@@ -1,4 +1,4 @@
-import { expect, request as newRequest, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { expect, request as newRequest, test, type APIRequestContext, type APIResponse, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { env } from "../utils/env";
 import { exec, literal, scalar } from "../utils/psql";
@@ -152,6 +152,36 @@ test.describe("governed skills operator journey (UI)", () => {
   async function cleanupSkill(documentId: string) {
     exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
     exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+  }
+
+  function candidateRecoveryState(documentId: string, title: string) {
+    return JSON.parse(scalar(`SELECT jsonb_build_object(
+      'documentIds', (SELECT COALESCE(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM knowledge_documents
+        WHERE project_id=${literal(tenant!.mainProjectId)} AND document_type='skill' AND title=${literal(title)}),
+      'profileCount', (SELECT COUNT(*) FROM skill_profiles WHERE project_id=${literal(tenant!.mainProjectId)} AND document_id=d.id),
+      'submittedCount', (SELECT COUNT(*) FROM knowledge_document_versions WHERE document_id=d.id AND snapshot_kind='submitted'),
+      'approvedCount', (SELECT COUNT(*) FROM knowledge_document_versions WHERE document_id=d.id AND snapshot_kind='approved'),
+      'assignmentCount', (SELECT COUNT(*) FROM skill_assignments WHERE project_id=${literal(tenant!.mainProjectId)} AND skill_document_id=d.id),
+      'reviewedVersionId', d.reviewed_version_id,
+      'payload', jsonb_build_object('id',d.id,'title',d.title,'contentJson',d.content_json,
+        'contentText',d.content_text,'contentHtml',d.content_html,'skillKey',p.skill_key,'module',p.module,'subtype',p.subtype)
+      )::text FROM knowledge_documents d JOIN skill_profiles p ON p.document_id=d.id
+      WHERE d.id=${literal(documentId)} AND d.project_id=${literal(tenant!.mainProjectId)};`));
+  }
+
+  async function cleanupCandidatesWithTitle(title: string) {
+    // If the regression creates a duplicate, clean up every uniquely named test candidate too.
+    const ids = scalar(`SELECT COALESCE(string_agg(id::text, ','), '') FROM knowledge_documents
+      WHERE project_id=${literal(tenant!.mainProjectId)} AND document_type='skill' AND title=${literal(title)};`);
+    for (const id of ids.split(",").filter(Boolean)) await cleanupSkill(id);
+  }
+
+  async function fillCandidate(page: Page, title: string, key: string, instructions: string) {
+    await page.getByTestId("skill-title").fill(title);
+    await page.getByTestId("skill-key").fill(key);
+    await page.getByTestId("skill-module").selectOption("requirements");
+    await page.getByTestId("skill-subtype").fill("functional");
+    await page.getByTestId("skill-instructions").fill(instructions);
   }
 
   /** Delay one real immutable-version response; subsequent requests remain independent. */
@@ -372,6 +402,247 @@ test.describe("governed skills operator journey (UI)", () => {
         exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
         exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(tenant!.mainProjectId)};`);
       }
+    }
+  });
+
+  for (const keyMode of ["explicit", "automatic"] as const) {
+    test(`a saved candidate with an ${keyMode} key recovers submission failure without another creation`, async ({ browser }) => {
+      const suffix = randomUUID();
+      const title = `Submission recovery ${keyMode} ${suffix}`;
+      const instructions = "RULE-RECOVERY: preserve this saved candidate and its exact instructions when submission fails.";
+      const key = keyMode === "explicit" ? `RECOVER-${suffix.slice(0, 8)}` : "";
+      let page: Page | undefined;
+      let createRequests = 0;
+      let submitRequests = 0;
+      try {
+        page = await open(browser, "/settings/skills");
+        page.on("request", (request) => {
+          if (request.method() === "POST" && new URL(request.url()).pathname === `${base()}/skills`) createRequests++;
+        });
+        await page.route("**/knowledge-base/documents/*/submissions", async (route) => {
+          if (route.request().method() !== "POST") return route.continue();
+          submitRequests++;
+          if (submitRequests === 1) {
+            // Creation reached the real API; this first submission definitely did not.
+            return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Injected submission unavailable" }) });
+          }
+          await route.continue();
+        });
+        await fillCandidate(page, title, key, instructions);
+        const created = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === `${base()}/skills`);
+        const refused = page.waitForResponse((response) => response.url().endsWith("/submissions") && response.status() === 503);
+        await page.getByTestId("skill-create-submit").click();
+        const response = await created;
+        expect(response.ok(), await response.text()).toBe(true);
+        const documentId = String((await response.json()).id);
+        await refused;
+        const saved = candidateRecoveryState(documentId, title);
+        expect(saved).toMatchObject({ documentIds: [documentId], profileCount: 1, submittedCount: 0,
+          approvedCount: 0, assignmentCount: 0, reviewedVersionId: null });
+
+        // The page must expose the committed candidate before a reload, then recover from native
+        // state after reload rather than depending on an in-memory create response.
+        const card = page.getByTestId(`skill-${documentId}`);
+        await expect(card).toBeVisible();
+        await page.reload();
+        await expect(card).toBeVisible();
+        const submitted = page.waitForResponse((result) => result.request().method() === "POST" && result.url().endsWith(`/documents/${documentId}/submissions`));
+        await card.getByRole("button", { name: "Submit draft", exact: true }).click();
+        const submission = await submitted;
+        expect(submission.ok(), await submission.text()).toBe(true);
+        await expect(card.getByRole("button", { name: /Review submitted v/ })).toBeVisible();
+        expect(createRequests).toBe(1);
+        expect(submitRequests).toBe(2);
+        expect(candidateRecoveryState(documentId, title)).toEqual({ ...saved, submittedCount: 1 });
+        await card.getByRole("button", { name: /Review submitted v/ }).click();
+        await expect(page.getByTestId("skill-review-content")).toContainText(instructions);
+      } finally {
+        await page?.context().close();
+        await cleanupCandidatesWithTitle(title);
+      }
+    });
+  }
+
+  for (const failReconciliationRead of [false, true]) {
+    test(`a lost submission response ${failReconciliationRead ? "waits for an available read before reconciling" : "reconciles"} the saved candidate without replaying writes`, async ({ browser }) => {
+      const title = `Lost submission ${randomUUID()}`;
+      const instructions = "RULE-LOST-SUBMISSION: inspect the real submitted snapshot before attempting another write.";
+      let page: Page | undefined;
+      let createRequests = 0;
+      let submitRequests = 0;
+      let blockLibraryReads = false;
+      let refusedReads = 0;
+      let submittedVersionId = "";
+      let release!: () => void;
+      let committed!: () => void;
+      const delivery = new Promise<void>((resolve) => { release = resolve; });
+      const receiptWritten = new Promise<void>((resolve) => { committed = resolve; });
+      try {
+        page = await open(browser, "/settings/skills");
+        await expect(page.getByText("Loading skills…", { exact: true })).toHaveCount(0);
+        page.on("request", (request) => {
+          if (request.method() === "POST" && new URL(request.url()).pathname === `${base()}/skills`) createRequests++;
+        });
+        await page.route(`**${base()}/skills`, async (route) => {
+          if (route.request().method() === "GET" && blockLibraryReads) {
+            refusedReads++;
+            return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Injected reconciliation unavailable" }) });
+          }
+          await route.continue();
+        });
+        await page.route("**/knowledge-base/documents/*/submissions", async (route) => {
+          if (route.request().method() !== "POST") return route.continue();
+          submitRequests++;
+          const actual = await route.fetch();
+          expect(actual.ok(), await actual.text()).toBe(true);
+          submittedVersionId = String((await actual.json()).id);
+          committed();
+          await delivery;
+          await route.abort("failed");
+        });
+        await fillCandidate(page, title, "", instructions);
+        const created = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === `${base()}/skills`);
+        await page.getByTestId("skill-create-submit").click();
+        const response = await created;
+        expect(response.ok(), await response.text()).toBe(true);
+        const documentId = String((await response.json()).id);
+        await receiptWritten;
+        const committedState = candidateRecoveryState(documentId, title);
+        expect(committedState).toMatchObject({ documentIds: [documentId], profileCount: 1, submittedCount: 1,
+          approvedCount: 0, assignmentCount: 0, reviewedVersionId: null });
+        await expect(page.getByTestId("skill-create-submit")).toBeDisabled();
+        blockLibraryReads = failReconciliationRead;
+        release();
+
+        const card = page.getByTestId(`skill-${documentId}`);
+        if (failReconciliationRead) {
+          await expect(page.getByTestId("skill-library-unavailable")).toBeVisible();
+          await expect(page.getByRole("button", { name: "Submit draft", exact: true })).toHaveCount(0);
+          const refresh = page.getByTestId("skill-readiness").getByRole("button", { name: "Refresh" });
+          const refusedRead = page.waitForResponse((result) => result.request().method() === "GET" && new URL(result.url()).pathname === `${base()}/skills` && result.status() === 503);
+          await refresh.click();
+          await refusedRead;
+          await expect(refresh).toBeEnabled();
+          await expect(page.getByTestId("skill-library-unavailable")).toBeVisible();
+          expect(refusedReads).toBeGreaterThanOrEqual(2);
+          expect(createRequests).toBe(1);
+          expect(submitRequests).toBe(1);
+          expect(candidateRecoveryState(documentId, title)).toEqual(committedState);
+          blockLibraryReads = false;
+          await refresh.click();
+        }
+        await expect(card.getByRole("button", { name: /Review submitted v/ })).toBeVisible();
+        await expect(card.getByRole("button", { name: "Submit draft", exact: true })).toHaveCount(0);
+        await page.reload();
+        await expect(card.getByRole("button", { name: /Review submitted v/ })).toBeVisible();
+        expect(createRequests).toBe(1);
+        expect(submitRequests).toBe(1);
+        expect(candidateRecoveryState(documentId, title)).toEqual(committedState);
+        const library = await ownerApi.get(`${base()}/skills`);
+        expect(library.ok(), await library.text()).toBe(true);
+        expect((await library.json()).skills.find((skill: { id: string }) => skill.id === documentId)).toMatchObject({
+          submittedVersionId, approvedVersionId: null, assignments: []
+        });
+        await card.getByRole("button", { name: /Review submitted v/ }).click();
+        await expect(page.getByTestId("skill-review-content")).toContainText(instructions);
+      } finally {
+        release();
+        await page?.context().close();
+        await cleanupCandidatesWithTitle(title);
+      }
+    });
+  }
+
+  test("a delayed native draft read after a lost submission response resumes the original receipt after reload", async ({ browser }) => {
+    const title = `Delayed draft recovery ${randomUUID()}`;
+    const instructions = "RULE-DELAYED-DRAFT: a resumed submission must retain its original receipt and one audit entry.";
+    let page: Page | undefined;
+    let draftResponse: APIResponse | undefined;
+    let replayDraft = false;
+    let draftReadDeliveries = 0;
+    let createRequests = 0;
+    let submitRequests = 0;
+    let originalReceipt: { id: string; versionNumber: number } | undefined;
+    let release!: () => void;
+    let committed!: () => void;
+    const delivery = new Promise<void>((resolve) => { release = resolve; });
+    const receiptWritten = new Promise<void>((resolve) => { committed = resolve; });
+    try {
+      page = await open(browser, "/settings/skills");
+      await expect(page.getByText("Loading skills…", { exact: true })).toHaveCount(0);
+      page.on("request", (request) => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === `${base()}/skills`) createRequests++;
+      });
+      await page.route(`**${base()}/skills`, async (route) => {
+        if (route.request().method() === "GET" && replayDraft && draftResponse) {
+          draftReadDeliveries++;
+          // Deliver the intact native response captured below before the first submission. This
+          // models a late read; no Skill, version, timestamp or response body is manufactured.
+          return route.fulfill({ response: draftResponse });
+        }
+        await route.continue();
+      });
+      await page.route("**/knowledge-base/documents/*/submissions", async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        submitRequests++;
+        if (submitRequests === 1) {
+          const documentId = new URL(route.request().url()).pathname.split("/").at(-2)!;
+          draftResponse = await ownerApi.get(`${base()}/skills`);
+          expect(draftResponse.ok(), await draftResponse.text()).toBe(true);
+          const draft = (await draftResponse.json()).skills.find((skill: { id: string }) => skill.id === documentId);
+          expect(draft).toMatchObject({ id: documentId, title, submittedVersionId: null,
+            approvedVersionId: null, versions: [], assignments: [] });
+          const actual = await route.fetch();
+          expect(actual.ok(), await actual.text()).toBe(true);
+          originalReceipt = await actual.json();
+          committed();
+          await delivery;
+          return route.abort("failed");
+        }
+        const actual = await route.fetch();
+        replayDraft = false;
+        await route.fulfill({ response: actual });
+      });
+      await fillCandidate(page, title, "", instructions);
+      const created = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === `${base()}/skills`);
+      await page.getByTestId("skill-create-submit").click();
+      const response = await created;
+      expect(response.ok(), await response.text()).toBe(true);
+      const documentId = String((await response.json()).id);
+      await receiptWritten;
+      const committedState = candidateRecoveryState(documentId, title);
+      expect(committedState).toMatchObject({ documentIds: [documentId], profileCount: 1, submittedCount: 1,
+        approvedCount: 0, assignmentCount: 0, reviewedVersionId: null });
+      const submissionAudits = () => JSON.parse(scalar(`SELECT COALESCE(jsonb_agg(
+        jsonb_build_object('id', id, 'versionId', diff->>'versionId') ORDER BY id), '[]'::jsonb)::text
+        FROM audit_logs WHERE project_id=${literal(tenant!.mainProjectId)} AND entity_id=${literal(documentId)}
+          AND entity_type='knowledge_document' AND action='submitted';`));
+      const originalAudits = submissionAudits();
+      expect(originalAudits).toHaveLength(1);
+      expect(originalAudits[0]).toMatchObject({ versionId: originalReceipt!.id });
+      replayDraft = true;
+      release();
+      const card = page.getByTestId(`skill-${documentId}`);
+      await expect(card.getByRole("button", { name: "Submit draft", exact: true })).toBeVisible();
+      await page.reload();
+      await expect(card.getByRole("button", { name: "Submit draft", exact: true })).toBeVisible();
+      expect(draftReadDeliveries).toBeGreaterThanOrEqual(2);
+      const resumed = page.waitForResponse((result) => result.request().method() === "POST" && result.url().endsWith(`/documents/${documentId}/submissions`));
+      await card.getByRole("button", { name: "Submit draft", exact: true }).click();
+      const replay = await resumed;
+      expect(replay.ok(), await replay.text()).toBe(true);
+      expect(await replay.json()).toMatchObject({ id: originalReceipt!.id, versionNumber: originalReceipt!.versionNumber });
+      await expect(card.getByRole("button", { name: /Review submitted v/ })).toBeVisible();
+      expect(createRequests).toBe(1);
+      expect(submitRequests).toBe(2);
+      expect(candidateRecoveryState(documentId, title)).toEqual(committedState);
+      expect(submissionAudits()).toEqual(originalAudits);
+      await card.getByRole("button", { name: /Review submitted v/ }).click();
+      await expect(page.getByTestId("skill-review-content")).toContainText(instructions);
+    } finally {
+      release();
+      await page?.context().close();
+      await cleanupCandidatesWithTitle(title);
     }
   });
 
