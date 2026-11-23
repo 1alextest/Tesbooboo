@@ -43,6 +43,27 @@ describe("AuthMiddleware bearer precedence", () => {
     expect(req.userId).toBeNull();
     expect(f.otp.resolveSession).not.toHaveBeenCalled();
   });
+  it.each(["Bearer unverified-oauth", "Bearer ", ""])(
+    "never carries forward an unverified OAuth machine identity for header %p", async authorization => {
+      const f = fixture(null);
+      const req = {
+        headers: authorization ? { authorization } : {},
+        cookies: { session: "valid" },
+        oauthAccess: {
+          kind: "oauth_access",
+          issuer: "https://untrusted.example", subject: "s", clientId: "client",
+          grantId: "grant", userId: "forged", projectId: "p",
+          resource: "https://untrusted.example/api/mcp", scopes: ["write"]
+        }
+      } as unknown as AuthenticatedRequest;
+      await f.mw.use(req, {} as Response, f.next);
+      expect(req.oauthAccess).toBeNull();
+      expect(req.apiToken).toBeNull();
+      expect(req.userId).toBe(authorization ? null : "browser");
+      if (authorization) expect(f.otp.resolveSession).not.toHaveBeenCalled();
+    }
+  );
+
   it("preserves browser cookie authentication when no bearer provided", async () => {
     const f = fixture();
     const req = { headers: {}, cookies: { session: "valid" } } as unknown as AuthenticatedRequest;

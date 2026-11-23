@@ -40,10 +40,10 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
   let app: INestApplication;
   const member = jest.fn().mockResolvedValue({ id: PROJECT });
   let baseUrl: string;
-  async function send(method: "GET" | "POST", scope: "read" | "write" = "read", suffix = "testcases") {
+  async function send(method: "GET" | "POST", scope: "read" | "write" = "read", suffix = "testcases", futureOAuth = false) {
     const response = await fetch(`${baseUrl}/api/projects/${PROJECT}/${suffix}`, {
       method,
-      headers: { "x-test-scope": scope, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+      headers: { "x-test-scope": scope, ...(futureOAuth ? { "x-test-future-oauth": "1" } : {}), ...(method === "POST" ? { "content-type": "application/json" } : {}) },
       ...(method === "POST" ? { body: "{}" } : {})
     });
     return { status: response.status, body: await response.json() };
@@ -60,6 +60,19 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
     app = module.createNestApplication();
     // Explicit token fixture isolates the authorization guard from token hashing and cookie parsing.
     app.use((req: AuthenticatedRequest, _res: unknown, next: () => void) => {
+      // Simulate a future authenticator resolving OAuth to an internal user.
+      // Even that identity cannot inherit REST/browser privileges.
+      if (req.headers["x-test-future-oauth"] === "1") {
+        req.userId = "u";
+        req.apiToken = null;
+        req.oauthAccess = {
+          kind: "oauth_access", issuer: "https://issuer.example", subject: "external-sub",
+          clientId: "client", grantId: "grant", userId: "u", projectId: PROJECT,
+          resource: `https://tesbo.example/api/projects/${PROJECT}/mcp`, scopes: ["read", "write"]
+        };
+        next();
+        return;
+      }
       req.apiToken = {
         tokenId: "t", userId: "u", projectId: PROJECT,
         scopes: req.headers["x-test-scope"] === "write" ? ["write"] : ["read"]
@@ -79,6 +92,22 @@ describe("ApiTokenRestGuard at the Nest HTTP boundary", () => {
     expect(nativeCredentialWrite).not.toHaveBeenCalled();
     expect(member).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["GET", "testcases"],
+    ["POST", "agents/zyra/tasks/proposals"],
+    ["POST", "testcases"],
+    ["POST", "apikeys"]
+  ] as const)("does not treat an OAuth machine principal as a browser user at the real HTTP guard: %s %s",
+    async (method, suffix) => {
+      const result = await send(method, "write", suffix, true);
+      expect(result.status).toBe(403);
+      expect(result.body.code).toBe("OAUTH_MACHINE_ACCESS_DISABLED");
+      expect(member).not.toHaveBeenCalled();
+      expect(nativeCaseWrite).not.toHaveBeenCalled();
+      expect(nativeCredentialWrite).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects read-token writes and allows reads", async () => {
     const rejected = await send("POST");

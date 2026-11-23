@@ -20,6 +20,9 @@ export class AuthMiddleware implements NestMiddleware {
     // never resolved (no session lookup) on a bearer-authenticated call.
     req.userId = null;
     req.apiToken = null;
+    // No OAuth verifier exists yet. Reset untrusted/ambient identity before any lookup.
+    // A future verifier must attach a checked principal explicitly after this boundary.
+    req.oauthAccess = null;
 
     const bearer = this.readBearerHeader(req.headers?.authorization);
     if (bearer.present) {
