@@ -66,7 +66,7 @@ export function createMcpOAuthPostgresAdapter(db: Pick<DatabaseService, "query">
       return oauthReferenceFingerprint(`oauth:${this.model}:${key}`, value);
     }
 
-    private async read(where: string, value: string): Promise<ProviderRecord | undefined> {
+    private async read(where: "id_fingerprint" | "uid_fingerprint" | "user_code_fingerprint", value: string): Promise<ProviderRecord | undefined> {
       const row = (await db.query<StoredRow>(
         `SELECT encrypted_payload, consumed_at FROM mcp_oauth_provider_artifacts
          WHERE model=$1 AND ${where}=$2 AND (expires_at IS NULL OR expires_at > now())
