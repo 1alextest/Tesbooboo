@@ -1338,6 +1338,10 @@ test.describe("zyra / agents (UI)", () => {
       expect((await decisionRequest).postDataJSON()).toEqual({ expectedProposalRevision: task.proposalRevision });
       await expect(panel.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
       await expect(page.getByTestId("requirement-bundle-recorded-decision")).toContainText("Recorded outcome: rejected");
+      // Rejected and withdrawn bundles also end as taskStatus "done"; that must never read as applied/published.
+      await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("not published");
+      await expect(page.getByTestId("requirement-bundle-publication-gate")).not.toContainText("This bundle is published");
+      await expect(panel).not.toContainText("Applied. The exact submitted requirement version");
       const after = await api.get(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}`);
       expect(after.ok(), await after.text()).toBe(true);
       expect(await after.json()).toMatchObject({ taskStatus: "done", requirementDecision: { decision: "rejected", proposalRevision: task.proposalRevision } });

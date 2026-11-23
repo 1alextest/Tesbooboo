@@ -16800,13 +16800,16 @@ export class LegacyService implements OnModuleInit {
               ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
               ${TESTCASE_APPROVAL_REVISION_SQL} AS current_approval_revision,
               ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
-              attempt.attempt_count, attempt.latest_status, attempt.latest_at, attempt.conflicting_attempts
+              attempt.attempt_count, attempt.latest_status, attempt.latest_at, attempt.conflicting_attempts,
+              attempt.latest_execution_id, attempt.latest_cycle_id
          FROM requirement_case_links l
          JOIN testcases ON testcases.id=l.testcase_id AND testcases.project_id=l.project_id
          LEFT JOIN LATERAL (
            SELECT COUNT(*)::int AS attempt_count,
                   (ARRAY_AGG(e.status ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_status,
                   MAX(e.executed_at) AS latest_at,
+                  (ARRAY_AGG(e.id ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_execution_id,
+                  (ARRAY_AGG(ci.cycle_id ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_cycle_id,
                   BOOL_OR(e.status='Passed') AND BOOL_OR(e.status='Failed') AS conflicting_attempts
              FROM executions e
              JOIN cycle_items ci ON ci.id=e.cycle_item_id AND ci.testcase_id=l.testcase_id
@@ -16831,7 +16834,11 @@ export class LegacyService implements OnModuleInit {
         linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
         criterionKeys: normalizeJsonArray(row.criterion_keys).map(String), requirementVersionId: String(row.requirement_version_id),
         authored: true, approved, executed, passing: executed && row.latest_status === "Passed",
-        latestAttempt: row.latest_status ? { status: String(row.latest_status), executedAt: row.latest_at } : null,
+        latestAttempt: row.latest_status ? {
+          status: String(row.latest_status), executedAt: row.latest_at,
+          executionId: row.latest_execution_id ? String(row.latest_execution_id) : null,
+          cycleId: row.latest_cycle_id ? String(row.latest_cycle_id) : null
+        } : null,
         attemptCount: Number(row.attempt_count || 0), conflictingAttempts: row.conflicting_attempts === true,
         reasons: [
           ...(onApprovedVersion ? [] : ["REQUIREMENT_VERSION_SUPERSEDED"]),
@@ -16941,6 +16948,38 @@ export class LegacyService implements OnModuleInit {
 
   private requirementDecisionReceipt(row: Body): Body | null {
     return normalizeJsonArray(row.activity_log).find((entry: Body) => entry.kind === "requirement_bundle_decision")?.decisionReceipt || null;
+  }
+
+  /**
+   * The bounded apply receipt the Zyra task surface may use to reopen the exact submitted
+   * requirement version. `save_events` also carries the full proposal snapshot, pinned skills and
+   * decision digest; none of that is needed to review the published version, so it is not exposed.
+   * The last matching apply wins, which is the one that moved the task to done.
+   */
+  private requirementApplyReceipt(row: Body): Body | null {
+    const receipt = normalizeJsonArray(row.save_events)
+      .filter((event: Body) => event?.action === "requirement_bundle_apply" && event?.requirement?.documentId && event?.requirement?.versionId)
+      .sort((left: Body, right: Body) => String(left.appliedAt || "").localeCompare(String(right.appliedAt || "")))
+      .pop();
+    if (!receipt) return null;
+    const requirement = receipt.requirement as Body;
+    const testcase = receipt.testcase as Body | null;
+    const link = receipt.link as Body | null;
+    return {
+      requirement: {
+        documentId: String(requirement.documentId),
+        versionId: String(requirement.versionId),
+        versionNumber: requirement.versionNumber ?? null,
+        editRevision: requirement.editRevision ?? null
+      },
+      testcase: testcase?.id ? {
+        id: String(testcase.id), title: testcase.title ?? null, editRevision: testcase.editRevision ?? null
+      } : null,
+      link: link?.id ? {
+        id: String(link.id), criterionKeys: normalizeJsonArray(link.criterionKeys).map(String)
+      } : null,
+      appliedAt: receipt.appliedAt ?? null
+    };
   }
 
   private assertOrdinaryProposalMutation(row: Body): void {
@@ -27874,7 +27913,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ? row.skill_context
         : bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
     }
-    if (this.isRequirementBundleTask(row)) item.requirementDecision = this.requirementDecisionReceipt(row);
+    if (this.isRequirementBundleTask(row)) {
+      item.requirementDecision = this.requirementDecisionReceipt(row);
+      // Apply is the only moment the submitted requirement version identity is chosen. Persist it
+      // in the task payload so the review surface can reopen the exact version after a reload
+      // without re-deriving it from the mutable requirement document.
+      item.requirementApplyReceipt = this.requirementApplyReceipt(row);
+    }
     if (snapshot) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;

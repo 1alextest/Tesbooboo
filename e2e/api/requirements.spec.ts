@@ -282,6 +282,28 @@ test("governed skills allow protected publication, exact approval and separate c
     const requirementVersionId = applied.receipt.requirement.versionId as string;
     const caseId = applied.receipt.testcase.id as string;
 
+    // The task payload the review surface reloads carries the exact submitted version identity,
+    // and only the bounded identities — never the proposal snapshot or decision digest.
+    const reloaded = await (await request.get(`${base}/requirements/proposals/${staged.id}`)).json();
+    expect(reloaded.requirementApplyReceipt).toMatchObject({
+      requirement: { documentId: requirementId, versionId: requirementVersionId, versionNumber: applied.receipt.requirement.versionNumber },
+      testcase: { id: caseId },
+      link: { id: applied.receipt.link.id }
+    });
+    expect(reloaded.requirementApplyReceipt.proposalSnapshot).toBeUndefined();
+    expect(reloaded.requirementApplyReceipt.decisionKey).toBeUndefined();
+
+    // A stale submitted version is refused after the requirement content moves on. Restoring the
+    // exact reviewed content makes the original version approvable again without rewriting it.
+    const changedTitle = `${title} changed`;
+    const changed = await request.patch(`${base}/knowledge-base/documents/${requirementId}`, { data: { title: changedTitle } });
+    expect(changed.ok(), await changed.text()).toBe(true);
+    const staleApproval = await request.post(`${base}/requirements/${requirementId}/approve`, { data: { versionId: requirementVersionId } });
+    expect(staleApproval.status()).toBe(409);
+    expect((await staleApproval.json()).code).toBe("DOCUMENT_REVISION_CONFLICT");
+    const restored = await request.patch(`${base}/knowledge-base/documents/${requirementId}`, { data: { title } });
+    expect(restored.ok(), await restored.text()).toBe(true);
+
     const coverage = async () => (await request.get(`${base}/requirements/${requirementId}/coverage`)).json();
     let readings = await coverage();
     expect(readings.readings).toMatchObject({ authored: true, approved: false, executed: false, passing: false });
@@ -315,14 +337,18 @@ test("governed skills allow protected publication, exact approval and separate c
       const runId = scalar(`INSERT INTO cycles(project_id,name) VALUES (${literal(ctx.projectId)},${literal(`E2E coverage ${status} ${suffix}`)}) RETURNING id;`);
       cycleIds.push(runId);
       const itemId = scalar(`INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES (${literal(runId)},${literal(caseId)},${literal(caseAfter.approvalRevision)}) RETURNING id;`);
-      exec(`INSERT INTO executions(cycle_item_id,status,executed_by,executed_at)
+      const executionId = scalar(`INSERT INTO executions(cycle_item_id,status,executed_by,executed_at)
             SELECT ${literal(itemId)},${literal(status)},pm.user_id,${literal(at)}::timestamptz
               FROM project_members pm WHERE pm.project_id=${literal(ctx.projectId)}
-             ORDER BY CASE pm.role WHEN 'owner' THEN 0 ELSE 1 END, pm.user_id LIMIT 1;`);
+             ORDER BY CASE pm.role WHEN 'owner' THEN 0 ELSE 1 END, pm.user_id LIMIT 1 RETURNING id;`);
+      return { runId, executionId };
     };
-    await attempt("Passed", new Date().toISOString());
+    const passedAttempt = await attempt("Passed", new Date().toISOString());
     readings = await coverage();
     expect(readings.readings).toMatchObject({ approved: true, executed: true, passing: true, mixed: false });
+    expect(readings.cases[0].latestAttempt).toMatchObject({
+      status: "Passed", executionId: passedAttempt.executionId, cycleId: passedAttempt.runId
+    });
 
     await attempt("Failed", new Date(Date.now() + 1000).toISOString());
     readings = await coverage();

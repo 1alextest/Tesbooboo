@@ -544,7 +544,8 @@ type Body=Record<string,any>;
     const attempt=async(caseId:string,approvalRevision:string,status:string,at:Date)=>{
       const run=(await admin.query("INSERT INTO cycles(project_id,name,source,status) VALUES ($1,$2,'manual','In Progress') RETURNING id",[project,`Coverage ${randomUUID()}`])).rows[0].id;
       const item=(await admin.query("INSERT INTO cycle_items(cycle_id,testcase_id,snapshot_approval_revision) VALUES ($1,$2,$3) RETURNING id",[run,caseId,approvalRevision])).rows[0].id;
-      await admin.query("INSERT INTO executions(cycle_item_id,status,executed_by,executed_at) VALUES ($1,$2,$3,$4)",[item,status,user,at]);
+      const execution=(await admin.query("INSERT INTO executions(cycle_item_id,status,executed_by,executed_at) VALUES ($1,$2,$3,$4) RETURNING id",[item,status,user,at])).rows[0].id;
+      return {executionId:String(execution),cycleId:String(run)};
     };
 
     it("resolves exact skills, applies atomically and reports authored/approved/executed/passing separately",async()=>{
@@ -560,6 +561,16 @@ type Body=Record<string,any>;
         requirementId=applied.receipt.requirement.documentId;
         const caseId=applied.receipt.testcase.id;
         expect(applied.receipt.link.testcaseApprovalRevision).toBeNull();
+        // The task surface reopens this exact version after a reload from the bounded receipt,
+        // never by re-deriving it from the (mutable) requirement document.
+        const reloaded=await service().requirementProposalTask(project,user,staged.id);
+        expect(reloaded.requirementApplyReceipt).toMatchObject({
+          requirement:{documentId:requirementId,versionId:applied.receipt.requirement.versionId,versionNumber:applied.receipt.requirement.versionNumber},
+          testcase:{id:caseId},
+          link:{id:applied.receipt.link.id}
+        });
+        expect(reloaded.requirementApplyReceipt).not.toHaveProperty("proposalSnapshot");
+        expect(reloaded.requirementApplyReceipt).not.toHaveProperty("decisionKey");
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted'",[requirementId])).rows[0].n).toBe(1);
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM testcases WHERE id=$1 AND status='Draft'",[caseId])).rows[0].n).toBe(1);
 
@@ -583,9 +594,10 @@ type Body=Record<string,any>;
         coverage=await service().requirementCoverage(project,user,requirementId);
         expect(coverage.readings).toMatchObject({authored:true,approved:true,executed:false,passing:false});
 
-        await attempt(caseId,after.approval_revision,"Passed",new Date());
+        const passedAttempt=await attempt(caseId,after.approval_revision,"Passed",new Date());
         coverage=await service().requirementCoverage(project,user,requirementId);
         expect(coverage.readings).toMatchObject({approved:true,executed:true,passing:true,mixed:false});
+        expect(coverage.cases[0].latestAttempt).toMatchObject({status:"Passed",executionId:passedAttempt.executionId,cycleId:passedAttempt.cycleId});
 
         await attempt(caseId,after.approval_revision,"Failed",new Date(Date.now()+1000));
         coverage=await service().requirementCoverage(project,user,requirementId);
