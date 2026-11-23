@@ -6,7 +6,7 @@
  * Refuse every DB except disposable tesbo_ci and never use a real Tesbo account.
  */
 const assert = require("node:assert/strict");
-const { randomBytes, randomUUID } = require("node:crypto");
+const { createHash, randomBytes, randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const net = require("node:net");
@@ -105,6 +105,34 @@ async function main() {
     assert.equal(remoteRead?.accountId, accountId);
     assert.equal(remoteRead?.clientId, clientId);
 
+    // Exercise a real short-lived AuthorizationCode model, not just a Grant.
+    // The model must keep its PKCE S256 basis through encrypted persistence,
+    // and two provider instances must NOT consume the same code twice.
+    const verifier = randomBytes(36).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    const code = new providerA.AuthorizationCode({
+      accountId, clientId, grantId,
+      redirectUri: "http://127.0.0.1/never-used",
+      codeChallenge: challenge,
+      codeChallengeMethod: "S256",
+      scope: "openid"
+    });
+    const rawCode = await code.save();
+    assert.equal(typeof rawCode, "string");
+    const codeA = await providerA.AuthorizationCode.find(rawCode);
+    const codeB = await providerB.AuthorizationCode.find(rawCode);
+    assert.equal(codeB?.codeChallenge, challenge);
+    assert.equal(codeB?.codeChallengeMethod, "S256");
+    assert.equal(codeA?.grantId, grantId);
+    assert.ok(codeA && codeB, "A persisted code must be visible to both providers");
+    const consumed = await Promise.allSettled([codeA.consume(), codeB.consume()]);
+    assert.deepEqual(consumed.map(a => a.status).sort(), ["fulfilled", "rejected"],
+      "Concurrent provider instances must have a single code-consumption winner");
+    const consumedCode = await providerB.AuthorizationCode.find(rawCode);
+    assert.ok(consumedCode?.consumed, "Consumed code must remain unusable on retry");
+    await new AdapterB("AuthorizationCode").destroy(rawCode);
+
+
     // Mount the same real-provider instance in a local Nest/Express app. The
     // public metadata is a test fixture; no Tesbo auth route or token issuer is
     // ever mounted by the actual product.
@@ -131,6 +159,9 @@ async function main() {
       provider: PROVIDER_VERSION,
       runtime: process.version,
       realGrantModel: true,
+      realAuthorizationCodeModel: true,
+      codePkceRetainedAcrossInstances: true,
+      concurrentCodeConsumeWinner: true,
       encryptedAtRest: true,
       readableAcrossProviderInstances: true,
       revokedStateUnavailable: true,
