@@ -1,3 +1,4 @@
+import { apiTokenStagingProducer } from "./mcp-producer";
 import { HttpException } from "@nestjs/common";
 import { DRAFT_MODEL_PREVIEW_INPUT_SCHEMA } from "../behavior-graph/model-studio-preview.core";
 import { BUG_SEVERITIES, LegacyService, TESTCASE_REVIEW_VIEWS, TESTCASE_TECHNIQUES } from "../legacy/legacy.service";
@@ -1944,8 +1945,7 @@ export function buildMcpTools(): McpTool[] {
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
         }
-        if (!ctx.tokenId) throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated credential is required to stage testcase proposals");
-        if (!ctx.actorId) throw new McpError(RpcCode.ToolExecutionError, "The MCP agent identity is unavailable; no proposal was staged", { code: "AGENT_IDENTITY_UNAVAILABLE" });
+        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: true });
         const submittedOperations = Array.isArray(args.operations) ? args.operations.map(operation => {
           if (!operation || typeof operation !== "object" || Array.isArray(operation)) return operation;
           const key = operation.opType === "create" ? "draft" : "fields";
@@ -1958,7 +1958,7 @@ export function buildMcpTools(): McpTool[] {
         try {
           const task = await ctx.legacy.stageTestcaseChanges(ctx.projectId, ctx.userId,
             { requestKey, operations: submittedOperations, ...(args.title === undefined ? {} : { title: args.title }) },
-            { kind: "api_token", transport: "mcp", tokenId: ctx.tokenId, ...(ctx.actorId ? { actorId: ctx.actorId } : {}) });
+            producer);
           return { publication: "unpublished", taskId: task.id, task,
             reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
         } catch (error) { rethrowModelError(error); }
@@ -2010,11 +2010,11 @@ export function buildMcpTools(): McpTool[] {
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
         }
-        if (!ctx.tokenId) throw new McpError(RpcCode.ProjectScopeDenied, "An authenticated credential is required to stage a requirement change bundle");
+        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false });
         try {
           const task = await ctx.legacy.stageRequirementChangeBundle(ctx.projectId, ctx.userId,
             { requestKey, operations: args.operations, ...(args.title === undefined ? {} : { title: args.title }) },
-            { kind: "api_token", transport: "mcp", tokenId: ctx.tokenId, ...(ctx.actorId ? { actorId: ctx.actorId } : {}) });
+            producer);
           return { publication: "unpublished", taskId: task.id, task, skillContext: task.skillContext,
             reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
         } catch (error) { rethrowModelError(error); }
