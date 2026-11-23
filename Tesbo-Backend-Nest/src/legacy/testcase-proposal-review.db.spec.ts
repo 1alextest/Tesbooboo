@@ -299,6 +299,28 @@ type Body=Record<string,any>;
       approvals:(await admin.query("SELECT r.id FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=$1 ORDER BY r.id",[project])).rows
     });
 
+    it("serializes a shared producer requestKey across testcase and requirement proposal inlets",async()=>{
+      const key=randomUUID();
+      const principal={kind:"api_token",tokenId:token,transport:"rest"};
+      const before=(await tasks()).rows;
+      const beforeOfficial=await docCounts();
+      const outcomes=await Promise.allSettled([
+        stage([{opType:"create",draft:{title:"Case inlet competing for shared request key"}}],key,principal),
+        stageBundle(ops(),key,principal)
+      ]);
+      const committed=outcomes.filter(item=>item.status==="fulfilled");
+      const refused=outcomes.filter(item=>item.status==="rejected") as PromiseRejectedResult[];
+      expect(committed).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect(refused[0].reason).toMatchObject({status:409});
+      const added=(await tasks()).rows.filter(row=>!before.some(previous=>previous.id===row.id));
+      expect(added).toHaveLength(1);
+      expect(added[0].proposal_provenance).toMatchObject({
+        kind:"api_token",principalKey:`api_token:${token}`,issuerId:user,tokenId:token
+      });
+      expect(await docCounts()).toEqual(beforeOfficial);
+    },15000);
+
     it("stages one inert, idempotent bundle whose reviewed revision cannot drift",async()=>{
       const before=await docCounts();
       const key=randomUUID(),operations=ops();
