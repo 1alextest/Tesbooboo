@@ -2791,6 +2791,13 @@ test.describe("knowledge base (UI)", () => {
     await page.reload();
     await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v2");
     await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    // QA is checked while the owner still has both actions, so "QA sees nothing" proves the role
+    // gate rather than the already-decided state hiding the buttons from everybody.
+    await expect(page.getByTestId("governed-reject")).toBeVisible();
+    const qaPage = await openDocument(browser, documentId, "qa");
+    await expect(qaPage.getByTestId("governed-approve")).toHaveCount(0);
+    await expect(qaPage.getByTestId("governed-reject")).toHaveCount(0);
+    await page.bringToFront();
     await page.getByTestId("governed-reject").click();
     await expect(page.getByTestId("governed-decision")).toContainText("rejected");
     await expect(page.getByTestId("governed-approve")).toHaveCount(0);
@@ -2801,10 +2808,8 @@ test.describe("knowledge base (UI)", () => {
     // restorable through the content-history restore path.
     await page.getByTestId("governed-version-open").first().click();
     await expect(page.getByTestId("governed-version-detail")).toBeVisible();
-
-    const qaPage = await openDocument(browser, documentId, "qa");
-    await expect(qaPage.getByTestId("governed-approve")).toHaveCount(0);
-    await expect(qaPage.getByTestId("governed-reject")).toHaveCount(0);
+    await qaPage.reload();
+    await expect(qaPage.getByTestId("governed-decision")).toContainText("rejected");
   });
 
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {

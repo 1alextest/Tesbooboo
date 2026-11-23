@@ -12641,6 +12641,11 @@ export class LegacyService implements OnModuleInit {
     const nextHtml = body.contentHtml !== undefined ? body.contentHtml : doc.content_html;
     const nextText = body.contentText !== undefined ? body.contentText : doc.content_text;
     const nextDocumentType = String(body.documentType || doc.document_type);
+    // V164's trigger refuses this too, but as a raw 23514. Refuse it here so the API answers
+    // 400 like every other type-change boundary rather than surfacing a database error as a 500.
+    if (isGovernedDocumentType(doc.document_type) && nextDocumentType !== doc.document_type) {
+      throw new BadRequestException({ error: "A governed manual or policy cannot change document type" });
+    }
     const governedMetadata = normalizeGovernedMetadata(
       body.governedMetadata === undefined ? doc.governed_metadata : body.governedMetadata,
       nextDocumentType

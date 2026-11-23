@@ -185,9 +185,12 @@ policy. An approved document does not become Zyra-visible merely because it is a
 - DB/API: metadata validation (valid, missing, unknown key, invalid enum/impossible date/inverted effectivity/
   misplaced refs), duplicate metadata preservation and embedding hold, legacy `{}` compatibility, digest change on
   metadata edit, submitted snapshot metadata, owner approve, QA refusal, stale approval, lost-response replay,
-  later rejection superseding an earlier approval, AI-context exclusion.
-- UI: author a manual/policy with metadata, submit, owner reviews exact version/diff and approves; QA read-only;
-  stale edit refusal; history/readback; confidential doc not offered to Zyra context.
+  later rejection superseding an earlier approval, AI-context exclusion **while approved**, owner/manager API
+  approval, QA/guest/anonymous refusal, project boundary 404, API-token `HUMAN_REVIEW_REQUIRED`, replay, and
+  refusal of a governed→general type change.
+- UI: author a manual/policy with metadata, submit, owner reviews exact version/diff and approves; QA is refused
+  while the owner still has the actions (not after a decision hides them); a later rejection supersedes the
+  approval on reload; history/readback; confidential doc not offered to Zyra context.
 - Native Tesbo: REQ-WPB-01 task `d5b7ab51-1c6b-460b-971f-280d1f567edb` staged; execution UNRUN until human apply.
 
 ---
@@ -206,3 +209,21 @@ policy. An approved document does not become Zyra-visible merely because it is a
    channel list or per-recipient entitlement, that is a wider model requiring a separate decision.
 5. **Policy enforcement references.** The first slice stores references only; it does not execute or enforce them.
 6. **Audience-specific views.** Internal/external views and section-level review are not part of this first slice.
+7. **Changing a decision on the same exact version.** The API currently allows a later opposite decision on the same
+   submitted version (matching digest), recording a second snapshot and flipping `status`; the UI hides the actions
+   once a version is decided. Treating a decision as final or as a deliberate "change of mind" is a governance
+   decision. Until it is made, do not rely on API finality; the snapshot history preserves both decisions.
+8. **`reviewBinding` read model.** `reviewBinding='exact_snapshot'` currently means "an exact decision snapshot is
+   bound", including a rejection. Consumers that require approval semantics must also check `status`; the governed
+   panel does. Splitting approval/rejection into separate read fields is a follow-up once a consumer needs it.
+9. **Newer submission supersedes an older one.** Unlike the Skill reviewer, the governed reviewer does not refuse an
+   older submitted version when a newer submitted version exists; it relies on the digest check. Approving an older
+   still-matching version is possible but the UI targets the latest submission. Align the guard if a consumer can
+   reach older versions directly.
+10. **One-time `editRevision` change on deploy.** Adding `governed_metadata` changes the legacy `editRevision` hash
+    once for every row. A client holding a pre-deploy revision sees a `DOCUMENT_REVISION_CONFLICT` and must reload.
+    No persisted state depends on the old value; excluding the column from the hash would let concurrent metadata
+    edits bypass the CAS, so the one-time invalidation is deliberate.
+11. **Sweep exclusion test depth.** The processor exclusion is behavioural; the boot sweep is asserted by its SQL
+    predicate because the query is global across projects and a DB fixture would contend with unrelated pending rows.
+    The terminal `embedding_status='unsupported'` state is asserted through the real DB.

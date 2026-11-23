@@ -1274,6 +1274,66 @@ test.describe("knowledge base v2 — folders and documents", () => {
     await expectUnauthenticated(await anon.get(kbUrl(`/documents/${doc.id}/versions/${submitted.id}`), { failOnStatusCode: false }), "anonymous version read");
   });
 
+  test("KB-A-78 governed review is owner/manager-only, project-scoped and human-session-only", async () => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const doc = await createDocument({
+      title: stamp("Governed review"), documentType: "user_manual", contentText: "Exact governed body",
+      contentHtml: "<p>Exact governed body</p>", governedMetadata: metadata,
+    });
+    const submittedResponse = await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }, failOnStatusCode: false,
+    });
+    expect(submittedResponse.status(), await submittedResponse.text()).toBe(201);
+    const submitted = await submittedResponse.json();
+    const decisionUrl = (action: "governed-approval" | "governed-rejection") => kbUrl(`/documents/${doc.id}/${action}`);
+
+    // Role and session gates are checked before any state change.
+    expect((await asQa.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(403);
+    expect((await asGuest.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(403);
+    await expectUnauthenticated(await anon.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false }), "anonymous governed approval");
+    // A document in another project is not reachable, even by the owner of this one.
+    expect((await asOwner.post(kbUrl(`/documents/${doc.id}/governed-approval`, tenant!.secondProjectId), {
+      data: { versionId: submitted.id }, failOnStatusCode: false,
+    })).status()).toBe(404);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json()).status).toBe("draft");
+
+    // A manager holds the same owner/manager authority as approval elsewhere.
+    const approvedResponse = await asManager.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false });
+    expect(approvedResponse.status(), await approvedResponse.text()).toBe(200);
+    const approved = await approvedResponse.json();
+    expect(approved).toMatchObject({ status: "approved", sourceVersionId: submitted.id, replayed: false });
+    expect(approved.reviewedVersionId).toBe(approved.decidedVersionId);
+    const replay = await asManager.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false });
+    expect(replay.status()).toBe(200);
+    expect((await replay.json()).replayed).toBe(true);
+
+    // A human session is required: an owner-issued token cannot approve or reject.
+    const issued = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/apikeys`, { data: { name: stamp("Governed review token"), scopes: ["read", "write"] } });
+    expect(issued.status()).toBe(201);
+    const token = await issued.json();
+    try {
+      for (const action of ["governed-approval", "governed-rejection"] as const) {
+        const result = await anon.post(decisionUrl(action), {
+          headers: { Authorization: `Bearer ${token.token}` }, data: { versionId: submitted.id }, failOnStatusCode: false,
+        });
+        expect(result.status()).toBe(403);
+        expect((await result.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
+      }
+    } finally {
+      await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
+    }
+
+    // A governed type cannot be changed to bypass the exact-version decision.
+    const converted = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { documentType: "general" }, failOnStatusCode: false });
+    expect(converted.status()).toBe(400);
+    expect(scalar(`SELECT status FROM knowledge_documents WHERE id = ${literal(doc.id)};`)).toBe("approved");
+    expect(scalar(`SELECT snapshot_kind FROM knowledge_document_versions WHERE id = ${literal(approved.decidedVersionId)};`)).toBe("approved");
+  });
+
   // ─── Search and summary ───────────────────────────────────────────────────
 
   test("KB-A-32 search finds folders and documents by name, and scopes to the requested type", { tag: '@tesbo.testId("TES-TC-364")' }, async () => {

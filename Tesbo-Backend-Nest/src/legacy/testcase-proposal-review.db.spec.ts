@@ -1114,6 +1114,10 @@ type Body=Record<string,any>;
         expect(approved.reviewedVersionId).toBe(approved.decidedVersionId);
         const retry=await service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human);
         expect(retry).toMatchObject({decidedVersionId:approved.decidedVersionId,replayed:true});
+        // Approval alone must not expose the manual to Zyra/RAG. Assert while the document is
+        // actually approved: doing this only after a rejection would pass for the wrong reason.
+        const exposedApproved=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposedApproved.rows[0].n).toBe(0);
 
         // A later rejection must supersede the earlier approval as the current decision. The
         // snapshot is bound to the exact newly submitted version, not to the document's latest
@@ -1140,6 +1144,9 @@ type Body=Record<string,any>;
 
         const exposed=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
         expect(exposed.rows[0].n).toBe(0);
+        await expect(service().updateKnowledgeDocument(project,user,docId,
+          {documentType:"general",expectedRevision:rejected.editRevision}))
+          .rejects.toMatchObject({status:400});
 
         legacyId=(await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Legacy general ${randomUUID()}`,documentType:"general",contentText:"Legacy"})).id;
         await expect(service().approveGovernedKnowledgeDocument(project,user,legacyId,{versionId:submitted.id},human))
