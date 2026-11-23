@@ -104,4 +104,5 @@ jobs:
           PR_NUMBER: ${{ steps.publish.outputs.pull-request-number }}
           SOURCE_SHA: ${{ steps.handoff.outputs.source_sha }}
           BOT_BRANCH: ${{ steps.handoff.outputs.bot_branch }}
+          EXPECTED_TREE_SHA: ${{ steps.handoff.outputs.tree_sha }}
         run: node trusted/scripts/agent-pr-verify-publication.mjs
