@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { resetToLaunch, setGraceWindow, setProPlan } from "../utils/billing-db";
 import { exec, literal, scalar } from "../utils/psql";
+import { approveTestcase } from "../utils/testcase-approval";
 import {
   anonymousContext,
   loginAs,
@@ -170,6 +171,75 @@ test.describe("custom field definitions", () => {
   }
 
   // ─── Creation ──────────────────────────────────────────────────────────────
+
+  test("every definition writer retires warmed approved lists after the native review-dependency trigger", async () => {
+    const existing = await textField(); // gives reorder a second field; created before any warm read
+    const projectId = tenant!.mainProjectId;
+    const createdResponse = await asOwner.post(`/api/projects/${projectId}/testcases`, {
+      data: { title: fieldName("Definition cache"), status: "Draft" },
+    });
+    expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    const ownedCase = await createdResponse.json() as { id: string; title: string };
+    const caseUrl = `/api/projects/${projectId}/testcases/${ownedCase.id}`;
+    const listUrl = `/api/projects/${projectId}/testcases`;
+    let total: string | undefined;
+
+    const assertPages = async (status: string, approvalCurrent: boolean) => {
+      for (const limit of [25, 1]) {
+        const response = await asOwner.get(listUrl, { params: { limit, offset: 0 } });
+        expect(response.status(), await response.text()).toBe(200);
+        const count = response.headers()["x-total-count"];
+        expect(Number(count)).toBeGreaterThanOrEqual(1);
+        if (total === undefined) total = count;
+        expect(count).toBe(total);
+        const rows = await response.json() as Array<{ id: string; title: string; status: string; approvalCurrent: boolean }>;
+        expect(rows.find(row => row.id === ownedCase.id)).toMatchObject({
+          id: ownedCase.id, title: ownedCase.title, status, approvalCurrent,
+        });
+      }
+    };
+    const dependencyRevision = () => Number(scalar(
+      `SELECT review_dependency_revision::text FROM testcases WHERE id = ${literal(ownedCase.id)} AND project_id = ${literal(projectId)};`,
+    ));
+    const changedBy = (label: string, write: () => Promise<APIResponse>) => test.step(label, async () => {
+      const reviewed = await approveTestcase(asOwner, projectId, ownedCase.id);
+      expect(reviewed.approvalCurrent).toBe(true);
+      const beforeDependency = dependencyRevision();
+      await assertPages("Approved", true);
+
+      const response = await write();
+      expect(response.ok(), `${label}: ${await response.text()}`).toBeTruthy();
+      // No case edit or reapproval occurs until both previously warm pages have been checked.
+      // These exact-case/SQL reads observe the real V155 trigger, without causing invalidation.
+      const exactResponse = await asOwner.get(caseUrl);
+      expect(exactResponse.status(), await exactResponse.text()).toBe(200);
+      const exact = await exactResponse.json();
+      expect(exact).toMatchObject({ id: ownedCase.id, status: "In Review", approvalCurrent: false });
+      expect(exact.approvalRevision).not.toBe(reviewed.approvalRevision);
+      expect(dependencyRevision()).toBeGreaterThan(beforeDependency);
+      expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(ownedCase.id)} AND project_id = ${literal(projectId)};`)).toBe("In Review");
+      await assertPages("In Review", false);
+      return response;
+    });
+
+    try {
+      const field = await (await changedBy("create definition", () => asOwner.post(definitionsUrl(), {
+        data: { name: fieldName("Select cache"), fieldType: "single_select", config: { options: [{ label: "Alpha" }, { label: "Beta" }] } },
+      }))).json();
+      await changedBy("rename definition", () => asOwner.patch(definitionUrl(field.id), { data: { name: fieldName("Renamed cache") } }));
+      const appended = await (await changedBy("add option", () => asOwner.post(`${definitionUrl(field.id)}/options`, { data: { label: "Gamma" } }))).json();
+      const option = appended.config.options.find((item: { label: string }) => item.label === "Gamma");
+      expect(option?.id).toBeTruthy();
+      await changedBy("deactivate option", () => asOwner.patch(`${definitionUrl(field.id)}/options/${option.id}`, { data: { active: false } }));
+      await changedBy("reorder definitions", () => asOwner.post(`${definitionsUrl()}/reorder`, { data: { orderedIds: [field.id, existing.id] } }));
+      await changedBy("change definition status", () => asOwner.patch(`${definitionUrl(field.id)}/status`, { data: { status: "inactive" } }));
+      await changedBy("delete definition", () => asOwner.delete(definitionUrl(field.id)));
+      await changedBy("restore definition", () => asOwner.post(restoreUrl(field.id)));
+    } finally {
+      const removed = await asOwner.delete(caseUrl, { failOnStatusCode: false });
+      expect(removed.ok(), await removed.text()).toBeTruthy();
+    }
+  });
 
   test("creates a field of every supported type, normalising each type's config", { tag: '@tesbo.testId("TES-TC-126")' }, async () => {
     const specs: { fieldType: string; config?: Record<string, unknown>; expected?: Record<string, unknown> }[] = [

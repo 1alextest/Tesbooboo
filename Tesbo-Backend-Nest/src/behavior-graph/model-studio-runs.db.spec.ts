@@ -43,7 +43,7 @@ function latch() {
     const legacy = makeLegacy(db), internals = legacy as unknown as Body;
     const plans = { assertCustomFieldsEnabled: jest.fn().mockResolvedValue(undefined) } as unknown as PlanLimitsService;
     internals.customFields = new CustomFieldsService(db, plans,
-      new ProjectLookupService(db, new RequestCacheService({} as AppConfigService)), legacy);
+      new ProjectLookupService(db, new RequestCacheService({} as AppConfigService)), legacy, internals.testcasesListCache);
     internals.customTags = new CustomTagsService(db, legacy, internals.testcasesListCache);
     const embedding = jest.spyOn(internals, "enqueueTestcaseEmbedding").mockReturnValue(undefined);
     const suitesCache = jest.spyOn(internals.suitesCache, "invalidate").mockResolvedValue(undefined);

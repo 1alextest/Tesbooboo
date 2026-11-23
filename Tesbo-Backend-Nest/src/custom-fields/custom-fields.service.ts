@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, forwardRef, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { randomBytes, randomUUID } from "crypto";
 import { DatabaseService } from "../database/database.service";
+import { TestcasesListCacheService } from "../cache/testcases-list-cache.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { ProjectLookupService } from "../request-cache/project-lookup.service";
 import { isUuid, LegacyService } from "../legacy/legacy.service";
@@ -101,8 +102,20 @@ export class CustomFieldsService {
     private readonly db: DatabaseService,
     private readonly planLimits: PlanLimitsService,
     private readonly projectLookup: ProjectLookupService,
-    @Inject(forwardRef(() => LegacyService)) private readonly legacy: LegacyService
+    @Inject(forwardRef(() => LegacyService)) private readonly legacy: LegacyService,
+    private readonly testcasesListCache: TestcasesListCacheService
   ) {}
+
+  private async withListInvalidation<T>(projectId: string, write: () => Promise<T>): Promise<T> {
+    try {
+      return await write();
+    } finally {
+      // Standalone writes can autocommit a value/definition before a later audit fails. A completed
+      // attempt must clear that projection even when the original error is propagated. Callers
+      // owning a transaction wrap its whole completion, never an intermediate statement.
+      await this.testcasesListCache.invalidate(projectId);
+    }
+  }
 
   private async requireConfigAccess(userId: string | null | undefined, projectId: string) {
     const project = await this.legacy.requireProjectAccess(userId, projectId);
@@ -166,16 +179,18 @@ export class CustomFieldsService {
       [projectId]
     );
 
-    const res = await this.db.query(
-      `INSERT INTO custom_field_definitions
-       (project_id, key, name, description, field_type, status, required, display_order, config, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$10)
-       RETURNING *, false AS is_used`,
-      [projectId, key, name, body.description || null, fieldType, status, Boolean(body.required), orderRes.rows[0].next, JSON.stringify(config), userId]
-    );
-    const dto = mapDefinitionRow(res.rows[0]);
-    await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_created", "custom_field_definition", dto.id, dto.name, { after: dto });
-    return dto;
+    return this.withListInvalidation(projectId, async () => {
+      const res = await this.db.query(
+        `INSERT INTO custom_field_definitions
+         (project_id, key, name, description, field_type, status, required, display_order, config, created_by, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$10)
+         RETURNING *, false AS is_used`,
+        [projectId, key, name, body.description || null, fieldType, status, Boolean(body.required), orderRes.rows[0].next, JSON.stringify(config), userId]
+      );
+      const dto = mapDefinitionRow(res.rows[0]);
+      await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_created", "custom_field_definition", dto.id, dto.name, { after: dto });
+      return dto;
+    });
   }
 
   async updateDefinition(userId: string | null | undefined, projectId: string, definitionId: string, body: Body): Promise<CustomFieldDefinitionDto> {
@@ -211,16 +226,18 @@ export class CustomFieldsService {
     const required = body.required !== undefined ? Boolean(body.required) : existing.required;
     const description = body.description !== undefined ? body.description || null : existing.description;
 
-    const res = await this.db.query(
-      `UPDATE custom_field_definitions
-       SET name = $3, description = $4, required = $5, config = $6::jsonb, updated_by = $7, updated_at = now()
-       WHERE id = $1 AND project_id = $2
-       RETURNING *, (SELECT EXISTS (SELECT 1 FROM custom_field_values v WHERE v.definition_id = $1)) AS is_used`,
-      [definitionId, projectId, name, description, required, JSON.stringify(config), userId]
-    );
-    const dto = mapDefinitionRow(res.rows[0]);
-    await this.logConfigChangeEvents(projectId, userId, existing, dto);
-    return dto;
+    return this.withListInvalidation(projectId, async () => {
+      const res = await this.db.query(
+        `UPDATE custom_field_definitions
+         SET name = $3, description = $4, required = $5, config = $6::jsonb, updated_by = $7, updated_at = now()
+         WHERE id = $1 AND project_id = $2
+         RETURNING *, (SELECT EXISTS (SELECT 1 FROM custom_field_values v WHERE v.definition_id = $1)) AS is_used`,
+        [definitionId, projectId, name, description, required, JSON.stringify(config), userId]
+      );
+      const dto = mapDefinitionRow(res.rows[0]);
+      await this.logConfigChangeEvents(projectId, userId, existing, dto);
+      return dto;
+    });
   }
 
   private async logConfigChangeEvents(
@@ -278,7 +295,7 @@ export class CustomFieldsService {
     const trimmed = String(label || "").trim();
     if (!trimmed) throw new BadRequestException({ error: "label is required" });
 
-    return this.db.transaction(async (client) => {
+    return this.withListInvalidation(projectId, () => this.db.transaction(async (client) => {
       const res = await client.query(`SELECT * FROM custom_field_definitions WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE`, [
         definitionId,
         projectId
@@ -308,7 +325,7 @@ export class CustomFieldsService {
         label: option.label
       });
       return dto;
-    });
+    }));
   }
 
   async setOptionActive(
@@ -321,7 +338,7 @@ export class CustomFieldsService {
     await this.requireConfigAccess(userId, projectId);
     requireDefinitionId(definitionId);
 
-    return this.db.transaction(async (client) => {
+    return this.withListInvalidation(projectId, () => this.db.transaction(async (client) => {
       const res = await client.query(`SELECT * FROM custom_field_definitions WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE`, [
         definitionId,
         projectId
@@ -352,7 +369,7 @@ export class CustomFieldsService {
         { optionId: option.id, label: option.label }
       );
       return dto;
-    });
+    }));
   }
 
   async reorderDefinitions(userId: string | null | undefined, projectId: string, orderedIds: string[]): Promise<void> {
@@ -368,15 +385,17 @@ export class CustomFieldsService {
     const matches = currentIds.size === incomingIds.size && [...currentIds].every((id) => incomingIds.has(id));
     if (!matches) throw new BadRequestException({ error: "orderedIds must exactly match the project's active/inactive custom fields" });
 
-    await this.db.transaction(async (client) => {
-      for (let i = 0; i < orderedIds.length; i++) {
-        await client.query(
-          "UPDATE custom_field_definitions SET display_order = $3, updated_by = $4, updated_at = now() WHERE id = $1 AND project_id = $2",
-          [orderedIds[i], projectId, i, userId]
-        );
-      }
+    await this.withListInvalidation(projectId, async () => {
+      await this.db.transaction(async (client) => {
+        for (let i = 0; i < orderedIds.length; i++) {
+          await client.query(
+            "UPDATE custom_field_definitions SET display_order = $3, updated_by = $4, updated_at = now() WHERE id = $1 AND project_id = $2",
+            [orderedIds[i], projectId, i, userId]
+          );
+        }
+      });
+      await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_reordered", "project", projectId, null, { order: orderedIds });
     });
-    await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_reordered", "project", projectId, null, { order: orderedIds });
   }
 
   async setStatus(userId: string | null | undefined, projectId: string, definitionId: string, status: FieldStatus): Promise<CustomFieldDefinitionDto> {
@@ -392,19 +411,21 @@ export class CustomFieldsService {
     const existing = mapDefinitionRow(existingRes.rows[0]);
     if (existing.status === "archived") throw new BadRequestException({ error: "Archived fields cannot be reactivated" });
 
-    const res = await this.db.query(
-      `UPDATE custom_field_definitions SET status = $3, updated_by = $4, updated_at = now()
-       WHERE id = $1 AND project_id = $2
-       RETURNING *, (SELECT EXISTS (SELECT 1 FROM custom_field_values v WHERE v.definition_id = $1)) AS is_used`,
-      [definitionId, projectId, status, userId]
-    );
-    const dto = mapDefinitionRow(res.rows[0]);
-    const action = status === "archived" ? "custom_field_archived" : status === "active" ? "custom_field_reactivated" : "custom_field_deactivated";
-    await this.legacy.logProjectActivity(projectId, userId ?? null, action, "custom_field_definition", dto.id, dto.name, {
-      before: existing.status,
-      after: status
+    return this.withListInvalidation(projectId, async () => {
+      const res = await this.db.query(
+        `UPDATE custom_field_definitions SET status = $3, updated_by = $4, updated_at = now()
+         WHERE id = $1 AND project_id = $2
+         RETURNING *, (SELECT EXISTS (SELECT 1 FROM custom_field_values v WHERE v.definition_id = $1)) AS is_used`,
+        [definitionId, projectId, status, userId]
+      );
+      const dto = mapDefinitionRow(res.rows[0]);
+      const action = status === "archived" ? "custom_field_archived" : status === "active" ? "custom_field_reactivated" : "custom_field_deactivated";
+      await this.legacy.logProjectActivity(projectId, userId ?? null, action, "custom_field_definition", dto.id, dto.name, {
+        before: existing.status,
+        after: status
+      });
+      return dto;
     });
-    return dto;
   }
 
   /**
@@ -421,15 +442,17 @@ export class CustomFieldsService {
     await this.requireConfigAccess(userId, projectId);
     requireDefinitionId(definitionId);
 
-    const res = await this.db.query(
-      `UPDATE custom_field_definitions SET deleted_at = now(), deleted_by = $3, updated_by = $3, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL
-       RETURNING *`,
-      [definitionId, projectId, userId ?? null]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "Custom field not found" });
-    const dto = mapDefinitionRow(res.rows[0]);
-    await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_deleted", "custom_field_definition", dto.id, dto.name, { before: dto });
+    await this.withListInvalidation(projectId, async () => {
+      const res = await this.db.query(
+        `UPDATE custom_field_definitions SET deleted_at = now(), deleted_by = $3, updated_by = $3, updated_at = now()
+         WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL
+         RETURNING *`,
+        [definitionId, projectId, userId ?? null]
+      );
+      if (!res.rows[0]) throw new NotFoundException({ error: "Custom field not found" });
+      const dto = mapDefinitionRow(res.rows[0]);
+      await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_deleted", "custom_field_definition", dto.id, dto.name, { before: dto });
+    });
   }
 
   /**
@@ -442,16 +465,18 @@ export class CustomFieldsService {
     await this.requireConfigAccess(userId, projectId);
     requireDefinitionId(definitionId);
 
-    const res = await this.db.query(
-      `UPDATE custom_field_definitions SET deleted_at = NULL, deleted_by = NULL, updated_by = $3, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND deleted_at IS NOT NULL
-       RETURNING *, (SELECT EXISTS (SELECT 1 FROM custom_field_values v WHERE v.definition_id = $1)) AS is_used`,
-      [definitionId, projectId, userId ?? null]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "Deleted custom field not found" });
-    const dto = mapDefinitionRow(res.rows[0]);
-    await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_restored", "custom_field_definition", dto.id, dto.name, { after: dto });
-    return dto;
+    return this.withListInvalidation(projectId, async () => {
+      const res = await this.db.query(
+        `UPDATE custom_field_definitions SET deleted_at = NULL, deleted_by = NULL, updated_by = $3, updated_at = now()
+         WHERE id = $1 AND project_id = $2 AND deleted_at IS NOT NULL
+         RETURNING *, (SELECT EXISTS (SELECT 1 FROM custom_field_values v WHERE v.definition_id = $1)) AS is_used`,
+        [definitionId, projectId, userId ?? null]
+      );
+      if (!res.rows[0]) throw new NotFoundException({ error: "Deleted custom field not found" });
+      const dto = mapDefinitionRow(res.rows[0]);
+      await this.legacy.logProjectActivity(projectId, userId ?? null, "custom_field_restored", "custom_field_definition", dto.id, dto.name, { after: dto });
+      return dto;
+    });
   }
 
   async getValuesForTestCase(userId: string | null | undefined, projectId: string, testcaseId: string): Promise<CustomFieldValueDto[]> {
@@ -516,7 +541,10 @@ export class CustomFieldsService {
 
     const context = await this.loadWriteContext(projectId, runner, mode);
     if (!context) return;
-    await this.setValuesWithContext(actorId, projectId, testcaseId, values, context, runner, options);
+    const write = () => this.setValuesWithContext(actorId, projectId, testcaseId, values, context, runner, options);
+    // An explicit transaction runner's outer owner invalidates only after its own commit.
+    if (runner === this.db) await this.withListInvalidation(projectId, write);
+    else await write();
   }
 
   /**

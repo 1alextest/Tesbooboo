@@ -40,7 +40,7 @@ type Body=Record<string,any>;
     const db=new DatabaseService(pool),svc=makeLegacy(db);
     const internals=svc as unknown as Body;
     const plans={assertCustomFieldsEnabled:jest.fn().mockResolvedValue(undefined)} as unknown as PlanLimitsService;
-    internals.customFields=new CustomFieldsService(db,plans,new ProjectLookupService(db,new RequestCacheService({} as AppConfigService)),svc);
+    internals.customFields=new CustomFieldsService(db,plans,new ProjectLookupService(db,new RequestCacheService({} as AppConfigService)),svc,internals.testcasesListCache);
     internals.customTags=new CustomTagsService(db,svc,internals.testcasesListCache);
     internals.ragIngestion={enqueueEmbedding:jest.fn().mockResolvedValue(undefined)};
     jest.spyOn(internals,"enqueueTestcaseEmbedding").mockReturnValue(undefined);

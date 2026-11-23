@@ -2306,6 +2306,88 @@ test.describe("repository paging", () => {
   const REFUSED = [400, 401, 403, 404];
   const listUrl = `/api/projects/${ctx.projectId}/testcases`;
 
+  test("warm unfiltered pages reflect native create, edit and delete immediately in one isolated project", async ({ request }) => {
+    const stamp = Date.now();
+    const projectResponse = await request.post("/api/projects", {
+      data: { name: `E2E Cache ${stamp}`, key: `CC${stamp.toString(36)}${test.info().workerIndex}` },
+    });
+    expect(projectResponse.ok(), await projectResponse.text()).toBeTruthy();
+    const project = await projectResponse.json() as { id: string };
+    expect(project.id).toMatch(/^[a-f0-9-]{36}$/);
+    const url = `/api/projects/${project.id}/testcases`;
+    const upperUrl = `/api/projects/${project.id.toUpperCase()}/testcases`;
+    const ownedCases: string[] = [];
+    type Row = { id: string; title: string; status: string };
+
+    const page = async (limit: number, offset: number, expected: Row[], total: number, readUrl = upperUrl) => {
+      // No search, sort or status parameter: these requests exercise the actual cached shape.
+      const response = await request.get(readUrl, { params: { limit, offset } });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      expect(response.headers()["x-total-count"]).toBe(String(total));
+      const rows = await response.json() as Row[];
+      expect(rows.map(row => row.id)).toEqual(expected.map(row => row.id));
+      for (const [index, expectedRow] of expected.entries()) {
+        expect(rows[index]).toMatchObject({
+          id: expectedRow.id, title: expectedRow.title, status: expectedRow.status,
+        });
+      }
+    };
+    const pages = async (rows: Row[]) => {
+      await page(25, 0, rows, rows.length);
+      await page(1, 0, rows.slice(0, 1), rows.length, url);
+      await page(1, 1, rows.slice(1, 2), rows.length);
+    };
+    const createDraft = async (title: string) => {
+      // Native POST only. An automatic fixture approval would add a second invalidation and
+      // could conceal a missing create hook; this test deliberately keeps every case Draft.
+      const response = await request.post(url, { data: { title } });
+      expect(response.status(), await response.text()).toBe(201);
+      const created = await response.json() as Row;
+      ownedCases.push(created.id);
+      expect(created).toMatchObject({ title, status: "Draft" });
+      return created;
+    };
+
+    try {
+      await pages([]); // warm empty pages before the first native write
+      const first = await createDraft(`E2E Cache first ${stamp}`);
+      await pages([first]);
+      await pages([first]); // repeat a healthy warm read before the next write
+      const second = await createDraft(`E2E Cache second ${stamp}`);
+      await pages([second, first]);
+
+      const initialExactResponse = await request.get(`${url}/${first.id}`);
+      expect(initialExactResponse.ok(), await initialExactResponse.text()).toBeTruthy();
+      const initialExact = await initialExactResponse.json() as Row & { editRevision: string };
+      expect(initialExact.editRevision).toMatch(/^[a-f0-9]{64}$/);
+      const editedTitle = `${first.title} edited`;
+      const editedResponse = await request.put(`${url}/${first.id}`, {
+        data: { expectedRevision: initialExact.editRevision, title: editedTitle },
+      });
+      expect(editedResponse.ok(), await editedResponse.text()).toBeTruthy();
+      const exactResponse = await request.get(`${url}/${first.id}`);
+      expect(exactResponse.ok(), await exactResponse.text()).toBeTruthy();
+      const edited = await exactResponse.json() as Row & { editRevision: string };
+      expect(edited).toMatchObject({ id: first.id, title: editedTitle, status: "Draft" });
+      expect(edited.editRevision).not.toBe(initialExact.editRevision);
+      await pages([second, edited]);
+
+      const deletedResponse = await request.delete(`${url}/${second.id}`);
+      expect(deletedResponse.ok(), await deletedResponse.text()).toBeTruthy();
+      await pages([edited]);
+      const deletedLastResponse = await request.delete(`${url}/${first.id}`);
+      expect(deletedLastResponse.ok(), await deletedLastResponse.text()).toBeTruthy();
+      await pages([]);
+    } finally {
+      try {
+        for (const id of ownedCases) await request.delete(`${url}/${id}`, { failOnStatusCode: false });
+      } finally {
+        const deletedProject = await request.delete(`/api/projects/${project.id}`, { failOnStatusCode: false });
+        expect(deletedProject.ok(), await deletedProject.text()).toBeTruthy();
+      }
+    }
+  });
+
   test("an unfiltered sorted page is not answered from the default-order list cache", async ({ request }) => {
     // The no-filter list cache is keyed on (project, limit, offset) only. Before sortBy was excluded
     // from it, the sorted request below came back as the cached default-order rows, so ascending and
