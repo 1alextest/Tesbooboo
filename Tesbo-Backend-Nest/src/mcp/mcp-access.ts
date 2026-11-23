@@ -86,7 +86,7 @@ export function onlyReducesMcpAccess(before: ProjectMcpAccess, after: ProjectMcp
  */
 export function hasApprovedMcpToolPermission(
   credentialScopes: readonly string[],
-  grant: Pick<McpClientGrant, "scopes" | "allowedTools">,
+  grant: { readonly scopes: readonly ("read" | "write")[]; readonly allowedTools: readonly string[] | null },
   requiredScope: "read" | "write",
   toolName: string
 ): boolean {
