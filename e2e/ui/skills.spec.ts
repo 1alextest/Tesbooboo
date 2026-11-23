@@ -1173,13 +1173,15 @@ test.describe("governed skills operator journey (UI)", () => {
     const title = `Lost creation response ${suffix}`;
     let dropped = false;
     let documentId = "";
+    let createdSkillKey = "";
     try {
       const page = await open(browser, "/settings/skills");
       const endpoint = `**/api/projects/${tenant!.mainProjectId}/skills`;
       await page.route(endpoint, async (route) => {
         if (route.request().method() !== "POST" || dropped) return route.continue();
         dropped = true;
-        await route.fetch(); // the native creation commits
+        const response = await route.fetch(); // the native creation commits
+        createdSkillKey = (await response.json()).skillKey;
         await route.abort(); // ...but the client never receives the response
       });
       await page.getByTestId("skill-title").fill(title);
@@ -1194,11 +1196,13 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(dropped).toBe(true);
       documentId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(documentId).not.toBe("");
+      expect(createdSkillKey).toMatch(/^SKL-/);
+      expect(scalar(`SELECT sp.skill_key FROM skill_profiles sp JOIN knowledge_documents d ON d.id=sp.document_id WHERE d.project_id=${literal(tenant!.mainProjectId)} AND d.title=${literal(title)};`)).toBe(createdSkillKey);
       expect(scalar(`SELECT COUNT(*)::int FROM skill_profiles sp JOIN knowledge_documents d ON d.id=sp.document_id WHERE d.project_id=${literal(tenant!.mainProjectId)} AND d.title=${literal(title)};`)).toBe("1");
       expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`)).toBe("1");
       expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(documentId)} AND snapshot_kind='submitted';`)).toBe("1");
     } finally {
-      if (documentId) await cleanupSkill(documentId);
+      await cleanupCandidatesWithTitle(title);
     }
   });
 });

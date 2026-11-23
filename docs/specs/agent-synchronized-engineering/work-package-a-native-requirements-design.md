@@ -688,7 +688,10 @@ The request digest covers the **requested** content, not an automatically genera
 `skillKey` is omitted, the digest uses `null`; two identical retries therefore match and the first
 candidate's generated key is returned. Explicit keys remain part of the digest.
 
-Rows written by the original V161 algorithm hashed the generated key. For compatibility, a retry that
-still omits the key also compares against the legacy digest computed from that row's stored key. An
-explicit-key request never uses the legacy fallback, so changing the key cannot be mistaken for reuse.
-Concurrent omitted-key retries serialize on the request lock and converge on one candidate.
+Rows written by the original V161 algorithm hashed the generated key. V162 marks the basis version:
+new rows store `creation_basis_version=2`, and only pre-marker rows may use the legacy digest computed
+from their stored key. A new explicit-key row can therefore never replay as an omitted retry. For V161
+rows the original request cannot be reconstructed, so an explicit-origin row and a generated-origin row
+are indistinguishable; an omitted-key retry on such a row may replay when content matches. That
+compatibility ambiguity is limited to pre-V162 rows and never creates a second candidate, approval or
+assignment. Concurrent omitted-key retries serialize on the request lock and converge on one candidate.

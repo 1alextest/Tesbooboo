@@ -16265,12 +16265,12 @@ export class LegacyService implements OnModuleInit {
     if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
     // The optional key is part of the requested content only when the caller supplied it. An
     // automatically generated identity must not change the request digest between retries.
-    const suppliedSkillKey = body.skillKey === undefined || String(body.skillKey).trim() === ""
-      ? null
-      : String(body.skillKey).trim();
+    // Preserve the original optional-key semantics for null/false/0/blank values: an absent key is
+    // generated. Only a supplied non-empty string becomes part of the request identity.
+    const suppliedSkillKey = !body.skillKey ? null : String(body.skillKey).trim() || null;
     const skillKey = suppliedSkillKey || `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
-    const requestKey = body.requestKey === undefined ? null : String(body.requestKey).trim();
+    const requestKey = body.requestKey == null || body.requestKey === "" ? null : String(body.requestKey).trim();
     if (requestKey !== null && (!requestKey || requestKey.length > 160)) {
       throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     }
@@ -16288,16 +16288,16 @@ export class LegacyService implements OnModuleInit {
       if (requestKey) {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-create:${projectId}:${principalKey}:${requestKey}`]);
         const prior = await client.query(
-          `SELECT sp.document_id, sp.creation_request_digest, sp.skill_key
+          `SELECT sp.document_id, sp.creation_request_digest, sp.skill_key, sp.creation_basis_version
              FROM skill_profiles sp
             WHERE sp.project_id=$1 AND sp.creation_principal=$2 AND sp.creation_request_key=$3`,
           [projectId, principalKey, requestKey]
         );
         if (prior.rows[0]) {
-          // V161 originally hashed the automatically generated key. Recompute that legacy basis
-          // only when the caller still omits the key, so old rows replay without weakening a
-          // changed explicit-key request into a false match.
-          const legacyDigest = !suppliedSkillKey
+          // Pre-marker V161 rows hashed whatever key they stored (generated or explicit). The
+          // fallback is only for that legacy basis and only when the retry still omits the key.
+          // New rows carry basis version 2, so an explicit-key row can never replay as omitted.
+          const legacyDigest = !suppliedSkillKey && Number(prior.rows[0].creation_basis_version) < 2
             ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey: prior.rows[0].skill_key, instructions })).digest("hex")
             : null;
           const digestMatches = prior.rows[0].creation_request_digest === requestDigest
@@ -16312,7 +16312,7 @@ export class LegacyService implements OnModuleInit {
           if (!existingDoc) {
             throw new ConflictException({ code: "SKILL_REQUEST_CONFLICT", error: "The candidate for this requestKey is no longer available; choose a new requestKey" });
           }
-          return { doc: existingDoc, replayed: true };
+          return { doc: existingDoc, replayed: true, skillKey: String(prior.rows[0].skill_key) };
         }
       }
       // A skillKey identifies the project's stable skill identity. A duplicate is a refusal, not a
@@ -16330,8 +16330,8 @@ export class LegacyService implements OnModuleInit {
       )).rows[0];
       try {
         await client.query(
-          `INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype,creation_principal,creation_request_key,creation_request_digest)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          `INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype,creation_principal,creation_request_key,creation_request_digest,creation_basis_version)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,2)`,
           [doc.id, projectId, skillKey, module, subtype, requestKey ? principalKey : null, requestKey, requestDigest]
         );
       } catch (error) {
@@ -16343,10 +16343,10 @@ export class LegacyService implements OnModuleInit {
         throw error;
       }
       await this.logProjectActivity(projectId, uid, "skill_candidate_created", "knowledge_document", doc.id, title, { skillKey, module, subtype }, client);
-      return { doc, replayed };
+      return { doc, replayed, skillKey };
     });
     if (!result.replayed) this.enqueueEmbedding(String(result.doc.organization_id), projectId, "document", String(result.doc.id), "created");
-    return { ...toCamel(result.doc), skillKey, module, subtype, state: "draft", effective: false, replayed: result.replayed };
+    return { ...toCamel(result.doc), skillKey: result.skillKey ?? skillKey, module, subtype, state: "draft", effective: false, replayed: result.replayed };
   }
 
   /** Human-only approval of the exact submitted skill version. Approval stays separate from assignment. */
