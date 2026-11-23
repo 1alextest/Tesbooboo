@@ -10,7 +10,39 @@ function request(path: string, method: string, scopes: string[] | null = ["read"
     apiToken: scopes ? { tokenId: "token-1", userId: "user-1", projectId, scopes } : null
   }) }) } as unknown as ExecutionContext;
 }
+function futureOAuthRequest(path: string, method = "POST"): ExecutionContext {
+  return { switchToHttp: () => ({ getRequest: () => ({
+    path, method, userId: "tesbo-user", apiToken: null,
+    cookies: { tesbo_session: "existing-browser-cookie" },
+    oauthAccess: {
+      kind: "oauth_access", issuer: "https://issuer.example", subject: "user-sub",
+      clientId: "client", grantId: "grant", userId: "tesbo-user", projectId: P,
+      resource: `https://tesbo.example/api/projects/${P}/mcp`, scopes: ["read", "write"]
+    }
+  }) }) } as unknown as ExecutionContext;
+}
+
 describe("ApiTokenRestGuard", () => {
+  it.each([
+    ["POST", "/api/mcp"],
+    ["POST", `/api/projects/${P}/mcp`],
+    ["GET", `/api/projects/${P}/testcases`],
+    ["POST", `/api/projects/${P}/agents/zyra/tasks/proposals`],
+    ["POST", `/api/projects/${P}/testcases/case/approve`],
+    ["PUT", `/api/projects/${P}/mcp-access`],
+    ["POST", "/api/auth/logout"],
+    ["GET", "/api/auth/me"]
+  ])("fails closed for an OAuth machine principal on %s %s until a verifier and route policy exist",
+    async (method, path) => {
+      const l = legacy();
+      await expect(new ApiTokenRestGuard(l as unknown as LegacyService)
+        .canActivate(futureOAuthRequest(path, method)))
+        .rejects.toMatchObject({ response: expect.objectContaining({ code: "OAUTH_MACHINE_ACCESS_DISABLED" }) });
+      expect(l.requireProjectAccess).not.toHaveBeenCalled();
+    }
+  );
+
+
   it("preserves cookie requests", async () => {
     const l = legacy();
     expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, "POST", null))).toBe(true);
