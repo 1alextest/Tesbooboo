@@ -7,7 +7,8 @@ export const REPO='1alextest/Tesbooboo';
 // literal job names and the five directory matrix values produce the contexts below.
 // Reviewed source: 9f506df2b6fae0f74e2ae2c5172b9ef865ef2457, with the smoke workflow
 // from 8becc53fae3fe6eb299f00c07e278647d4370be3, combined with PR193's WPA-01
-// selection on development f456af1b. Contexts are defined here once.
+// selection on development f456af1b. PR209 adds the reviewed runtime-migrator contract
+// to the existing container-security job. Contexts are defined here once.
 // A workflow edit (including a same-name job edit) requires source review and pin reconciliation.
 // Pins/active metadata establish installed configuration, not successful live check publication,
 // a unique GitHub Actions producer identity, or proof that GitHub denies an unauthorized merge.
@@ -18,7 +19,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'39161db0ed9758a7c4161555a0b26d7679438fa7',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'9573ca239fa5c10c1c0ae4eaf3b35a04f10cc320',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'d9f69e8fa0f9685f3b59537c668bb9a7f93572f5',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',

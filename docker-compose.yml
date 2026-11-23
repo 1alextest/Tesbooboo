@@ -35,7 +35,8 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_USER: ${DATABASE_USER}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
-    command: ["npm", "run", "migrate"]
+    # The production runtime removes npm/npx; execute the compiled migration owner directly.
+    command: ["node", "dist/database/migrate.js"]
 
   backend:
     build:
