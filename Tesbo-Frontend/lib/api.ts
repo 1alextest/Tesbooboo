@@ -1570,6 +1570,8 @@ export interface SkillAssignmentRecord {
 export interface SkillRecord {
   id: string;
   title: string;
+  createdBy: string | null;
+  isReadOnly: boolean;
   skillKey: string | null;
   module: SkillModule | null;
   subtype: string | null;
@@ -1606,10 +1608,10 @@ export async function createSkillCandidate(projectId: string, data: {
 }
 
 /** Submit the current skill draft as an immutable candidate version. */
-export async function submitSkillVersion(projectId: string, documentId: string, expectedRevision: string): Promise<SkillVersionRecord> {
+export async function submitSkillVersion(projectId: string, documentId: string, expectedRevision: string, submissionKey = crypto.randomUUID()): Promise<SkillVersionRecord> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/submissions`, {
     method: "POST",
-    body: { expectedRevision, submissionKey: crypto.randomUUID() },
+    body: { expectedRevision, submissionKey },
   });
 }
 

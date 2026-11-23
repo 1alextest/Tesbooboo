@@ -636,3 +636,32 @@ review/comparison/history responses, known and uncertain approval outcomes, repr
 cross-field heading collisions, and bounded long comparisons. Actual before/after outcomes and reached assertions belong to the native
 PR evidence; test source alone does not establish a pass. This does not implement the separate Skills
 redesign or ratify root/S0/quorum governance.
+
+### 15.2 Recovering an acknowledged candidate after submission fails
+
+Candidate creation and immutable-version submission are separate native operations. Once creation
+returns the saved document identity, the page clears that completed creation form and reconciles the
+Skills library even if submission fails or its response is lost. It retains the failure message; a
+successful refresh is not presented as proof that the failed operation succeeded.
+
+A saved, unsubmitted draft exposes **Submit draft** to its creator or a current owner/manager. This
+resumes submission on the same document and edit revision; it does not create another candidate. The
+backend remains authoritative for permission, read-only state and revision checks. The submission key
+is stable for the actor, project, document and revision across reloads, so a late read or response cannot
+turn the same initial submission into a second snapshot. A changed revision has a different operation
+identity. Other API callers retain their ability to request an intentional new submission.
+
+If the submission already committed, the refreshed card exposes its existing **Review submitted vN**
+action. When the library cannot be read, it stays unavailable and offers no draft-submission action
+based on stale state. Inputs are disabled while the creation/submission operation is pending so its
+completion cannot erase edits entered during that operation. Approval, assignment and effective Skill
+selection remain separate human decisions.
+
+This is the concrete operator recovery for the existing ASER-C04 / FR-112–113 preservation and resume
+rules. The boundary is acknowledged creation followed by failed or uncertain submission. A lost creation
+response itself remains an unresolved boundary; a key conflict never authorizes reuse of someone else's
+candidate. Browser acceptance covers explicit and generated keys, reload, a committed submission with a
+lost response, unavailable reconciliation, and a late draft read followed by idempotent resume. The
+native PR records actual failing-before and passing-after execution; this text does not claim those runs
+have happened. Native Tesbo record synchronization remains separately required when its connector is
+available.
