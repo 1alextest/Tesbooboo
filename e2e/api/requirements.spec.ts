@@ -416,6 +416,7 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
       fields: { steps: revisedSteps, description: "Existing regression case with explicit recovery behaviour." }
     }]);
     expect(revised.staged.publication).toBe("unpublished");
+    taskIds.push(revised.staged.taskId);
     const amendedCase = await (await request.get(`${base}/testcases/${caseId}`)).json();
     expect(amendedCase.id).toBe(caseId);
     expect(amendedCase.editRevision).not.toBe(caseAfter.editRevision);
