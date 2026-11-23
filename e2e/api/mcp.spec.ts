@@ -830,6 +830,53 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
     });
   });
 
+  test("modern 2026 stateless clients receive an explicit version refusal without changing legacy MCP", async ({ request }) => {
+    await withToken(request, ["read"], async (api, token) => {
+      for (const url of ["/api/mcp", `/api/projects/${ctx.projectId}/mcp`]) {
+        const payload = {
+          jsonrpc: "2.0", id: 101, method: "server/discover",
+          params: { _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {}
+          } }
+        };
+        const modern = await api.post(url, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "server/discover",
+            Accept: "application/json"
+          },
+          data: payload, failOnStatusCode: false
+        });
+        expect(modern.status(), "legacy server must not pretend to speak stateless MCP").toBe(400);
+        expect(await modern.json()).toEqual({
+          jsonrpc: "2.0", id: 101,
+          error: { code: -32022, message: "Unsupported protocol version",
+            data: { supported: ["2025-06-18", "2024-11-05"], requested: "2026-07-28" } }
+        });
+        const modernList = await api.post(url, {
+          headers: { Authorization: `Bearer ${token}`, "MCP-Protocol-Version": "2026-07-28" },
+          data: { ...payload, id: 102, method: "tools/list" }, failOnStatusCode: false
+        });
+        expect(modernList.status()).toBe(400);
+        expect((await modernList.json()).error.code).toBe(-32022);
+
+        // The same token still uses the existing approved legacy method, with
+        // unchanged HTTP status and catalog authorization. No new OAuth grant.
+        const legacy = await api.post(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          data: { jsonrpc: "2.0", id: 103, method: "tools/list" },
+          failOnStatusCode: false
+        });
+        expect(legacy.status()).toBe(201);
+        const listed = await legacy.json();
+        expect(listed.error).toBeUndefined();
+        expect(listed.result.tools.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
   test("a client that never sends a session id is served exactly as before", async ({ request }) => {
     await withToken(request, ["read"], async (api, token) => {
       const list = await rpc(api, token, { id: 1, method: "tools/list" });
