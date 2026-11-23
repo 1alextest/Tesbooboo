@@ -1945,7 +1945,7 @@ export function buildMcpTools(): McpTool[] {
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
         }
-        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: true });
+        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: true, operation: "testcase" });
         const submittedOperations = Array.isArray(args.operations) ? args.operations.map(operation => {
           if (!operation || typeof operation !== "object" || Array.isArray(operation)) return operation;
           const key = operation.opType === "create" ? "draft" : "fields";
@@ -2010,7 +2010,7 @@ export function buildMcpTools(): McpTool[] {
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
         }
-        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false });
+        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false, operation: "requirement" });
         try {
           const task = await ctx.legacy.stageRequirementChangeBundle(ctx.projectId, ctx.userId,
             { requestKey, operations: args.operations, ...(args.title === undefined ? {} : { title: args.title }) },
