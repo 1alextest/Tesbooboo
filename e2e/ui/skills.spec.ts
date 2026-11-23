@@ -667,6 +667,12 @@ test.describe("governed skills operator journey (UI)", () => {
     groups: { selected: string; reversed: string; other: string }; extraTaskIds: string[];
   };
 
+  async function attachActivationView(page: Page, name: string) {
+    const screenshotPath = test.info().outputPath(name + ".png");
+    await page.getByTestId("requirement-review-panel").screenshot({ path: screenshotPath });
+    await test.info().attach(name, { path: screenshotPath, contentType: "image/png" });
+  }
+
   async function withActivationFixture(run: (fixture: ActivationFixture) => Promise<void>) {
     const suffix = randomUUID();
     const skillDocs: string[] = [], taskIds: string[] = [];
@@ -742,6 +748,27 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   }
 
+  async function approveNewRequirementBasis(f: ActivationFixture): Promise<string> {
+    const doc = await (await ownerApi.get(base() + "/knowledge-base/documents/" + f.requirementId)).json();
+    const stagedResponse = await ownerApi.post(base() + "/requirements/proposals", { data: {
+      requestKey: "newer-activation-basis-" + randomUUID(), title: "Newer activation requirement",
+      operations: [{ opType: "requirement_revision", operationId: randomUUID(), documentId: f.requirementId,
+        expectedRevision: doc.editRevision, title: "Newer activation requirement " + randomUUID(),
+        criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Updated obligation " + key })) }],
+    } });
+    expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
+    const staged = await stagedResponse.json();
+    f.extraTaskIds.push(staged.id);
+    const applied = await ownerApi.post(base() + "/requirements/proposals/" + staged.id + "/apply",
+      { data: { expectedProposalRevision: staged.proposalRevision } });
+    expect(applied.ok(), await applied.text()).toBe(true);
+    const appliedBody = await applied.json();
+    const approved = await ownerApi.post(base() + "/requirements/" + f.requirementId + "/approve",
+      { data: { versionId: appliedBody.receipt.requirement.versionId } });
+    expect(approved.ok(), await approved.text()).toBe(true);
+    return String((await approved.json()).approvedVersionId);
+  }
+
   test("activation recovery retains two uncertain ordered groups and verifies their exact native outcomes", async ({ browser }) => {
     await withActivationFixture(async f => {
       const coverageUrl = base() + "/requirements/" + f.requirementId + "/coverage";
@@ -751,7 +778,16 @@ test.describe("governed skills operator journey (UI)", () => {
       const before = await beforeResponse.json();
       const reversedBefore = scalar("SELECT to_jsonb(l)::text FROM requirement_case_links l WHERE requirement_id=" +
         literal(f.requirementId) + " AND criterion_keys=ARRAY['AC-2','AC-1']::text[];");
+      const snapshot = () => scalar("SELECT json_build_object(" +
+        "'links',(SELECT json_agg(to_jsonb(l) ORDER BY id) FROM requirement_case_links l WHERE requirement_id=" + literal(f.requirementId) + ")," +
+        "'audit',(SELECT json_agg(to_jsonb(a) ORDER BY id) FROM audit_logs a WHERE entity_name=" + literal(f.requirementId) +
+        " AND action='requirement_link_reapplied'))::text;");
       const page = await open(browser, "/agents/tasks/" + f.taskId);
+      const activationPosts: string[] = [];
+      page.on("request", request => {
+        if (request.method() === "POST" && request.url().includes(base() + "/requirements/" + f.requirementId + "/links/") &&
+          request.url().endsWith("/reapply")) activationPosts.push(request.url());
+      });
       for (const group of Object.values(f.groups)) await expect(page.getByTestId("requirement-link-activate-" + group)).toBeEnabled();
       // Deliver the already captured REAL native response to model a delayed/stale read. Only
       // delivery is controlled: actual activation writes and subsequent verification are native.
@@ -776,6 +812,9 @@ test.describe("governed skills operator journey (UI)", () => {
       }
       await expect(page.getByTestId("requirement-link-error-" + f.groups.selected)).toContainText("could not be confirmed");
       await expect(page.getByTestId("requirement-link-error-" + f.groups.other)).toContainText("could not be confirmed");
+      await attachActivationView(page, "activation-two-unconfirmed-groups");
+      expect(activationPosts).toHaveLength(2);
+      const beforeVerify = snapshot();
       await page.unroute(coveragePattern);
       await page.getByRole("button", { name: "Verify activation outcomes", exact: true }).click();
       for (const group of [f.groups.selected, f.groups.other]) {
@@ -796,6 +835,44 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(scalar("SELECT to_jsonb(l)::text FROM requirement_case_links l WHERE requirement_id=" +
         literal(f.requirementId) + " AND criterion_keys=ARRAY['AC-2','AC-1']::text[];")).toBe(reversedBefore);
       await expect(page.getByTestId("requirement-link-activate-" + f.groups.reversed)).toBeEnabled();
+      // Verification must only read: even a harmless replay POST would break this contract.
+      expect(activationPosts).toHaveLength(2);
+      expect(snapshot()).toBe(beforeVerify);
+      await attachActivationView(page, "activation-two-exact-outcomes-confirmed");
+
+      // Keep the displayed basis stale while a real edit invalidates the case approval. The
+      // untouched reversed group provides the existing action that refuses and refreshes it.
+      const changed = await ownerApi.put(base() + "/testcases/" + f.caseId,
+        { data: { title: "Unapproved later activation case " + randomUUID(), expectedRevision: f.caseBasis.editRevision } });
+      expect(changed.ok(), await changed.text()).toBe(true);
+      const reversedLink = after.cases.find((entry: { criterionKeys: string[] }) => entry.criterionKeys.join("::") === "AC-2::AC-1");
+      expect(reversedLink).toBeTruthy();
+      const refusedPromise = page.waitForResponse(response => response.request().method() === "POST" &&
+        response.url().endsWith("/requirements/" + f.requirementId + "/links/" + reversedLink.linkId + "/reapply"));
+      await page.getByTestId("requirement-link-activate-" + f.groups.reversed).click();
+      const refused = await refusedPromise;
+      expect(refused.status()).toBe(409);
+      expect(await refused.json()).toMatchObject({ code: "CASE_REVISION_CONFLICT" });
+      expect(refused.request().postDataJSON()).toMatchObject({ expectedRequirementVersionId: f.approvedVersionId,
+        expectedCaseRevision: f.caseBasis.editRevision, expectedApprovalRevision: f.caseBasis.approvalRevision });
+      await expect(page.getByTestId("requirement-link-error-" + f.groups.reversed)).toContainText("changed since this revision was read");
+      for (const group of [f.groups.selected, f.groups.other]) {
+        await expect(page.getByTestId("requirement-link-state-" + group)).toContainText("not active on the approved requirement version");
+        await expect(page.getByTestId("requirement-link-notice-" + group)).toHaveCount(0);
+      }
+      const afterEditResponse = await ownerApi.get(coverageUrl);
+      expect(afterEditResponse.ok(), await afterEditResponse.text()).toBe(true);
+      const afterEdit = await afterEditResponse.json();
+      for (const keys of [["AC-1", "AC-2"], ["AC-3"]]) {
+        const confirmed = after.cases.find((entry: { criterionKeys: string[] }) => JSON.stringify(entry.criterionKeys) === JSON.stringify(keys));
+        const current = afterEdit.cases.filter((entry: { criterionKeys: string[] }) => JSON.stringify(entry.criterionKeys) === JSON.stringify(keys));
+        expect(current).toHaveLength(1);
+        expect(current[0]).toMatchObject({ linkId: confirmed.linkId, approved: false, requirementVersionId: f.approvedVersionId,
+          testcaseRevision: f.caseBasis.editRevision, testcaseApprovalRevision: f.caseBasis.approvalRevision });
+      }
+      expect(activationPosts).toHaveLength(3);
+      expect(snapshot()).toBe(beforeVerify);
+      await attachActivationView(page, "activation-notices-cleared-after-case-edit");
     });
   });
 
@@ -829,24 +906,7 @@ test.describe("governed skills operator journey (UI)", () => {
           caseBasis = await (await ownerApi.get(base() + "/testcases/" + f.caseId)).json();
           expect(caseBasis.editRevision).not.toBe(f.caseBasis.editRevision);
         } else {
-          const doc = await (await ownerApi.get(base() + "/knowledge-base/documents/" + f.requirementId)).json();
-          const stagedResponse = await ownerApi.post(base() + "/requirements/proposals", { data: {
-            requestKey: "newer-activation-basis-" + randomUUID(), title: "Newer activation requirement",
-            operations: [{ opType: "requirement_revision", operationId: randomUUID(), documentId: f.requirementId,
-              expectedRevision: doc.editRevision, title: "Newer activation requirement " + randomUUID(),
-              criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Updated obligation " + key })) }],
-          } });
-          expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
-          const staged = await stagedResponse.json();
-          f.extraTaskIds.push(staged.id);
-          const applied = await ownerApi.post(base() + "/requirements/proposals/" + staged.id + "/apply",
-            { data: { expectedProposalRevision: staged.proposalRevision } });
-          expect(applied.ok(), await applied.text()).toBe(true);
-          const appliedBody = await applied.json();
-          const approved = await ownerApi.post(base() + "/requirements/" + f.requirementId + "/approve",
-            { data: { versionId: appliedBody.receipt.requirement.versionId } });
-          expect(approved.ok(), await approved.text()).toBe(true);
-          requirementVersionId = String((await approved.json()).approvedVersionId);
+          requirementVersionId = await approveNewRequirementBasis(f);
           expect(requirementVersionId).not.toBe(f.approvedVersionId);
         }
         // A separate actual human API action activates the NEW basis. It must never prove that
@@ -863,35 +923,76 @@ test.describe("governed skills operator journey (UI)", () => {
         expect(after.cases.find((entry: { linkId: string }) => entry.linkId === activatedBody.link.id))
           .toMatchObject({ approved: true, requirementVersionId, testcaseRevision: caseBasis.editRevision,
             testcaseApprovalRevision: caseBasis.approvalRevision });
+        await attachActivationView(page, "activation-unconfirmed-after-new-" + movedBasis + "-basis");
       });
     });
   }
 
-  test("activation affordance preserves server refusal for legacy project role aliases", async ({ browser }) => {
+  test("activation refuses the displayed stale requirement basis and preserves its error after the group disappears", async ({ browser }) => {
+    await withActivationFixture(async f => {
+      const page = await open(browser, "/agents/tasks/" + f.taskId);
+      await expect(page.getByTestId("requirement-link-activate-" + f.groups.selected)).toBeEnabled();
+      const newerVersion = await approveNewRequirementBasis(f);
+      expect(newerVersion).not.toBe(f.approvedVersionId);
+      const snapshot = () => scalar("SELECT json_build_object(" +
+        "'links',(SELECT json_agg(to_jsonb(l) ORDER BY id) FROM requirement_case_links l WHERE requirement_id=" + literal(f.requirementId) + ")," +
+        "'audit',(SELECT json_agg(to_jsonb(a) ORDER BY id) FROM audit_logs a WHERE entity_name=" + literal(f.requirementId) +
+        " AND action='requirement_link_reapplied'))::text;");
+      const before = snapshot();
+      await page.getByTestId("requirement-link-activate-" + f.groups.selected).click();
+      await expect(page.getByTestId("requirement-link-error-" + f.groups.selected)).toContainText("approved requirement version changed");
+      await expect(page.getByTestId("requirement-coverage-approved-version")).toContainText(newerVersion);
+      await expect(page.getByTestId("requirement-coverage-case-" + f.groups.selected)).toHaveCount(0);
+      await expect(page.getByTestId("requirement-link-error-" + f.groups.selected)).toBeVisible();
+      await expect(page.getByTestId("requirement-link-notice-" + f.groups.selected)).toHaveCount(0);
+      expect(snapshot()).toBe(before);
+      await attachActivationView(page, "activation-stale-requirement-error-without-current-group");
+    });
+  });
+
+  test("activation accepts documented manager role aliases and still refuses a QA reader without writes", async ({ browser }) => {
     await withActivationFixture(async f => {
       const snapshot = () => scalar("SELECT jsonb_agg(to_jsonb(l) ORDER BY id)::text FROM requirement_case_links l WHERE requirement_id=" + literal(f.requirementId) + ";");
-      const beforeRows = snapshot();
       try {
-        for (const role of ["admin", "test_manager"]) {
+        // FEATURE_DOCUMENTATION's role contract and the existing project/KB role parser define
+        // these as manager aliases. The earlier raw-role-denial expectation was the wrong oracle.
+        for (const [role, group] of [["admin", f.groups.selected], ["test_manager", f.groups.other]]) {
           exec("UPDATE project_members SET role=" + literal(role) + " WHERE project_id=" +
             literal(tenant!.mainProjectId) + " AND user_id=" + literal(tenant!.qa.userId) + ";");
           const page = await open(browser, "/agents/tasks/" + f.taskId, "qa");
-          await expect(page.getByTestId("requirement-link-readonly-" + f.groups.selected)).toBeVisible();
-          await expect(page.getByTestId("requirement-link-activate-" + f.groups.selected)).toHaveCount(0);
-          const coverage = await (await qaApi.get(base() + "/requirements/" + f.requirementId + "/coverage")).json();
-          const link = coverage.cases.find((entry: { requirementVersionId: string; criterionKeys: string[] }) =>
-            entry.requirementVersionId === f.approvedVersionId && entry.criterionKeys.join("::") === "AC-1::AC-2");
-          const refused = await qaApi.post(base() + "/requirements/" + f.requirementId + "/links/" + link.linkId + "/reapply",
-            { data: { expectedRequirementVersionId: f.approvedVersionId,
-              expectedCaseRevision: f.caseBasis.editRevision, expectedApprovalRevision: f.caseBasis.approvalRevision } });
-          expect(refused.status()).toBe(403);
-          expect(snapshot()).toBe(beforeRows);
+          await expect(page.getByTestId("requirement-link-activate-" + group)).toBeEnabled();
+          const responsePromise = page.waitForResponse(response =>
+            response.request().method() === "POST" && response.url().includes("/requirements/" + f.requirementId + "/links/") &&
+            response.url().endsWith("/reapply"));
+          await page.getByTestId("requirement-link-activate-" + group).click();
+          const activated = await responsePromise;
+          expect(activated.ok(), await activated.text()).toBe(true);
+          const result = await activated.json();
+          await expect(page.getByTestId("requirement-link-notice-" + group)).toContainText(result.link.id);
+          expect(result.link).toMatchObject({ state: "active", requirementVersionId: f.approvedVersionId,
+            testcaseRevision: f.caseBasis.editRevision, testcaseApprovalRevision: f.caseBasis.approvalRevision });
+          expect(scalar("SELECT applied_by FROM requirement_case_links WHERE id=" + literal(result.link.id) + ";")).toBe(tenant!.qa.userId);
+          expect(scalar("SELECT COUNT(*)::int FROM audit_logs WHERE action='requirement_link_reapplied' AND entity_id=" +
+            literal(result.link.id) + " AND actor_id=" + literal(tenant!.qa.userId) + ";")).toBe("1");
           await page.close();
         }
       } finally {
         exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +
           " AND user_id=" + literal(tenant!.qa.userId) + ";");
       }
+      const beforeRows = snapshot();
+      const beforeAudit = scalar("SELECT COUNT(*)::int FROM audit_logs WHERE entity_name=" + literal(f.requirementId) + " AND action='requirement_link_reapplied';");
+      const qaPage = await open(browser, "/agents/tasks/" + f.taskId, "qa");
+      await expect(qaPage.getByTestId("requirement-link-readonly-" + f.groups.reversed)).toBeVisible();
+      await expect(qaPage.getByTestId("requirement-link-activate-" + f.groups.reversed)).toHaveCount(0);
+      const coverage = await (await qaApi.get(base() + "/requirements/" + f.requirementId + "/coverage")).json();
+      const link = coverage.cases.find((entry: { criterionKeys: string[] }) => entry.criterionKeys.join("::") === "AC-2::AC-1");
+      const refused = await qaApi.post(base() + "/requirements/" + f.requirementId + "/links/" + link.linkId + "/reapply",
+        { data: { expectedRequirementVersionId: f.approvedVersionId,
+          expectedCaseRevision: f.caseBasis.editRevision, expectedApprovalRevision: f.caseBasis.approvalRevision } });
+      expect(refused.status()).toBe(403);
+      expect(snapshot()).toBe(beforeRows);
+      expect(scalar("SELECT COUNT(*)::int FROM audit_logs WHERE entity_name=" + literal(f.requirementId) + " AND action='requirement_link_reapplied';")).toBe(beforeAudit);
     });
   });
 
@@ -919,7 +1020,10 @@ test.describe("governed skills operator journey (UI)", () => {
         requestKey: `ui-task-review-${suffix}`, title: `UI task review bundle ${suffix}`,
         operations: [
           { opType: "requirement_revision", operationId: requirementOperationId, title,
-            description: "Fixture for the task review surface.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+            description: "Fixture for the task review surface.", criteria: [
+              { key: "AC-1", text: "The obligation is observable" },
+              { key: "AC-2", text: "A second criterion supports distinct ordered link groups" },
+            ] },
           { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] }
         ]
@@ -1134,6 +1238,57 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Executed: yes");
       await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Passing: yes");
       await expect(page.getByTestId("requirement-coverage-execution-link")).toHaveAttribute("href", new RegExp(`cycles/${runId}/execute/${executionId}`));
+
+      // Multiple criterion groups, including a reversed array order, are distinct. A 5xx on one
+      // group must stay associated with that group, leave the others untouched, and a retry must
+      // activate only its own exact group.
+      const groupBLink = scalar(`INSERT INTO requirement_case_links
+        (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+        VALUES (${literal(tenant!.mainProjectId)},${literal(requirementId)},${literal(linkBefore.approvedVersionId)},
+          ARRAY['AC-1','AC-2']::text[],${literal(caseId)},${literal("0".repeat(64))},NULL,'active',
+          ${literal(tenant!.owner.userId)},${literal(tenant!.owner.userId)},now()) RETURNING id;`);
+      const groupCLink = scalar(`INSERT INTO requirement_case_links
+        (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+        VALUES (${literal(tenant!.mainProjectId)},${literal(requirementId)},${literal(linkBefore.approvedVersionId)},
+          ARRAY['AC-2','AC-1']::text[],${literal(caseId)},${literal("0".repeat(64))},NULL,'active',
+          ${literal(tenant!.owner.userId)},${literal(tenant!.owner.userId)},now()) RETURNING id;`);
+      const groupB = `${caseId}::AC-1::AC-2`;
+      const groupC = `${caseId}::AC-2::AC-1`;
+      const groupBEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/links/${groupBLink}/reapply`;
+      const groupCEndpoint = `**/api/projects/${tenant!.mainProjectId}/requirements/${requirementId}/links/${groupCLink}/reapply`;
+      await page.reload();
+      await expect(page.getByTestId(`requirement-link-state-${groupB}`)).toContainText("not active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-state-${groupC}`)).toContainText("not active on the approved requirement version");
+      await expect(page.getByTestId(`requirement-link-state-${groupB}`)).toContainText("Activation is needed because");
+      await expect(page.getByTestId(`requirement-link-activate-${groupB}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-activate-${groupC}`)).toBeVisible();
+
+      await page.route(groupBEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Activation service unavailable" } }));
+      await page.route(groupCEndpoint, (route) => route.fulfill({ status: 503, json: { error: "Activation service unavailable" } }));
+      await page.getByTestId(`requirement-link-activate-${groupB}`).click();
+      await expect(page.getByTestId(`requirement-link-error-${groupB}`)).toContainText("could not be confirmed");
+      await page.getByTestId(`requirement-link-activate-${groupC}`).click();
+      await expect(page.getByTestId(`requirement-link-error-${groupC}`)).toContainText("could not be confirmed");
+      // The first group's uncertain outcome is still present after the second group errors.
+      await expect(page.getByTestId(`requirement-link-error-${groupB}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-notice-${groupB}`)).toHaveCount(0);
+      await expect(page.getByTestId(`requirement-link-notice-${groupC}`)).toHaveCount(0);
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE id IN (${literal(groupBLink)},${literal(groupCLink)}) AND state='active';`)).toBe("2");
+
+      await page.unroute(groupBEndpoint);
+      await page.unroute(groupCEndpoint);
+      await page.getByTestId(`requirement-link-activate-${groupB}`).click();
+      await expect(page.getByTestId(`requirement-link-notice-${groupB}`)).toBeVisible();
+      await page.getByTestId(`requirement-link-activate-${groupC}`).click();
+      await expect(page.getByTestId(`requirement-link-notice-${groupC}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-notice-${groupB}`)).toBeVisible();
+      await expect(page.getByTestId(`requirement-link-state-${caseGroup}`)).toContainText("active on the approved requirement version");
+      const groupBActive = scalar(`SELECT id FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND testcase_id=${literal(caseId)} AND criterion_keys=ARRAY['AC-1','AC-2']::text[] AND state='active';`);
+      const groupCActive = scalar(`SELECT id FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND testcase_id=${literal(caseId)} AND criterion_keys=ARRAY['AC-2','AC-1']::text[] AND state='active';`);
+      expect(groupBActive).not.toBe(groupBLink);
+      expect(groupCActive).not.toBe(groupCLink);
+      expect(scalar(`SELECT state FROM requirement_case_links WHERE id=${literal(active)};`)).toBe("active");
+      expect(scalar(`SELECT COUNT(*)::int FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)} AND state='active';`)).toBe("3");
 
       // A successful zero and an unavailable read are different states.
       exec(`UPDATE requirement_case_links SET state='retired' WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)};`);

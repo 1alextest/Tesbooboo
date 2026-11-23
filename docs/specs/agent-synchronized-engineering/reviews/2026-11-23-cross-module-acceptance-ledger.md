@@ -113,3 +113,249 @@ use isolated CI fixtures, while persistent native definitions and attempts stay 
 
 - #191: eligible nonauthor native approval of exact bootstrap head, trusted main installation, observed publisher write and denied-merge enforcement; no admin bypass.
 - #155: current-head CI, real deployment mappings/provenance, applied migration ledger, rollback/backward compatibility, release-wide independent acceptance and owner authorization. Green development CI does not satisfy this.
+
+## PR221 activation reliability — bounded regression handoff
+
+**Prepared definitions: Draft / UNRUN. Native synchronization: BLOCKED. Tesbo sync not performed.**
+This 23 November continuation prepares the accepted reliability follow-ups to the existing requirement
+link activation owner, from integrated source `0222ed20d9ddff4e05c97177977babb108d1833d`. PR228 extends
+the overlapping PR226 candidate rather than competing with it. It does not reopen PR221, certify its
+later source, or change the eight canonical specification files. The
+corresponding bounded design belongs to the existing Work Package A design document. Implementation,
+automated execution, independent review, native publication and official execution require their own
+subsequent evidence; none is established by these prepared cases.
+
+### Observed access gap and exact-link handoff
+
+The current session's available/deferred tool registry exposed no Tesbo case, requirement or staging
+connector. A Plugin Management search for `Tesbo` returned no results. The local browser connection
+was unavailable; the permitted cloud-browser read of `/projects/TESBOPROJECT` redirected to the site's
+sign-in page, which offered Password and Email code. No credential was requested or extracted, no
+authenticated project content was read, and no browser-session HTTP, direct database write, approval,
+assignment or publication was attempted. This is a session access gap, not evidence that the project
+or its records are absent. Earlier empty inventories and Skill-state observations remain historical.
+
+Use **TESBOPROJECT (`df072dfe-e4d0-406a-9350-e0d022c6323f`)**. PR226 reports a staged **REQ-WPA-12**
+reliability bundle at task `3a961980-261a-47d9-b019-7331027b4695`; retain that receipt and **REQ-WPA-11**
+as discovery leads, not a live-verified native identity or approved oracle in this session. Once the
+authorized connection is available, read the matching existing requirement and its current approved
+version, discover matching cases
+and suites, and resolve the exact criterion keys for each obligation below. For every proposed case,
+record the actual requirement document ID, immutable version ID/digest, exact ordered criterion keys,
+existing case ID/revision where present, and review-task/proposal revision. If the requirement or a
+needed criterion cannot be established, keep that mapping BLOCKED and propose the amendment through
+the existing requirement owner; do not invent a criterion or approve it by writing this ledger.
+Preserve a matching case's stable identity and history. The titles below are proposed titles, not
+native Test Case IDs. Fixture symbols such as `R1`, `C1`, `A` and `B` describe controlled test data only.
+
+All six cases require a source/build/environment binding, actual actor and authorization, complete
+before/after link generations and attributable `requirement_link_reapplied` audit records. The native
+requirement linkage for each case is **UNRESOLVED / awaiting live readback** of the existing reliability
+bundle and its predecessor. Run destructive
+setup, failure injection and membership changes only inside the existing suite's isolated disposable
+tenants. Keep persistent case definitions and genuine execution history in TESBOPROJECT; never treat
+fixture setup or repository CI as an official native run.
+
+### Proposed case: replay only the current approved requirement and case basis
+
+**Risk / linkage obligation:** high; exact approved-basis replay, immutable generations and one audit.
+**Role / setup:** authorized human owner or manager; a currently approved case revision and approval
+revision; one requirement with an earlier approved version and a different current approved version;
+record the target link and the exact ordered criterion group. Create any otherwise unreachable
+historical-generation arrangement only in the isolated database fixture.
+
+1. Activate the target group on the current approved requirement version using the reviewed case and
+   approval revisions. Read back the created link, retired predecessors and one attributable audit.
+2. Retry using the same original link ID and revision basis. Expect `replayed: true`, the same created
+   link ID on the current approved requirement version, and no additional generation or audit.
+3. In a separate controlled fixture, leave only a matching active link on an older requirement
+   version, then retry a retired link. Expect refusal rather than replay of the older version. Also
+   remove the current approved requirement basis in a controlled variant: replay must not bypass the
+   requirement approval guard.
+4. In a separate real lifecycle, keep the requirement approved and edit the case after a successful
+   activation. Retry the retired input link with its earlier case revisions, before and after the new
+   case approval. Expect `CASE_REVISION_CONFLICT`; historical links and audit must remain unchanged.
+5. An isolated missing-approval-receipt integrity fixture with the same case edit revision must refuse
+   with `CASE_NOT_APPROVED`. This fixture does not imply a product revocation operation. A legitimate
+   activation on the new current case basis must subsequently replay exactly without another write.
+
+**Persisted refusal oracle:** all link rows, states, revision pins and relevant audit rows equal the
+captured before-state; no stale generation is returned as current success. **Automated owner:** extend
+`Tesbo-Backend-Nest/src/legacy/testcase-proposal-review.db.spec.ts` and the replay assertions in
+`e2e/api/requirements.spec.ts`. DB selectors: `does not replay an activation after its requirement basis
+becomes %s` and `does not replay a retired link when the current case is %s`. **Cleanup:** use the existing
+fixture-owned requirement/case/Skill cleanup in `finally`; preserve real case and attempt history.
+
+### Proposed case: guard the displayed requirement version without breaking omitted-field callers
+
+**Risk / linkage obligation:** high; explicit selection freshness and compatible omitted-field behavior.
+**Role / setup:** human owner/manager with current case approval; the UI has read approved requirement
+version `R1`; another authorized fixture actor can approve `R2` before activation obtains its lock.
+
+1. Send activation with the optional expected requirement-version field set to the exact displayed
+   `R1`. Advance the approved pointer to `R2` before the writer revalidates it. Expect a version-conflict
+   refusal on both the active-link path and a retired-link replay path, without publishing to `R2`.
+2. Refresh and explicitly review `R2`, then send its exact version and current case revisions. Expect
+   successful activation on that basis. A supplied malformed version must receive validation refusal.
+3. Exercise the existing caller contract with the new optional field absent. With all existing
+   authority and case/requirement approval gates satisfied, activation remains supported and binds to
+   the current approved requirement version observed by the authoritative transaction.
+
+**Persisted refusal oracle:** no changed link generation, retirement, audit or approval pointer from the
+refused activation; the independently authorized `R2` approval retains its own history. **Automated
+owner:** existing DB owner plus `e2e/api/requirements.spec.ts` and the requirement review journey in
+`e2e/ui/skills.spec.ts`. Field: `expectedRequirementVersionId`; mismatch: `REQUIREMENT_VERSION_CONFLICT`;
+DB selectors: `refuses a changed displayed requirement version before retiring links or reaching
+criterion validation` and `validates an explicitly supplied requirement basis while preserving
+successful legacy activation`.
+**Cleanup:** release held locks in `finally`, remove only fixture-owned actors/objects, and never reset
+real approval history merely to make the test repeatable.
+
+### Proposed case: activate one exact ordered criterion group and preserve its neighbors
+
+**Risk / linkage obligation:** high; relation identity, scope isolation and ordered-array preservation.
+**Role / setup:** human owner/manager; the same approved case is linked through `[A, B]`, `[B, A]` and a
+distinct neighboring group, using valid fixture criterion keys. Capture every group's generation and
+history. These arrays are intentionally different identities under the existing owner contract.
+
+1. Open the review surface and verify separate rows/controls for the exact ordered groups. Do not
+   sort, normalize or deduplicate their order into a single group.
+2. Activate `[A, B]`. Expect only that group's active/proposed predecessors to retire and exactly one
+   current active generation for its reviewed case/requirement basis. Read back `[B, A]` and the other
+   neighbor unchanged, including IDs, states, revision pins and timestamps.
+3. Replay the first command and separately activate the reversed group. Each result, notice and audit
+   must remain attributable to its own exact ordered group; neither operation consumes the neighbor.
+
+**Persisted isolation oracle:** full neighbor rows/history remain equal after each unrelated action;
+the UI does not hide a group because it shares a case ID or the same unordered keys. **Automated
+owner:** existing DB link tests and `e2e/ui/skills.spec.ts`; add API assertions in the existing
+`e2e/api/requirements.spec.ts` owner where the route boundary is exercised. DB selector: `activates only
+the selected ordered criterion group and exposes each persisted case basis`. Retain PR226's separate
+reversed-order regression and the original API journey.
+**Cleanup:** remove only scenario-owned fixture links and parents through the established cleanup;
+never retire a real neighbor or delete a persistent regression case.
+
+### Proposed case: reconcile two independently uncertain activation outcomes
+
+**Risk / linkage obligation:** high; per-group uncertain-write state and independent recovery.
+**Role / setup:** human owner/manager; two eligible ordered groups in the same review panel; transport
+interception can discard each response after a real commit and delay the subsequent coverage reads.
+
+1. Activate the first group, lose its committed response and keep its readback unresolved. Activate the
+   second group and independently lose that response. Both groups must retain their own attempted
+   link, ordered keys, requirement version, case revision and approval revision; the second attempt
+   must not overwrite or clear the first group's uncertainty.
+2. Restore authoritative proof for only the first attempted basis. Confirm only that group's recovery;
+   the second remains unconfirmed with no false success notice or blind repeat write.
+3. Restore exact proof for the second basis. Confirm it independently. Count one committed activation
+   and one attributable audit per group; read-only reconciliation must create neither.
+4. Edit the case through its native writer without reapproving it, then refresh coverage through the
+   existing interaction. The earlier link IDs and history stay intact but no longer qualify as
+   approved coverage; no green current-success notice may remain beside that invalidated state.
+
+**Persisted/visible oracle:** two separate real commits remain attributable, while each UI conclusion
+depends on its own exact proof. A failed/partial read is not an empty or successful state. **Automated
+owner:** extend the existing lost-activation-response journey in `e2e/ui/skills.spec.ts`; retain real
+API/DB readback for commits/audits rather than infer them from mocked responses. UI selector:
+`activation recovery retains two uncertain ordered groups and verifies their exact native outcomes`.
+**Cleanup:** release every held response and remove every route interception in `finally`, then clean
+only the isolated fixture records; retain the failed-response and recovery evidence separately.
+
+### Proposed case: later revisions cannot confirm an earlier uncertain attempt
+
+**Risk / linkage obligation:** high; evidence freshness and truthful attribution across revisions.
+**Role / setup:** human owner/manager; capture an attempted group's exact requirement version, case
+revision, approval revision, ordered keys and original link ID; lose its response and delay readback.
+Use separate fixture variants for case edits/reapproval and requirement-version approval changes.
+
+1. Before recovery completes, advance the case or approved requirement basis and activate a valid link
+   on that later basis through an independently authorized fixture action.
+2. Return coverage containing the later active link. It must not clear the earlier uncertainty or
+   display that earlier attempt as verified merely because the case ID/group matches or current
+   coverage is approved. Recovery compares the persisted approval revision as well as the edit
+   revision; do not invent a product action that changes only an approval receipt for this variant.
+3. Where the original exact basis remains independently provable, supply that proof and reconcile
+   only its attempt. Where it is superseded and no such proof is available, retain an honest
+   unconfirmed/review-needed outcome; do not relabel the later action as the earlier result.
+
+**Persisted/visible oracle:** recovery adds no writes, duplicate audits or approval changes; original
+and later generations retain distinct attribution. Current coverage and confirmation of a past attempt
+remain separate facts. **Automated owner:** `e2e/ui/skills.spec.ts`, with backend revision/replay controls
+in the existing DB/API owners. UI selectors: `activation recovery does not confirm an earlier 503 from
+a different case approval basis` and the corresponding `requirement` variant. The additional UI case
+`activation refuses the displayed stale requirement basis and preserves its error after the group
+disappears` verifies the semantic refusal survives readback even when the previous row is absent.
+**Cleanup:** remove transport interception and
+isolated fixtures, retaining all source-bound historical execution evidence.
+
+### Proposed case: match activation affordance to server authority and preserve server-error uncertainty
+
+**Risk / linkage obligation:** high; consistent authority and truthful failure classification.
+**Role / setup:** isolated owner/manager, QA reader and legacy-role fixtures; include raw `admin` and
+`test_manager` memberships, which the pre-existing canonical project-role contract maps to manager.
+Every fixture actor must select the valid active organization so membership checks cannot disguise the
+role result. The initial raw-denial oracle was incorrect and is replaced by this established contract.
+
+1. Verify the canonical owner/manager and both manager aliases can inspect and actually activate an
+   eligible link. Independently retrieve the exact persisted link and attributable audit. Canonical QA
+   remains read-only; direct forbidden calls still fail server-side with no link/audit changes. Retain
+   machine-principal refusal and current project/workspace authority checks.
+2. Inject an actual server 5xx for the authorized activation path. Preserve its server-error meaning;
+   the UI must not report a definite validation/permission rejection or confirmed success solely from
+   that response. Reconcile the exact attempted basis through authoritative reads, without automatic
+   repeat activation. A controlled pre-commit failure must leave persisted state unchanged.
+3. Remove the failure and verify legitimate operation. Separately retain existing 4xx validation,
+   authorization and stale-basis refusal messages so a known refusal is not relabeled as an unknown
+   infrastructure failure.
+
+**Persisted refusal oracle:** unauthorized/pre-commit-failed attempts create no new or retired links,
+audit records or approvals. **Automated owner:** `e2e/ui/skills.spec.ts` and existing API/DB authority
+tests. UI selector: `activation accepts documented manager role aliases and still refuses a QA reader
+without writes`; retain PR226's independent 503/retry assertions. **Cleanup:** remove scoped
+faults and restore/delete only disposable fixture memberships in `finally`; do not change real users'
+roles or policy to run the case.
+
+### Native record dispositions and completion boundary
+
+| Domain | Bounded disposition | Native status |
+| --- | --- | --- |
+| Requirements | Discover and reuse the REQ-WPA-12 reliability bundle reported by PR226 and its REQ-WPA-11 predecessor; amend only evidenced missing obligations. | BLOCKED: live identity/version/criterion linkage unverified. |
+| Test Cases | Six prepared regression purposes; search and revise matching native cases before proposing new identities, with exact source selectors finalized after implementation. | Draft / UNRUN; no staging or publication claimed. |
+| User Manual | Existing Work Package A design owns the reliability behavior and recovery explanation; native manual changes depend on actual affected content. | Assessment retained; native content unavailable. |
+| Policies | Existing human authority, ordered group identity, revision guards and no fabricated execution remain unchanged; no new authority or role promotion. | No native policy mutation required by this handoff. |
+| Tasks / Issues | Link PR226/228 and exact evidence to the existing reliability task after discovery; retain the reported task ID as a lead. | BLOCKED: current native task revision/state unverified; no replacement task created. |
+| Files / Evidence | Retain failing-first/after results, source/build/CI bindings, audit/generation readbacks and review originals with their actual outcomes. | Prepared evidence contract; new execution and native evidence upload not performed. |
+| Skills Governance | Reuse current approved methods and effective assignments only after authorized readback; §16.8 records the unresolved reviewed link-Skill basis after a requirement-only revision. | PARTIAL/BLOCKED: link reapply lacks the documented guard, the general basis contract needs an authorized decision, and live versions/assignments remain unverified. |
+
+These definitions are a native synchronization handoff, not native acceptance. Finalize the source
+selectors and actual run evidence separately; all six native execution statuses remain UNRUN until a
+genuine persisted attempt is read back. Preserve failed or blocked attempts and later regression
+history under the same stable case identities. Source CI, a successful publication, and case approval
+must never be substituted for one another.
+
+### Source-bound execution evidence
+
+The tests-first checkpoint is PR228 head `96870b71910d7e5f875516073dd4ddf4ef72e5d6` over development
+`0222ed20d9ddff4e05c97177977babb108d1833d`, changing only the two DB/UI test files. Actual checkout
+`70d80894560f6100efa9129089e34d4a5d1d8f06` has those ordered parents and the same tree
+`1c58fd7f43cec056a202fea14aa5026af0c208ec`. The [database job](https://github.com/1alextest/Tesbooboo/actions/runs/45239600554/job/137920344630)
+completed **7 failed / 688 passed / 695 total**, with all seven intended regressions reaching their
+assertion. The [complete coordinator receipt](https://github.com/1alextest/Tesbooboo/pull/228#pullrequestreview-6027398936)
+records each failure, method and source binding. This is failing-source evidence, not a fixed-source
+or native execution pass.
+
+PR226's first [database run](https://github.com/1alextest/Tesbooboo/actions/runs/45239479050/job/137919921284)
+had one earlier prerequisite-oracle failure (requirement unapproved when testing case approval).
+Its `6502f70fc7d905edb508227a21ae807b014e4e71` successor separates those fixtures and is reused here;
+the continuation additionally supplies valid active-workspace membership to its role actors. The
+imported UI fixture's new ordered groups also require AC-2 in its staged native requirement. These
+fixture corrections preserve exact refusal and persisted-state assertions. The initial raw-alias
+denial proposal is expressly corrected against the pre-existing canonical role policy, not presented
+as a product defect or used to claim a false red-to-green result.
+
+The current implementation contains nine requirements API definitions and 35 Skills UI definitions
+(44 selected definitions). Static type/lint/discovery checks do not establish those executions.
+Actual later CI, screenshot artifacts and final independent/White verdicts must be bound to their
+own exact candidate on PR228/226; this ledger does not predeclare their outcomes. The six prepared
+panel captures will be actual browser-fixture screenshots only if the corresponding test states are
+reached. Native TESBOPROJECT execution remains UNRUN.

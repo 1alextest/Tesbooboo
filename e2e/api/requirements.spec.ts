@@ -356,7 +356,8 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
 
     const approvedRequirement = await request.post(`${base}/requirements/${requirementId}/approve`, { data: { versionId: requirementVersionId } });
     expect(approvedRequirement.ok(), await approvedRequirement.text()).toBe(true);
-    expect((await approvedRequirement.json()).approvedVersionId).toBeTruthy();
+    const requirementApproval = await approvedRequirement.json();
+    expect(requirementApproval.approvedVersionId).toBeTruthy();
 
     const caseBefore = await (await request.get(`${base}/testcases/${caseId}`)).json();
     expect(caseBefore.status).toBe("Draft");
@@ -371,12 +372,42 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
 
     readings = await coverage();
     const approvedLink = (readings.cases as Array<Record<string, any>>).find((item) => item.requirementVersionId === readings.approvedVersionId) || readings.cases[0];
+    // The linked basis is historical data. A current case read must not be substituted for the
+    // exact revisions persisted on this not-yet-activated relation.
+    expect(approvedLink.testcaseRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(approvedLink.testcaseApprovalRevision).toBeNull();
+    const activationState = () => scalar(`SELECT json_build_object(
+      'links', (SELECT COALESCE(json_agg(to_jsonb(l) ORDER BY l.id),'[]'::json) FROM requirement_case_links l WHERE l.project_id=${literal(ctx.projectId)} AND l.requirement_id=${literal(requirementId)}),
+      'audit', (SELECT COALESCE(json_agg(to_jsonb(a) ORDER BY a.id),'[]'::json) FROM audit_logs a WHERE a.project_id=${literal(ctx.projectId)} AND a.action='requirement_link_reapplied' AND a.entity_name=${literal(requirementId)})
+    )::text;`);
+    const activationRevisions = { expectedCaseRevision: caseAfter.editRevision, expectedApprovalRevision: caseAfter.approvalRevision };
+    const beforeWrongBasis = activationState();
+    const wrongBasis = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
+      data: { ...activationRevisions, expectedRequirementVersionId: requirementVersionId }
+    });
+    expect(wrongBasis.status(), await wrongBasis.text()).toBe(409);
+    expect((await wrongBasis.json()).code).toBe("REQUIREMENT_VERSION_CONFLICT");
+    expect(activationState()).toBe(beforeWrongBasis);
     const reapplied = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
-      data: { expectedCaseRevision: caseAfter.editRevision, expectedApprovalRevision: caseAfter.approvalRevision }
+      data: { ...activationRevisions, expectedRequirementVersionId: requirementApproval.approvedVersionId }
     });
     expect(reapplied.ok(), await reapplied.text()).toBe(true);
+    const activation = await reapplied.json();
+    expect(activation).toMatchObject({ replayed: false, link: { requirementVersionId: requirementApproval.approvedVersionId } });
+    const afterActivation = activationState();
+    const replayed = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
+      data: { ...activationRevisions, expectedRequirementVersionId: requirementApproval.approvedVersionId }
+    });
+    expect(replayed.ok(), await replayed.text()).toBe(true);
+    expect(await replayed.json()).toEqual({ ...activation, replayed: true });
+    expect(activationState()).toBe(afterActivation);
+    expect(JSON.parse(afterActivation).audit).toHaveLength(1);
     readings = await coverage();
     expect(readings.readings).toMatchObject({ authored: true, approved: true, executed: false, passing: false });
+    expect(readings.cases.find((item: Record<string, any>) => item.linkId === activation.link.id)).toMatchObject({
+      testcaseRevision: caseAfter.editRevision, testcaseApprovalRevision: caseAfter.approvalRevision,
+      requirementVersionId: requirementApproval.approvedVersionId
+    });
 
     // Fixture setup only: the human publication/approval decisions above were API calls. The
     // persisted attempt is created in the native Run/execution tables so the coverage reader is
@@ -435,6 +466,55 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     expect(historicalAttempts()).toBe(immutableAttemptHistory);
     readings = await coverage();
     expect(readings.readings).toMatchObject({ authored: true, approved: false, passing: false });
+    const beforeChangedCaseReplay = activationState();
+    const changedCaseReplay = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
+      data: { ...activationRevisions, expectedRequirementVersionId: requirementApproval.approvedVersionId }
+    });
+    expect(changedCaseReplay.status(), await changedCaseReplay.text()).toBe(409);
+    expect((await changedCaseReplay.json()).code).toBe("CASE_REVISION_CONFLICT");
+    expect(activationState()).toBe(beforeChangedCaseReplay);
+
+    // A real new requirement revision clears the current approval without rewriting old link or
+    // execution history. Neither that interval nor the later new approval may replay the old link
+    // as evidence of a current activation, even for a legacy client without requirement CAS.
+    const currentRequirement = await (await request.get(`${base}/knowledge-base/documents/${requirementId}`)).json();
+    const changedRequirement = await stageRest(request, [{
+      ...operations[0], operationId: randomUUID(), documentId: requirementId,
+      expectedRevision: currentRequirement.editRevision, title: `${title} revised after activation`
+    }]);
+    expect(changedRequirement.ok(), await changedRequirement.text()).toBe(true);
+    const changedTask = await changedRequirement.json();
+    taskIds.push(changedTask.id);
+    const changedApplied = await request.post(`${base}/requirements/proposals/${changedTask.id}/apply`, {
+      data: { expectedProposalRevision: changedTask.proposalRevision }
+    });
+    expect(changedApplied.ok(), await changedApplied.text()).toBe(true);
+    const changedReceipt = await changedApplied.json();
+    const beforeClearedReplay = activationState();
+    const clearedReplay = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
+      data: activationRevisions
+    });
+    expect(clearedReplay.status(), await clearedReplay.text()).toBe(409);
+    expect((await clearedReplay.json()).code).toBe("REQUIREMENT_NOT_APPROVED");
+    expect(activationState()).toBe(beforeClearedReplay);
+    const changedApproval = await request.post(`${base}/requirements/${requirementId}/approve`, {
+      data: { versionId: changedReceipt.receipt.requirement.versionId }
+    });
+    expect(changedApproval.ok(), await changedApproval.text()).toBe(true);
+    expect((await changedApproval.json()).approvedVersionId).not.toBe(requirementApproval.approvedVersionId);
+    const beforeMovedReplay = activationState();
+    const movedReplay = await request.post(`${base}/requirements/${requirementId}/links/${approvedLink.linkId}/reapply`, {
+      data: activationRevisions
+    });
+    expect(movedReplay.status(), await movedReplay.text()).toBe(409);
+    expect((await movedReplay.json()).code).toBe("LINK_NOT_ACTIVE");
+    const staleDisplayedBasis = await request.post(`${base}/requirements/${requirementId}/links/${activation.link.id}/reapply`, {
+      data: { ...activationRevisions, expectedRequirementVersionId: requirementApproval.approvedVersionId }
+    });
+    expect(staleDisplayedBasis.status(), await staleDisplayedBasis.text()).toBe(409);
+    expect((await staleDisplayedBasis.json()).code).toBe("REQUIREMENT_VERSION_CONFLICT");
+    expect(activationState()).toBe(beforeMovedReplay);
+    expect(historicalAttempts()).toBe(immutableAttemptHistory);
   } finally {
     if (mcp) await mcp.dispose();
     if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });

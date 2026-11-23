@@ -16904,39 +16904,67 @@ export class LegacyService implements OnModuleInit {
     if (!/^[a-f0-9]{64}$/.test(expectedCaseRevision) || !/^[a-f0-9]{64}$/.test(expectedApprovalRevision)) {
       throw new BadRequestException({ error: "expectedCaseRevision and expectedApprovalRevision must be the current case revisions" });
     }
+    // Optional for existing clients; the native review surface quotes the approved requirement
+    // it displayed so a later human approval cannot silently become this action's target.
+    if (body.expectedRequirementVersionId !== undefined
+      && (typeof body.expectedRequirementVersionId !== "string" || !isUuid(body.expectedRequirementVersionId))) {
+      throw new BadRequestException({ error: "expectedRequirementVersionId must identify the approved requirement version under review" });
+    }
+    const expectedRequirementVersionId = body.expectedRequirementVersionId === undefined
+      ? null : String(body.expectedRequirementVersionId).toLowerCase();
     return this.db.transaction(async client => {
       const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
-      if (!["owner", "manager"].includes(String(access.caller_role))) throw new ForbiddenException({ error: "Only project owners and managers can re-apply a requirement link" });
+      // Use the same normalized role policy as requirement approval and the review surface:
+      // legacy admin/test_manager values normalize to manager.
+      if (!["owner", "manager"].includes(this.normalizeRole(String(access.caller_role)))) {
+        throw new ForbiddenException({ error: "Only project owners and managers can re-apply a requirement link" });
+      }
       const doc = (await client.query(
         `SELECT id,document_type,source_provider,reviewed_version_id FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
         [documentId, projectId]
       )).rows[0];
       if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
+      if (expectedRequirementVersionId !== null && String(doc.reviewed_version_id) !== expectedRequirementVersionId) {
+        throw new ConflictException({ code: "REQUIREMENT_VERSION_CONFLICT", error: "The approved requirement version changed since review; reload the coverage before activating a case link" });
+      }
+      if (!doc.reviewed_version_id) {
+        throw new ConflictException({ code: "REQUIREMENT_NOT_APPROVED", error: "Approve the exact requirement version before activating a case link" });
+      }
+      const requirementVersionId = String(doc.reviewed_version_id);
       const link = (await client.query("SELECT * FROM requirement_case_links WHERE id=$1 AND project_id=$2 AND requirement_id=$3 FOR UPDATE", [linkId, projectId, documentId])).rows[0];
       if (!link) throw new NotFoundException({ error: "Requirement link not found" });
+      let replay: Body | null = null;
       if (link.state !== "active") {
-        const prior = (await client.query(
+        // A lost-response retry may only replay the current approved generation, never a link that
+        // was superseded by a later requirement approval.
+        replay = (await client.query(
           `SELECT * FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3
-             AND testcase_revision=$4 AND testcase_approval_revision=$5 AND criterion_keys=$6 AND state='active' LIMIT 1`,
-          [projectId, documentId, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, link.criterion_keys]
+             AND testcase_revision=$4 AND testcase_approval_revision=$5 AND criterion_keys=$6
+             AND requirement_version_id=$7 AND state='active' LIMIT 1`,
+          [projectId, documentId, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, link.criterion_keys, requirementVersionId]
         )).rows[0];
-        if (prior) return { link: toCamel(prior), retiredLinkId: String(link.id), replayed: true };
-        throw new ConflictException({ code: "LINK_NOT_ACTIVE", error: "This link is no longer active; load the current requirement coverage and choose an active link" });
+        if (!replay) throw new ConflictException({ code: "LINK_NOT_ACTIVE", error: "This link is no longer active; load the current requirement coverage and choose an active link" });
       }
+      const lockedCase = (await client.query(
+        "SELECT id FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE",
+        [link.testcase_id, projectId]
+      )).rows[0];
+      if (!lockedCase) throw new NotFoundException({ error: "Test case not found" });
+      // Match native case approval's lock-then-read boundary. A fresh statement observes any
+      // dependency writer that committed while the case lock was being acquired (V155).
       const testcase = (await client.query(
         `SELECT testcases.id, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
                 ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
-           FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE`, [link.testcase_id, projectId]
+           FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`, [link.testcase_id, projectId]
       )).rows[0];
       if (!testcase) throw new NotFoundException({ error: "Test case not found" });
       if (String(testcase.edit_revision) !== expectedCaseRevision) throw new ConflictException({ code: "CASE_REVISION_CONFLICT", error: "The case changed since this revision was read" });
       if (testcase.approval_current !== true || String(testcase.approval_revision) !== expectedApprovalRevision) {
         throw new ConflictException({ code: "CASE_NOT_APPROVED", error: "The case is not currently approved at the reviewed revision" });
       }
-      if (!doc.reviewed_version_id) {
-        throw new ConflictException({ code: "REQUIREMENT_NOT_APPROVED", error: "Approve the exact requirement version before activating a case link" });
-      }
-      const requirementVersionId = String(doc.reviewed_version_id);
+      // This is a current active-link readback, not a historical command receipt. Returning an
+      // earlier link must still satisfy the same current case approval as an initial activation.
+      if (replay) return { link: toCamel(replay), retiredLinkId: String(link.id), replayed: true };
       // One live relation per case/criteria. Retire every active/proposed generation that would
       // collide with the current approved basis, not only the row the caller happened to read.
       await client.query(
@@ -17010,6 +17038,8 @@ export class LegacyService implements OnModuleInit {
       return {
         linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
         criterionKeys: normalizeJsonArray(row.criterion_keys).map(String), requirementVersionId: String(row.requirement_version_id),
+        testcaseRevision: String(row.testcase_revision),
+        testcaseApprovalRevision: row.testcase_approval_revision == null ? null : String(row.testcase_approval_revision),
         authored: true, approved, executed, passing: executed && row.latest_status === "Passed",
         latestAttempt: row.latest_status ? {
           status: String(row.latest_status), executedAt: row.latest_at,
