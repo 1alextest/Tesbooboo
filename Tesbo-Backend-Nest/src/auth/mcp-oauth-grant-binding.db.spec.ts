@@ -48,8 +48,10 @@ const grant = { kind: "oauth_client" as const, oauthClientId: CLIENT,
 
     afterAll(async () => {
       if (project) {
-        await db.query("DELETE FROM mcp_oauth_provider_artifacts WHERE id_fingerprint IN (SELECT id_fingerprint FROM mcp_oauth_provider_artifacts WHERE model IN ('Grant','RefreshToken')) AND (model='Grant' OR model='RefreshToken') AND created_at >= now() - interval '1 day'")
-          .catch(() => undefined); // Don't expose any unrelated credential; explicit ids cleaned below.
+        const cleanup = createMcpOAuthPostgresAdapter(db);
+        await new cleanup("RefreshToken").destroy(oldRefresh);
+        await new cleanup("Grant").destroy(oldGrant);
+        await new cleanup("Grant").destroy(freshGrant);
         await db.query("DELETE FROM audit_logs WHERE project_id=$1", [project]);
         await db.query("DELETE FROM mcp_oauth_grant_approval_bindings WHERE project_id=$1", [project]);
         await db.query("DELETE FROM project_members WHERE project_id=$1", [project]);
@@ -101,7 +103,7 @@ const grant = { kind: "oauth_client" as const, oauthClientId: CLIENT,
       await bindOAuthGrantToApproval(db, freshGrant, basis(3));
       expect(await currentOAuthGrantBinding(db, freshGrant, basis(3))).toBe(true);
       expect(await grants.find(freshGrant)).toBeDefined();
-      await expect(bindOAuthGrantToApproval(db, oldGrant, basis(3))).resolves.toBeUndefined();
+      await expect(bindOAuthGrantToApproval(db, oldGrant, basis(3))).rejects.toThrow(/already bound/);
       // A fresh binding is a distinct provider Grant: never reuse an older identity.
       await refresh.destroy(oldRefresh);
       await grants.destroy(oldGrant);
