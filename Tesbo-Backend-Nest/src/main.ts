@@ -23,6 +23,7 @@ import type { Request, Response, NextFunction } from "express";
 import { AppModule } from "./app.module";
 import { AppConfigService } from "./config/app-config.service";
 import { EmailDeliveryPolicy } from "./config/email-delivery.policy";
+import { McpOAuthServer } from "./auth/mcp-oauth-server";
 import { HttpExceptionFilter } from "./common/http-exception.filter";
 import { assertEncryptionKeyConfigured } from "./common/crypto.util";
 import type { AuthenticatedRequest } from "./common/request.types";
@@ -112,6 +113,12 @@ async function bootstrap() {
   // never blocks meaningfully: with no keys configured it returns immediately without a network
   // call, and any failure inside logs and leaves tracing off.
   await startLangfuse();
+
+  // OAuth is default-OFF. When explicitly enabled, refuse startup on any
+  // missing issuer, client registration, signing key, adapter or library; do
+  // not fall back to Tesbo API tokens or issue ephemeral authorization state.
+  // Mount in this SAME Nest/Express process before the HTTP listener starts.
+  await app.get(McpOAuthServer).mount(app);
 
   await app.listen(config.port, "0.0.0.0");
 
