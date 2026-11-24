@@ -869,6 +869,47 @@ type Body=Record<string,any>;
       }
     });
 
+    it.each(["fresh","replay"])("refuses %s activation after its reviewed link Skill assignment is revoked",async phase=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let requirementId="",caseId="",taskId="";
+      try{
+        const staged=await stageBundle(ops());taskId=staged.id;
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;caseId=applied.receipt.testcase.id;
+        const approval=await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const before=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:before.edit_revision,expectedApprovalRevision:before.approval_revision},human);
+        const current=await revisionsOf(caseId);
+        expect(current.approval_current).toBe(true);
+        const request={expectedCaseRevision:current.edit_revision,expectedApprovalRevision:current.approval_revision,
+          expectedRequirementVersionId:approval.approvedVersionId};
+        const sourceLinkId=String(applied.receipt.link.id);
+        if(phase==="replay"){
+          const first=await service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human);
+          expect(first).toMatchObject({replayed:false,link:{requirementVersionId:approval.approvedVersionId}});
+          expect(await service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human))
+            .toEqual({...first,replayed:true});
+        }
+        const linkAssignments=(await admin.query(
+          "SELECT id FROM skill_assignments WHERE project_id=$1 AND module='requirements' AND subtype='functional' AND operation='requirement_case_link' AND status='active'",
+          [project])).rows;
+        expect(linkAssignments).toHaveLength(1);
+        await service().deactivateSkillAssignment(project,user,String(linkAssignments[0].id),{},human);
+        const preserved=await bundleWrites(taskId);
+        const beforeCoverage=await service().requirementCoverage(project,user,requirementId);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+        expect(await bundleWrites(taskId)).toEqual(preserved);
+        expect(await service().requirementCoverage(project,user,requirementId)).toEqual(beforeCoverage);
+      }finally{
+        if(requirementId)await cleanupRequirement(requirementId);
+        if(taskId)await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[taskId,project]);
+        if(caseId)await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
+        await cleanupSkills(skillIds);
+      }
+    });
+
     it("replays activation only against the current approved requirement version",async()=>{
       const skills=await publishSkills();
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
@@ -915,16 +956,17 @@ type Body=Record<string,any>;
         expect(after.rows).toEqual(before.rows);
         expect(after.rows.find(row=>String(row.id)===lostLink)).toMatchObject({state:"active",requirement_version_id:lostVersion});
 
-        // The still-active v1 link can be intentionally rebound to the current approved version; the
-        // returned identity is the new v2 link, and the v1 generation is retired.
-        const rebound=await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,
-          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human);
-        expect(rebound.replayed).toBe(false);
-        expect(String(rebound.link.id)).not.toBe(lostLink);
-        expect(String(rebound.link.requirementVersionId)).toBe(String(approvedV2.approvedVersionId));
-        const active=await admin.query("SELECT id,state,requirement_version_id FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND state='active'",[project,requirementId]);
-        expect(active.rows.some(row=>String(row.id)===String(rebound.link.id)&&String(row.requirement_version_id)===String(approvedV2.approvedVersionId))).toBe(true);
-        expect(active.rows.some(row=>String(row.id)===lostLink)).toBe(false);
+        // A requirement-only approval does not confer reviewed authority to carry an old link.
+        // The positive intentional-rebind journey must use the explicit selected carry-forward
+        // scope in the revised contract; do not remove that use case when implementing the guard.
+        const preserved=await bundleWrites(stagedV2.id);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision,
+            expectedRequirementVersionId:approvedV2.approvedVersionId},human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_LINK_REVIEW_REQUIRED"}});
+        expect(await bundleWrites(stagedV2.id)).toEqual(preserved);
+        expect((await admin.query("SELECT id,state,requirement_version_id FROM requirement_case_links WHERE id=$1",[lostLink])).rows[0])
+          .toMatchObject({id:lostLink,state:"active",requirement_version_id:lostVersion});
       }finally{
         if(v2TaskId) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[v2TaskId]);
         if(requirementId) await cleanupRequirement(requirementId);
