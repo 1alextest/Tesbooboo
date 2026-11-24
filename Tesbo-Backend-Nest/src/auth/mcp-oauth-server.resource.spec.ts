@@ -1,5 +1,6 @@
 import type { DatabaseService } from "../database/database.service";
 import { randomBytes } from "node:crypto";
+import { oauthReferenceFingerprint } from "../common/crypto.util";
 import { McpOAuthServer } from "./mcp-oauth-server";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
@@ -49,15 +50,18 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     };
     const binding = {
       project_id: PROJECT, account_id: "tesbo-member", client_id: CLIENT,
-      resource: RESOURCE, approval_revision: 1
+      resource: RESOURCE, approval_revision: 1, revoked_at: null as string | null
     };
+    const bindings = new Map([[oauthReferenceFingerprint("oauth:Grant:id", "oidc-grant-1"), binding]]);
     const findAccess = jest.fn(async () => token);
     const findGrant = jest.fn(async () => grant);
-    const query = jest.fn(async (sql: string) => ({
-      rows: String(sql).includes("mcp_oauth_grant_approval_bindings")
-        ? [{ ...binding, settings }]
-        : [{ settings }]
-    }));
+    const query = jest.fn(async (sql: string, args?: unknown[]) => {
+      if (String(sql).includes("mcp_oauth_grant_approval_bindings")) {
+        const found = bindings.get(String(args?.[0] ?? ""));
+        return { rows: found && !found.revoked_at ? [{ ...found, settings }] : [] };
+      }
+      return { rows: [{ settings }] };
+    });
     const svc = new McpOAuthServer({ query } as unknown as DatabaseService);
     // Inject test-only *verified-model* responses. Never enable a real
     // provider, mount an endpoint, or modify production OAuth configuration.
@@ -65,7 +69,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       provider: { AccessToken: { find: findAccess }, Grant: { find: findGrant } },
       policy: { issuer: ISSUER, resourceOrigin: "https://tesbo.example", scopes: ["mcp:read"] }
     });
-    return { svc, token, grant, binding, settings, findAccess, findGrant, query };
+    return { svc, token, grant, binding, bindings, settings, findAccess, findGrant, query };
   }
 
   it("authenticates a current exact-audience token only as an OAuth machine principal", async () => {
@@ -114,6 +118,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
 
     f.settings.externalMcpAccess.clients = [];
     f.settings.externalMcpAccess.revision++;
+    f.binding.revoked_at = "2026-11-24T00:00:00.000Z";
     expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
 
     // Restore identical owner-visible facts, but as a later approval.
@@ -124,7 +129,10 @@ describe("OAuth access-token read-only resource and live revocation", () => {
 
     // A separate fresh human consent is bound to the NEW approval revision.
     f.token.grantId = "new-consent-grant-2";
-    f.binding.approval_revision = f.settings.externalMcpAccess.revision;
+    f.bindings.set(oauthReferenceFingerprint("oauth:Grant:id", f.token.grantId), {
+      ...f.binding, revoked_at: null, approval_revision: f.settings.externalMcpAccess.revision
+    });
+    expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
     expect(await f.svc.verifyAccessToken("new-opaque-credential")).not.toBeNull();
   });
 
