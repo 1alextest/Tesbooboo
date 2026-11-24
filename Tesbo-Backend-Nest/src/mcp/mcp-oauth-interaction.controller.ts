@@ -19,8 +19,8 @@ function html(value: unknown): string {
 }
 
 function safeEquals(left: string, right: string): boolean {
-  if (left.length !== right.length || !left) return false;
-  return timingSafeEqual(Buffer.from(left), Buffer.from(right));
+  if (!/^[a-f0-9]{64}$/.test(left) || !/^[a-f0-9]{64}$/.test(right)) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
 }
 
 /**
@@ -69,7 +69,11 @@ export class McpOAuthInteractionController {
     const approved = await this.oauth.approvedClient(clientId, resource);
     if (!approved) throw new ForbiddenException({ error: "Project owner has not approved this OAuth client" });
     const project = await this.legacy.requireProjectAccess(userId, projectId);
-    return { userId, clientId, projectId, resource, clientName: approved.clientName, projectName: project.name || project.key || projectId };
+    const requestedScopes = scope.split(/\s+/);
+    return { userId, clientId, projectId, resource, clientName: approved.clientName,
+      projectName: project.name || project.key || projectId,
+      refreshRequested: requestedScopes.includes("offline_access"), openidRequested: requestedScopes.includes("openid"),
+      allowedTools: approved.allowedTools };
   }
 
   @Get("/interactions/:uid")
@@ -96,7 +100,7 @@ export class McpOAuthInteractionController {
 <p>This action ${login ? "confirms which Tesbo account is signing in. You will still review the permissions before granting access." : "allows a verified OAuth client to READ data only. It cannot create, edit, publish, approve or execute tests."}</p>
 <dl><dt>Account</dt><dd>${html(userId)}</dd><dt>Client</dt><dd>${html(target.clientName)}</dd>
 <dt>Client ID</dt><dd>${html(target.clientId)}</dd><dt>Project</dt><dd>${html(target.projectName)}</dd>
-<dt>Permissions</dt><dd>Read-only test cases, suites and permitted QA records</dd></dl>
+<dt>Permissions</dt><dd>Read-only QA records and tools: ${html(target.allowedTools ? target.allowedTools.join(", ") : "all permitted read-only tools")}</dd><dt>Reconnect</dt><dd>${target.refreshRequested ? "You are also granting offline read-only access until revoked." : "No offline access was requested; you may need to sign in again."}</dd></dl>
 <p class="muted">The project owner preapproved this client identity. You can cancel. You may later revoke the project grant. Login and consent do not publish test cases or approve Skills.</p>
 <form method="post" action="/api/oauth/interactions/${encodeURIComponent(uid)}">
 <input type="hidden" name="csrf" value="${html(csrf)}">
@@ -141,6 +145,10 @@ export class McpOAuthInteractionController {
     if (details.prompt?.name !== "consent") throw new ForbiddenException({ error: "Unsupported OAuth prompt" });
     const grant = new provider.Grant({ accountId: userId, clientId: target.clientId });
     grant.addResourceScope(target.resource, "mcp:read");
+    if (target.openidRequested || target.refreshRequested) {
+      grant.addOIDCScope([...(target.openidRequested ? ["openid"] : []),
+        ...(target.refreshRequested ? ["offline_access"] : [])].join(" "));
+    }
     const grantId = await grant.save();
     await provider.interactionFinished(req, res,
       { consent: { grantId } },
