@@ -63,6 +63,7 @@ function reviewState(document: KnowledgeDocument | null, reviewed: KnowledgeDocu
 
 const REASON_LABELS: Record<string, string> = {
   REQUIREMENT_VERSION_SUPERSEDED: "Linked to a submission that is not the current approved version",
+  REVIEWED_CARRY_FORWARD_PENDING: "Selected historical link awaits explicit activation; not current coverage",
   CASE_REVISION_CHANGED_OR_NOT_APPROVED: "The case is not currently approved at the linked revision",
   NO_QUALIFYING_ATTEMPT: "No persisted attempt on the exact approved case basis",
 };
@@ -189,9 +190,10 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   useEffect(() => { void loadCoverage(); }, [loadCoverage, coverageNonce]);
 
   useEffect(() => {
-    if (!coverage || coverage.cases.length === 0) { setCaseBases({}); return; }
+    const actionable = coverage ? [...coverage.cases, ...(coverage.pendingCarryForwardCases ?? [])] : [];
+    if (actionable.length === 0) { setCaseBases({}); return; }
     let active = true;
-    const ids = [...new Set(coverage.cases.map((item) => item.testcaseId))];
+    const ids = [...new Set(actionable.map((item) => item.testcaseId))];
     setCaseBases((previous) => Object.fromEntries(ids.map((id) => [id, {
       basis: previous[id]?.basis ?? null, loading: true, error: null
     }])));
@@ -389,7 +391,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
         passing: reading?.passing ?? false, mixed: reading?.mixed ?? false };
     })
     : [];
-  const linkedCases = coverage ? currentCaseRows(coverage.cases, coverage) : [];
+  const linkedCases = coverage ? currentCaseRows([...coverage.cases, ...(coverage.pendingCarryForwardCases ?? [])], coverage) : [];
   const coverageMatchesReviewedVersion = Boolean(coverage && (
     approvedAs
     || (coverage.latestSubmittedVersionId && coverage.latestSubmittedVersionId === versionId)));
@@ -586,7 +588,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
             )}
 
             <div className="mt-4 space-y-2">
-              <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Linked cases</h4>
+              <h4 className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Linked cases and reviewed carry-forward</h4>
               {linkedCases.length === 0 ? (
                 <p className="text-sm text-[var(--muted)]" data-testid="requirement-coverage-empty">
                   Coverage loaded successfully: no case is linked on the coverage basis shown above. That is a truthful zero, not an unavailable read.
@@ -605,6 +607,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                     && basis?.approvalCurrent === true && basis.editRevision.length === 64 && Boolean(basis.approvalRevision) && !item.approved;
                   const activationReasons = [
                     ...(item.reasons.includes("REQUIREMENT_VERSION_SUPERSEDED") ? ["the link still targets the submitted requirement version"] : []),
+                    ...(item.reasons.includes("REVIEWED_CARRY_FORWARD_PENDING") ? ["the approved requirement explicitly selected this historical source"] : []),
                     ...(item.reasons.includes("CASE_REVISION_CHANGED_OR_NOT_APPROVED") ? ["the case is not approved at the linked revision"] : []),
                   ];
                   const hiddenGenerations = coverage.cases.filter((entry) => linkGroupKey(entry) === groupKey).length > 1;
@@ -620,7 +623,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                           {item.title}
                         </Link>
                         <p className="mt-1 text-xs text-[var(--muted)]">
-                          Criteria {item.criterionKeys.join(", ")} · {versionBasisLabel(item, coverage)}
+                          Criteria {item.criterionKeys.join(", ")} · {item.reasons.includes("REVIEWED_CARRY_FORWARD_PENDING") ? "selected historical source — pending activation" : versionBasisLabel(item, coverage)}
                         </p>
                         <p className="mt-1 break-all font-mono text-[11px] text-[var(--muted-soft)]" data-testid="requirement-coverage-link-id">
                           Link {item.linkId}
