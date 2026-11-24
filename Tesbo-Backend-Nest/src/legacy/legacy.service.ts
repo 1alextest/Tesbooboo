@@ -13734,10 +13734,10 @@ export class LegacyService implements OnModuleInit {
         }
         return toCamel(prior.rows[0]); // Exact retry reads its receipt, even after later edits.
       }
-      // A submission snapshots the current draft. Approved/rejected content must be edited back to
-      // draft first, so a stale tab cannot create a new candidate that the API still calls approved.
-      if (doc.status !== "draft") {
-        throw new ConflictException({ code: "DOCUMENT_NOT_DRAFT", error: "Only a draft document can be submitted for review" });
+      // A governed submission snapshots the current draft. Approved/rejected governed content must be
+      // edited back to draft first. Skill candidates keep their existing review flow and are excluded.
+      if (isGovernedDocumentType(doc.document_type) && doc.status !== "draft") {
+        throw new ConflictException({ code: "DOCUMENT_NOT_DRAFT", error: "Only a draft governed document can be submitted for review" });
       }
       this.assertKnowledgeReviewRevision(doc, expectedRevision);
       const snapshot = await this.writeKnowledgeGovernedVersion(client, doc, uid, "submitted", expectedRevision, principal?.kind ?? "unknown", submissionKey);
