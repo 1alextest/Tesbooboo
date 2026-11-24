@@ -2974,6 +2974,54 @@ test.describe("knowledge base (UI)", () => {
     });
   }
 
+  test("KBU-74 external edit after failed Submit cannot be silently overwritten on retry", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+      confidentiality: "internal", distribution: "internal",
+      sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Governed concurrent edit"), folderId: rootFolderId, documentType: "user_manual",
+      contentText: "Initial body", contentHtml: "<p>Initial body</p>", governedMetadata: metadata,
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" locally-authored");
+    let updates = 0;
+    await page.route(`**/knowledge-base/documents/${documentId}`, async route => {
+      if (route.request().method() === "PATCH") updates++;
+      await route.continue();
+    });
+    let failOnce = true;
+    await page.route(`**/knowledge-base/documents/${documentId}/submissions`, async route => {
+      if (failOnce && route.request().method() === "POST") {
+        failOnce = false;
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "E2E uncertain submit" }) });
+      } else await route.continue();
+    });
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("E2E uncertain submit");
+    const saved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(saved.contentText).toContain("locally-authored");
+    const competing = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: { contentText: "Competing edit", contentHtml: "<p>Competing edit</p>", expectedRevision: saved.editRevision },
+    });
+    expect(competing.status(), await competing.text()).toBe(200);
+    const updatesBeforeRetry = updates;
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText(/changed|revision|conflict/i);
+    expect(updates).toBe(updatesBeforeRetry);
+    await expect(page.locator(".ProseMirror").first()).toContainText("locally-authored");
+    const authoritative = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(authoritative.contentText).toBe("Competing edit");
+    const versions = (await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).list as Array<{ snapshotKind: string }>;
+    expect(versions.filter(v => v.snapshotKind === "submitted")).toHaveLength(0);
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
