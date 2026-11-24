@@ -3146,6 +3146,42 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
   });
 
+  test("KBU-78 a decision retains a title edited during the in-flight approval", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const createdResponse = await api.post(kbUrl("/documents"), {
+      data: { title: stamp("Governed decision title race"), folderId: rootFolderId, documentType: "user_manual", contentText: "Decision body", governedMetadata: metadata },
+    });
+    expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    const created = await createdResponse.json();
+    const submitted = await api.post(kbUrl(`/documents/${created.id}/submissions`), {
+      data: { expectedRevision: created.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(submitted.status(), await submitted.text()).toBe(201);
+    const page = await openDocument(browser, created.id);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let intercepted = false;
+    await page.route(`**/knowledge-base/documents/${created.id}/governed-approval`, async (route) => {
+      intercepted = true;
+      await gate;
+      await route.continue();
+    });
+    try {
+      await page.getByTestId("governed-approve").click();
+      await expect.poll(() => intercepted).toBe(true);
+      await page.getByPlaceholder("Untitled document").fill("Title edited during decision");
+    } finally {
+      release?.();
+    }
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+    await expect(page.getByPlaceholder("Untitled document")).toHaveValue("Title edited during decision");
+    await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },

@@ -387,3 +387,17 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   Whether a future Skill rename should preserve pinned applicability, and whether candidate revision should replace
   an earlier task, remain owner decisions. The task record cannot be updated through the available native tools;
   REQ-WPB-03 `4c6d84b3-64e9-4508-a4fd-d6001fbb4c75` remains staged/`in_review`, execution **UNRUN**.
+
+---
+
+## 10. PR #250 carried findings — disposition
+
+| Finding | Disposition |
+| --- | --- |
+| Title edited during governed Save/Submit could be overwritten | Fixed in #250 (in-flight local revision fence + refresh guard); KBU-77 covers save/submit. |
+| Decision path could overwrite a title/body edited during the in-flight decision | Fixed here: the decision captures the local revision and preserves the visible draft as unsaved; KBU-78 covers the browser path. |
+| `writer.needsReadback` blocked a decision retry after a failed decision | Fixed in #250: removed from the pre-decision guard; draft state still blocks a genuinely unsaved body. |
+| Ambiguous governed UPDATE acknowledgement | Confirmed follow-up: POST ambiguity is covered (KBU-73), but a PATCH that commits with a lost response still requires reload/readback. Not an authority or draft-loss defect. |
+| Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
+| Create-vs-folder-delete race | Confirmed follow-up: folder cascade checks the project lock used by conversions, but document create does not take that lock; a human create concurrent with a token folder delete can land in a deleted folder. Narrow, pre-existing for human deletes. |
+| Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |
