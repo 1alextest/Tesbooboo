@@ -2007,7 +2007,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.restoreKnowledgeDocumentVersion(projectId, req.userId, documentId, body);
+    return this.legacy.restoreKnowledgeDocumentVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/approve-ai-memory")
@@ -2076,7 +2076,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.moveKnowledgeDocument(projectId, req.userId, documentId, body);
+    return this.legacy.moveKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/restore")
@@ -2086,7 +2086,7 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/duplicate")
   duplicateKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId")

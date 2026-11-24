@@ -1336,6 +1336,17 @@ test.describe("knowledge base v2 — folders and documents", () => {
         headers: { Authorization: `Bearer ${token.token}` }, data: { governedMetadata: metadata }, failOnStatusCode: false,
       });
       expect(tokenUpdate.status()).toBe(403);
+      for (const [method, suffix, data] of [
+        ["post", `/documents/${doc.id}/duplicate`, {}],
+        ["patch", `/documents/${doc.id}/move`, { folderId: rootFolderId }],
+        ["post", `/documents/${doc.id}/restore-version`, { versionId: submitted.id }],
+      ] as const) {
+        const headers = { Authorization: `Bearer ${token.token}` };
+        const result = method === "post"
+          ? await anon.post(kbUrl(suffix), { headers, data, failOnStatusCode: false })
+          : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
+        expect(result.status(), `${method} ${suffix} — ${await result.text()}`).toBe(403);
+      }
     } finally {
       await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
     }

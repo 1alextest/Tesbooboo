@@ -12567,6 +12567,12 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
+  private assertAgentMayTouchGoverned(principal: { kind: "human_session" | "api_token" } | undefined, documentType: unknown) {
+    if (principal?.kind === "api_token" && isGovernedDocumentType(documentType)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+  }
+
   private assertKnowledgeDocumentBodyWritable(doc: Body) {
     // Provider-owned mirrors are rewritten wholesale by every sync, so an edit here would be
     // silently discarded later. Comments are the writable channel on these documents — they live
@@ -12764,10 +12770,12 @@ export class LegacyService implements OnModuleInit {
     return { row: res.rows[0], before: doc, contentChanged, nextTitle };
   }
 
-  async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     const folderId = String(body.folderId || "");
@@ -12792,10 +12800,12 @@ export class LegacyService implements OnModuleInit {
     return toCamel(res.rows[0]);
   }
 
-  async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const embeddingStatus = isGovernedDocumentType(doc.document_type) ? "unsupported" : "pending";
     const res = await this.db.query(
       `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
@@ -13772,10 +13782,12 @@ export class LegacyService implements OnModuleInit {
     return { list: res.rows.map(toCamel), total: res.rowCount };
   }
 
-  async restoreKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async restoreKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     this.assertKnowledgeDocumentBodyWritable(doc);

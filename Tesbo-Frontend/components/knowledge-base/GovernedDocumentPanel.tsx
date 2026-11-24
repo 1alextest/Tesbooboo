@@ -235,11 +235,18 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
     .sort((a, b) => b.versionNumber - a.versionNumber)[0];
   // A prior decision on this submitted version no longer applies after the body/metadata edit
   // that cleared the document's binding. The same is true for an undecided submission that has
-  // since been edited: its digest no longer matches the document, so approving it can only 409.
-  const submittedRevision = submittedDetail?.snapshotMetadata?.expectedRevision;
+  // since changed: compare the snapshot's bound content, not editRevision, because a no-op save
+  // can change updated_by without changing what the reviewer would approve.
+  const submittedContentChanged = Boolean(submittedDetail && (
+    submittedDetail.title !== doc.title
+    || (submittedDetail.contentText ?? null) !== (doc.contentText ?? null)
+    || (submittedDetail.contentHtml ?? null) !== (doc.contentHtml ?? null)
+    || JSON.stringify(submittedDetail.contentJson ?? null) !== JSON.stringify(doc.contentJson ?? null)
+    || JSON.stringify(submittedDetail.snapshotMetadata?.governedMetadata ?? null) !== JSON.stringify(doc.governedMetadata ?? null)
+  ));
   const submittedSuperseded = Boolean(currentDecision === "" && submittedVersion
     && (latestDecisionSnapshot?.snapshotMetadata?.sourceVersionId === submittedVersion.id
-      || (typeof submittedRevision === "string" && submittedRevision !== doc.editRevision)));
+      || submittedContentChanged));
   const decidedOnSubmitted = Boolean(currentDecision && decidedSnapshot && submittedVersion
     && doc.reviewedVersionId === decidedSnapshot.id
     && decidedSnapshot.snapshotMetadata?.sourceVersionId === submittedVersion.id);
@@ -284,9 +291,9 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
             <p className="text-xs text-[var(--muted)]" data-testid="governed-submitted-version">Submitted v{submittedVersion.versionNumber} · {submittedVersion.createdAt ? formatDateTime(submittedVersion.createdAt) : "—"} · {decidedOnSubmitted ? `decision ${currentDecision}` : submittedSuperseded ? "changed since this version was submitted" : "awaiting exact-version decision"}</p>
             {submittedMetadata && (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs" data-testid="governed-submitted-metadata">
-                <p>Audience: {submittedMetadata.audience} · Confidentiality: {submittedMetadata.confidentiality} · Distribution: {submittedMetadata.distribution}</p>
-                <p>Source authority: {submittedMetadata.sourceAuthority?.kind} — {submittedMetadata.sourceAuthority?.label}</p>
-                <p>Effectivity: {submittedMetadata.effectivity?.from || "—"} to {submittedMetadata.effectivity?.to || "—"}</p>
+                <p>Audience: {submittedMetadata.audience} · Subtype: {submittedMetadata.subtype} · Confidentiality: {submittedMetadata.confidentiality} · Distribution: {submittedMetadata.distribution}</p>
+                <p>Source authority: {submittedMetadata.sourceAuthority?.kind} — {submittedMetadata.sourceAuthority?.label}{submittedMetadata.sourceAuthority?.reference ? ` (${submittedMetadata.sourceAuthority.reference})` : ""}</p>
+                <p>Effectivity: {submittedMetadata.effectivity?.from || "—"} to {submittedMetadata.effectivity?.to || "—"}{submittedMetadata.enforcementRefs?.length ? ` · Enforcement: ${submittedMetadata.enforcementRefs.join(", ")}` : ""}</p>
               </div>
             )}
             {submittedDetail && <div className="max-h-80 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs"><VersionContent detail={submittedDetail} /></div>}

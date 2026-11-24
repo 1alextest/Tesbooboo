@@ -148,8 +148,10 @@ For `user_manual` and `policy` only:
 4. A later edit clears the exact binding through the existing review-invalidation rules; a stale approval is refused.
 5. A QA reader can read/author where the existing KB mutation rule allows but cannot approve/reject.
 6. Agent-authored content remains a draft/submission until this human decision; no agent token can approve.
-7. The UI reports the **latest** decision snapshot by version number, so a later rejection supersedes an earlier
-   approval; it does not show the first approved snapshot forever.
+7. The UI's current decision comes from the document's `reviewed_version_id` + `status`, joined to that exact
+   snapshot. History can retain an older approval after an edit, but it is not reported as current. Supersession
+   uses the latest decision snapshot and the submitted snapshot's bound content, so a later rejection supersedes an
+   approval and an edited undecided submission is not offered for a decision.
 
 ---
 
@@ -235,10 +237,11 @@ policy. An approved document does not become Zyra-visible merely because it is a
     Restoring an autosave therefore keeps the current metadata and the trigger re-drafts the document. Restore of a
     decision snapshot restores its metadata with the body.
 13. **Agent write boundary for governed documents.** API-token principals are refused when they create a
-    `user_manual`/`policy`, supply `governedMetadata`, or update a governed document (the REST controller and MCP
-    handlers pass the token principal; the service enforces it). Agents may still read/list governed documents and
-    their metadata, and none of them can set `status` or approve. This is a containment rule for the first slice,
-    not a complete MCP schema; a future governed-authoring contract would need an explicit human-review design.
+    `user_manual`/`policy`, supply `governedMetadata`, update a governed document, duplicate one, restore one of its
+    versions, or move it. The REST controller and MCP handlers pass the token principal; the service enforces it
+    across those paths. Agents may still read/list governed documents and their metadata, and none of them can set
+    `status` or approve. This is a containment rule for the first slice, not a complete MCP schema; a future
+    governed-authoring contract would need an explicit human-review design.
 14. **Submit does not flush a pending editor autosave.** The panel submits the persisted revision and only patches
     metadata first. The page autosaves quickly and the empty-state copy asks the author to save content first, but a
     click inside the debounce window can submit the prior body. A shared editor flush hook is the follow-up.
