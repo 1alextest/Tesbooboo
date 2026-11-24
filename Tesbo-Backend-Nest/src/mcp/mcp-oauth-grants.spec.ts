@@ -199,3 +199,39 @@ describe("MCP read-only OAuth authorization uses the existing member/grant/tool 
       .rejects.toMatchObject({ code: RpcCode.ProjectScopeDenied });
   });
 });
+
+describe("OAuth owner mutation invalidates old consent families in the existing transaction", () => {
+  it("deletes earlier provider bindings as part of the owner revision write", async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT p.settings, pm.role")) {
+        return { rows: [{ settings: { externalMcpAccess: settings() }, caller_role: "owner" }] };
+      }
+      if (sql.includes("SELECT id, user_id, scopes FROM api_tokens")) return { rows: [] };
+      return { rows: [] };
+    });
+    const transaction = jest.fn(async (work: (client: { query: typeof query }) => Promise<unknown>) =>
+      work({ query }));
+    const requireProjectAccess = jest.fn().mockResolvedValue({
+      caller_role: "owner", organization_id: "org-ci"
+    });
+    const service = new McpService(
+      { requireProjectAccess, normalizeRole: (role: string) => role } as unknown as LegacyService,
+      { transaction } as unknown as DatabaseService,
+      { assertProjectWritable: jest.fn() } as unknown as PlanLimitsService
+    );
+    const result = await service.updateAccessSettings(
+      { userId: "test-human", apiToken: null, oauthAccess: null } as any,
+      P, { enabled: false, revision: settings().revision, clients: [grant] }
+    );
+    expect(result.revision).toBe(settings().revision + 1);
+    const calls = query.mock.calls.map(([sql, args]) => ({ sql: String(sql), args }));
+    const updateIndex = calls.findIndex(({ sql }) => sql.includes("UPDATE projects SET settings"));
+    const revokeIndex = calls.findIndex(({ sql }) => sql.includes("DELETE FROM mcp_oauth_grant_approval_bindings"));
+    const auditIndex = calls.findIndex(({ sql }) => sql.includes("INSERT INTO audit_logs"));
+    expect(updateIndex).toBeGreaterThanOrEqual(0);
+    expect(revokeIndex).toBeGreaterThan(updateIndex);
+    expect(auditIndex).toBeGreaterThan(revokeIndex);
+    expect(calls[revokeIndex].args).toEqual([P, settings().revision + 1]);
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+});
