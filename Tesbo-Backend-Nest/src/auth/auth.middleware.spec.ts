@@ -112,6 +112,30 @@ describe("AuthMiddleware bearer precedence", () => {
     expect(f.otp.resolveSession).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { authorization: "Bearer ", enabled: true, apiValid: false, expectedOAuthCalls: 1, expectedUser: null },
+    { authorization: "Bearer rejected", enabled: false, apiValid: false, expectedOAuthCalls: 0, expectedUser: null },
+    { authorization: "Bearer tsbo_read", enabled: true, apiValid: true, expectedOAuthCalls: 0, expectedUser: "machine" }
+  ])("keeps credential owners separate: %p", async ({ authorization, enabled, apiValid, expectedOAuthCalls, expectedUser }) => {
+    const f = apiValid ? fixture() : fixture(null);
+    const oauth = { enabled, verifyAccessToken: jest.fn().mockResolvedValue(null) };
+    const real = new AuthMiddleware(
+      { sessionCookieName: "session" } as unknown as AppConfigService,
+      f.otp as unknown as OtpService,
+      f.api as unknown as ApiTokenService,
+      oauth as unknown as McpOAuthServer
+    );
+    const req = { headers: { authorization }, cookies: { session: "valid" } } as unknown as AuthenticatedRequest;
+    await real.use(req, {} as Response, f.next);
+    expect(req.userId).toBe(expectedUser);
+    expect(req.oauthAccess).toBeNull();
+    expect(req.apiToken?.userId ?? null).toBe(expectedUser);
+    expect(f.otp.resolveSession).not.toHaveBeenCalled();
+    expect(oauth.verifyAccessToken).toHaveBeenCalledTimes(expectedOAuthCalls);
+    if (expectedOAuthCalls) expect(oauth.verifyAccessToken).toHaveBeenCalledWith(null);
+    expect(f.next).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves browser cookie authentication when no bearer provided", async () => {
     const f = fixture();
     const req = { headers: {}, cookies: { session: "valid" } } as unknown as AuthenticatedRequest;
