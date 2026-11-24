@@ -47,7 +47,7 @@ export const CHECKS=WORKFLOW_SOURCES.flatMap(source=>source.contexts);
 const PUBLISHER_SOURCES=[
  {path:'.github/workflows/assurance-pr-gate.yml',sha:'3910a61102a8765876f5134475be1a2e1506da63'},
  {path:'.github/assurance-policy.json',sha:'9b396e0aa7160b68453e99273a9ef285ea02f125'},
- {path:'scripts/assurance-pr-gate.mjs',sha:'e96deb68c4db8274252170c27f766861ac32ad7b'},
+ {path:'scripts/assurance-pr-gate.mjs',sha:'56c66d8aa8483e79fb49b50464a4ae187ebd903b'},
  {path:'scripts/publish-assurance-status.mjs',sha:'856d664b0f6165ae6ffbfc75394866bd9c2379cf'}
 ];
 export const required=phase=>phase==='foundation'?CHECKS:phase==='assurance'?[...CHECKS,'specification-assurance']:(()=>{throw Error('Invalid phase')})();
