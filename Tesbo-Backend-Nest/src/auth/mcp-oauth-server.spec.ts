@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { allowedChatGptCimdClientId, McpOAuthServer } from "./mcp-oauth-server";
 import { DatabaseService } from "../database/database.service";
 
@@ -68,6 +68,46 @@ describe("Tesbo in-process OAuth issuer — default OFF, registered clients and 
     "https://chatgpt.com/oauth/%2e%2e/client.json"
   ])("denies untrusted CIMD client metadata source %s", url => {
     expect(allowedChatGptCimdClientId(url)).toBe(false);
+  });
+
+  it("actually instantiates the pinned provider through Tesbo's opt-in Nest mount without production keys", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const jwk = privateKey.export({ format: "jwk" });
+    process.env.TESBO_MCP_OAUTH_ENABLED = "true";
+    process.env.TESBO_MCP_OAUTH_DISCOVERY_PREVIEW = "false";
+    process.env.TESBO_MCP_OAUTH_RESOURCE_ORIGIN = "https://tesbo.example";
+    process.env.TESBO_MCP_OAUTH_ISSUER = "https://tesbo.example/oauth";
+    process.env.TESBO_MCP_OAUTH_PRIVATE_JWKS = JSON.stringify({
+      keys: [{ ...jwk, kid: "synthetic-jest-issuer-key" }]
+    });
+    process.env.TESBO_MCP_OAUTH_COOKIE_KEYS_JSON = JSON.stringify([
+      randomBytes(48).toString("base64url"),
+      randomBytes(48).toString("base64url")
+    ]);
+    process.env.TESBO_MCP_OAUTH_REGISTERED_CLIENTS = JSON.stringify([{
+      client_id: "tesbo-ci-only-public-client",
+      redirect_uris: ["https://client.example.test/return"]
+    }]);
+    process.env.TESBO_MCP_OAUTH_CIMD_ENABLED = "false";
+
+    const use = jest.fn();
+    const app = {
+      getHttpAdapter: jest.fn().mockReturnValue({
+        getInstance: jest.fn().mockReturnValue({ use })
+      })
+    };
+    const oauth = new McpOAuthServer(fakeDb);
+    await expect(oauth.mount(app as any)).resolves.toBeUndefined();
+    expect(oauth.enabled).toBe(true);
+    expect(oauth.issuer).toBe("https://tesbo.example/oauth");
+    expect(oauth.resource("11111111-1111-4111-8111-111111111111"))
+      .toBe("https://tesbo.example/api/projects/11111111-1111-4111-8111-111111111111/mcp");
+    expect(use).toHaveBeenCalledWith("/oauth", expect.any(Function));
+    expect(use).toHaveBeenCalledWith("/.well-known/oauth-authorization-server/oauth", expect.any(Function));
+    expect(use).toHaveBeenCalledWith("/.well-known/openid-configuration/oauth", expect.any(Function));
+    // Constructing a provider must neither authorize a Tesbo project nor issue
+    // a token. This tests startup wiring, not a successful client login.
+    expect(fakeDb.query).not.toHaveBeenCalled();
   });
 
   it("keeps private signing key configuration mandatory even when CIMD is enabled", async () => {
