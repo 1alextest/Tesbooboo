@@ -226,7 +226,7 @@ describe("OAuth owner mutation invalidates old consent families in the existing 
     expect(result.revision).toBe(settings().revision + 1);
     const calls = query.mock.calls.map(([sql, args]) => ({ sql: String(sql), args }));
     const updateIndex = calls.findIndex(({ sql }) => sql.includes("UPDATE projects SET settings"));
-    const revokeIndex = calls.findIndex(({ sql }) => sql.includes("DELETE FROM mcp_oauth_grant_approval_bindings"));
+    const revokeIndex = calls.findIndex(({ sql }) => sql.includes("UPDATE mcp_oauth_grant_approval_bindings SET revoked_at"));
     const auditIndex = calls.findIndex(({ sql }) => sql.includes("INSERT INTO audit_logs"));
     expect(updateIndex).toBeGreaterThanOrEqual(0);
     expect(revokeIndex).toBeGreaterThan(updateIndex);
