@@ -105,6 +105,24 @@ describe("Tesbo MCP OAuth resource metadata — preview OFF by default", () => {
     );
   });
 
+  it.each([
+    ["malformed project", "../admin", "https://tesbo.example"],
+    ["empty project", "", "https://tesbo.example"],
+    ["invalid discovery configuration", PROJECT, "http://bad.example"]
+  ])("denies unauthenticated dispatch regardless of %s", async (_label, projectId, origin) => {
+    Object.assign(process.env, env, { TESBO_MCP_OAUTH_RESOURCE_ORIGIN: origin });
+    const authorizeRequest = jest.fn();
+    const handleRequest = jest.fn();
+    const ctrl = new McpController({ authorizeRequest, handleRequest } as unknown as McpService);
+    const setHeader = jest.fn();
+    await expect(ctrl.handle({ apiToken: null, userId: "browser-user" } as AuthenticatedRequest,
+      { setHeader } as unknown as Response, projectId, { method: "tools/call" }))
+      .rejects.toThrow(UnauthorizedException);
+    expect(setHeader).not.toHaveBeenCalled();
+    expect(authorizeRequest).not.toHaveBeenCalled();
+    expect(handleRequest).not.toHaveBeenCalled();
+  });
+
   it("never sends a project-specific OAuth challenge from shared /api/mcp", async () => {
     Object.assign(process.env, env);
     const ctrl = new McpController({} as McpService);
