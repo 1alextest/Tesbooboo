@@ -238,6 +238,11 @@ export default function KnowledgeDocumentPage() {
   const [titleError, setTitleError] = useState<string | null>(null);
   const editRevision = useRef(0);
   const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
+  // Save and Submit are separate HTTP commits. Retain the exact saved revision after a
+  // failed/ambiguous Submit so the same-key retry cannot accidentally save again.
+  const pendingGovernedSubmission = useRef<{
+    key: string; editRevision: string; editorSnapshot: string;
+  } | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
   // before React re-renders the disabled button, so this is checked and set before any await.
   const restoreInFlightRef = useRef(false);
@@ -253,6 +258,7 @@ export default function KnowledgeDocumentPage() {
   useEffect(() => {
     const writer = new DocumentWriteQueue<KnowledgeDocument>();
     writerRef.current = writer;
+    pendingGovernedSubmission.current = null;
     editRevision.current = 0;
     restoreInFlightRef.current = false;
     return () => {
@@ -290,11 +296,35 @@ export default function KnowledgeDocumentPage() {
     }
     let versionNumber: number | null = null;
     const saved = await writer.restore(async () => {
+      const payload = latestContent.current;
+      // Capture editor state when this queued operation begins, after previous writes drain.
+      const editorSnapshot = JSON.stringify({
+        title: latestTitle.current, contentJson: payload?.contentJson,
+        contentHtml: payload?.contentHtml, contentText: payload?.contentText, metadata,
+      });
+      const pending = pendingGovernedSubmission.current;
+      if (submissionKey && pending?.key === submissionKey) {
+        // The prior UPDATE committed. On an ambiguous SUBMIT response, the server's
+        // submissionKey receipt is the authority; never issue another UPDATE first.
+        if (pending.editorSnapshot !== editorSnapshot) {
+          throw new Error("The draft changed after submission failed. Review or reload before retrying; the prior submission may already exist.");
+        }
+        const current = await getKnowledgeDocument(projectId, documentId);
+        const version = await submitKnowledgeDocument(projectId, documentId, {
+          expectedRevision: pending.editRevision,
+          submissionKey: pending.key,
+        });
+        versionNumber = version.versionNumber;
+        pendingGovernedSubmission.current = null;
+        return current;
+      }
+      if (pending) {
+        throw new Error("Resolve the previous uncertain submission before saving or submitting new changes.");
+      }
       const acknowledged = writer.acknowledged;
       if (acknowledged?.id !== documentId || !acknowledged.editRevision) {
         throw new Error("Reload this document before saving its governance.");
       }
-      const payload = latestContent.current;
       const updated = await updateKnowledgeDocument(projectId, documentId, {
         title: latestTitle.current,
         contentJson: payload?.contentJson,
@@ -305,11 +335,17 @@ export default function KnowledgeDocumentPage() {
       });
       if (submissionKey) {
         if (!updated.editRevision) throw new Error("Reload this document before submitting this revision.");
+        pendingGovernedSubmission.current = {
+          key: submissionKey, editRevision: updated.editRevision, editorSnapshot,
+        };
+        // This call can fail after the server has already created its immutable snapshot.
+        // Preserve the checkpoint above until the exact-key receipt is confirmed.
         const version = await submitKnowledgeDocument(projectId, documentId, {
           expectedRevision: updated.editRevision,
           submissionKey,
         });
         versionNumber = version.versionNumber;
+        pendingGovernedSubmission.current = null;
       }
       return updated;
     });
