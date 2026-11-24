@@ -107,7 +107,7 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
       {proposal.applyReceipt ? (
         <div className="rounded-lg border border-[var(--success-foreground)]/40 bg-[var(--success-soft)] p-3 text-sm" data-testid="managed-document-apply-receipt">
           <p>
-            Applied as native <strong>{proposal.applyReceipt.document.status}</strong>{" "}
+            Applied as native <strong>{proposal.applyReceipt.document.status === "draft" ? "Draft" : proposal.applyReceipt.document.status}</strong>{" "}
             <Link className="underline" href={`/projects/${projectId}/knowledge-base/documents/${proposal.applyReceipt.document.documentId}`}>
               {proposal.applyReceipt.document.title || proposal.applyReceipt.document.documentId}
             </Link>.
