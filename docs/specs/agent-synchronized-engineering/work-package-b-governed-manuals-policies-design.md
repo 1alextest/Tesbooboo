@@ -188,7 +188,7 @@ policy. An approved document does not become Zyra-visible merely because it is a
   misplaced refs), duplicate metadata preservation and embedding hold, legacy `{}` compatibility, digest change on
   metadata edit, submitted snapshot metadata, owner approve, QA refusal, stale approval, lost-response replay,
   later rejection superseding an earlier approval, AI-context exclusion for draft and approved governed documents,
-  owner/manager API approval, QA/guest/anonymous refusal, project boundary 404, API-token
+  owner/manager API approval, QA engineers, guests and unauthenticated users refused; project boundary 404; machine API token
   `HUMAN_REVIEW_REQUIRED`, replay, and refusal of a governed→general type change.
 - UI: author a manual/policy with metadata, submit, owner reviews the exact version and its metadata and approves;
   QA is refused while the owner still has the actions (not after a decision hides them); an edit clears the
