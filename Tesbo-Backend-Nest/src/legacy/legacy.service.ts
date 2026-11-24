@@ -17308,8 +17308,14 @@ export class LegacyService implements OnModuleInit {
       const originLinkSkill = reviewedSkillTarget(origin?.snapshot_metadata?.skillContext, REQUIREMENT_SKILL_TARGETS.requirement_case_link);
       if (!origin || !originLinkSkill) throw unavailable();
       const { linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = selected;
+      const orderedCriteria = (value: unknown) => criterionKeys.map((key: string) => {
+        const criterion = normalizeJsonArray(value).find((item: Body) => item?.key === key);
+        if (!criterion || typeof criterion.text !== "string") throw unavailable();
+        return { key, text: criterion.text, normative: criterion.normative !== false };
+      });
       result.push({ linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys,
         originatingApprovedVersionId: String(origin.id), originatingLinkSkill: originLinkSkill,
+        originatingCriteria: orderedCriteria(origin.snapshot_metadata?.criteria), proposedCriteria: orderedCriteria(criteria),
         sourceTestcaseRevision: String(link.testcase_revision), sourceTestcaseApprovalRevision: link.testcase_approval_revision == null ? null : String(link.testcase_approval_revision) });
     }
     return result;
