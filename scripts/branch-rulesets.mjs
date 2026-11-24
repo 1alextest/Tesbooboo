@@ -12,6 +12,8 @@ export const REPO='1alextest/Tesbooboo';
 // PR #232 adds reviewed testcase cache protocol and metadata-consumer coverage inside
 // the existing smoke job; its source pin changes without changing required contexts.
 // PR #233 extends the same KB smoke selection with the governed manual API/UI journeys;
+// PR #250 expands KBU-70..72 to KBU-70..73 for ambiguous submission retry;
+// no job names, required contexts, triggers or producer identities change.
 // no required context is added or removed.
 // A workflow edit (including a same-name job edit) requires source review and pin reconciliation.
 // PR #223 proposes a new, separately tested agent-pr-handoff-contracts job. The existing
@@ -26,7 +28,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'b2f9ce02a06a7a688591b03e555008246df9e985',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'abe94e15fe244291011b9455abb1fcb018bee0f2',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'e439a59b93170f408511c3e2f8de63808035df5d',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',
