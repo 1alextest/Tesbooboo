@@ -1,0 +1,105 @@
+---
+name: living-security-engineering
+description: Evidence-grounded security design, coding, QA and scanner triage. Distill reusable principles, instantiate context-specific safeguards and learn from authorized reviewer feedback without weakening security gates.
+status: candidate-v1
+owner: Tesbo Skills governance; repository engineering principles in AGENTS.md
+---
+# Living Security Engineering Skill — candidate v1
+
+**Purpose.** Help every engineering agent proactively discover, evaluate, prevent and verify security failures, including failures the task did not explicitly mention. Reuse the authoritative contracts in [AGENTS.md](../../../AGENTS.md), [Skills governance](../../specs/agent-synchronized-engineering/skills-governance.md), and [evidence-grounded decisions](../evidence-grounded-decisions/SKILL.md). This skill is a **candidate**; writing this file does not approve a Skill version, activate an assignment or grant permission to mutate Tesbo's official Security Policies, Cases or Runs.
+
+**Governing idea:** Security is the preservation of legitimate authority and user outcomes across boundaries and over time, not merely the absence of analyzer warnings. A green scanner is evidence about what it checked, not assurance of the whole system. An agent must discover meaningful security questions without waiting for a bot or a user to identify them.
+
+## Method: observe → generalize → instantiate → challenge → verify → learn
+
+**Shared method, not a second distillation framework.** Apply the portable discovery and principle-distillation method in [Skills governance §13.4.1](../../specs/agent-synchronized-engineering/skills-governance.md#1341-portable-method-for-discovery-and-principle-distillation) (a proposed integration view of canonical 06; canonical 03 owns evaluation). Preserve the source observation, consequence, failure class, invariant, agnostic principle, reusable question and contextual example. The lenses below specialize that method for security; they are complementary, not an exhaustive or mutually exclusive taxonomy. Investigate successful outcomes as well as failures, consider competing causal explanations, distinguish supported observations from hypotheses, compare existing principles before creating another, and challenge transfer with materially dissimilar cases, counterexamples, applicability limits and legitimate no-change outcomes. A proposed correction, implemented correction and independently demonstrated improvement remain distinct. Refine the shared method at its owner, not by creating a competing Security-only procedure.
+
+1. **Observe:** record the exact source, commit/build, entry point, scanner rule and line, controlled data, attempted action, privilege boundary, relevant actors and actual observable outcome. Label demonstrated fact, inference and unknown. Retrieve the live code and tests; scanner prose and filename are leads, not verdicts.
+2. **Classify the underlying mechanism:** e.g. an untrusted value controls a guard, external bytes are fetched, credentials survive revocation, a client is authorized under stale policy, a production artifact contains diagnostics, a scanner is disabled or cannot run, or a rejected test input is mistaken for a vulnerability.
+3. **Principle distillation — application agnostic:** apply the shared outcome-first causal and transfer/evaluation gates in [Skills governance §13.4.1](../../specs/agent-synchronized-engineering/skills-governance.md#1341-portable-method-for-discovery-and-principle-distillation), including competing explanations, existing-principle deduplication and falsifying cases. Express a *positive, transferable mechanism* independent of the vendor, repository, product, UI or triggering incident. The following are **security-specific prompts**, not a second method or mandatory mutually exclusive taxonomy:
+   - **Mechanism/cause:** what trust boundary, control ownership, invariant or failure propagation explains the outcome?
+   - **Human outcome:** who may be harmed, misled, blocked, exposed or left without recovery, including operators, reviewers and the affected public?
+   - **Outcome-backward:** start from a secure outcome and identify the preconditions and observations needed to establish it.
+   - **Anti-pattern/negative space:** what tempting shortcut, omitted case, excluded actor, stale permission or absence of evidence breaks the intended result?
+   - **Contrast/counterfactual:** compare a successful design with similar-looking failed designs, including unrelated human fields (physical access, finance, governance, safety and operational checks) where the underlying mechanism is transferable. Never copy their implementation blindly.
+   - **Lifecycle/relationship:** trace issue → use → revoke → reapprove → expire → retry → recover, including every dependent token, cache, session, job, report and external consumer.
+   - **Evidence/provenance:** ask what would falsify the claim, and whether its source is current, independently observed and appropriate to the target context.
+4. **Contextual instantiation:** use the principle to formulate a rule for the *actual* code, actor, environment, data classification, dependency and authorization policy. Distinguish runtime restrictions from negative-test fixtures; development from production; project policy from universal security requirements.
+5. **Adversarial challenge:** try wrong actor, tenant, resource, state, timing, hostile URL, replay, denial, expiry, lost response, partial commit, cache staleness, missing dependency and absent infrastructure. Include a legitimate happy path and a negative control so refusal is not mistaken for general breakage.
+6. **Verify in the correct layer:** static analysis for source patterns; unit tests for pure predicates; real HTTP/DB tests for guards, transactions and revocation; integration for external dependencies; deployment and operator checks for build, secrets and configuration. Test refusal *and absence of unauthorized side effects*. A mocked grant is not proof of deployed OAuth interoperability. Keep a real execution and an official native Tesbo Run distinct from source tests.
+7. **Learn:** log new findings, dismissed false positives, missed safeguards, causal mechanism, principle/rule version, discriminating test, counterexample, downstream consumers and stakeholder feedback. Grade provisional usefulness; do not automatically activate, suppress a checker or claim independent approval.
+
+## Principle vs rule vs test
+
+- **Principle:** a transferable causal or outcome claim (e.g. “Authority withdrawn must not be restored by reusing an old credential after a later grant is created.”)
+- **Rule:** a context-dependent instruction applying that principle (e.g. “Reject an OAuth access/refresh family issued before the current project grant epoch, even after the same client ID is reapproved.”)
+- **Test:** an executable observation that would distinguish compliant from noncompliant behavior (revoke → reapprove same ID; old family remains denied, new explicit consent produces a distinct valid family).
+- **Exception:** an explicit, scoped decision by authorized owners with evidence and expiration/review; neither a scanner silence nor an agent assertion is an exception.
+
+Never convert one incident-specific rule into a universal principle, or call the existence of a rule evidence that the feature is implemented.
+
+## Current principle registry (candidate, not approved)
+
+| ID | Transferable principle | Initial confidence | Example contextual rule / discriminating test |
+| --- | --- | --- | --- |
+| SEC-P01 | **Development affordances must not silently become production capabilities.** | provisional | Strip/disable debug endpoints, testing fallbacks, permissive hosts, diagnostic credentials, verbose secrets and dev-only flags in production artifacts. Test deployment build with hostile access; distinguish intentionally rejected fixture literals from executed debug paths. |
+| SEC-P02 | **Treat untrusted input as data; it cannot decide whether its own verification is required.** | provisional | Authenticate and authorize independently of request-controlled flags, headers, tenant/resource selectors, claims and UI states. Exercise wrong resource, forged bearer, cookie precedence and caller-controlled bypass. |
+| SEC-P03 | **A permission is current only if every necessary owner still grants it at the moment of use.** | provisional | Intersect verified token identity, membership, project/client grant, tool allowlist, scope and data classification; fail closed on unavailable authority. Test revoke between preview and submit and between authentication and operation. |
+| SEC-P04 | **Revocation must invalidate the *dependent authority chain*, not just hide an entry at one layer.** | provisional | On same-client-ID reapproval, previously issued grant, refresh and access-token families must stay invalid. Require fresh user consent. Test concurrent refresh and replay across revocation, reapproval and session restoration. |
+| SEC-P05 | **Displayed authorization context must be the context actually approved.** | provisional | Bind a consent confirmation to exact actor/client/resource/scope/tool set, policy revision, expiry and reviewed snapshot; revalidate on affirmative POST; block stale consent without silently widening permission. |
+| SEC-P06 | **Provenance and trust tier matter more than the surface appearance of a warning.** | provisional | Triage scanner findings as confirmed flaw, negative fixture, protective guard, local isolated test, misconfiguration, unsupported scan, false positive or unknown. Give code/line/execution evidence; do not blanket-ignore a rule. |
+| SEC-P07 | **Missing security evidence must be reported as missing, not turned into success.** | provisional | If scan credentials, eligible targets, SARIF, external service or expected check is unavailable: fail when coverage is required, otherwise explicitly report not applicable. Never fabricate empty reports or silently skip a required scan. |
+| SEC-P08 | **Security tooling and dependencies are part of the attack surface.** | provisional | Pin third-party CI actions by immutable commit, verify provenance, choose minimum permissions, review update paths, avoid unbounded artifact/network exposure and do not expose secrets to untrusted PR code. |
+| SEC-P09 | **Security invariants include continuity of legitimate work and historical evidence.** | provisional | Deny forbidden writes with zero side effects; preserve immutable approved artifacts, receipt provenance and previously executed Runs when permissions change; preserve authorized recovery after ambiguous failures. |
+| SEC-P10 | **An assurance result is bounded by its evidence, authority and environment.** | provisional | Separate static warning, unit pass, isolated HTTP pass, CI success, deployed security posture, actual client interoperability and authorized reviewer decision. Re-run on exact head; do not impersonate independent/White review. |
+| SEC-P11 | **A restriction must govern every representation and derived disclosure of the protected information, not just its primary interface.** | provisional | Trace authoritative data into aliases, nested payloads, timelines, audit metadata, search, caches, reports and alternative endpoints. Check denied/feature-off reads for absence of protected information; authorized reads and unrelated records must remain usable. Retain restricted historical evidence at its proper owner rather than deleting it to make an unauthorized projection safe. |
+
+## Operational rules for production/debug findings
+
+The phrase “do not leave debug code in production” is a *contextual rule*, not a license to remove all localhost strings or testing instrumentation.
+
+1. Inspect whether the flagged code is reachable in a production artifact and from which authority and network boundary.
+2. Distinguish an **executed insecure URL** from a **test that submits an insecure URL and asserts refusal**; distinguish an ephemeral loopback integration server from a production listener; distinguish a localhost *rejection condition* from an outbound request.
+3. If truly production-reachable, remove or gate the capability at the authoritative owner and add build, deployment, negative-access and secret-leak regression coverage. Do not merely hide the UI or change the warning text.
+4. If harmless by evidence, reply to the exact finding with the code path, negative assertion and environment scope. Resolve only with traceable rationale, preserving the scanner. If evidence is incomplete, leave it unresolved as **investigation needed**.
+5. Trace siblings: logging, stack traces, tokens, test credentials, environment defaults, feature flags, bypass headers, local endpoints, source maps, development dependencies, permissive CORS, admin consoles, verbose errors and hardcoded diagnostic origins. Scope sibling changes carefully.
+
+## Required security review probes
+
+For every change, proportionate to its scope, examine:
+- **Subjects and objects:** user, agent, API token, browser session, OAuth client, project/workspace, document, requirement, case, run and evidence; who can read, propose, apply, publish, approve, revoke and retry?
+- **Entrances:** UI, REST, MCP, jobs, webhooks, command line, database migrations, CI actions and external integrations; do they converge on the same authoritative guard?
+- **Cross-boundary relationships:** credentials → consent → grant → project membership → tool → data/side effects; document → Skill → version → approval; agent staging → human apply. Check stale/revoked ancestors.
+- **Lifecycle and races:** create/activate/edit/submit/approve/reject/archive/revoke/reapprove/rotate/expire; concurrent edits, retries, distributed cache, failover, partial commits and lost acknowledgements.
+- **Exposure:** secrets, PII, proprietary sources, hidden content, diagnostics, logs, artifact uploads, host/resource discovery, SSRF, origins/redirects and unexpected clients.
+- **Evidence quality:** exact commit, check producer, tested environment, tool version, scanner coverage, real DB/provider where necessary, intended failure, false-positive control and who accepted residual risk.
+
+When a consequential product/security decision is unresolved, independently discover and surface it through the established evidence-grounded decision workflow. Do not silently pick a permissive option.
+
+## Living registry, feedback and grading
+
+For each candidate principle or rule maintain: `id`, `version`, `origin` (scanner ID/PR/incident/research/user), `distillation_lenses`, `mechanism`, `human_outcome`, `scope/applicability`, `counterexamples`, `evidence`, `observed_tests`, `limitations`, `reviewer_decisions`, `grade_history`, `status`, and `supersedes`.
+
+**Ask the user to evaluate a meaningful application of a principle after presenting the resulting design/fix**, without a large form. Record their free-form response; the agent proposes a grade and reasoning, and the user remains the authority on whether the result served their intended outcome. The user does **not** have to grade every routine security patch. User satisfaction can evaluate design utility; it cannot by itself establish exploit resistance, a false-positive determination or compliance.
+
+Suggested internal rubric (0–5 each, explicitly provisional): **causal accuracy**, **cross-domain transferability**, **context fit**, **preventive/discriminating test value**, **human outcome**, **false-positive cost**, **evidence strength**. Report confidence and missing observations separately. Never average a high user score over a failed trust-boundary test. Include both positive and negative examples and periodically test whether the new principle actually finds issues missed by the old procedure without generating unacceptable false alarms.
+
+On feedback, classify the reason for a miss: principle missing, too specific, wrong abstraction, context rule wrong, poor applicability, rule not consulted, test inadequate, evidence stale, reviewer misunderstood or unmade product decision. Update the smallest authoritative owner and a versioned candidate; preserve rejected rules and historical grades. **Approved version ≠ active assignment**: only authorized humans may approve/assign/activate the native Skill. Other agents may propose revisions, not silently change the active mapping.
+
+## Security-bot feedback intake protocol
+
+1. Fetch exact finding, affected head, bot/rule/version and source; verify whether it is still current.
+2. Trace actual tainted source → sensitive sink, guard and deployment reachability; identify root cause or a negative-test counterexample.
+3. Assign a disposition: confirmed / likely / false-positive with evidence / not-applicable / unknown. Include severity and confidence *independently*.
+4. Apply principle-distillation lenses and check the registry for an existing principle before creating another. Add an instantiation rule and discriminating regression; for true defects, sweep sibling consumers.
+5. Ask independent Security, Red, Green and QA lenses to challenge the reasoning; White checks authority/evidence/coverage. Do not assert separate reviewers ran if they did not.
+6. Feed a concrete result to the user for feedback; propose a grade and keep full lineage. Promote only through governed native publication and assignment.
+
+**Initial provenance:** GitHub CodeQL/DevSkim review of OAuth #246, CI action hardening #239/#240, Snyk IaC applicability #241, governed manual/policy work #250/#251, and existing AGENTS.md principles. These are examples and candidate learning inputs, not proof of general effectiveness or authorized release.
+
+
+### Learning receipts — candidate, 2026-11-24
+
+- **SEC-P11 (new):** [PR #251's correction](https://github.com/1alextest/Tesbooboo/commit/32e58f9fc6ee0692659822b70234a5328c6e4f1c) redacts not only direct proposal fields but also nested source/activity projections and request aliases when the managed preview is unavailable. This is a distinct confidentiality mechanism from SEC-P03's current permission check: a correct gate can still leak through a different representation. Reusable question: *Where else can a restricted fact be reconstructed, directly or by correlation, and which owner governs that disclosure?* Contrast a hidden field whose value can be inferred from an export or a support timeline. Counterexample: a genuinely non-sensitive aggregate may remain visible if authorized and it cannot disclose the protected detail. Verify feature-off/forbidden and legitimate ordinary-task projections, including nested fields; keep independently authorized historical retention distinct from exposure. The source change and merge are evidence of implementation, not proof of transfer to all contexts or independent acceptance.
+- **SEC-P01/P06/P10 (existing; contextual refinement, not a new principle):** OAuth #246 DevSkim alerts [3336](https://github.com/1alextest/Tesbooboo/security/code-scanning/3336) and [3335](https://github.com/1alextest/Tesbooboo/security/code-scanning/3335) refer to a test-only ephemeral loopback listener and its locally constructed request URL. Production TypeScript build config excludes spec files. Inspect artifact reachability and scope of actual execution; distinguish a typecheck and focused test selection from execution of the flagged integration fixture. Candidate disposition is not a dismissal or independent review. A real production listener would need a different outcome and rule.
+- **Feedback/evaluation:** no user grades or held-out transfer evaluation recorded for these additions. Preserve provisional status and use existing governed review/version/assignment owners.
