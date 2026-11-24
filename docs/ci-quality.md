@@ -417,6 +417,8 @@ actually demonstrated.
 
 ### Native finding protection — proposed activation phase
 
+The assurance evaluator requires Independent and White receipts for changes to the [finding reconciliation procedure](agent-scope-discipline.md) and the [ruleset implementation](../scripts/branch-rulesets.mjs). A rename into or out of either path requires coverage of both names. The trusted default-branch installation must carry this reviewed verifier revision before the activation preflight can succeed. The earlier PR 191 bootstrap carries an older verifier.
+
 Following AGENTS principle 18 and PR254, use the existing ruleset owner, not a parallel publisher. The `--findings` phase extends the assurance phase with native `code_scanning` protection for CodeQL and DevSkim, both alert thresholds set to `all`. Existing unrelated scanner rules and required checks are preserved. Native conversation resolution stays mandatory; it closes the same-head thread timing gap that a scheduled check cannot guarantee. Native scanner protection addresses qualifying PR alerts and missing analysis, not every historical repository alert or every possible independent finding.
 
 Before applying, verify the installed trusted publisher, both target branches' pinned CI and scanner sources, active workflows, no bypass actors, and the newest result from each reviewed scanner job at the exact target ref and commit. The command checks the native tool name, GitHub analysis key (workflow path and job ID), and SARIF category. It examines at most the 100 newest results per tool and ref. Missing evidence, an unidentified newer producer, a changed category on the reviewed job, or an incomplete analysis blocks activation.
