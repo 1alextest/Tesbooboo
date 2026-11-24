@@ -1117,7 +1117,9 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     });
     expect(noChangeApply.status(), await noChangeApply.text()).toBe(201);
     expect((await noChangeApply.json()).receipt.document).toMatchObject({ operation: "no_change", status: "draft" });
-    expect(scalar(`SELECT edit_revision FROM knowledge_documents WHERE id=${literal(target.id)};`)).toBe(latest.editRevision);
+    // edit_revision is a computed digest, not a column: read it back through the API.
+    const afterNoChange = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(afterNoChange).toMatchObject({ editRevision: latest.editRevision, contentText: latest.contentText });
   } finally {
     await machine?.dispose();
     for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
