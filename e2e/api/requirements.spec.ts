@@ -1094,7 +1094,7 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     expect(rejectedResponse.status(), await rejectedResponse.text()).toBe(201);
     const rejected = await rejectedResponse.json();
     expect(rejected.receipt).toMatchObject({ action: "managed_document_reject", proposalRevision: second.proposalRevision });
-    expect((await reject()).json()).toMatchObject({ replayed: true, receipt: { id: rejected.receipt.id } });
+    expect(await (await reject()).json()).toMatchObject({ replayed: true, receipt: { id: rejected.receipt.id } });
     expect((await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
 
     // A candidate that proposes exactly the current state records no change instead of claiming a
