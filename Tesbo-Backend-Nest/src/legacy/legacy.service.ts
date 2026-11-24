@@ -16758,8 +16758,10 @@ export class LegacyService implements OnModuleInit {
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
-      // Re-read current human authority after the task wait, before any reviewed content is used.
-      const authorityAfterWait = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      // Re-read the full proposal authority after the task wait, before any reviewed content is
+      // used. This is the locking read: it re-checks membership and workspace role and also the
+      // project's testcaseStorage capability, which a settings change can disable while we wait.
+      const authorityAfterWait = await this.requireProposalAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authorityAfterWait.caller_role)));
       if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
       const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);

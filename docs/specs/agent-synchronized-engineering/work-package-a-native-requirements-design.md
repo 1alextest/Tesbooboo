@@ -1040,6 +1040,10 @@ Apply authorization (REQ-WPA-13): requirement-bundle apply now uses the same nor
 policy as requirement approval, proposal rejection and link activation at both authorization checks. Legacy
 `admin`/`test_manager` members can apply, a raw `qa_engineer` is refused, and a role change while the apply
 waits is re-read and refused after the wait. The initial check is a non-locking fail-fast preflight; the
-post-wait check is the authoritative `FOR SHARE` membership read and is held through commit. A locking
-preflight would have held the membership rows for the whole task wait, making a demotion unable to commit
-between the checks. Membership, human-session, exact-revision and effective-Skill checks are unchanged.
+post-wait check is the full `requireProposalAuthority` read with `FOR SHARE` on the project, project/org
+membership and user, held through commit. It re-checks the workspace role and the project's
+`testcaseStorage` capability as well as the project role, so disabling proposal storage while an apply waits
+also refuses it. A locking preflight would have held the membership rows for the whole task wait, making a
+demotion unable to commit between the checks. Membership, human-session, exact-revision and effective-Skill
+checks are unchanged. Legacy aliases are covered on apply and rejection; a rejected bundle writes no
+requirement, case or link, and a refused apply leaves the stored writes untouched.
