@@ -56,6 +56,7 @@ export function validateModernMcpRequest(
       typeof body.method !== "string" || !object(body.params)) {
     return rpcError(id, INVALID, "Invalid modern MCP JSON-RPC request", 400);
   }
+  const validId: string | number = body.id as string | number;
   const version = header(req, "MCP-Protocol-Version");
   const meta = body.params._meta;
   if (!object(meta) || typeof meta["io.modelcontextprotocol/protocolVersion"] !== "string") {
@@ -90,12 +91,12 @@ export function validateModernMcpRequest(
         nameHeaderValue(suppliedName) !== name || !suppliedName) {
       return rpcError(id, HEADER_MISMATCH, "Mcp-Name header and requested tool must agree", 400);
     }
-    return { ok: true, method, name, id };
+    return { ok: true, method, name, id: validId };
   }
   if (suppliedName !== undefined) {
     return rpcError(id, HEADER_MISMATCH, "Unexpected Mcp-Name header", 400);
   }
-  return { ok: true, method, id };
+  return { ok: true, method, id: validId };
 }
 
 /** Preserve existing MCP read tools and add modern result metadata. */
