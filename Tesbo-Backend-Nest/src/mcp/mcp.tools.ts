@@ -1794,7 +1794,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
-        return ctx.legacy.deleteKnowledgeDocument(ctx.projectId, ctx.userId, documentId);
+        return ctx.legacy.deleteKnowledgeDocument(ctx.projectId, ctx.userId, documentId, { kind: "api_token" });
       }
     },
     {
@@ -1810,7 +1810,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
-        return ctx.legacy.restoreKnowledgeDocument(ctx.projectId, ctx.userId, documentId);
+        return ctx.legacy.restoreKnowledgeDocument(ctx.projectId, ctx.userId, documentId, { kind: "api_token" });
       }
     },
     {

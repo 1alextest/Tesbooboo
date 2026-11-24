@@ -745,7 +745,7 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).deleteKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1");
+      expect((legacy as any).deleteKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1", { kind: "api_token" });
     });
 
     it("rejects archive_knowledge_document without documentId", async () => {
@@ -805,7 +805,7 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).restoreKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1");
+      expect((legacy as any).restoreKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1", { kind: "api_token" });
     });
 
     it("rejects restore_knowledge_document without documentId", async () => {

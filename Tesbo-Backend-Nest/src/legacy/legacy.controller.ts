@@ -2081,7 +2081,7 @@ export class LegacyController {
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/restore")
   restoreKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.restoreKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.restoreKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/duplicate")
@@ -2123,7 +2123,7 @@ export class LegacyController {
 
   @Delete("/api/projects/:projectId/knowledge-base/documents/:documentId")
   deleteKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.deleteKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.deleteKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Post("/api/projects/:projectId/knowledge-base/files/upload")

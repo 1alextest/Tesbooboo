@@ -128,12 +128,36 @@ For `user_manual` and `policy` only:
 | --- | --- |
 | `createKnowledgeDocument` | Accept and validate `governedMetadata`; default `{}`; new types require the full contract. |
 | `updateKnowledgeDocument` / `writeKnowledgeDocument` | Accept, validate, store; treat a metadata change as content changed; exact-revision CAS. |
-| `submitKnowledgeDocument` | Unchanged; snapshots the exact document including metadata. |
+| `submitKnowledgeDocument` | Snapshots the exact document including metadata; only a `draft` can be submitted, and a repeat of the same `submissionKey` still returns its original receipt after a later decision. |
 | New `approveGovernedKnowledgeDocument` / `rejectGovernedKnowledgeDocument` | Owner/manager human-session exact-version decision for manual/policy; content digest; approved/rejected snapshot; `reviewed_version_id`/status; replay; stale conflict. |
 | `restoreKnowledgeDocumentVersion` | For governed types, restore the snapshot's governed metadata with the body. |
 | `getKnowledgeDocument` / list / version history | Return metadata and snapshot metadata. |
-| KB UI | Type templates, metadata form, submit-for-review, exact submitted-version review/diff/approve/reject, a read-only exact-version timeline, and history/readback. |
+| KB UI | Type templates, metadata form, submit-for-review, exact submitted-version review/readback/approve/reject, a read-only exact-version timeline, and history. Submit routes through the editor write queue and writes the current editor body + metadata before the exact submission. |
 | Zyra AI context / RAG | New types excluded until the exposure policy in §8 is approved. New and duplicated governed rows are created `embedding_status='unsupported'`; the boot sweep and embedding processor also exclude `user_manual`/`policy` so a status reset or an already-queued job cannot leak text. |
+
+### 3.5 Mutation permission matrix
+
+All governed mutation paths use the shared `assertAgentMayTouchGoverned` owner and the existing KB role rules.
+The agent restriction is re-checked against the **locked** document inside the write transaction, so a document
+that becomes governed while a token operation waits is refused before any write, folder change or version snapshot.
+
+| Operation | Human session | API/MCP token | Notes |
+| --- | --- | --- | --- |
+| create governed | any project member (as before) | refused | token cannot originate governed types or `governedMetadata` |
+| update / submit | creator, owner or manager; submit only from `draft` | refused | exact-revision CAS; submit snapshots body + metadata |
+| duplicate | any project member with project access | refused for a governed source | copies the locked source's type/metadata; new row is a draft |
+| move | creator, owner or manager | refused | locked type re-check; trigger re-drafts when folder changes |
+| restore-version | creator, owner or manager | refused | locked type re-check; restores body + decision-snapshot metadata |
+| archive (delete) | creator, owner or manager | refused | soft delete only; no approval change while archived |
+| unarchive | owner or manager | refused | locked type re-check; original provenance preserved |
+| approve / reject | owner or manager, human session | refused (`HUMAN_REVIEW_REQUIRED`) | exact submitted version; manager aliases normalized |
+
+**Unresolved permission policy (owner evidence):** the matrix deliberately keeps governed authoring available to
+any project member, matching the existing KB create rule, while approval remains owner/manager. A project may want
+authoring restricted to owners/managers or to a named document role; that is a product decision because it changes
+who can originate a manual/policy draft. Archive is also currently refused to agent tokens even though it changes
+no content; the alternative is to allow archive/unarchive for tokens while keeping content/metadata/status writes
+closed. Both alternatives are tracked, not implemented.
 
 ---
 
@@ -238,17 +262,58 @@ policy. An approved document does not become Zyra-visible merely because it is a
     Restoring an autosave therefore keeps the current metadata and the trigger re-drafts the document. Restore of a
     decision snapshot restores its metadata with the body.
 13. **Agent write boundary for governed documents.** API-token principals are refused when they create a
-    `user_manual`/`policy`, supply `governedMetadata`, update a governed document, duplicate one, restore one of its
-    versions, or move it. The REST controller and MCP handlers pass the token principal; the service enforces it
-    across those paths. Agents may still read/list governed documents and their metadata, and none of them can set
+    `user_manual`/`policy`, supply `governedMetadata`, update/submit a governed document, duplicate one, move it,
+    restore one of its versions, archive it or unarchive it. The REST controller and MCP handlers pass the token
+    principal; the service enforces it across those paths, re-checking the locked document type for operations that
+    wait on a row lock. Agents may still read/list governed documents and their metadata, and none of them can set
     `status` or approve. This is a containment rule for the first slice, not a complete MCP schema; a future
     governed-authoring contract would need an explicit human-review design.
-14. **Submit does not flush a pending editor autosave.** The panel submits the persisted revision and only patches
-    metadata first. The page autosaves quickly and the empty-state copy asks the author to save content first, but a
-    click inside the debounce window can submit the prior body. A shared editor flush hook is the follow-up.
+14. **Submit binds the current editor state (implemented).** Save metadata, Submit and decisions run through the
+    document write queue. Submit cancels a pending debounce and writes the current title/body + metadata in one
+    operation, then submits that returned revision. A failed save or stale revision leaves the draft in the editor,
+    surfaces the API error and does not submit; retries reuse the pending submission key until it succeeds.
 15. **Zyra context picker (filtered).** The task composer no longer offers `user_manual`/`policy` documents,
     because selecting one copies its full text into the task context sent to the model. The backend snapshot and
     AI-context gates remain authoritative; a future exposure policy may reintroduce an explicitly labelled option.
 16. **Submitted-vs-current diff.** Governed snapshots intentionally carry no changed summary/fields, so the history
     list does not render a text diff for them. The panel shows the complete exact snapshot and its metadata; a
     computed diff against the current working copy is a follow-up, not a current capability.
+
+### 8.1 Owner decision brief — decision reversal on the same exact version
+
+**Question:** may an owner or manager reverse an already-recorded approval/rejection on the same submitted version?
+
+**Current evidence:** `reviewGovernedKnowledgeDocument` only replays when `reviewed_version_id` points at a decision
+snapshot with the same kind and `sourceVersionId`. A later opposite call with the same matching digest creates a
+second decision snapshot, flips `status` and rewrites `reviewed_version_id`; the UI hides actions once decided.
+
+**Options and consequences:**
+
+- **Final decision (block opposite calls):** simplest auditor story and matches the current UI; an accidental or
+  mistaken approval needs a new submission/revision, which is a heavier but more defensible correction path.
+- **Explicit reversal (allow, require a reason, label it as a reversal):** matches the API's current capability and
+  supports genuine changes of mind without editing content; requires a new receipt/UI affordance and consumers must
+  read the latest decision snapshot rather than assume one decision per version.
+- **Recommended pending decision:** keep the API's recorded reversals during the pilot but do not present them as a
+  supported workflow; add an explicit reversal endpoint/UI and reason before relying on it. No silent change.
+
+### 8.2 Owner decision brief — future AI-context exposure
+
+**Question:** which approved manuals/policies, if any, may enter Zyra context or RAG?
+
+**Current evidence:** every governed row is created `embedding_status='unsupported'`; the boot sweep and embedding
+processor exclude `user_manual`/`policy`; `knowledgeDocumentAiContextSql` excludes them from both the non-memory and
+the approved-memory branches; the task-composer picker filters them. No approved governed content reaches the model.
+
+**Options and consequences:**
+
+- **Remain dark (current):** strongest confidentiality posture; owners must read manuals/policies in the KB and
+  cannot use them as Zyra context, including for policy-aware generation.
+- **Explicit selection only (recommended first exposure):** allow an owner to mark one exact approved revision as
+  context-eligible per project, with audience/distribution/confidentiality checks and a visible receipt; requires a
+  new eligibility field/decision and retrieval/audit tests.
+- **Automatic by metadata:** derive eligibility from confidentiality/distribution/effectivity; risks silently
+  admitting content when metadata is wrong or a policy becomes effective, and needs a durable enforcement model.
+
+Do not change the exposure gate or embedding hold until the owner chooses an option and the corresponding retrieval,
+audit and UI contract is reviewed. GitHub CI is not evidence that native publication/execution occurred.

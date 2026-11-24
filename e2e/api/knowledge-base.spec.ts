@@ -1340,11 +1340,16 @@ test.describe("knowledge base v2 — folders and documents", () => {
         ["post", `/documents/${doc.id}/duplicate`, {}],
         ["patch", `/documents/${doc.id}/move`, { folderId: rootFolderId }],
         ["post", `/documents/${doc.id}/restore-version`, { versionId: submitted.id }],
+        ["post", `/documents/${doc.id}/submissions`, { expectedRevision: approved.editRevision, submissionKey: randomUUID() }],
+        ["delete", `/documents/${doc.id}`, undefined],
+        ["patch", `/documents/${doc.id}/restore`, undefined],
       ] as const) {
         const headers = { Authorization: `Bearer ${token.token}` };
         const result = method === "post"
           ? await anon.post(kbUrl(suffix), { headers, data, failOnStatusCode: false })
-          : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
+          : method === "delete"
+            ? await anon.delete(kbUrl(suffix), { headers, failOnStatusCode: false })
+            : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
         expect(result.status(), `${method} ${suffix} — ${await result.text()}`).toBe(403);
       }
     } finally {

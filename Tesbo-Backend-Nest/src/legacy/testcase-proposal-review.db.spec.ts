@@ -1358,16 +1358,23 @@ type Body=Record<string,any>;
 
         const exposed=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
         expect(exposed.rows[0].n).toBe(0);
-        // Two identical submissions bind to different exact versions; approving the older one
-        // must not leave the latest submission showing as undecided.
+        // A rejected document must be edited back to draft before another submission. Two identical
+        // submissions then bind to different exact versions; approving the older one must not leave
+        // the latest submission showing as undecided.
+        const rejectedState=await service().getKnowledgeDocument(project,user,docId);
+        await expect(service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:rejectedState.editRevision,submissionKey:randomUUID()},human))
+          .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_NOT_DRAFT"}});
+        const reopened=await service().updateKnowledgeDocument(project,user,docId,
+          {contentText:"Manual body reopened",expectedRevision:rejectedState.editRevision});
         const older=await service().submitKnowledgeDocument(project,user,docId,
-          {expectedRevision:rejected.editRevision,submissionKey:randomUUID()},human);
+          {expectedRevision:reopened.editRevision,submissionKey:randomUUID()},human);
         await service().submitKnowledgeDocument(project,user,docId,
-          {expectedRevision:rejected.editRevision,submissionKey:randomUUID()},human);
+          {expectedRevision:reopened.editRevision,submissionKey:randomUUID()},human);
         await expect(service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:older.id},human))
           .rejects.toMatchObject({status:409,response:{code:"GOVERNED_VERSION_SUPERSEDED"}});
         await expect(service().updateKnowledgeDocument(project,user,docId,
-          {documentType:"general",expectedRevision:rejected.editRevision}))
+          {documentType:"general",expectedRevision:reopened.editRevision}))
           .rejects.toMatchObject({status:400});
 
         legacyId=(await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Legacy general ${randomUUID()}`,documentType:"general",contentText:"Legacy"})).id;
@@ -1386,6 +1393,61 @@ type Body=Record<string,any>;
         }
       }
     });
+
+    it("rechecks the agent restriction against a document that becomes governed while a token operation waits",async()=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const otherFolder=(await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name) SELECT organization_id,id,$2 FROM projects WHERE id=$1 RETURNING id",[project,`Race target ${randomUUID()}`])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",subtype:"manual",confidentiality:"internal",
+        distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:null,to:null},enforcementRefs:[]};
+      const blocker=new Client({connectionString:url}); await blocker.connect();
+      const docIds:string[]=[];
+      const makeDoc=async(title:string)=>service().createKnowledgeDocument(project,user,{folderId:folder,title,contentText:`${title} body`});
+      const race=async(docId:string,expectedRevision:string,operation:()=>Promise<Body>)=>{
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT id FROM knowledge_documents WHERE id=$1 FOR UPDATE",[docId]);
+        const conversion=service().updateKnowledgeDocument(project,user,docId,
+          {documentType:"user_manual",governedMetadata:metadata,expectedRevision});
+        expect(await waitUntil(()=>waitingOn("%knowledge_documents%FOR UPDATE%"))).toBe(true);
+        const pending=operation();
+        await blocker.query("COMMIT");
+        await conversion;
+        await expect(pending).rejects.toMatchObject({status:403});
+      };
+      try{
+        const moveDoc=await makeDoc(`Race move ${randomUUID()}`); docIds.push(moveDoc.id);
+        await race(moveDoc.id,moveDoc.editRevision,
+          ()=>service().moveKnowledgeDocument(project,user,moveDoc.id,{folderId:otherFolder},{kind:"api_token"}));
+        expect((await admin.query("SELECT folder_id,document_type FROM knowledge_documents WHERE id=$1",[moveDoc.id])).rows[0])
+          .toEqual({folder_id:folder,document_type:"user_manual"});
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM audit_logs WHERE entity_id=$1 AND action='moved'",[moveDoc.id])).rows[0].n).toBe(0);
+
+        const restoreDoc=await makeDoc(`Race restore ${randomUUID()}`); docIds.push(restoreDoc.id);
+        const version=await service().submitKnowledgeDocument(project,user,restoreDoc.id,
+          {expectedRevision:restoreDoc.editRevision,submissionKey:randomUUID()},human);
+        const versionsBefore=(await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n;
+        const beforeRestore=(await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText;
+        await race(restoreDoc.id,restoreDoc.editRevision,
+          ()=>service().restoreKnowledgeDocumentVersion(project,user,restoreDoc.id,{versionId:version.id},{kind:"api_token"}));
+        expect((await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText).toBe(beforeRestore);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n).toBe(versionsBefore);
+
+        const duplicateDoc=await makeDoc(`Race duplicate ${randomUUID()}`); docIds.push(duplicateDoc.id);
+        await race(duplicateDoc.id,duplicateDoc.editRevision,
+          ()=>service().duplicateKnowledgeDocument(project,user,duplicateDoc.id,{kind:"api_token"}));
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id=$1 AND title=$2",[project,`${duplicateDoc.title} (copy)`])).rows[0].n).toBe(0);
+      }finally{
+        await blocker.query("ROLLBACK").catch(()=>undefined);
+        await blocker.end();
+        for(const id of docIds){
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
+        }
+        await admin.query("DELETE FROM knowledge_folders WHERE id=$1",[otherFolder]);
+      }
+    },120000);
 
     it.each(["apply","approval"])("marks a resolved pin stale after revocation before %s and preserves every native write",async phase=>{
       const skills=await publishSkills();
