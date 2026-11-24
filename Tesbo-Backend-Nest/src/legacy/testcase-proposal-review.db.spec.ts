@@ -1072,6 +1072,10 @@ type Body=Record<string,any>;
         // explicitly queued job can send confidential text to an embedding provider.
         expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[docId])).rows[0].embedding_status)
           .toBe("unsupported");
+        // Draft governed content is excluded by the type filter, not merely because an approval
+        // snapshot is absent from the AI-context predicate.
+        const exposedDraft=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposedDraft.rows[0].n).toBe(0);
 
         await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Invalid manual ${randomUUID()}`,
           documentType:"user_manual",governedMetadata:{...metadata,audience:"nope"}})).rejects.toMatchObject({status:400});

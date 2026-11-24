@@ -117,7 +117,9 @@ For `user_manual` and `policy` only:
 - `writeKnowledgeGovernedVersion` records `governedMetadata` and the exact `contentDigest` in the immutable snapshot.
 - Approval requires the submitted version's digest to match the current document exactly, so a metadata edit after
   submission invalidates the old approval.
-- Restoring a governed version restores the version's content **and** metadata; content and metadata cannot diverge.
+- Restoring a governed decision snapshot restores the snapshot's content **and** metadata together. Autosave
+  snapshots carry no metadata, so restoring one keeps the current metadata and the trigger re-drafts the document;
+  that narrower exception is recorded in §8.12.
 
 ### 3.4 Writers / readers
 
@@ -185,12 +187,14 @@ policy. An approved document does not become Zyra-visible merely because it is a
 - DB/API: metadata validation (valid, missing, unknown key, invalid enum/impossible date/inverted effectivity/
   misplaced refs), duplicate metadata preservation and embedding hold, legacy `{}` compatibility, digest change on
   metadata edit, submitted snapshot metadata, owner approve, QA refusal, stale approval, lost-response replay,
-  later rejection superseding an earlier approval, AI-context exclusion **while approved**, owner/manager API
-  approval, QA/guest/anonymous refusal, project boundary 404, API-token `HUMAN_REVIEW_REQUIRED`, replay, and
-  refusal of a governed→general type change.
-- UI: author a manual/policy with metadata, submit, owner reviews exact version/diff and approves; QA is refused
-  while the owner still has the actions (not after a decision hides them); a later rejection supersedes the
-  approval on reload; history/readback; confidential doc not offered to Zyra context.
+  later rejection superseding an earlier approval, AI-context exclusion for draft and approved governed documents,
+  owner/manager API approval, QA/guest/anonymous refusal, project boundary 404, API-token
+  `HUMAN_REVIEW_REQUIRED`, replay, and refusal of a governed→general type change.
+- UI: author a manual/policy with metadata, submit, owner reviews the exact version and its metadata and approves;
+  QA is refused while the owner still has the actions (not after a decision hides them); an edit clears the
+  reported decision even though history keeps the snapshot; a later rejection supersedes the approval on reload;
+  exact-version history/readback. The Zyra context picker still lists governed documents that the backend then
+  excludes; filtering the picker is a follow-up, not a claim of this slice.
 - Native Tesbo: REQ-WPB-01 task `d5b7ab51-1c6b-460b-971f-280d1f567edb` staged; execution UNRUN until human apply.
 
 ---
@@ -229,9 +233,15 @@ policy. An approved document does not become Zyra-visible merely because it is a
 12. **Autosave restore metadata.** Decision snapshots carry the exact governance metadata; autosave snapshots do not.
     Restoring an autosave therefore keeps the current metadata and the trigger re-drafts the document. Restore of a
     decision snapshot restores its metadata with the body.
-13. **MCP surface.** `create_knowledge_document`/`update_knowledge_document` still enumerate only legacy types and do
-    not accept `governedMetadata`. Governed manuals/policies are intentionally absent from that agent-facing surface
-    until a human-governed authoring contract exists; the tool descriptions should say so when that surface changes.
+13. **MCP surface is not governed-aware.** `create_knowledge_document`/`update_knowledge_document` accept an
+    unconstrained `documentType`, so an agent token can read a governed manual/policy and edit its existing title
+    or body (which re-drafts it); it cannot set `governedMetadata`, change the document type, set `status` or approve.
+    The human exact-version decision invariant therefore still holds, but governed documents are not absent from the
+    agent surface. A guarded MCP authoring contract, or refusing governed-document edits from agent tokens, is a
+    follow-up; do not describe the current tools as legacy-only.
 14. **Submit does not flush a pending editor autosave.** The panel submits the persisted revision and only patches
     metadata first. The page autosaves quickly and the empty-state copy asks the author to save content first, but a
     click inside the debounce window can submit the prior body. A shared editor flush hook is the follow-up.
+15. **Zyra context picker.** The task composer lists all KB documents, including governed manuals/policies, while
+    the backend snapshot/AI-context gate excludes them. No content is exposed, but the picker offers an inert
+    choice and shows the raw type. Filtering/labelling it belongs with the exposure-policy follow-up.

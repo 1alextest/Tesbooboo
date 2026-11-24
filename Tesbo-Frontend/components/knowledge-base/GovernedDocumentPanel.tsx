@@ -76,7 +76,6 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   const [versions, setVersions] = useState<KnowledgeDocumentVersion[]>([]);
   const [submittedVersion, setSubmittedVersion] = useState<KnowledgeDocumentVersion | null>(null);
   const [submittedDetail, setSubmittedDetail] = useState<KnowledgeDocumentVersionDetail | null>(null);
-  const [decision, setDecision] = useState<KnowledgeDocumentVersion | null>(null);
   const [openedVersion, setOpenedVersion] = useState<KnowledgeDocumentVersionDetail | null>(null);
   const [metadataDirty, setMetadataDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -89,9 +88,16 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   const governed = isGoverned(doc.documentType);
-  // A later rejection supersedes an earlier approval. Taking the first approved snapshot would
-  // report the old approval and hide the actions for the newly submitted version.
-  const currentDecision = decisionOf(decision ?? undefined);
+  // The document's own decision binding is authoritative. Snapshot history alone is not: an edit
+  // clears status/reviewed_version_id to draft while the prior approved/rejected snapshot remains
+  // in history, and reporting that history row as current would claim an approval that is gone.
+  const decidedSnapshot = doc.reviewedVersionId
+    ? versions.find((version) => version.id === doc.reviewedVersionId
+      && (version.snapshotKind === "approved" || version.snapshotKind === "rejected"))
+    : undefined;
+  const currentDecision = doc.status === "approved" || doc.status === "rejected"
+    ? decisionOf(decidedSnapshot)
+    : "";
 
   useEffect(() => {
     // An editor autosave replaces `doc` while the user may be editing governance fields. Keep the
@@ -109,10 +115,6 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
       const list = result.list || [];
       if (!mounted.current) return;
       setVersions(list);
-      const latestDecision = list
-        .filter((version) => version.snapshotKind === "approved" || version.snapshotKind === "rejected")
-        .sort((a, b) => b.versionNumber - a.versionNumber)[0] || null;
-      setDecision(latestDecision);
       const submitted = list.find((version) => version.snapshotKind === "submitted");
       if (!submitted) {
         setSubmittedVersion(null);
@@ -228,8 +230,16 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   const subtypes = doc.documentType === "policy" ? POLICY_SUBTYPES : MANUAL_SUBTYPES;
   const submittedMetadata = submittedDetail?.snapshotMetadata?.governedMetadata as Metadata | undefined;
   const openedMetadata = openedVersion?.snapshotMetadata?.governedMetadata as Metadata | undefined;
-  const decidedOnSubmitted = Boolean(decision && submittedVersion
-    && decision.snapshotMetadata?.sourceVersionId === submittedVersion.id);
+  const latestDecisionSnapshot = versions
+    .filter((version) => version.snapshotKind === "approved" || version.snapshotKind === "rejected")
+    .sort((a, b) => b.versionNumber - a.versionNumber)[0];
+  // A prior decision on this submitted version no longer applies after the body/metadata edit
+  // that cleared the document's binding. Offer a refreshed submission, not a stale decision.
+  const submittedSuperseded = Boolean(currentDecision === "" && submittedVersion
+    && latestDecisionSnapshot?.snapshotMetadata?.sourceVersionId === submittedVersion.id);
+  const decidedOnSubmitted = Boolean(currentDecision && decidedSnapshot && submittedVersion
+    && doc.reviewedVersionId === decidedSnapshot.id
+    && decidedSnapshot.snapshotMetadata?.sourceVersionId === submittedVersion.id);
 
   return (
     <Card className="space-y-4 p-4" data-testid="governed-document-panel">
@@ -259,7 +269,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
       {message && <p className="text-sm text-[var(--success-foreground)]" role="status">{message}</p>}
       <div className="flex flex-wrap gap-2">
         <Button variant="secondary" size="sm" onClick={() => void saveMetadata()} disabled={busy} data-testid="governed-save-metadata">Save governance metadata</Button>
-        <Button size="sm" onClick={() => void submitForReview()} disabled={busy || !doc.editRevision} data-testid="governed-submit">Submit exact version for review</Button>
+        <Button size="sm" onClick={() => void submitForReview()} disabled={busy || !doc.editRevision || doc.status !== "draft"} data-testid="governed-submit">Submit exact version for review</Button>
       </div>
 
       <div className="border-t border-[var(--border)] pt-4">
@@ -268,7 +278,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
           <p className="mt-2 text-sm text-[var(--muted)]">No submitted version yet. Save the document content, then submit the exact revision.</p>
         ) : (
           <div className="mt-2 space-y-3">
-            <p className="text-xs text-[var(--muted)]" data-testid="governed-submitted-version">Submitted v{submittedVersion.versionNumber} · {submittedVersion.createdAt ? formatDateTime(submittedVersion.createdAt) : "—"} · {decidedOnSubmitted ? `decision ${currentDecision}` : "awaiting exact-version decision"}</p>
+            <p className="text-xs text-[var(--muted)]" data-testid="governed-submitted-version">Submitted v{submittedVersion.versionNumber} · {submittedVersion.createdAt ? formatDateTime(submittedVersion.createdAt) : "—"} · {decidedOnSubmitted ? `decision ${currentDecision}` : submittedSuperseded ? "changed since this version was submitted" : "awaiting exact-version decision"}</p>
             {submittedMetadata && (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs" data-testid="governed-submitted-metadata">
                 <p>Audience: {submittedMetadata.audience} · Confidentiality: {submittedMetadata.confidentiality} · Distribution: {submittedMetadata.distribution}</p>
@@ -279,6 +289,10 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
             {submittedDetail && <div className="max-h-80 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs"><VersionContent detail={submittedDetail} /></div>}
             {decidedOnSubmitted ? (
               <p className="text-sm text-[var(--success-foreground)]" data-testid="governed-decision">This exact version is {currentDecision}.</p>
+            ) : submittedSuperseded ? (
+              <p className="text-sm text-[var(--muted)]" data-testid="governed-decision-superseded">
+                The document changed after this version was submitted. Submit the current revision for a new decision.
+              </p>
             ) : canManage ? (
               <div className="space-y-2">
                 <Field><FieldLabel>Rejection reason (optional)</FieldLabel><Input value={reason} onChange={(event) => setReason(event.target.value)} /></Field>

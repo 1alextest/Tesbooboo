@@ -2739,7 +2739,7 @@ test.describe("knowledge base (UI)", () => {
     expect(storedDocument(documentId).text).toBe(MEMORY_TEXT);
   });
 
-  test("KBU-64 a governed manual saves typed metadata, submits an exact version and records an owner decision", async ({ browser }) => {
+  test("KBU-70 a governed manual saves typed metadata, submits an exact version and records an owner decision", async ({ browser }) => {
     const metadata = {
       schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
       distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
@@ -2784,6 +2784,12 @@ test.describe("knowledge base (UI)", () => {
     });
     expect(revisedResponse.status(), await revisedResponse.text()).toBe(200);
     const revised = await revisedResponse.json();
+    // The edit cleared the document's decision binding even though the approved snapshot remains
+    // in history; the panel must not keep reporting that historical approval.
+    await page.reload();
+    await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    await expect(page.getByTestId("governed-decision-superseded")).toBeVisible();
+    await expect(page.getByTestId("governed-submit")).toBeEnabled();
     const secondSubmission = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
       data: { expectedRevision: revised.editRevision, submissionKey: crypto.randomUUID() },
     });
