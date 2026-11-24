@@ -16397,7 +16397,7 @@ export class LegacyService implements OnModuleInit {
       const result = await client.query(
         `INSERT INTO ai_generation_requests
           (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log,skill_context)
-         VALUES ($1,$2,'external_managed_document_proposal',NULL,$3,1,1,$4::jsonb,$5,'in_review',$6,$7,$8::jsonb,$9::jsonb,$10::jsonb) RETURNING id`,
+         VALUES ($1,$2,'external_document_proposal',NULL,$3,1,1,$4::jsonb,$5,'in_review',$6,$7,$8::jsonb,$9::jsonb,$10::jsonb) RETURNING id`,
         [projectId, uid, title, JSON.stringify([operation]), ZYRA_AGENT_NAME, requestKey, requestDigest,
           JSON.stringify(provenance),
           JSON.stringify([{ actor: activityActor, stage: "in_review", title: "Staged governed document proposal",
@@ -16457,7 +16457,7 @@ export class LegacyService implements OnModuleInit {
     const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
     const rows = await this.db.query(
       `SELECT id FROM ai_generation_requests
-        WHERE project_id=$1 AND provider='external_managed_document_proposal' AND task_status IN ('in_review','failed')
+        WHERE project_id=$1 AND provider='external_document_proposal' AND task_status IN ('in_review','failed')
         ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
       [projectId, limit, offset]
     );
@@ -16563,7 +16563,7 @@ export class LegacyService implements OnModuleInit {
     const result = await this.db.transaction(async client => {
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
-      if (!existing || existing.provider !== "external_managed_document_proposal") throw new NotFoundException({ error: "Document proposal not found" });
+      if (!existing || existing.provider !== "external_document_proposal") throw new NotFoundException({ error: "Document proposal not found" });
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
       if (existing.task_status === "done") return { replayed: true };

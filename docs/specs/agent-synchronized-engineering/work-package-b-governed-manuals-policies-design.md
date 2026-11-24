@@ -354,7 +354,7 @@ audit and UI contract is reviewed. GitHub CI is not evidence that native publica
 ## 9. Agent-authored manual/policy proposals (next workflow)
 
 The existing proposal task owner (`ai_generation_requests`) now carries one inert managed-document candidate under
-provider `external_managed_document_proposal`. The candidate is not a knowledge document and does not alter the target.
+provider `external_document_proposal`. The candidate is not a knowledge document and does not alter the target.
 
 - **Payload.** `opType='managed_document_revision'`, `operation='create'|'update'`, `documentType`, optional
   `documentId`/`targetEditRevision`, create-only `folderId`, full `document` (`title`, `contentJson`, `contentHtml`,

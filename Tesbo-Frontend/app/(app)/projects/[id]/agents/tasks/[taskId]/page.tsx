@@ -630,7 +630,7 @@ export default function ZyraTaskDetailPage() {
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
   const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
-  const isManagedDocumentProposal = task.provider === "external_managed_document_proposal" || Boolean(task.managedDocumentProposal);
+  const isManagedDocumentProposal = task.provider === "external_document_proposal" || Boolean(task.managedDocumentProposal);
   const requirementApplyReceipt = task.requirementApplyReceipt;
   // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
   const requirementApplied = done && Boolean(requirementApplyReceipt);
