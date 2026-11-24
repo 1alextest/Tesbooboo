@@ -22,8 +22,7 @@ export class AuthMiddleware implements NestMiddleware {
     // never resolved (no session lookup) on a bearer-authenticated call.
     req.userId = null;
     req.apiToken = null;
-    // No OAuth verifier exists yet. Reset untrusted/ambient identity before any lookup.
-    // A future verifier must attach a checked principal explicitly after this boundary.
+    // Reset untrusted/ambient identity before any credential lookup.
     req.oauthAccess = null;
 
     const bearer = this.readBearerHeader(req.headers?.authorization);
@@ -31,21 +30,18 @@ export class AuthMiddleware implements NestMiddleware {
       // authenticate() answers null for an absent token, so no second user-controlled branch is
       // needed between "a bearer was presented" and "a principal was resolved".
       const principal = await this.apiTokens.authenticate(bearer.token);
-      req.userId = principal?.userId ?? null;
-      req.apiToken = principal
-        ? {
-            tokenId: principal.tokenId,
-            userId: principal.userId,
-            projectId: principal.projectId,
-            scopes: principal.scopes
-          }
-        : null;
-      // Only the vetted issuer's AccessToken/Grant models can attach a
-      // read-only machine identity. The human userId deliberately remains NULL:
-      // valid OAuth bearer credentials are NEVER browser sessions.
-      if (!principal && bearer.token && this.oauth?.enabled) {
+      if (principal) {
+        req.userId = principal.userId;
+        req.apiToken = {
+          tokenId: principal.tokenId,
+          userId: principal.userId,
+          projectId: principal.projectId,
+          scopes: principal.scopes
+        };
+      } else if (this.oauth?.enabled) {
+        // Credential validation, including missing/empty inputs, is owned by the
+        // verifier. An OAuth principal cannot assign a human session identity.
         req.oauthAccess = await this.oauth.verifyAccessToken(bearer.token);
-        req.userId = null;
       }
     } else {
       const sessionToken = req.cookies?.[this.config.sessionCookieName];
