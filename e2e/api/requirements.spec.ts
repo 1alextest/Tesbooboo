@@ -529,6 +529,64 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     expect((await staleDisplayedBasis.json()).code).toBe("REQUIREMENT_VERSION_CONFLICT");
     expect(activationState()).toBe(beforeMovedReplay);
     expect(historicalAttempts()).toBe(immutableAttemptHistory);
+
+    // Explicit carry-forward is a proposal, not a machine publication or implicit approval.
+    const approvedAmended = await request.post(`${base}/testcases/${caseId}/approve`, {
+      data: { expectedRevision: amendedCase.editRevision, expectedApprovalRevision: amendedCase.approvalRevision }
+    });
+    expect(approvedAmended.ok(), await approvedAmended.text()).toBe(true);
+    const currentCase = await (await request.get(`${base}/testcases/${caseId}`)).json();
+    const currentDoc = await (await request.get(`${base}/knowledge-base/documents/${requirementId}`)).json();
+    const selection = { linkId: activation.link.id, requirementVersionId: activation.link.requirementVersionId,
+      testcaseId: caseId, testcaseRevision: currentCase.editRevision,
+      testcaseApprovalRevision: currentCase.approvalRevision, criterionKeys: ["AC-1"] };
+    const currentRevisions = { expectedCaseRevision: currentCase.editRevision, expectedApprovalRevision: currentCase.approvalRevision };
+    const noAuthority = await request.post(`${base}/requirements/${requirementId}/links/${selection.linkId}/reapply`, {
+      data: { ...currentRevisions, expectedRequirementVersionId: currentDoc.reviewedVersionId }
+    });
+    expect(noAuthority.status()).toBe(409);
+    expect((await noAuthority.json()).code).toBe("SKILL_LINK_REVIEW_REQUIRED");
+    expect(activationState()).toBe(beforeMovedReplay);
+    const carry = await stageMcp(mcp!, agentCredential.token, [{
+      ...operations[0], operationId: randomUUID(), documentId: requirementId,
+      expectedRevision: currentDoc.editRevision, title: `${title} explicitly carried`, carryForwardLinks: [selection]
+    }]);
+    taskIds.push(carry.taskId);
+    expect(carry.publication).toBe("unpublished");
+    expect(carry.task.requirementBundle[0].carryForwardLinks[0]).toMatchObject(selection);
+    expect(carry.task.skillContext.assignments).toHaveLength(2);
+    expect(activationState()).toBe(beforeMovedReplay);
+    const carryApplied = await request.post(`${base}/requirements/proposals/${carry.taskId}/apply`, {
+      data: { expectedProposalRevision: carry.task.proposalRevision }
+    });
+    expect(carryApplied.ok(), await carryApplied.text()).toBe(true);
+    const carryReceipt = await carryApplied.json();
+    expect(carryReceipt.receipt.testcase).toBeNull();
+    const carryApproved = await request.post(`${base}/requirements/${requirementId}/approve`, {
+      data: { versionId: carryReceipt.receipt.requirement.versionId }
+    });
+    expect(carryApproved.ok(), await carryApproved.text()).toBe(true);
+    const carryApproval = await carryApproved.json();
+    readings = await coverage();
+    expect(readings.readings.approved).toBe(false);
+    expect(readings.pendingCarryForwardCases).toEqual(expect.arrayContaining([expect.objectContaining({
+      linkId: selection.linkId, approved: false, executed: false, passing: false
+    })]));
+    const rebindRequest = { ...currentRevisions, expectedRequirementVersionId: carryApproval.approvedVersionId };
+    const reboundResponse = await request.post(`${base}/requirements/${requirementId}/links/${selection.linkId}/reapply`, { data: rebindRequest });
+    expect(reboundResponse.ok(), await reboundResponse.text()).toBe(true);
+    const rebound = await reboundResponse.json();
+    expect(rebound).toMatchObject({ replayed: false, link: { testcaseId: caseId, requirementVersionId: carryApproval.approvedVersionId } });
+    const reboundState = activationState();
+    const retryRebind = await request.post(`${base}/requirements/${requirementId}/links/${selection.linkId}/reapply`, { data: rebindRequest });
+    expect(retryRebind.ok(), await retryRebind.text()).toBe(true);
+    expect(await retryRebind.json()).toEqual({ ...rebound, replayed: true });
+    expect(activationState()).toBe(reboundState);
+    readings = await coverage();
+    expect(readings.readings).toMatchObject({ authored: true, approved: true, executed: false, passing: false });
+    expect(readings.pendingCarryForwardCases).toHaveLength(0);
+    expect(historicalAttempts()).toBe(immutableAttemptHistory);
+    expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("1");
   } finally {
     if (mcp) await mcp.dispose();
     if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
