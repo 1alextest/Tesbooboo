@@ -12312,24 +12312,40 @@ export class LegacyService implements OnModuleInit {
     // sweep from requeueing it; the sweep and processor also filter by document type so the hold
     // survives a migration that resets terminal embedding states.
     const embeddingStatus = isGovernedDocumentType(documentType) ? "unsupported" : "pending";
-    const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [
-        project.organization_id,
-        projectId,
-        folderId,
-        title,
-        body.contentJson ? JSON.stringify(body.contentJson) : null,
-        body.contentHtml || null,
-        body.contentText || null,
-        documentType,
-        JSON.stringify(governedMetadata),
-        embeddingStatus,
-        uid
-      ]
-    );
-    await this.logProjectActivity(projectId, uid, "created", "knowledge_document", res.rows[0].id, title, {});
+    const res = await this.db.transaction(async client => {
+      // Recheck the folder under a shared lock. A delete locks the target FOR UPDATE and its
+      // cascade updates descendants with FOR NO KEY UPDATE; FOR SHARE conflicts with both, so
+      // this insert either wins (and the cascade then sees the new document) or sees the deleted
+      // folder and refuses. The earlier kbFolder() read is only a fast preflight. Do not take the
+      // skill-assignment advisory lock after this point: the delete acquires it before the folder
+      // lock, so reversing that order would create a cycle.
+      const folder = await client.query(
+        "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",
+        [folderId, projectId]
+      );
+      if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      // The preflight access read may be stale after the wait; revalidate membership/role here.
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const inserted = await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [
+          project.organization_id,
+          projectId,
+          folderId,
+          title,
+          body.contentJson ? JSON.stringify(body.contentJson) : null,
+          body.contentHtml || null,
+          body.contentText || null,
+          documentType,
+          JSON.stringify(governedMetadata),
+          embeddingStatus,
+          uid
+        ]
+      );
+      await this.logProjectActivity(projectId, uid, "created", "knowledge_document", inserted.rows[0].id, title, {}, client);
+      return inserted;
+    });
     // Governed manuals/policies remain human-only until an exposure policy is accepted.
     if (!isGovernedDocumentType(documentType)) {
       this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");

@@ -510,4 +510,60 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       expect(changed).toMatchObject({ status: "draft", reviewedVersionId: null });
     });
   });
+
+  it("rechecks a folder under a lock so a concurrent delete cannot strand a newly created document", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name) VALUES ($1,$2,$3) RETURNING id",
+      [orgId, projectId, `Race folder ${randomUUID()}`]
+    )).rows[0].id;
+    const blocker = new Client({ connectionString: url });
+    const f = service();
+    // The fixture default returns `{}`; the create needs the real organization for its INSERT, and
+    // with it the pre-fix INSERT blocks on the folder FK and then lands in the deleted folder.
+    (f.svc.requireProjectAccess as unknown as jest.Mock).mockResolvedValue({ id: projectId, organization_id: orgId });
+    await blocker.connect();
+    try {
+      await blocker.query("BEGIN");
+      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await blocker.query("SELECT id FROM knowledge_folders WHERE id = $1 FOR UPDATE", [target]);
+      // The preflight read has already passed; only the locked recheck in the create transaction
+      // can see the folder being deleted underneath it. Attach the rejection handler immediately
+      // so a failed wait cannot leave an unhandled rejection behind.
+      const create = f.svc.createKnowledgeDocument(projectId, actor, {
+        folderId: target, title: `Race create ${randomUUID()}`,
+        contentText: "Body", contentHtml: "<p>Body</p>", contentJson: json("Body")
+      }).then(() => null, (error) => error);
+      await waitForBlocker(pid);
+      await blocker.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [target]);
+      await blocker.query("COMMIT");
+      expect(await create).toMatchObject({ status: 404 });
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1", [target])).rows[0].n).toBe(0);
+      expect(f.activity).not.toHaveBeenCalled();
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      await blocker.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
+
+  it("rolls back the created document when its audit insert fails", async () => {
+    let failed = false;
+    const observed = observedPool(async (sql, _values, _result, raw) => {
+      if (!failed && /INSERT INTO audit_logs/.test(sql)) {
+        failed = true;
+        await raw("SELECT 1 / 0");
+      }
+    });
+    const svc = makeLegacy(new DatabaseService(observed));
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: projectId, organization_id: orgId } as never);
+    const title = `Audit failure ${randomUUID()}`;
+    try {
+      await expect(svc.createKnowledgeDocument(projectId, actor, { folderId, title, contentText: "Body" }))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(failed).toBe(true);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, title])).rows[0].n).toBe(0);
+    } finally {
+      await observed.end();
+    }
+  });
 });
