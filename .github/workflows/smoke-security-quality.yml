@@ -334,7 +334,7 @@ jobs:
           # and folder restore now brings back the subtree deleted with it, so the delete/restore
           # contract needs to run. Select the impacted tests only: the UI file also carries
           # intentionally red editor-validation tests (KBU-25/26).
-          selection="WPA-01|KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KB-A-7[2-8]|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26|KBU-6[4-9]|KBU-7[0-2]"
+          selection="WPA-01|KB-A-05|KB-A-07|KB-A-21|KB-A-50|KB-A-51|KB-A-52|KB-A-53|KB-A-7[2-8]|KBU-08|KBU-09|KBU-10|KBU-10b|KBU-24|KBU-25|KBU-26|KBU-6[4-9]|KBU-7[0-3]"
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection" --list
           npx playwright test -c playwright.config.ts api/knowledge-base.spec.ts ui/knowledge-base.spec.ts --workers=10 --output=test-results-kb -g "$selection"
       - name: Verify scheduled runs end to end
