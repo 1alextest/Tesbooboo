@@ -40,7 +40,8 @@ jobs:
 
       # Execute Codacy Analysis CLI and generate a SARIF output with the security issues identified during the analysis
       - name: Run Codacy Analysis CLI
-        uses: codacy/codacy-analysis-cli-action@d840f886c4bd4edc059706d09c6a1586111c540b
+        # Pinned compatibility candidate: upstream CLI 7.10.4 (newer Docker client).
+        uses: codacy/codacy-analysis-cli-action@6f415a0d3790c227a9cff580098545188e0f4e5a
         with:
           # Check https://github.com/codacy/codacy-analysis-cli#project-token to get your project token from your Codacy repository
           # You can also omit the token and run the tools that support default configurations
@@ -53,6 +54,9 @@ jobs:
           # Findings are adjudicated by GitHub code scanning; execution failures are not findings.
           # Never upload an incomplete analysis as a successful scan.
           fail-if-incomplete: true
+          run-docker-tools: true
+          upload: false
+          allow-network: false
           max-allowed-issues: 2147483647
 
       # Upload the SARIF file generated in the previous step
