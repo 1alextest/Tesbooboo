@@ -50,8 +50,9 @@ jobs:
           format: sarif
           # Adjust severity of non-security issues
           gh-code-scanning-compat: true
-          # Force 0 exit code to allow SARIF file generation
-          # This will handover control about PR rejection to the GitHub side
+          # Findings are adjudicated by GitHub code scanning; execution failures are not findings.
+          # Never upload an incomplete analysis as a successful scan.
+          fail-if-incomplete: true
           max-allowed-issues: 2147483647
 
       # Upload the SARIF file generated in the previous step
