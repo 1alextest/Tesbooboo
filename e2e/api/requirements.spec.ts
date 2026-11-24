@@ -1006,11 +1006,20 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     const payload = {
       requestKey, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
       document: {
-        title: `${target.title} revised`, contentText: "Revised manual body",
+        title: `${target.title} revised`, contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>",
+        contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] },
         governedMetadata: { ...metadata, confidentiality: "confidential" },
       },
       reason: "Security update",
     };
+    // A body-changing update must carry the whole representation set: applying new text/HTML over
+    // stale editor JSON would leave one Draft showing two different bodies.
+    const partial = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: { requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: target.title, contentText: "Text only", governedMetadata: metadata } },
+      failOnStatusCode: false,
+    });
+    expect(partial.status()).toBe(400);
     const stagedResponse = await machine.post(`${base}/knowledge-base/document-proposals`, { data: payload, failOnStatusCode: false });
     expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
     const staged = await stagedResponse.json();
@@ -1068,9 +1077,8 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     const readback = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
     expect(readback).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
     expect(readback.governedMetadata).toMatchObject({ confidentiality: "confidential" });
-    // Omitted representations are not nulled: the rich body the agent did not propose survives.
-    expect(readback.contentHtml).toBe("<p>Base manual body</p>");
-    expect(readback.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] });
+    expect(readback.contentHtml).toBe("<p>Revised manual body</p>");
+    expect(readback.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] });
     const replayApply = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
       data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
     });
@@ -1083,12 +1091,35 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     });
     expect(rejectedAfterApply.status()).toBe(409);
 
+    // A metadata/title-only candidate omits all three representations and preserves the body.
+    const metadataOnlyResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: readback.editRevision,
+        document: { title: readback.title, governedMetadata: { ...readback.governedMetadata, distribution: "external" } },
+      }, failOnStatusCode: false,
+    });
+    expect(metadataOnlyResponse.status(), await metadataOnlyResponse.text()).toBe(201);
+    const metadataOnly = await metadataOnlyResponse.json();
+    taskIds.push(metadataOnly.id);
+    const metadataApply = await request.post(`${base}/knowledge-base/document-proposals/${metadataOnly.id}/apply`, {
+      data: { expectedProposalRevision: metadataOnly.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(metadataApply.status(), await metadataApply.text()).toBe(201);
+    const preserved = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(preserved).toMatchObject({ contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>" });
+    expect(preserved.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] });
+    expect(preserved.governedMetadata).toMatchObject({ distribution: "external" });
+
     // Rejection is bound to the exact reviewed revision; a changed expectation cannot close a
     // different candidate, and the same decision replays its own receipt.
-    const current = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    const current = preserved;
     const secondPayload = {
       requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: current.editRevision,
-      document: { title: current.title, contentText: "Rejected manual body", governedMetadata: current.governedMetadata },
+      document: {
+        title: current.title, contentText: "Rejected manual body", contentHtml: "<p>Rejected manual body</p>",
+        contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Rejected manual body" }] }] },
+        governedMetadata: current.governedMetadata,
+      },
       reason: "Second candidate",
     };
     const secondResponse = await machine.post(`${base}/knowledge-base/document-proposals`, { data: secondPayload, failOnStatusCode: false });
@@ -1137,7 +1168,12 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     const movedResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
       data: {
         requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: afterNoChange.editRevision,
-        document: { title: afterNoChange.title, contentText: "Candidate over a moving target", governedMetadata: afterNoChange.governedMetadata },
+        document: {
+          title: afterNoChange.title, contentText: "Candidate over a moving target",
+          contentHtml: "<p>Candidate over a moving target</p>",
+          contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Candidate over a moving target" }] }] },
+          governedMetadata: afterNoChange.governedMetadata,
+        },
       }, failOnStatusCode: false,
     });
     expect(movedResponse.status(), await movedResponse.text()).toBe(201);
@@ -1160,7 +1196,11 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     const staleCandidateResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
       data: {
         requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: editedTarget.editRevision,
-        document: { title: editedTarget.title, contentText: "Stale candidate body", governedMetadata: editedTarget.governedMetadata },
+        document: {
+          title: editedTarget.title, contentText: "Stale candidate body", contentHtml: "<p>Stale candidate body</p>",
+          contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Stale candidate body" }] }] },
+          governedMetadata: editedTarget.governedMetadata,
+        },
       }, failOnStatusCode: false,
     });
     expect(staleCandidateResponse.status(), await staleCandidateResponse.text()).toBe(201);

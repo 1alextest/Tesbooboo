@@ -16313,8 +16313,17 @@ export class LegacyService implements OnModuleInit {
     if (title === LegacyService.ZYRA_MEMORY_DOC_TITLE) {
       throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
     }
-    // Omitted representations mean "leave the current value" on update. Do not coerce them to
-    // JSON null: the KB writer treats an explicit null as a set and would erase the rich body.
+    // Omitted representations on an update mean "leave the current value"; do not coerce them to
+    // JSON null, which the KB writer would apply as an erase. A body-changing update must carry
+    // the whole representation set, though: the editor mounts from contentJson, so applying a new
+    // text/HTML over stale JSON leaves one Draft that shows a different body on each surface and
+    // the next editor save would silently revert the other two. Metadata/title-only updates omit
+    // all three and preserve the current body exactly.
+    const contentKeys = ["contentText", "contentHtml", "contentJson"] as const;
+    const suppliedContent = contentKeys.filter((key) => doc[key] !== undefined);
+    if (operation === "update" && suppliedContent.length > 0 && suppliedContent.length < contentKeys.length) {
+      throw new BadRequestException({ error: "A body-changing update must supply contentText, contentHtml and contentJson together; omit all three to keep the current body" });
+    }
     const content: Body = {};
     if (doc.contentText !== undefined) content.contentText = doc.contentText == null ? null : String(doc.contentText);
     if (doc.contentHtml !== undefined) content.contentHtml = doc.contentHtml == null ? null : String(doc.contentHtml);
@@ -16567,6 +16576,9 @@ export class LegacyService implements OnModuleInit {
       } else {
         const target = operation.target;
         if (!target?.documentId) throw new BadRequestException({ error: "This update candidate has no exact target" });
+        if (!isGovernedDocumentType(operation.documentType)) {
+          throw new BadRequestException({ error: "A managed candidate must revise a user_manual or policy document" });
+        }
         const current = (await client.query(
           `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
             WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
@@ -16611,6 +16623,13 @@ export class LegacyService implements OnModuleInit {
         existing.user_story, { decisionKey, proposalRevision: revision, documentId: document.documentId, editRevision: document.editRevision, skillContext: currentSkills }, client);
       return { receipt, replayed: false };
     });
+    // Give the published document its own history entry, not only the proposal task's. The task
+    // receipt remains the authoritative applied-proposal record.
+    const applied = result.receipt?.document;
+    if (applied && applied.operation !== "no_change") {
+      await this.logProjectActivity(projectId, uid, applied.operation === "create" ? "created" : "updated",
+        "knowledge_document", applied.documentId, applied.title, { source: "managed_document_proposal", taskId, proposalRevision: revision });
+    }
     return { taskId, taskStatus: "done", ...result };
   }
 
@@ -16624,7 +16643,9 @@ export class LegacyService implements OnModuleInit {
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
     const revision = expectedProposalRevision(body.expectedProposalRevision);
     const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
-    const decisionKey = proposalDigest({ action: "managed_document_reject", revision, reviewerId: uid, reason });
+    // The key identifies the decision, not the note attached to it: a retry after a lost response
+    // must replay the stored receipt even if the reason field arrived empty on the second attempt.
+    const decisionKey = proposalDigest({ action: "managed_document_reject", revision, reviewerId: uid });
     const result = await this.db.transaction(async client => {
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
@@ -28891,6 +28912,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       delete item.proposalProvenance;
       delete item.proposalRequestKey;
       delete item.proposalRequestDigest;
+      // The staging entry embeds the pinned Skill context, so the timeline is a side door too.
       delete item.activityLog;
       delete item.sourceSummary;
     }

@@ -1638,6 +1638,7 @@ type Body=Record<string,any>;
         const staged=await service().stageManagedDocumentProposal(project,user,{
           requestKey:randomUUID(),operation:"update",documentId:targetId,expectedRevision:target.editRevision,
           document:{title:`${target.title} revised`,contentText:"Revised body",contentHtml:"<p>Revised body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Revised body"}]}]},
             governedMetadata:{...metadata,confidentiality:"confidential"}},reason:"Security update"
         },producer);
         taskId=staged.id;
@@ -1677,7 +1678,8 @@ type Body=Record<string,any>;
         const staleStaged=await service().stageManagedDocumentProposal(project,user,{
           requestKey:randomUUID(),operation:"update",documentId:targetId,
           expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
-          document:{title:`${target.title} stale`,contentText:"Stale body",governedMetadata:metadata}
+          document:{title:`${target.title} stale`,contentText:"Stale body",contentHtml:"<p>Stale body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Stale body"}]}]},governedMetadata:metadata}
         },producer);
         staleTaskId=staleStaged.id;
         const staleView=await service().managedDocumentProposalTask(project,user,staleTaskId);
@@ -1690,7 +1692,8 @@ type Body=Record<string,any>;
         const changedStaged=await service().stageManagedDocumentProposal(project,user,{
           requestKey:randomUUID(),operation:"update",documentId:targetId,
           expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
-          document:{title:`${target.title} changed`,contentText:"Changed body",governedMetadata:metadata}
+          document:{title:`${target.title} changed`,contentText:"Changed body",contentHtml:"<p>Changed body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Changed body"}]}]},governedMetadata:metadata}
         },producer);
         changedTaskId=changedStaged.id;
         const changedView=await service().managedDocumentProposalTask(project,user,changedTaskId);

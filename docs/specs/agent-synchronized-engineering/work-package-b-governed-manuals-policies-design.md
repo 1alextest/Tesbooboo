@@ -391,9 +391,12 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 
 ### 9.1 Review-surface hardening after review
 
-- Omitted `contentText`/`contentHtml`/`contentJson` on an update now mean "preserve the current
-  value"; they are not coerced to JSON null. The panel shows plain text, stored HTML, editor JSON,
-  the base title/status/revision, the changed representations and the producer provenance.
+- An update may omit all three of `contentText`/`contentHtml`/`contentJson` to keep the current
+  body, and an explicit `null` clears one representation; an omitted representation is never
+  coerced to JSON null. A body-changing update must supply all three together, so the published
+  Draft cannot show revised text/HTML over stale editor JSON (which the next editor save would
+  revert). The panel distinguishes "preserved" from "cleared" and shows the base
+  title/status/revision, the changed representations and the producer provenance.
 - A text-only diff no longer has to stand in for HTML/JSON or metadata-only changes: the read
   model lists `Title`, `Plain text`, `HTML`, `Editor JSON` and `Governance metadata` changes, and
   compares the effective value of an omitted representation (the current one), not `""`.
@@ -401,8 +404,9 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   paths, and are excluded from `list_testcase_proposals`; only the dedicated owner/manager
   Apply/Reject actions decide them.
 - Reject requires the exact `expectedProposalRevision`, stores a decision receipt and refuses a
-  candidate already applied/decided or changed since review. All managed REST reads/apply/reject
-  share the same preview gate as staging.
+  candidate already applied/decided or changed since review. Its decision key is independent of
+  the optional reason text, so a retry after a lost response replays the stored receipt. All
+  managed REST reads/apply/reject share the same preview gate as staging.
 - Apply asserts the row's `external_document_proposal` provider and revalidates governed type,
   provider ownership/read-only state, the exact target revision and the reserved Zyra-memory title.
   A no-op update records `no_change` and the actual status instead of claiming a new Draft.
@@ -411,6 +415,8 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   identity/digest, provenance and raw or rendered activity/source entries (which can themselves
   contain Skill pins). The dedicated endpoints refuse with `not_implemented`. Basic task metadata
   remains visible; this is a capability gate, not a replacement for project access control.
+- Apply gives the published document its own `created`/`updated` project activity entry (the task
+  receipt remains the authoritative applied-proposal record).
 - The managed review revision is a digest of the exact operation + pinned Skill context, not the
   unrelated testcase proposal dependency snapshot.
 - e2e now covers: non-owner apply refusal, generic draft tamper refusal, target moved after

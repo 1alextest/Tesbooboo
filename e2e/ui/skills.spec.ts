@@ -2458,6 +2458,7 @@ test.describe("governed skills operator journey (UI)", () => {
         data: {
           requestKey: `agent-manual-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
           document: { title: `${target.title} revised`, contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>",
+            contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] },
             governedMetadata: { ...metadata, confidentiality: "confidential" } },
           reason: "Security update",
         },
@@ -2489,9 +2490,9 @@ test.describe("governed skills operator journey (UI)", () => {
       const applied = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
       expect(applied).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
       expect(applied.governedMetadata).toMatchObject({ confidentiality: "confidential" });
-      // The supplied HTML is applied, and the editor JSON the candidate did not propose is preserved.
+      // The full representation set is applied together, so every surface shows the same Draft.
       expect(applied.contentHtml).toBe("<p>Revised manual body</p>");
-      expect(applied.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] });
+      expect(applied.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] });
       await expect(panel).toContainText("Producer: api_token");
 
       const staleResponse = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
@@ -2499,7 +2500,9 @@ test.describe("governed skills operator journey (UI)", () => {
         data: {
           requestKey: `agent-manual-stale-${suffix}`, operation: "update", documentId: target.id,
           expectedRevision: applied.editRevision,
-          document: { title: `${target.title} stale`, contentText: "Stale body", governedMetadata: metadata },
+          document: { title: `${target.title} stale`, contentText: "Stale body", contentHtml: "<p>Stale body</p>",
+            contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Stale body" }] }] },
+            governedMetadata: metadata },
         },
       });
       expect(staleResponse.ok(), await staleResponse.text()).toBe(true);

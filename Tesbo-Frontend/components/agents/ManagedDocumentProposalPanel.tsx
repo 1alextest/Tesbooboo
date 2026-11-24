@@ -95,7 +95,7 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
         <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentText === undefined ? "Not supplied; the current plain text is preserved on apply." : proposal.proposed.contentText || "The proposed plain text is empty."}</pre>
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-medium">Stored HTML</summary>
-          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentHtml ?? "Not supplied; the current HTML is preserved on apply."}</pre>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentHtml === undefined ? "Not supplied; the current HTML is preserved on apply." : proposal.proposed.contentHtml === null ? "The proposal clears the stored HTML." : proposal.proposed.contentHtml}</pre>
         </details>
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-medium">Editor JSON</summary>
