@@ -17025,8 +17025,11 @@ export class LegacyService implements OnModuleInit {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(documentId)) throw new NotFoundException({ error: "Requirement not found" });
     const doc = (await this.db.query(
-      `SELECT id,title,content_json,reviewed_version_id,document_type,source_provider
-         FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false`, [documentId, projectId]
+      `SELECT d.id,d.title,d.content_json,d.reviewed_version_id,d.document_type,d.source_provider,
+              v.snapshot_metadata->'carryForwardLinks' AS approved_carry_forward
+         FROM knowledge_documents d
+         LEFT JOIN knowledge_document_versions v ON v.id=d.reviewed_version_id AND v.document_id=d.id AND v.snapshot_kind='approved'
+        WHERE d.id=$1 AND d.project_id=$2 AND d.is_deleted=false`, [documentId, projectId]
     )).rows[0];
     if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
     const approvedVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : null;
@@ -17034,6 +17037,10 @@ export class LegacyService implements OnModuleInit {
       `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1`, [documentId]
     )).rows[0];
     const latestSubmitted = latestSubmittedRow ? String(latestSubmittedRow.id) : null;
+    // Selected historical links are actionable before rebind, but are not current coverage.
+    // Read only the exact source IDs pinned by the current approved snapshot.
+    const selectedLinkIds = normalizeJsonArray(doc.approved_carry_forward)
+      .map((entry: Body) => String(entry?.linkId || "")).filter(isUuid);
     const rows = (await this.db.query(
       `SELECT l.id, l.criterion_keys, l.testcase_id, l.testcase_revision, l.testcase_approval_revision,
               l.requirement_version_id, testcases.title,
@@ -17059,12 +17066,12 @@ export class LegacyService implements OnModuleInit {
               AND ci.snapshot_approval_revision = l.testcase_approval_revision
          ) attempt ON true
         WHERE l.project_id=$1 AND l.requirement_id=$2 AND l.state='active'
-          AND l.requirement_version_id = ANY($3::uuid[])
+          AND (l.requirement_version_id = ANY($3::uuid[]) OR l.id = ANY($4::uuid[]))
         ORDER BY l.testcase_id,l.id`,
-      [projectId, documentId, [approvedVersionId, latestSubmitted].filter(Boolean)]
+      [projectId, documentId, [approvedVersionId, latestSubmitted].filter(Boolean), selectedLinkIds]
     )).rows;
     const criteria = normalizeJsonArray((doc.content_json as Body | null)?.criteria);
-    const cases = rows.map((row: Body) => {
+    const projectCase = (row: Body) => {
       const onApprovedVersion = approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId;
       const approved = onApprovedVersion && String(row.testcase_revision) === String(row.current_edit_revision)
         && row.testcase_approval_revision !== null && String(row.testcase_approval_revision) === String(row.current_approval_revision)
@@ -17088,7 +17095,12 @@ export class LegacyService implements OnModuleInit {
           ...(executed || !approved ? [] : ["NO_QUALIFYING_ATTEMPT"])
         ]
       };
-    });
+    };
+    const isCurrentBasis = (row: Body) => [approvedVersionId, latestSubmitted].includes(String(row.requirement_version_id));
+    const cases = rows.filter(isCurrentBasis).map(projectCase);
+    const pendingCarryForwardCases = rows.filter((row: Body) => !isCurrentBasis(row) && selectedLinkIds.includes(String(row.id)))
+      .map((row: Body) => ({ ...projectCase(row), authored: false, approved: false, executed: false, passing: false,
+        latestAttempt: null, attemptCount: 0, conflictingAttempts: false, reasons: ["REVIEWED_CARRY_FORWARD_PENDING"] }));
     const summary = criteria.map((criterion: Body) => {
       const key = String(criterion.key);
       const linked = cases.filter(item => item.criterionKeys.includes(key));
@@ -17108,7 +17120,7 @@ export class LegacyService implements OnModuleInit {
         passing: cases.some(item => item.passing),
         mixed: cases.some(item => item.conflictingAttempts)
       },
-      criteria: summary, cases,
+      criteria: summary, cases, pendingCarryForwardCases,
       basis: "Current approved requirement version and its exact active links; historical attempts remain readable and are not deleted."
     };
   }
