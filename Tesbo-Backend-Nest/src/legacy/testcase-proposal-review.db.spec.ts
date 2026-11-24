@@ -1410,10 +1410,10 @@ type Body=Record<string,any>;
         const conversion=service().updateKnowledgeDocument(project,user,docId,
           {documentType:"user_manual",governedMetadata:metadata,expectedRevision});
         expect(await waitUntil(()=>waitingOn("%knowledge_documents%FOR UPDATE%"))).toBe(true);
-        const pending=operation();
+        const pending=operation().then(value=>({value}),error=>({error}));
         await blocker.query("COMMIT");
         await conversion;
-        await expect(pending).rejects.toMatchObject({status:403});
+        expect((await pending).error).toMatchObject({status:403});
       };
       try{
         const moveDoc=await makeDoc(`Race move ${randomUUID()}`); docIds.push(moveDoc.id);
@@ -1431,7 +1431,9 @@ type Body=Record<string,any>;
         await race(restoreDoc.id,restoreDoc.editRevision,
           ()=>service().restoreKnowledgeDocumentVersion(project,user,restoreDoc.id,{versionId:version.id},{kind:"api_token"}));
         expect((await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText).toBe(beforeRestore);
-        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n).toBe(versionsBefore);
+        // The owner conversion itself writes one autosave snapshot (metadata changed); the refused
+        // restore must not add another.
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n).toBe(versionsBefore+1);
 
         const duplicateDoc=await makeDoc(`Race duplicate ${randomUUID()}`); docIds.push(duplicateDoc.id);
         await race(duplicateDoc.id,duplicateDoc.editRevision,
