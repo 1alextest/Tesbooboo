@@ -10,6 +10,23 @@ import { mcpOAuthDiscoveryPolicy, mcpOAuthResource, type McpOAuthDiscoveryPolicy
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const MAX_CLIENTS = 20;
 
+/**
+ * Bounded, opt-in ChatGPT CIMD pilot (oidc-provider v9.15.1 draft-03).
+ * Never follow client-chosen hosts, arbitrary paths, credentials or redirects.
+ * This only identifies candidate OAuth clients. Current owner approval and
+ * user consent are checked independently before any token can access Tesbo.
+ */
+export function allowedChatGptCimdClientId(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 1024 || value.includes("\\")) return false;
+  let u: URL;
+  try { u = new URL(value); } catch { return false; }
+  if (u.protocol !== "https:" || u.hostname !== "chatgpt.com" ||
+      u.username || u.password || u.port || u.search || u.hash ||
+      u.href !== value) return false;
+  return /^\/oauth\/(?:client\.json|[A-Za-z0-9_-]{1,128}\/client\.json|codex\/client\.json|codex\/[A-Za-z0-9_-]{1,128}\/client\.json)$/.test(u.pathname);
+}
+
+
 type ProviderInstance = {
   callback(): (req: Request, res: Response, next?: (error?: unknown) => void) => void;
   interactionDetails(req: Request, res: Response): Promise<any>;
@@ -44,9 +61,20 @@ function configuredKeys(): { keys: Record<string, unknown>[] } {
   return { keys: keys as Record<string, unknown>[] };
 }
 
-function configuredClients(): Record<string, unknown>[] {
-  const input = requiredJson("TESBO_MCP_OAUTH_REGISTERED_CLIENTS");
-  if (!Array.isArray(input) || !input.length || input.length > MAX_CLIENTS) {
+function configuredCookieKeys(): string[] {
+  const values = requiredJson("TESBO_MCP_OAUTH_COOKIE_KEYS_JSON");
+  if (!Array.isArray(values) || values.length < 2 || values.length > 5 ||
+      values.some(v => typeof v !== "string" || v.length < 43 || v.length > 128)) {
+    throw new Error("OAuth requires at least two operator-managed signing keys for interactions and cookies");
+  }
+  if (new Set(values).size !== values.length) throw new Error("OAuth cookie keys must be distinct");
+  return values as string[];
+}
+
+function configuredClients(cimdEnabled = false): Record<string, unknown>[] {
+  const input = cimdEnabled && !process.env.TESBO_MCP_OAUTH_REGISTERED_CLIENTS
+    ? [] : requiredJson("TESBO_MCP_OAUTH_REGISTERED_CLIENTS");
+  if (!Array.isArray(input) || (!cimdEnabled && !input.length) || input.length > MAX_CLIENTS) {
     throw new Error("OAuth requires an operator-reviewed list of registered clients");
   }
   const seen = new Set<string>();
@@ -143,7 +171,9 @@ export class McpOAuthServer {
       throw new Error("Embedded OAuth issuer must use the same trusted public origin and /oauth path");
     }
     const jwks = configuredKeys();
-    const clients = configuredClients();
+    const cimdEnabled = process.env.TESBO_MCP_OAUTH_CIMD_ENABLED === "true";
+    const clients = configuredClients(cimdEnabled);
+    const cookieKeys = configuredCookieKeys();
     // Explicitly pin the dependency in the existing backend lockfile. Node 22
     // supports requiring synchronous ESM; CI must prove this exact build path.
     // No fallback to a self-written issuer or to the legacy API-token service.
@@ -157,8 +187,23 @@ export class McpOAuthServer {
         adapter: createMcpOAuthPostgresAdapter(this.db),
         jwks,
         clients,
+        cookies: { keys: cookieKeys, long: { signed: true }, short: { signed: true } },
         pkce: { required: () => true },
         features: {
+          revocation: { enabled: true },
+          clientIdMetadataDocument: {
+            enabled: cimdEnabled,
+            ack: "draft-03",
+            cacheDuration: { min: 30, max: 300 },
+            // The upstream provider verifies the Client ID document's exact
+            // self-identity and redirect URIs, refuses redirected fetches and
+            // uses connected-socket special-IP SSRF protection. In addition,
+            // Tesbo only permits OpenAI's known client URL forms.
+            allowFetch: async (_ctx: unknown, clientId: string) =>
+              allowedChatGptCimdClientId(clientId),
+            allowClient: async (_ctx: unknown, client: { clientId: string }) =>
+              allowedChatGptCimdClientId(client.clientId)
+          },
           resourceIndicators: {
             enabled: true,
             getResourceServerInfo: async (_ctx: unknown, resource: string, client: { clientId: string }) => {
