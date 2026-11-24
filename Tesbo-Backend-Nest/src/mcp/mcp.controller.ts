@@ -2,11 +2,12 @@ import { Body, Controller, Delete, Get, NotFoundException, Optional, Param, Post
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { McpService } from "./mcp.service";
-import { MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
+import { MCP_SERVER_INSTRUCTIONS, MCP_SERVER_NAME, MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
 import type { McpClientGrant } from "./mcp-access";
 import { unsupportedMcpProtocol } from "./mcp-protocol-compat";
 import { mcpOAuthDiscoveryPolicy, mcpOAuthProtectedResourceMetadata, mcpOAuthUnauthorizedChallenge } from "./mcp-oauth-discovery";
 import { McpOAuthServer } from "../auth/mcp-oauth-server";
+import { modernMcpResponse, validateModernMcpRequest } from "./mcp-oauth-modern";
 
 /**
  * Tesbo MCP — HTTP transport.
@@ -130,8 +131,26 @@ export class McpController {
     let resource: string;
     try { resource = this.oauth.resource(projectId); }
     catch { throw new UnauthorizedException({ error: "OAuth resource is unavailable" }); }
-    const unsupported = unsupportedMcpProtocol(body, req.header("MCP-Protocol-Version") ?? undefined);
-    if (unsupported) { res.status(400).json(unsupported); return; }
+    const modern = validateModernMcpRequest(req, body, new URL(resource).origin);
+    if (!modern.ok) {
+      res.status(modern.error.status).json(modern.error.body);
+      return;
+    }
+    const info = { name: MCP_SERVER_NAME, version: this.mcp.serverVersion,
+      instructions: MCP_SERVER_INSTRUCTIONS };
+    // Never expose catalog/capabilities to a revoked client or removed member.
+    if (modern.method === "server/discover") {
+      try {
+        await this.mcp.authorizeVerifiedOAuthReadOnly(principal, projectId, this.oauth.issuer, resource);
+      } catch (error) {
+        res.status(403).json(this.mcp.toErrorResponse(modern.id, error));
+        return;
+      }
+      res.status(200).json(modernMcpResponse(
+        { jsonrpc: "2.0", id: modern.id, result: {} }, modern.method, info
+      ));
+      return;
+    }
     const result = await this.mcp.handleVerifiedOAuthReadOnlyRequest(
       body, principal, projectId, this.oauth.issuer, resource
     );
@@ -146,7 +165,7 @@ export class McpController {
       res.status(403).json(result);
       return;
     }
-    res.status(200).json(result);
+    res.status(200).json(modernMcpResponse(result, modern.method, info));
   }
 
   private async respond(
