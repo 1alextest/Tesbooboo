@@ -202,7 +202,7 @@ describe("MCP read-only OAuth authorization uses the existing member/grant/tool 
 
 describe("OAuth owner mutation invalidates old consent families in the existing transaction", () => {
   it("deletes earlier provider bindings as part of the owner revision write", async () => {
-    const query = jest.fn(async (sql: string) => {
+    const query = jest.fn(async (sql: string, _args?: unknown[]) => {
       if (sql.includes("SELECT p.settings, pm.role")) {
         return { rows: [{ settings: { externalMcpAccess: settings() }, caller_role: "owner" }] };
       }
