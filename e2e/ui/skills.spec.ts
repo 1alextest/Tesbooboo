@@ -2360,4 +2360,78 @@ test.describe("governed skills operator journey (UI)", () => {
       await cleanupCandidatesWithTitle(title);
     }
   });
+
+  test("a coding agent stages a pinned-Skill manual candidate and an owner applies a native draft", async ({ browser }) => {
+    const suffix = randomUUID();
+    const skill = await apiSkill("user_manuals", "internal", "manual_revision");
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const created = await ownerApi.post(`${base()}/knowledge-base/documents`, { data: {
+      title: `Agent manual target ${suffix}`, folderId: (await (await ownerApi.get(`${base()}/knowledge-base/folders/tree`)).json()).id,
+      documentType: "user_manual", contentText: "Base manual body", contentHtml: "<p>Base manual body</p>", governedMetadata: metadata,
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const target = await created.json();
+    const issued = await ownerApi.post(`${base()}/apikeys`, { data: { name: `Agent document proposal ${suffix}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json();
+    const tasks: string[] = [];
+    try {
+      const stagedResponse = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
+        headers: { Authorization: `Bearer ${token.token}` },
+        data: {
+          requestKey: `agent-manual-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+          document: { title: `${target.title} revised`, contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>",
+            governedMetadata: { ...metadata, confidentiality: "confidential" } },
+          reason: "Security update",
+        },
+      });
+      expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
+      const staged = await stagedResponse.json();
+      tasks.push(staged.id);
+      expect(staged.skillContext).toMatchObject({ status: "resolved" });
+      const before = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
+      expect(before).toMatchObject({ contentText: "Base manual body", status: "draft", editRevision: target.editRevision });
+
+      const page = await open(browser, `/agents/tasks/${staged.id}`);
+      const panel = page.getByTestId("managed-document-proposal");
+      await expect(panel).toBeVisible();
+      await expect(panel).toContainText("Proposed governed manual");
+      await expect(panel).toContainText("Revised manual body");
+      await expect(panel).toContainText("Skill: current");
+      await page.getByTestId("managed-document-apply").click();
+      await expect(page.getByTestId("managed-document-apply-receipt")).toContainText("native Draft");
+      const applied = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
+      expect(applied).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
+      expect(applied.governedMetadata).toMatchObject({ confidentiality: "confidential" });
+
+      const staleResponse = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
+        headers: { Authorization: `Bearer ${token.token}` },
+        data: {
+          requestKey: `agent-manual-stale-${suffix}`, operation: "update", documentId: target.id,
+          expectedRevision: applied.editRevision,
+          document: { title: `${target.title} stale`, contentText: "Stale body", governedMetadata: metadata },
+        },
+      });
+      expect(staleResponse.ok(), await staleResponse.text()).toBe(true);
+      const stale = await staleResponse.json();
+      tasks.push(stale.id);
+      const revoked = await ownerApi.patch(`${base()}/skill-assignments/${skill.assignmentId}/deactivate`, { data: {} });
+      expect(revoked.ok(), await revoked.text()).toBe(true);
+      const stalePage = await open(browser, `/agents/tasks/${stale.id}`);
+      await expect(stalePage.getByTestId("managed-document-proposal")).toContainText("Skill: stale");
+      await expect(stalePage.getByTestId("managed-document-apply")).toBeDisabled();
+      await expect(stalePage.getByTestId("managed-document-proposal")).toContainText("Apply is blocked");
+      expect((await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
+    } finally {
+      for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await ownerApi.delete(`${base()}/apikeys/${token.id}`, { failOnStatusCode: false });
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(target.id)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(target.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await cleanupSkill(skill.documentId);
+    }
+  });
 });

@@ -348,3 +348,42 @@ Zyra context/RAG. A read-scope MCP token can still explicitly fetch a governed d
 
 Do not change the exposure gate or embedding hold until the owner chooses an option and the corresponding retrieval,
 audit and UI contract is reviewed. GitHub CI is not evidence that native publication/execution occurred.
+
+---
+
+## 9. Agent-authored manual/policy proposals (next workflow)
+
+The existing proposal task owner (`ai_generation_requests`) now carries one inert managed-document candidate under
+provider `external_managed_document_proposal`. The candidate is not a knowledge document and does not alter the target.
+
+- **Payload.** `opType='managed_document_revision'`, `operation='create'|'update'`, `documentType`, optional
+  `documentId`/`targetEditRevision`, create-only `folderId`, full `document` (`title`, `contentJson`, `contentHtml`,
+  `contentText`, `governedMetadata`) and a producer `reason`.
+- **Exact base.** An update stages only after comparing the caller's `expectedRevision` with the target's locked
+  `editRevision`; the task stores a base snapshot (title/content/metadata/type/status/revision/content digest).
+  A target edit, type change, provider-owned row or deletion after staging refuses apply with
+  `PROPOSAL_TARGET_CONFLICT` and writes nothing.
+- **Pinned Skills.** Targets are `user_manuals` or `policies`, subtype `internal`/`external` from the metadata
+  audience, operation `manual_revision`/`policy_revision`. Staging pins the resolved assignment IDs, exact Skill
+  document/version IDs and content digests. Reading classifies the live basis as `current`, `stale`, `conflict` or
+  `unavailable`. Apply proceeds only when the pinned and current basis are exactly equal; otherwise
+  `DOCUMENT_PROPOSAL_SKILL_STALE` is returned with the current resolution.
+- **Review.** The task view exposes the exact target/base, full proposed content and metadata, a
+  `summarizeDocumentChange` diff, reason, producer provenance, pinned Skill context/assignments and current
+  applicability. It never offers direct editing of the governed document.
+- **Apply.** Human session only; owner/manager checked after the task row wait. The task row, project Skill
+  assignments and target row are locked in one transaction. Create publishes a native `draft` governed document with
+  `embedding_status='unsupported'`; update uses the existing KB writer, preserving the prior body as a version and
+  letting the invalidation trigger clear any review. The receipt is stored in `save_events` and the task becomes
+  `done`. The same decision key returns the receipt; a changed proposal revision is refused.
+- **State distinctions.** Candidate staged (`in_review`, no document write) → applied native Draft (document/version
+  exists, not submitted) → submitted exact version (existing submission) → human approved/rejected (existing review).
+  Apply does not submit or approve; submission does not approve.
+- **REST/MCP.** `POST/GET /knowledge-base/document-proposals`, `GET /:taskId`, `POST /:taskId/apply|reject`;
+  MCP `propose_manual_revision`, `propose_policy_revision`, `get_document_proposal`, `list_document_proposals`.
+  API-token producers need a write scope and current MCP consent; they cannot apply, reject or approve.
+- **Known limits / decisions.** Candidate revision is a new `requestKey` (an exact key replay resolves to the original
+  task). Archive/delete proposals, direct governed authoring, auto-submit and automatic approval are out of scope.
+  Whether a future Skill rename should preserve pinned applicability, and whether candidate revision should replace
+  an earlier task, remain owner decisions. The task record cannot be updated through the available native tools;
+  REQ-WPB-03 `4c6d84b3-64e9-4508-a4fd-d6001fbb4c75` remains staged/`in_review`, execution **UNRUN**.

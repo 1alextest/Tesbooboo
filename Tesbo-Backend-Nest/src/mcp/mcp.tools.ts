@@ -2031,6 +2031,53 @@ export function buildMcpTools(): McpTool[] {
       description: "List staged requirement change bundles awaiting review in this project. They are candidates only; none is an official requirement, case, link, approval or execution result.",
       inputSchema: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 } } },
       handler: async (args, ctx) => ctx.legacy.listRequirementProposals(ctx.projectId, ctx.userId, args)
+    },
+    ...(["manual", "policy"] as const).map((kind): McpTool => ({
+      name: kind === "manual" ? "propose_manual_revision" : "propose_policy_revision",
+      requiredScope: "write" as const,
+      proposalPreviewOnly: true,
+      description: `Stage an inert ${kind} candidate in the existing proposal review task owner. Provide a full proposed title, content and typed governance metadata; for an update also provide the exact target documentId and expectedRevision. Nothing is written to the governed document. The native owner pins the effective Skill assignment/version/digest and reports missing, conflicting or stale applicability. Applying the exact reviewed candidate is a separate human owner/manager action that revalidates current authority and Skills and publishes only a native Draft; submission and approval remain separate.`,
+      inputSchema: { type: "object", additionalProperties: false,
+        required: ["requestKey", "operation", "document"], properties: {
+          requestKey: { type: "string", minLength: 1, maxLength: 160 },
+          title: { type: "string", maxLength: 512 },
+          operation: { enum: ["create", "update"] },
+          documentId: { type: "string", format: "uuid" },
+          expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          folderId: { type: "string", format: "uuid" },
+          document: { type: "object", additionalProperties: false, required: ["title", "governedMetadata"], properties: {
+            title: { type: "string", minLength: 1, maxLength: 512 },
+            contentText: { type: ["string", "null"] }, contentHtml: { type: ["string", "null"] },
+            contentJson: { type: ["object", "null"] }, governedMetadata: { type: "object" }
+          } },
+          reason: { type: "string", maxLength: 4000 }
+        } },
+      handler: async (args, ctx) => {
+        const allowed = ["requestKey", "title", "operation", "documentId", "expectedRevision", "folderId", "document", "reason"];
+        if (Object.keys(args).some(key => !allowed.includes(key))) {
+          throw new McpError(RpcCode.InvalidParams, "Unknown document proposal field; principal and project come from the authenticated credential");
+        }
+        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false, operation: "document" });
+        try {
+          const task = await ctx.legacy.stageManagedDocumentProposal(ctx.projectId, ctx.userId,
+            { ...args, documentType: kind === "manual" ? "user_manual" : "policy" }, producer,
+            kind === "manual" ? "user_manual" : "policy");
+          return { publication: "unpublished", taskId: task.id, task,
+            reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
+        } catch (error) { rethrowModelError(error); }
+      }
+    })),
+    {
+      name: "get_document_proposal", requiredScope: "read", proposalPreviewOnly: true,
+      description: "Read one staged manual/policy candidate with its exact target/base revision, full proposed content and metadata, diff, pinned Skill context/current applicability and apply receipt. A candidate is unpublished; reading cannot apply, submit or approve it.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
+      handler: async (args, ctx) => ctx.legacy.managedDocumentProposalTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
+    },
+    {
+      name: "list_document_proposals", requiredScope: "read", proposalPreviewOnly: true,
+      description: "List staged manual/policy candidates awaiting human review. They are unpublished candidates, not native documents, submissions or approvals.",
+      inputSchema: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 } } },
+      handler: async (args, ctx) => ctx.legacy.listManagedDocumentProposals(ctx.projectId, ctx.userId, args)
     }
   ];
   return [...tools.map(tool => DIRECT_TESTCASE_PUBLISHERS.has(tool.name) ? {
