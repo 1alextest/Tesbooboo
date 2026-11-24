@@ -255,7 +255,9 @@ export class McpOAuthServer {
       const token = await this.provider.AccessToken.find(raw);
       if (!token || !token.isValid || typeof token.accountId !== "string" ||
           typeof token.clientId !== "string" || typeof token.grantId !== "string" ||
-          typeof token.scope !== "string" || token.scope !== "mcp:read") return null;
+          typeof token.scope !== "string" ||
+          !token.scope.split(/\s+/).includes("mcp:read") ||
+          token.scope.split(/\s+/).some((scope: string) => !["mcp:read", "openid", "offline_access"].includes(scope))) return null;
       const resource = typeof token.aud === "string" ? token.aud : null;
       if (!resource) return null;
       const projectId = this.projectIdFromResource(resource);
