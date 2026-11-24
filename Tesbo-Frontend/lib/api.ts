@@ -1842,13 +1842,24 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
 }
 
-export type McpClientGrant = {
+/** Existing named token client grants keep their exact API shape. */
+export type ApiMcpClientGrant = {
   tokenId: string;
   clientName: string;
   scopes: Array<"read" | "write">;
   allowedTools: string[] | null;
   expiresAt: string | null;
 };
+/** Owner preapproval only; OAuth login and end-user consent are separate. */
+export type OAuthMcpClientGrant = {
+  kind: "oauth_client";
+  oauthClientId: string;
+  clientName: string;
+  scopes: Array<"read">;
+  allowedTools: string[] | null;
+  expiresAt: string | null;
+};
+export type McpClientGrant = ApiMcpClientGrant | OAuthMcpClientGrant;
 export type ProjectMcpAccess = { enabled: boolean; revision: number; clients: McpClientGrant[] };
 export async function getProjectMcpAccess(projectId: string): Promise<ProjectMcpAccess> {
   return api(`/api/projects/${projectId}/mcp-access`);
