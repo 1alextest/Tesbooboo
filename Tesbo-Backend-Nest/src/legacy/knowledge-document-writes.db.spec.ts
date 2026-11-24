@@ -510,4 +510,35 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       expect(changed).toMatchObject({ status: "draft", reviewedVersionId: null });
     });
   });
+
+  it("rechecks a folder under a lock so a concurrent delete cannot strand a newly created document", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name) VALUES ($1,$2,$3) RETURNING id",
+      [orgId, projectId, `Race folder ${randomUUID()}`]
+    )).rows[0].id;
+    const blocker = new Client({ connectionString: url });
+    const f = service();
+    await blocker.connect();
+    try {
+      await blocker.query("BEGIN");
+      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await blocker.query("SELECT id FROM knowledge_folders WHERE id = $1 FOR UPDATE", [target]);
+      // The preflight read has already passed; only the locked recheck in the create transaction
+      // can see the folder being deleted underneath it.
+      const create = f.svc.createKnowledgeDocument(projectId, actor, {
+        folderId: target, title: `Race create ${randomUUID()}`,
+        contentText: "Body", contentHtml: "<p>Body</p>", contentJson: json("Body")
+      });
+      await waitForBlocker(pid);
+      await blocker.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [target]);
+      await blocker.query("COMMIT");
+      await expect(create).rejects.toMatchObject({ status: 404 });
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1", [target])).rows[0].n).toBe(0);
+      expect(f.activity).not.toHaveBeenCalled();
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      await blocker.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
 });
