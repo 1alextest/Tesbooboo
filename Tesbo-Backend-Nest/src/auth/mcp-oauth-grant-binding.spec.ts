@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { encryptSecret } from "../common/crypto.util";
+import { encryptSecret, oauthReferenceFingerprint } from "../common/crypto.util";
 import type { DatabaseService } from "../database/database.service";
 import { createMcpOAuthPostgresAdapter } from "./mcp-oauth-postgres.adapter";
 import { bindOAuthGrantToApproval, currentOAuthGrantBinding } from "./mcp-oauth-grant-binding";
@@ -27,19 +27,38 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     };
     const binding = { project_id: PROJECT, account_id: ACCOUNT,
       client_id: CLIENT, resource: RESOURCE, approval_revision: 3, revoked_at: null as string | null };
-    const encoded = encryptSecret(JSON.stringify({
-      grantId: GRANT, accountId: ACCOUNT, clientId: CLIENT
-    }));
-    const query = jest.fn(async (sql: string) => {
+    const bindings = new Map<string, typeof binding>();
+    const artifacts = new Map<string, string>();
+    function addFamily(grantId: string) {
+      bindings.set(oauthReferenceFingerprint("oauth:Grant:id", grantId),
+        { ...binding, approval_revision: state.revision });
+      const ids = [
+        ["Grant", grantId], ["RefreshToken", grantId + "-refresh"],
+        ["AuthorizationCode", grantId + "-code"], ["AccessToken", grantId + "-access"]
+      ] as const;
+      for (const [model, id] of ids) {
+        const payload = { jti: id, kind: model, accountId: ACCOUNT, clientId: CLIENT,
+          ...(model === "Grant" ? {} : { grantId }) };
+        artifacts.set(oauthReferenceFingerprint(`oauth:${model}:id`, id),
+          encryptSecret(JSON.stringify(payload)));
+      }
+      return ids;
+    }
+    const original = addFamily(GRANT);
+    const originalBinding = bindings.get(oauthReferenceFingerprint("oauth:Grant:id", GRANT))!;
+    const query = jest.fn(async (sql: string, params: string[]) => {
       if (sql.includes("mcp_oauth_grant_approval_bindings")) {
-        return { rows: binding.revoked_at ? [] : [{ ...binding, settings: { externalMcpAccess: state } }] };
+        const row = bindings.get(params[0]);
+        const live = row && !(sql.includes("b.revoked_at IS NULL") && row.revoked_at);
+        return { rows: live ? [{ ...row, settings: { externalMcpAccess: state } }] : [] };
       }
       if (sql.includes("mcp_oauth_provider_artifacts")) {
-        return { rows: [{ encrypted_payload: encoded, consumed_at: null }] };
+        const encoded = artifacts.get(params[1]);
+        return { rows: encoded ? [{ encrypted_payload: encoded, consumed_at: null }] : [] };
       }
       return { rows: [] };
     });
-    return { state, binding, query };
+    return { state, original, originalBinding, addFamily, query };
   }
 
   it("requires the exact account, project, resource, client and approval revision", async () => {
@@ -63,7 +82,7 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(true);
     f.state.clients = [];
     f.state.revision = 4;
-    f.binding.revoked_at = "2026-11-24T00:00:00.000Z";
+    f.originalBinding.revoked_at = "2026-11-24T00:00:00.000Z";
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
     f.state.clients = [{
       kind: "oauth_client", oauthClientId: CLIENT, clientName: "Consent client",
@@ -71,42 +90,40 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     }];
     f.state.revision = 5;
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
-    f.binding.approval_revision = 5; // Tampering with epoch cannot clear the tombstone.
+    // Even a matching stored revision cannot restore a tombstoned consent.
+    f.originalBinding.approval_revision = 5;
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
-    const fresh = fixture();
-    fresh.state.revision = 5;
-    fresh.binding.approval_revision = 5;
-    expect(await currentOAuthGrantBinding({ query: fresh.query } as unknown as DatabaseService, GRANT)).toBe(true);
+    const fresh = "fresh-consent-grant";
+    f.addFamily(fresh);
+    expect(await currentOAuthGrantBinding(db, fresh)).toBe(true);
+    expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
     f.query.mockRejectedValueOnce(new Error("Postgres unavailable"));
-    expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
+    expect(await currentOAuthGrantBinding(db, fresh)).toBe(false);
   });
 
   it("strict provider adapter refuses old Grant and RefreshToken reads after owner reapproval", async () => {
     const f = fixture();
     const db = { query: f.query } as unknown as DatabaseService;
     const adapter = createMcpOAuthPostgresAdapter(db, { requireLiveGrantBinding: true });
-    const grants = new adapter("Grant");
-    const refresh = new adapter("RefreshToken");
-    const codes = new adapter("AuthorizationCode");
-    const access = new adapter("AccessToken");
-    expect(await grants.find(GRANT)).toBeDefined();
-    expect(await refresh.find("synthetic-refresh")).toBeDefined();
-    expect(await codes.find("synthetic-authorization-code")).toBeDefined();
-    expect(await access.find("synthetic-access-token")).toBeDefined();
+    const readFamily = (family: typeof f.original) =>
+      Promise.all(family.map(([model, id]) => new adapter(model).find(id)));
+    const originalIds = f.original.map(([model, id]) => expect.objectContaining({ kind: model, jti: id }));
+    const denied = f.original.map(() => undefined);
+    expect(await readFamily(f.original)).toEqual(originalIds);
     f.state.revision = 4;
     f.state.clients = [];
-    f.binding.revoked_at = "2026-11-24T00:00:00.000Z";
-    for (const item of [grants, refresh, codes, access]) {
-      expect(await item.find("synthetic-token")).toBeUndefined();
-    }
+    f.originalBinding.revoked_at = "2026-11-24T00:00:00.000Z";
+    expect(await readFamily(f.original)).toEqual(denied);
     f.state.revision = 5;
     f.state.clients = [{
       kind: "oauth_client", oauthClientId: CLIENT, clientName: "Consent client",
       scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null
     }];
-    for (const item of [grants, refresh, codes, access]) {
-      expect(await item.find("synthetic-token")).toBeUndefined();
-    }
+    expect(await readFamily(f.original)).toEqual(denied);
+    const fresh = f.addFamily("fresh-consent-grant");
+    expect(await readFamily(fresh)).toEqual(fresh.map(([model, id]) =>
+      expect.objectContaining({ kind: model, jti: id })));
+    expect(await readFamily(f.original)).toEqual(denied);
   });
 
   it("binds a new consent only under a locked matching owner revision and membership", async () => {

@@ -5,6 +5,7 @@ import { McpOAuthServer } from "./mcp-oauth-server";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const CLIENT = "https://chatgpt.com/oauth/client.json";
+const ORIGINAL_TOKEN = "synthetic-original-opaque-token";
 const ISSUER = "https://tesbo.example/oauth";
 const RESOURCE = `https://tesbo.example/api/projects/${PROJECT}/mcp`;
 
@@ -52,16 +53,17 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       project_id: PROJECT, account_id: "tesbo-member", client_id: CLIENT,
       resource: RESOURCE, approval_revision: 1, revoked_at: null as string | null
     };
-    const bindings = new Map([[oauthReferenceFingerprint("oauth:Grant:id", "oidc-grant-1"), binding]]);
-    const findAccess = jest.fn(async (raw: string) => raw === "new-opaque-credential"
-      ? { ...token, grantId: "new-consent-grant-2" } : token);
-    const findGrant = jest.fn(async () => grant);
-    const query = jest.fn(async (sql: string, args?: unknown[]) => {
-      if (String(sql).includes("mcp_oauth_grant_approval_bindings")) {
-        const found = bindings.get(String(args?.[0] ?? ""));
-        return { rows: found && !found.revoked_at ? [{ ...found, settings }] : [] };
-      }
-      return { rows: [{ settings }] };
+    const key = (id: string) => oauthReferenceFingerprint("oauth:Grant:id", id);
+    const tokens = new Map([[ORIGINAL_TOKEN, token]]);
+    const grants = new Map([[token.grantId, grant]]);
+    const bindings = new Map([[key(token.grantId), binding]]);
+    const findAccess = jest.fn(async (raw: string) => tokens.get(raw));
+    const findGrant = jest.fn(async (id: string) => grants.get(id));
+    const query = jest.fn(async (sql: string, params: string[]) => {
+      if (!sql.includes("mcp_oauth_grant_approval_bindings")) return { rows: [{ settings }] };
+      const row = bindings.get(params[0]);
+      const live = row && !(sql.includes("b.revoked_at IS NULL") && row.revoked_at);
+      return { rows: live ? [{ ...row, settings }] : [] };
     });
     const svc = new McpOAuthServer({ query } as unknown as DatabaseService);
     // Inject test-only *verified-model* responses. Never enable a real
@@ -70,12 +72,12 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       provider: { AccessToken: { find: findAccess }, Grant: { find: findGrant } },
       policy: { issuer: ISSUER, resourceOrigin: "https://tesbo.example", scopes: ["mcp:read"] }
     });
-    return { svc, token, grant, binding, bindings, settings, findAccess, findGrant, query };
+    return { svc, token, grant, binding, tokens, grants, bindings, key, settings, findAccess, findGrant, query };
   }
 
   it("authenticates a current exact-audience token only as an OAuth machine principal", async () => {
     const f = fixture();
-    await expect(f.svc.verifyAccessToken("opaque-test-only-token")).resolves.toEqual({
+    await expect(f.svc.verifyAccessToken(ORIGINAL_TOKEN)).resolves.toEqual({
       kind: "oauth_access",
       issuer: ISSUER,
       subject: "tesbo-member",
@@ -86,7 +88,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       resource: RESOURCE,
       scopes: ["mcp:read"]
     });
-    expect(f.findAccess).toHaveBeenCalledWith("opaque-test-only-token");
+    expect(f.findAccess).toHaveBeenCalledWith(ORIGINAL_TOKEN);
     expect(f.grant.getResourceScope).toHaveBeenCalledWith(RESOURCE);
     expect(f.query).toHaveBeenCalledWith(
       expect.stringContaining("SELECT settings FROM projects"),
@@ -96,17 +98,17 @@ describe("OAuth access-token read-only resource and live revocation", () => {
 
   it("immediately rejects the SAME unexpired token when owner disables external MCP access", async () => {
     const f = fixture();
-    expect(await f.svc.verifyAccessToken("valid-opaque-token")).not.toBeNull();
+    expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).not.toBeNull();
     f.settings.externalMcpAccess.enabled = false;
-    expect(await f.svc.verifyAccessToken("valid-opaque-token")).toBeNull();
+    expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).toBeNull();
     expect(f.findAccess).toHaveBeenCalledTimes(2);
   });
 
   it("immediately rejects the SAME unexpired token when owner removes the client preapproval", async () => {
     const f = fixture();
-    expect(await f.svc.verifyAccessToken("valid-opaque-token")).not.toBeNull();
+    expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).not.toBeNull();
     f.settings.externalMcpAccess.clients = [];
-    expect(await f.svc.verifyAccessToken("valid-opaque-token")).toBeNull();
+    expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).toBeNull();
   });
 
   // OA-T18 failing-first resource regression. Synthetic provider models do
@@ -114,7 +116,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
   it("never resurrects a prior consent after the same client ID is reapproved", async () => {
     const f = fixture();
     const priorApproval = f.settings.externalMcpAccess.clients[0]!;
-    const priorToken = "same-unexpired-opaque-token";
+    const priorToken = ORIGINAL_TOKEN;
     expect(await f.svc.verifyAccessToken(priorToken)).not.toBeNull();
 
     f.settings.externalMcpAccess.clients = [];
@@ -129,12 +131,14 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
 
     // A separate fresh human consent is bound to the NEW approval revision.
-    const freshGrantId = "new-consent-grant-2";
-    f.bindings.set(oauthReferenceFingerprint("oauth:Grant:id", freshGrantId), {
-      ...f.binding, revoked_at: null, approval_revision: f.settings.externalMcpAccess.revision
-    });
+    const freshGrant = "new-consent-grant-2";
+    const freshToken = "new-opaque-credential";
+    f.tokens.set(freshToken, { ...f.token, grantId: freshGrant });
+    f.grants.set(freshGrant, { ...f.grant });
+    f.bindings.set(f.key(freshGrant), { ...f.binding, revoked_at: null, approval_revision: f.settings.externalMcpAccess.revision });
     expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
-    expect(await f.svc.verifyAccessToken("new-opaque-credential")).not.toBeNull();
+    expect(await f.svc.verifyAccessToken(freshToken)).toMatchObject({ grantId: freshGrant });
+    expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
   });
 
   it("rejects a grant bound to a different account, resource or approval epoch", async () => {
@@ -146,7 +150,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     ]) {
       const f = fixture();
       Object.assign(f.binding, mismatch);
-      expect(await f.svc.verifyAccessToken("old-test-token")).toBeNull();
+      expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).toBeNull();
     }
   });
 
@@ -160,7 +164,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       ""
     ]) {
       f.token.aud = aud;
-      expect(await f.svc.verifyAccessToken("opaque-test")).toBeNull();
+      expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).toBeNull();
     }
     expect(f.query).not.toHaveBeenCalledWith(
       expect.stringContaining("SELECT settings FROM projects"), [PROJECT]
@@ -182,13 +186,13 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     for (const mutate of cases) {
       const f = fixture();
       mutate(f);
-      expect(await f.svc.verifyAccessToken("test-only-opaque")).toBeNull();
+      expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).toBeNull();
     }
   });
 
   it("fails closed when the current project grant cannot be read", async () => {
     const f = fixture();
     f.query.mockRejectedValue(new Error("Database connection unavailable"));
-    expect(await f.svc.verifyAccessToken("valid-opaque-token")).toBeNull();
+    expect(await f.svc.verifyAccessToken(ORIGINAL_TOKEN)).toBeNull();
   });
 });

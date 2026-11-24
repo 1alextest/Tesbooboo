@@ -13,8 +13,15 @@ const grant = { kind: "oauth_client" as const, oauthClientId: CLIENT,
   clientName: "Disposable OAuth QA", scopes: ["read" as const],
   allowedTools: null, expiresAt: null };
 
-/** No production project or user. This suite requires the migrated /tesbo_ci database. */
-(/\/tesbo_ci(?:\?|$)/.test(url) ? describe : describe.skip)(
+const target = URL.canParse(url) ? new URL(url) : undefined;
+const disposableCI = process.env.GITHUB_ACTIONS === "true" && !!target &&
+  ["postgresql:", "postgres:"].includes(target.protocol) &&
+  ["localhost", "127.0.0.1"].includes(target.hostname) && target.pathname === "/tesbo_ci" && !target.search;
+if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
+  throw new Error("The OAuth persistence job requires its disposable PostgreSQL service");
+}
+
+(disposableCI ? describe : describe.skip)(
   "OA-T18 disposable PostgreSQL grant invalidation — never resurrect an old consent",
   () => {
     let pool: Pool;
@@ -47,24 +54,23 @@ const grant = { kind: "oauth_client" as const, oauthClientId: CLIENT,
     });
 
     afterAll(async () => {
-      if (project) {
-        const cleanup = createMcpOAuthPostgresAdapter(db);
-        await new cleanup("RefreshToken").destroy(oldRefresh);
-        await new cleanup("Grant").destroy(oldGrant);
-        await new cleanup("Grant").destroy(freshGrant);
-        await db.query("DELETE FROM audit_logs WHERE project_id=$1", [project]);
-        await db.query("DELETE FROM mcp_oauth_grant_approval_bindings WHERE project_id=$1", [project]);
-        await db.query("DELETE FROM project_members WHERE project_id=$1", [project]);
-        await db.query("DELETE FROM projects WHERE id=$1", [project]);
+      try {
+        if (project) {
+          const cleanup = createMcpOAuthPostgresAdapter(db);
+          const deleted = await Promise.allSettled([
+            new cleanup("RefreshToken").destroy(oldRefresh),
+            new cleanup("Grant").destroy(oldGrant),
+            new cleanup("Grant").destroy(freshGrant)
+          ]);
+          for (const result of deleted) if (result.status === "rejected") throw result.reason;
+        }
+        // V62 protects the audit rows, including changes via their parent FKs.
+        // The disposable service owns the fixture identities, receipts and revocation tombstone.
+      } finally {
+        if (priorKey === undefined) delete process.env.SECRETS_ENCRYPTION_KEY;
+        else process.env.SECRETS_ENCRYPTION_KEY = priorKey;
+        await pool?.end();
       }
-      if (org) {
-        await db.query("DELETE FROM organization_members WHERE organization_id=$1", [org]);
-        await db.query("DELETE FROM organizations WHERE id=$1", [org]);
-      }
-      if (user) await db.query("DELETE FROM users WHERE id=$1", [user]);
-      await pool?.end();
-      if (priorKey === undefined) delete process.env.SECRETS_ENCRYPTION_KEY;
-      else process.env.SECRETS_ENCRYPTION_KEY = priorKey;
     });
 
     it("revokes old Grant and RefreshToken without resurrecting them on identical-client reapproval", async () => {
@@ -104,10 +110,15 @@ const grant = { kind: "oauth_client" as const, oauthClientId: CLIENT,
       expect(await currentOAuthGrantBinding(db, freshGrant, basis(3))).toBe(true);
       expect(await grants.find(freshGrant)).toBeDefined();
       await expect(bindOAuthGrantToApproval(db, oldGrant, basis(3))).rejects.toThrow(/already bound/);
-      // A fresh binding is a distinct provider Grant: never reuse an older identity.
-      await refresh.destroy(oldRefresh);
-      await grants.destroy(oldGrant);
-      await grants.destroy(freshGrant);
+      expect(await currentOAuthGrantBinding(db, oldGrant)).toBe(false);
+      expect(await grants.find(oldGrant)).toBeUndefined();
+      expect(await refresh.find(oldRefresh)).toBeUndefined();
+      expect(await currentOAuthGrantBinding(db, freshGrant, basis(3))).toBe(true);
+      const receipts = await db.query(
+        `SELECT (diff->'after'->>'revision')::int AS revision FROM audit_logs
+          WHERE project_id=$1 AND actor_id=$2 AND action='project_mcp_access_updated'
+          ORDER BY revision`, [project, user]);
+      expect(receipts.rows.map(row => row.revision)).toEqual([2, 3]);
     });
   }
 );

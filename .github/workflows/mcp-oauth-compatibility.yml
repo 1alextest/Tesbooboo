@@ -9,6 +9,9 @@ on:
       - "Tesbo-Backend-Nest/migrations/V164_mcp_oauth_provider_artifacts.sql"
       - "Tesbo-Backend-Nest/src/common/crypto.util.ts"
       - "Tesbo-Backend-Nest/src/auth/**"
+      - "Tesbo-Backend-Nest/src/mcp/mcp-access.ts"
+      - "Tesbo-Backend-Nest/src/mcp/mcp.service.ts"
+      - "Tesbo-Backend-Nest/migrations/V166_oauth_grant_approval_binding.sql"
       - "Tesbo-Backend-Nest/src/common/request.types.ts"
       - "Tesbo-Backend-Nest/Dockerfile"
       - "Tesbo-Backend-Nest/package*.json"
@@ -92,6 +95,9 @@ jobs:
         run: |
           npm run migrate
           npm run migrate
+      - name: Verify the owner transaction and consent bindings on disposable PostgreSQL
+        working-directory: Tesbo-Backend-Nest
+        run: npm test -- --runTestsByPath src/auth/mcp-oauth-grant-binding.db.spec.ts
       - name: Install and audit pinned authorization server ONLY into isolated test directory
         shell: bash
         run: |
