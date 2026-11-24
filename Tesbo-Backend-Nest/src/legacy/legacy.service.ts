@@ -16139,7 +16139,9 @@ export class LegacyService implements OnModuleInit {
   async zyraTask(projectId: string, userId: string | null | undefined, taskId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    return this.formatAiTask(await this.readTestcaseProposal(this.db, projectId, taskId));
+    const row = await this.readTestcaseProposal(this.db, projectId, taskId);
+    const task = await this.formatAiTask(row);
+    return row.provider === "external_document_proposal" ? this.managedDocumentProposalView(projectId, task) : task;
   }
 
   /** Native no-model inlet: stores unpublished operations in the existing review task owner. */
@@ -16414,11 +16416,14 @@ export class LegacyService implements OnModuleInit {
 
   /** The reviewer's read model: base identity/content, proposed content/metadata, diff and applicability. */
   async managedDocumentProposalTask(projectId: string, userId: string | null | undefined, taskId: string): Promise<Body> {
-    await this.requireProjectAccess(this.requireUser(userId), projectId);
-    if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
     const task = await this.zyraTask(projectId, userId, taskId) as Body;
+    if (!task.managedDocumentProposal) throw new NotFoundException({ error: "Document proposal not found" });
+    return task;
+  }
+
+  private async managedDocumentProposalView(projectId: string, task: Body): Promise<Body> {
     const operation = normalizeJsonArray(task.proposalSnapshot?.operations || []).find(entry => entry?.opType === MANAGED_DOCUMENT_OP_TYPE);
-    if (!operation) throw new NotFoundException({ error: "Document proposal not found" });
+    if (!operation) return task;
     const pinned = task.skillContext || null;
     const current = await resolveEffectiveSkills(this.db, projectId,
       this.managedDocumentSkillTargets(String(operation.documentType), operation.document?.governedMetadata || {}));
