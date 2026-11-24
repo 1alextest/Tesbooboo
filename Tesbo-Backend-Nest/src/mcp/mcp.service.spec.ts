@@ -188,6 +188,8 @@ describe("McpService", () => {
       expect(guidance).toContain("A successful repository unit/E2E test does not mean a Tesbo Run executed");
       expect(guidance).toContain("re-approval of a changed definition is a separate human decision");
       expect(guidance).toContain("not permission to publish official records");
+      expect(guidance).toContain("observable expectedResult on each applicable step");
+      expect(guidance).toContain("sourceRefs and automationRepo/automationPath");
       expect(res.id).toBe(1);
     });
 
