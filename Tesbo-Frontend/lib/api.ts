@@ -1063,6 +1063,8 @@ export interface ZyraTask {
   drafts: AiGeneratedDraft[];
   /** Work Package A Slice 1: typed requirement-revision/link-intent entries of the same reviewed proposal. */
   requirementBundle?: Array<Record<string, unknown>>;
+  /** Work Package B: staged manual/policy candidate, target/base, diff and pinned Skill applicability. */
+  managedDocumentProposal?: ManagedDocumentProposal;
   /** Pinned effective-skill basis: resolved assignments, or why publication is blocked. */
   skillContext?: {
     status: string; authority?: string; reason?: string; digest?: string | null;
@@ -1096,6 +1098,35 @@ export interface RequirementApplyReceipt {
   testcase: { id: string; title: string | null; editRevision: string | null } | null;
   link: { id: string; criterionKeys: string[] } | null;
   appliedAt: string | null;
+}
+
+export interface ManagedDocumentProposal {
+  operation: "create" | "update";
+  documentType: "user_manual" | "policy";
+  target: {
+    documentId: string;
+    editRevision: string;
+    base: {
+      title: string; contentJson: unknown; contentHtml: string | null; contentText: string | null;
+      governedMetadata: Record<string, unknown>; documentType: string; status: string;
+      editRevision: string; contentDigest: string;
+    } | null;
+  } | null;
+  folderId: string | null;
+  proposed: {
+    title: string; contentJson?: unknown; contentHtml?: string | null; contentText?: string | null;
+    governedMetadata: Record<string, unknown>;
+  };
+  changes: string[];
+  provenance: Record<string, unknown> | null;
+  reason: string;
+  diff: { summary: string; fields: Array<{ label: string; oldExcerpt: string; newExcerpt: string; oldLength: number; newLength: number; truncated: boolean }> };
+  skillContext: ZyraTask["skillContext"] | null;
+  skillApplicability: { status: "current" | "stale" | "conflict" | "unavailable"; current: ZyraTask["skillContext"] };
+  applyReceipt: {
+    id: string; document: { documentId: string; editRevision: string; title: string; status: string; documentType: string; operation: "create" | "update" | "no_change" };
+    proposalRevision: string; appliedAt: string;
+  } | null;
 }
 
 export interface ZyraCapabilities {
@@ -1543,6 +1574,33 @@ export async function applyRequirementProposal(projectId: string, taskId: string
   return api(`/api/projects/${projectId}/requirements/proposals/${taskId}/apply`, {
     method: "POST",
     body: { expectedProposalRevision },
+  });
+}
+
+/** Work Package B — read one staged manual/policy candidate and its applicability. */
+export async function getManagedDocumentProposal(projectId: string, taskId: string): Promise<ZyraTask> {
+  return api<ZyraTask>(`/api/projects/${projectId}/knowledge-base/document-proposals/${taskId}`);
+}
+
+export async function listManagedDocumentProposals(projectId: string): Promise<{ list: ZyraTask[] }> {
+  return api(`/api/projects/${projectId}/knowledge-base/document-proposals`);
+}
+
+/** Protected human apply of the exact reviewed candidate; publishes a native Draft only. */
+export async function applyManagedDocumentProposal(projectId: string, taskId: string, expectedProposalRevision: string): Promise<{
+  taskId: string; taskStatus: string; replayed: boolean;
+  receipt?: { document?: { documentId: string; editRevision: string; title: string; status: string } };
+}> {
+  return api(`/api/projects/${projectId}/knowledge-base/document-proposals/${taskId}/apply`, {
+    method: "POST",
+    body: { expectedProposalRevision },
+  });
+}
+
+export async function rejectManagedDocumentProposal(projectId: string, taskId: string, expectedProposalRevision: string, reason?: string): Promise<{ taskId: string; taskStatus: string; replayed: boolean }> {
+  return api(`/api/projects/${projectId}/knowledge-base/document-proposals/${taskId}/reject`, {
+    method: "POST",
+    body: { expectedProposalRevision, ...(reason ? { reason } : {}) },
   });
 }
 

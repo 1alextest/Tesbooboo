@@ -959,3 +959,280 @@ test("apply re-reads testcase storage after the task wait and refuses a disabled
     }
   }
 });
+
+test("an agent-staged governed manual candidate is inert and only an owner applies the exact pinned revision", async ({ request }) => {
+  const suffix = Date.now();
+  const skillDocs: string[] = [];
+  const taskIds: string[] = [];
+  let documentId = "";
+  let tokenId = "";
+  let machine: APIRequestContext | undefined;
+  const metadata = {
+    schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+    distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+    effectivity: { from: null, to: null }, enforcementRefs: [],
+  };
+  try {
+    const skill = await createApprovedSkill(request, skillDocs, "user_manuals", "internal", "manual_revision");
+    const assigned = await request.post(`${base}/skill-assignments`, { data: {
+      skillDocumentId: skill.documentId, versionId: skill.versionId,
+      module: "user_manuals", subtype: "internal", operation: "manual_revision",
+    } });
+    expect(assigned.status(), await assigned.text()).toBe(201);
+    const assignmentId = (await assigned.json()).assignment.id as string;
+
+    const root = await (await request.get(`${base}/knowledge-base/folders/tree`)).json();
+    const created = await request.post(`${base}/knowledge-base/documents`, { data: {
+      title: `E2E agent manual ${suffix}`, folderId: root.id, documentType: "user_manual",
+      contentText: "Base manual body", contentHtml: "<p>Base manual body</p>",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] },
+      governedMetadata: metadata,
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const target = await created.json();
+    documentId = target.id;
+
+    const issued = await request.post(`${base}/apikeys`, { data: { name: `E2E document proposal ${suffix}`, scopes: ["read", "write"] } });
+    expect(issued.status(), await issued.text()).toBe(201);
+    const token = await issued.json();
+    tokenId = token.id;
+    // A token context with no session cookies: the producer must be the machine identity itself.
+    machine = await newRequest.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
+      extraHTTPHeaders: { Authorization: `Bearer ${token.token}` },
+    });
+
+    const requestKey = randomUUID();
+    const payload = {
+      requestKey, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+      document: {
+        title: `${target.title} revised`, contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>",
+        contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] },
+        governedMetadata: { ...metadata, confidentiality: "confidential" },
+      },
+      reason: "Security update",
+    };
+    // A body-changing update must carry the whole representation set: applying new text/HTML over
+    // stale editor JSON would leave one Draft showing two different bodies.
+    const partial = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: { requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: target.title, contentText: "Text only", governedMetadata: metadata } },
+      failOnStatusCode: false,
+    });
+    expect(partial.status()).toBe(400);
+    const stagedResponse = await machine.post(`${base}/knowledge-base/document-proposals`, { data: payload, failOnStatusCode: false });
+    expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+    const staged = await stagedResponse.json();
+    taskIds.push(staged.id);
+    expect(staged, "the candidate pins the exact base and Skill basis").toMatchObject({
+      proposalRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      managedDocumentProposal: {
+        operation: "update", documentType: "user_manual",
+        target: { documentId: target.id, editRevision: target.editRevision },
+        skillApplicability: { status: "current" },
+      },
+    });
+    const replay = await machine.post(`${base}/knowledge-base/document-proposals`, { data: payload, failOnStatusCode: false });
+    expect(replay.status()).toBe(201);
+    expect((await replay.json()).id).toBe(staged.id);
+
+    // Staging changes nothing on the governed target.
+    const untouched = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(untouched).toMatchObject({ contentText: "Base manual body", editRevision: target.editRevision, status: "draft" });
+    const listed = await (await request.get(`${base}/knowledge-base/document-proposals`)).json();
+    expect(listed.list.some((task: { id: string }) => task.id === staged.id)).toBe(true);
+    expect((await request.get(`${base}/knowledge-base/document-proposals/${staged.id}`)).status()).toBe(200);
+    expect((await request.get(`/api/projects/${randomUUID()}/knowledge-base/document-proposals/${staged.id}`, { failOnStatusCode: false })).status()).toBe(404);
+    // The generic draft editor is a different surface for a different owner. It must not rewrite or
+    // delete the exact candidate the owner is about to decide.
+    for (const tamper of [
+      () => request.delete(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false }),
+      () => request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered candidate" }, failOnStatusCode: false }),
+    ]) {
+      const refused = await tamper();
+      expect(refused.status(), await refused.text()).toBe(409);
+      expect((await refused.json()).code).toBe("MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE");
+    }
+    expect((await (await request.get(`${base}/knowledge-base/document-proposals/${staged.id}`)).json()).proposalRevision).toBe(staged.proposalRevision);
+
+    // A machine identity may stage, but only a human session may decide.
+    const tokenApply = await machine.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(tokenApply.status()).toBe(403);
+    expect((await tokenApply.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
+    const staleDecision = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: "0".repeat(64) }, failOnStatusCode: false,
+    });
+    expect(staleDecision.status()).toBe(409);
+    expect((await staleDecision.json()).code).toBe("PROPOSAL_REVIEW_CONFLICT");
+
+    const appliedResponse = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(appliedResponse.status(), await appliedResponse.text()).toBe(201);
+    const applied = await appliedResponse.json();
+    expect(applied.receipt.document).toMatchObject({ documentId: target.id, status: "draft", operation: "update" });
+    expect(applied.receipt.proposalRevision).toBe(staged.proposalRevision);
+    const readback = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(readback).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
+    expect(readback.governedMetadata).toMatchObject({ confidentiality: "confidential" });
+    expect(readback.contentHtml).toBe("<p>Revised manual body</p>");
+    expect(readback.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] });
+    const replayApply = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(replayApply.status()).toBe(201);
+    const replayReceipt = await replayApply.json();
+    expect(replayReceipt.replayed).toBe(true);
+    expect(replayReceipt.receipt.document.documentId).toBe(target.id);
+    // A replay is one publication: it must not append a second document history row.
+    expect(scalar(`SELECT COUNT(*)::int FROM audit_logs WHERE entity_type='knowledge_document' AND entity_id=${literal(target.id)} AND action='updated';`)).toBe("1");
+    const rejectedAfterApply = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/reject`, {
+      data: { expectedProposalRevision: staged.proposalRevision, reason: "Too late" }, failOnStatusCode: false,
+    });
+    expect(rejectedAfterApply.status()).toBe(409);
+
+    // A metadata/title-only candidate omits all three representations and preserves the body.
+    const metadataOnlyResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: readback.editRevision,
+        document: { title: readback.title, governedMetadata: { ...readback.governedMetadata, distribution: "external" } },
+      }, failOnStatusCode: false,
+    });
+    expect(metadataOnlyResponse.status(), await metadataOnlyResponse.text()).toBe(201);
+    const metadataOnly = await metadataOnlyResponse.json();
+    taskIds.push(metadataOnly.id);
+    const metadataApply = await request.post(`${base}/knowledge-base/document-proposals/${metadataOnly.id}/apply`, {
+      data: { expectedProposalRevision: metadataOnly.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(metadataApply.status(), await metadataApply.text()).toBe(201);
+    const preserved = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(preserved).toMatchObject({ contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>" });
+    expect(preserved.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] });
+    expect(preserved.governedMetadata).toMatchObject({ distribution: "external" });
+
+    // Rejection is bound to the exact reviewed revision; a changed expectation cannot close a
+    // different candidate, and the same decision replays its own receipt.
+    const current = preserved;
+    const secondPayload = {
+      requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: current.editRevision,
+      document: {
+        title: current.title, contentText: "Rejected manual body", contentHtml: "<p>Rejected manual body</p>",
+        contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Rejected manual body" }] }] },
+        governedMetadata: current.governedMetadata,
+      },
+      reason: "Second candidate",
+    };
+    const secondResponse = await machine.post(`${base}/knowledge-base/document-proposals`, { data: secondPayload, failOnStatusCode: false });
+    expect(secondResponse.status(), await secondResponse.text()).toBe(201);
+    const second = await secondResponse.json();
+    taskIds.push(second.id);
+    const wrongReject = await request.post(`${base}/knowledge-base/document-proposals/${second.id}/reject`, {
+      data: { expectedProposalRevision: "f".repeat(64) }, failOnStatusCode: false,
+    });
+    expect(wrongReject.status()).toBe(409);
+    const reject = () => request.post(`${base}/knowledge-base/document-proposals/${second.id}/reject`, {
+      data: { expectedProposalRevision: second.proposalRevision, reason: "Not needed" }, failOnStatusCode: false,
+    });
+    const rejectedResponse = await reject();
+    expect(rejectedResponse.status(), await rejectedResponse.text()).toBe(201);
+    const rejected = await rejectedResponse.json();
+    expect(rejected.receipt).toMatchObject({ action: "managed_document_reject", proposalRevision: second.proposalRevision });
+    // The decision key binds the decision, not the note: a retry that arrives without the reason
+    // (e.g. after a reload) still replays the stored receipt.
+    expect(await (await request.post(`${base}/knowledge-base/document-proposals/${second.id}/reject`, {
+      data: { expectedProposalRevision: second.proposalRevision }, failOnStatusCode: false,
+    })).json()).toMatchObject({ replayed: true, receipt: { id: rejected.receipt.id } });
+    expect((await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
+
+    // A candidate that proposes exactly the current state records no change instead of claiming a
+    // new Draft revision.
+    const latest = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    const noChangeResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: latest.editRevision,
+        document: {
+          title: latest.title, contentText: latest.contentText, contentHtml: latest.contentHtml,
+          contentJson: latest.contentJson, governedMetadata: latest.governedMetadata,
+        },
+      }, failOnStatusCode: false,
+    });
+    expect(noChangeResponse.status(), await noChangeResponse.text()).toBe(201);
+    const noChange = await noChangeResponse.json();
+    taskIds.push(noChange.id);
+    const noChangeApply = await request.post(`${base}/knowledge-base/document-proposals/${noChange.id}/apply`, {
+      data: { expectedProposalRevision: noChange.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(noChangeApply.status(), await noChangeApply.text()).toBe(201);
+    expect((await noChangeApply.json()).receipt.document).toMatchObject({ operation: "no_change", status: "draft" });
+    // edit_revision is a computed digest, not a column: read it back through the API.
+    const afterNoChange = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(afterNoChange).toMatchObject({ editRevision: latest.editRevision, contentText: latest.contentText });
+
+    // The target moving after staging refuses the apply instead of overwriting the newer edit.
+    const movedResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: afterNoChange.editRevision,
+        document: {
+          title: afterNoChange.title, contentText: "Candidate over a moving target",
+          contentHtml: "<p>Candidate over a moving target</p>",
+          contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Candidate over a moving target" }] }] },
+          governedMetadata: afterNoChange.governedMetadata,
+        },
+      }, failOnStatusCode: false,
+    });
+    expect(movedResponse.status(), await movedResponse.text()).toBe(201);
+    const moved = await movedResponse.json();
+    taskIds.push(moved.id);
+    const concurrentEdit = await request.patch(`${base}/knowledge-base/documents/${target.id}`, {
+      data: { contentText: "Edited after the candidate was staged", expectedRevision: afterNoChange.editRevision },
+    });
+    expect(concurrentEdit.status(), await concurrentEdit.text()).toBe(200);
+    const movedApply = await request.post(`${base}/knowledge-base/document-proposals/${moved.id}/apply`, {
+      data: { expectedProposalRevision: moved.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(movedApply.status()).toBe(409);
+    expect((await movedApply.json()).code).toBe("PROPOSAL_TARGET_CONFLICT");
+    const editedTarget = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(editedTarget.contentText).toBe("Edited after the candidate was staged");
+
+    // Deactivating the pinned Skill after staging refuses the apply at decision time, not only in
+    // the review panel's disabled button.
+    const staleCandidateResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: editedTarget.editRevision,
+        document: {
+          title: editedTarget.title, contentText: "Stale candidate body", contentHtml: "<p>Stale candidate body</p>",
+          contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Stale candidate body" }] }] },
+          governedMetadata: editedTarget.governedMetadata,
+        },
+      }, failOnStatusCode: false,
+    });
+    expect(staleCandidateResponse.status(), await staleCandidateResponse.text()).toBe(201);
+    const staleCandidate = await staleCandidateResponse.json();
+    taskIds.push(staleCandidate.id);
+    const revoked = await request.patch(`${base}/skill-assignments/${assignmentId}/deactivate`, { data: {}, failOnStatusCode: false });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+    const staleApply = await request.post(`${base}/knowledge-base/document-proposals/${staleCandidate.id}/apply`, {
+      data: { expectedProposalRevision: staleCandidate.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(staleApply.status()).toBe(409);
+    expect((await staleApply.json()).code).toBe("DOCUMENT_PROPOSAL_SKILL_STALE");
+    expect((await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json()).contentText)
+      .toBe("Edited after the candidate was staged");
+  } finally {
+    await machine?.dispose();
+    for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    if (documentId) {
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(ctx.projectId)};`);
+    }
+    for (const id of skillDocs) {
+      exec(`DELETE FROM skill_assignments WHERE project_id=${literal(ctx.projectId)} AND skill_document_id=${literal(id)};`);
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
+  }
+});

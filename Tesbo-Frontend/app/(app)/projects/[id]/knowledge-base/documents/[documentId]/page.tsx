@@ -389,14 +389,21 @@ export default function KnowledgeDocumentPage() {
     if (saveTimer.current || pendingAutosave.current || saveStatus !== "saved") {
       throw new Error("Save or discard the current editor draft before approving or rejecting this submitted version.");
     }
+    const decisionRevision = editRevision.current;
     const updated = await writer.restore(() => decision === "approved"
       ? approveGovernedKnowledgeDocument(projectId, documentId, versionId)
       : rejectGovernedKnowledgeDocument(projectId, documentId, versionId, reason));
     if (isMountedRef.current && writerRef.current === writer) {
       setDoc(updated);
-      setTitle(updated.title);
-      setSaveStatus("saved");
-      setError(null);
+      if (editRevision.current !== decisionRevision) {
+        // A title/body edit landed during the decision; keep the visible draft and do not claim it
+        // was saved as part of the decided revision.
+        setSaveStatus("unsaved");
+      } else {
+        setTitle(updated.title);
+        setSaveStatus("saved");
+        setError(null);
+      }
     }
     return updated;
   }

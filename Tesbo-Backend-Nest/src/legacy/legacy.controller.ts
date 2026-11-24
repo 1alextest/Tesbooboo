@@ -2089,6 +2089,35 @@ export class LegacyController {
     return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
+  @Post("/api/projects/:projectId/knowledge-base/document-proposals")
+  stageManagedDocumentProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.stageManagedDocumentProposal(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId, transport: "rest"
+    });
+  }
+
+  @Get("/api/projects/:projectId/knowledge-base/document-proposals")
+  listManagedDocumentProposals(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listManagedDocumentProposals(projectId, req.userId, query);
+  }
+
+  @Get("/api/projects/:projectId/knowledge-base/document-proposals/:taskId")
+  managedDocumentProposalTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
+    return this.legacy.managedDocumentProposalTask(projectId, req.userId, taskId);
+  }
+
+  @Post("/api/projects/:projectId/knowledge-base/document-proposals/:taskId/apply")
+  applyManagedDocumentProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.applyManagedDocumentProposal(projectId, req.userId, taskId, body,
+      { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/knowledge-base/document-proposals/:taskId/reject")
+  rejectManagedDocumentProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectManagedDocumentProposal(projectId, req.userId, taskId, body,
+      { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId")
   updateKnowledgeDocument(
     @Req() req: AuthenticatedRequest,

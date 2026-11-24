@@ -78,6 +78,7 @@ type SkillAssignmentBatchTarget = {
   module: string; subtype: string; operation: string; expectedAssignmentId: string | null; precedence: number;
 };
 const SKILL_MODULES = new Set(["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"]);
+const MANAGED_DOCUMENT_OP_TYPE = "managed_document_revision";
 export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing" | "retest" | "retestRecovery";
 
 /** Everything processZyraSaveEntriesSequential/Batched need that isn't `selected` or `client` itself. */
@@ -16139,7 +16140,11 @@ export class LegacyService implements OnModuleInit {
   async zyraTask(projectId: string, userId: string | null | undefined, taskId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    return this.formatAiTask(await this.readTestcaseProposal(this.db, projectId, taskId));
+    const row = await this.readTestcaseProposal(this.db, projectId, taskId);
+    const task = await this.formatAiTask(row);
+    return row.provider === "external_document_proposal" && process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1"
+      ? this.managedDocumentProposalView(projectId, task)
+      : task;
   }
 
   /** Native no-model inlet: stores unpublished operations in the existing review task owner. */
@@ -16285,6 +16290,390 @@ export class LegacyService implements OnModuleInit {
       return String(result.rows[0].id);
     });
     return this.zyraTask(projectId, uid, taskId);
+  }
+
+  /** Skill scope for a manual/policy candidate; audience is the existing assignment subtype. */
+  private managedDocumentSkillTargets(documentType: string, metadata: Body): Array<{ module: string; subtype: string; operation: string }> {
+    const module = documentType === "user_manual" ? "user_manuals" : "policies";
+    const operation = documentType === "user_manual" ? "manual_revision" : "policy_revision";
+    return [{ module, subtype: metadata.audience === "external" ? "external" : "internal", operation }];
+  }
+
+  private normalizeManagedDocumentProposal(body: Body, documentType: string) {
+    const operation = String(body.operation || "");
+    if (operation !== "create" && operation !== "update") throw new BadRequestException({ error: "operation must be create or update" });
+    const raw = body.document;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BadRequestException({ error: "document must contain the proposed title and content" });
+    const doc = raw as Body;
+    const title = String(doc.title || "").trim();
+    if (!title) throw new BadRequestException({ error: "The proposed document requires a title" });
+    if (title.length > LegacyService.KB_DOCUMENT_TITLE_MAX_LENGTH) {
+      throw new BadRequestException({ error: `Title must be at most ${LegacyService.KB_DOCUMENT_TITLE_MAX_LENGTH} characters` });
+    }
+    if (title === LegacyService.ZYRA_MEMORY_DOC_TITLE) {
+      throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
+    }
+    // Omitted representations on an update mean "leave the current value"; do not coerce them to
+    // JSON null, which the KB writer would apply as an erase. A body-changing update must carry
+    // the whole representation set, though: the editor mounts from contentJson, so applying a new
+    // text/HTML over stale JSON leaves one Draft that shows a different body on each surface and
+    // the next editor save would silently revert the other two. Metadata/title-only updates omit
+    // all three and preserve the current body exactly.
+    const contentKeys = ["contentText", "contentHtml", "contentJson"] as const;
+    const suppliedContent = contentKeys.filter((key) => doc[key] !== undefined);
+    if (suppliedContent.length > 0 && suppliedContent.length < contentKeys.length) {
+      throw new BadRequestException({ error: "A body-changing proposal must supply contentText, contentHtml and contentJson together; on an update, omit all three to keep the current body" });
+    }
+    const content: Body = {};
+    if (doc.contentText !== undefined) content.contentText = doc.contentText == null ? null : String(doc.contentText);
+    if (doc.contentHtml !== undefined) content.contentHtml = doc.contentHtml == null ? null : String(doc.contentHtml);
+    if (doc.contentJson !== undefined) content.contentJson = doc.contentJson;
+    this.assertKnowledgeDocumentPayloadSize(content);
+    const governedMetadata = normalizeGovernedMetadata(doc.governedMetadata, documentType);
+    const folderId = operation === "create" ? String(body.folderId || "") : null;
+    if (operation === "create" && !isUuid(folderId)) throw new BadRequestException({ error: "A create proposal requires folderId" });
+    const expectedRevision = operation === "update" ? expectedKnowledgeDocumentRevision(body.expectedRevision, true) : null;
+    if (operation === "update" && (!isUuid(String(body.documentId || "")) || !expectedRevision)) {
+      throw new BadRequestException({ error: "An update proposal requires documentId and expectedRevision" });
+    }
+    return {
+      opType: MANAGED_DOCUMENT_OP_TYPE, documentType, operation,
+      documentId: operation === "update" ? String(body.documentId) : null,
+      targetEditRevision: expectedRevision,
+      target: null as Body | null,
+      folderId,
+      document: { title, ...content, governedMetadata },
+      reason: String(body.reason || "").slice(0, 4000)
+    };
+  }
+
+  private requireManagedDocumentProposalPreview() {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented",
+        error: "Governed document proposals are a disabled preview on this deployment" });
+    }
+  }
+
+  /** Stage an inert manual/policy candidate in the existing proposal-task owner. */
+  async stageManagedDocumentProposal(projectId: string, userId: string | null | undefined, body: Body,
+    principal: TestcaseProposalPrincipal, forcedType?: "user_manual" | "policy"): Promise<Body> {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented", error: "External document proposal submission is a disabled preview until governed effective-skill authority is implemented and accepted" });
+    }
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!principal || !["human_session", "api_token"].includes(principal.kind) ||
+        (principal.kind === "api_token" && !isUuid(String(principal.tokenId || "")))) {
+      throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+    }
+    let documentType = forcedType ?? String(body.documentType || "");
+    // An update may omit documentType; the locked target is authoritative. Derive the type for
+    // validation, then re-check it inside the transaction where the row is locked.
+    if (!documentType && String(body.operation || "") === "update" && isUuid(String(body.documentId || ""))) {
+      const targetType = (await this.db.query(
+        "SELECT document_type FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false",
+        [String(body.documentId), projectId]
+      )).rows[0]?.document_type;
+      if (targetType) documentType = String(targetType);
+    }
+    if (!isGovernedDocumentType(documentType)) throw new BadRequestException({ error: "documentType must be user_manual or policy" });
+    const requestKey = typeof body.requestKey === "string" ? body.requestKey.trim() : "";
+    if (!requestKey || requestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    const operation = this.normalizeManagedDocumentProposal(body, documentType);
+    const title = String(body.title || `Proposed ${documentType === "policy" ? "policy" : "manual"}: ${operation.document.title}`).trim().slice(0, 512);
+    const requestDigest = proposalDigest({ title, operations: [operation] });
+    const { principalKey, producerActorId, provenance, activityActor } = nativeProposalProducerIdentity(principal, uid);
+    const taskId = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority,
+        documentType === "user_manual" ? "propose_manual_revision" : "propose_policy_revision");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`managed-document-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      if (prior.rows[0]) {
+        if (prior.rows[0].proposal_request_digest !== requestDigest) {
+          throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+        }
+        return String(prior.rows[0].id);
+      }
+      if (operation.operation === "create") {
+        const folder = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [operation.folderId, projectId]);
+        if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      } else {
+        const target = (await client.query(
+          `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+            WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE`,
+          [operation.documentId, projectId]
+        )).rows[0];
+        if (!target) throw new NotFoundException({ error: "Target document not found" });
+        if (!isGovernedDocumentType(target.document_type) || target.document_type !== documentType) {
+          throw new BadRequestException({ error: "The target must be the same governed document type" });
+        }
+        if (target.source_provider) throw new ConflictException({ code: "GOVERNED_DOCUMENT_EXTERNAL_OWNED", error: "A provider-synced document remains read-only" });
+        if (target.edit_revision !== operation.targetEditRevision) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The document changed before this proposal was staged" });
+        }
+        operation.target = {
+          documentId: String(target.id), targetEditRevision: String(target.edit_revision),
+          base: {
+            title: target.title, contentJson: target.content_json, contentHtml: target.content_html, contentText: target.content_text,
+            governedMetadata: target.governed_metadata ?? {}, documentType: target.document_type, status: target.status,
+            editRevision: String(target.edit_revision), contentDigest: knowledgeDocumentContentDigest(target)
+          }
+        };
+      }
+      const skillTargets = this.managedDocumentSkillTargets(documentType, operation.document.governedMetadata);
+      const skillContext = await resolveEffectiveSkills(client, projectId, skillTargets);
+      const result = await client.query(
+        `INSERT INTO ai_generation_requests
+          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log,skill_context)
+         VALUES ($1,$2,'external_document_proposal',NULL,$3,1,1,$4::jsonb,$5,'in_review',$6,$7,$8::jsonb,$9::jsonb,$10::jsonb) RETURNING id`,
+        [projectId, uid, title, JSON.stringify([operation]), ZYRA_AGENT_NAME, requestKey, requestDigest,
+          JSON.stringify(provenance),
+          JSON.stringify([{ actor: activityActor, stage: "in_review", title: "Staged governed document proposal",
+            detail: "One manual/policy candidate awaits human review. The governed document was not changed; Skill applicability is pinned in this task.",
+            createdAt: new Date().toISOString(), provenance, skillContext }]),
+          JSON.stringify(skillContext)]
+      );
+      await this.logProjectActivity(projectId, producerActorId, "managed_document_proposals_staged", "ai_generation_request",
+        result.rows[0].id, title, { provenance, requestDigest, operation: operation.operation, documentType, skillContext }, client);
+      return String(result.rows[0].id);
+    });
+    return this.managedDocumentProposalTask(projectId, uid, taskId);
+  }
+
+  /** The reviewer's read model: base identity/content, proposed content/metadata, diff and applicability. */
+  async managedDocumentProposalTask(projectId: string, userId: string | null | undefined, taskId: string): Promise<Body> {
+    this.requireManagedDocumentProposalPreview();
+    const task = await this.zyraTask(projectId, userId, taskId) as Body;
+    if (!task.managedDocumentProposal) throw new NotFoundException({ error: "Document proposal not found" });
+    return task;
+  }
+
+  private async managedDocumentProposalView(projectId: string, task: Body): Promise<Body> {
+    const operation = normalizeJsonArray(task.proposalSnapshot?.operations || []).find(entry => entry?.opType === MANAGED_DOCUMENT_OP_TYPE);
+    if (!operation) return task;
+    const pinned = task.skillContext || null;
+    const current = await resolveEffectiveSkills(this.db, projectId,
+      this.managedDocumentSkillTargets(String(operation.documentType), operation.document?.governedMetadata || {}));
+    const applicability = classifySkillResolution(pinned, current);
+    const base = operation.target?.base || null;
+    const proposed = operation.document;
+    // Omitted representations are preserved on apply, so the comparison must show the effective
+    // value too. Diffing an omitted contentText as "" would claim the body is being erased.
+    const effective = (key: string) => proposed?.[key] !== undefined ? proposed[key] : base?.[key] ?? null;
+    const diff = summarizeDocumentChange(
+      { title: base?.title || "", contentText: base?.contentText || "" },
+      { title: String(effective("title") ?? ""), contentText: String(effective("contentText") ?? "") }
+    );
+    const receipt = normalizeJsonArray(task.saveEvents)
+      .filter((entry: Body) => entry?.action === "managed_document_apply")
+      .sort((left: Body, right: Body) => String(left.appliedAt || "").localeCompare(String(right.appliedAt || "")))
+      .pop() || null;
+    const changes: string[] = [];
+    if (operation.operation === "create") changes.push("New governed document");
+    else {
+      if (String(effective("title") ?? "") !== String(base?.title ?? "")) changes.push("Title");
+      if (effective("contentText") !== (base?.contentText ?? null)) changes.push("Plain text");
+      if (effective("contentHtml") !== (base?.contentHtml ?? null)) changes.push("HTML");
+      if (JSON.stringify(effective("contentJson") ?? null) !== JSON.stringify(base?.contentJson ?? null)) changes.push("Editor JSON");
+      if (JSON.stringify(effective("governedMetadata") ?? null) !== JSON.stringify(base?.governedMetadata ?? null)) changes.push("Governance metadata");
+    }
+    return {
+      ...task,
+      managedDocumentProposal: {
+        operation: operation.operation, documentType: operation.documentType,
+        target: operation.target ? {
+          documentId: operation.target.documentId, editRevision: operation.target.targetEditRevision,
+          base: base ? { ...base, governedMetadata: base.governedMetadata } : null
+        } : null,
+        folderId: operation.folderId,
+        proposed: { ...proposed },
+        changes,
+        provenance: task.proposalProvenance || null,
+        reason: operation.reason || "",
+        diff: { summary: diff.summary, fields: diff.fields },
+        skillContext: pinned,
+        skillApplicability: { status: applicability, current },
+        applyReceipt: receipt
+      }
+    };
+  }
+
+  async listManagedDocumentProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    this.requireManagedDocumentProposalPreview();
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const rows = await this.db.query(
+      `SELECT id FROM ai_generation_requests
+        WHERE project_id=$1 AND provider='external_document_proposal' AND task_status IN ('in_review','failed')
+        ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset]
+    );
+    return { list: await Promise.all(rows.rows.map(row => this.managedDocumentProposalTask(projectId, userId, String(row.id)))) };
+  }
+
+  /** Protected human apply. Publishes a native Draft only; submission/approval remain separate. */
+  async applyManagedDocumentProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {},
+    principal?: ReviewPrincipal) {
+    this.requireManagedDocumentProposalPreview();
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const decisionKey = proposalDigest({ action: "managed_document_apply", revision, reviewerId: uid });
+    const result = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      // The provider is the ownership boundary for the operation shape below; do not infer it
+      // from an opType another producer could one day emit.
+      if (!existing || existing.provider !== "external_document_proposal") {
+        throw new NotFoundException({ error: "Document proposal not found" });
+      }
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      const prior = normalizeJsonArray(existing.save_events).find((entry: Body) => entry?.decisionKey === decisionKey);
+      if (prior) return { receipt: prior, replayed: true };
+      if (existing.task_status !== "in_review") throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This document proposal is not awaiting review" });
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposal or its Skill basis changed since review; reload and review the exact revision again" });
+      }
+      const operation = normalizeJsonArray(reviewed.proposal_snapshot.operations).find(entry => entry?.opType === MANAGED_DOCUMENT_OP_TYPE);
+      if (!operation) throw new BadRequestException({ error: "This task is not a governed document proposal" });
+      const targets = this.managedDocumentSkillTargets(String(operation.documentType), operation.document?.governedMetadata || {});
+      const currentSkills = await resolveEffectiveSkills(client, projectId, targets);
+      const applicability = classifySkillResolution(existing.skill_context, currentSkills);
+      if (applicability !== "current") {
+        throw new ConflictException({ code: "DOCUMENT_PROPOSAL_SKILL_STALE",
+          error: "The exact approved Skill basis for this candidate is no longer current; review a refreshed proposal", current: currentSkills, applicability });
+      }
+      const proposed = operation.document;
+      let document: Body;
+      if (operation.operation === "create") {
+        if (!isGovernedDocumentType(operation.documentType)) {
+          throw new BadRequestException({ error: "A managed candidate must create a user_manual or policy document" });
+        }
+        // Staging refuses this too. Keep the check here so a candidate staged before that guard
+        // existed still cannot capture the title Zyra looks its memory up by.
+        if (String(proposed.title) === LegacyService.ZYRA_MEMORY_DOC_TITLE) {
+          throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
+        }
+        const folder = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [operation.folderId, projectId]);
+        if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        const inserted = (await client.query(
+          `INSERT INTO knowledge_documents
+             (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+           VALUES ((SELECT organization_id FROM projects WHERE id=$1),$1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,'unsupported','draft',$9,$9)
+           RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+          [projectId, operation.folderId, proposed.title, proposed.contentJson ? JSON.stringify(proposed.contentJson) : null,
+            proposed.contentHtml, proposed.contentText, operation.documentType, JSON.stringify(proposed.governedMetadata), uid]
+        )).rows[0];
+        document = { documentId: String(inserted.id), editRevision: String(inserted.edit_revision), title: inserted.title,
+          status: inserted.status, documentType: inserted.document_type, operation: "create" };
+      } else {
+        const target = operation.target;
+        if (!target?.documentId) throw new BadRequestException({ error: "This update candidate has no exact target" });
+        if (!isGovernedDocumentType(operation.documentType)) {
+          throw new BadRequestException({ error: "A managed candidate must revise a user_manual or policy document" });
+        }
+        const current = (await client.query(
+          `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+            WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
+          [target.documentId, projectId]
+        )).rows[0];
+        if (!current) throw new NotFoundException({ error: "Target document not found" });
+        if (current.document_type !== operation.documentType) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The target document type changed" });
+        }
+        if (current.source_provider) {
+          throw new ConflictException({ code: "GOVERNED_DOCUMENT_EXTERNAL_OWNED", error: "A provider-synced document remains read-only" });
+        }
+        this.assertKnowledgeDocumentBodyWritable(current);
+        if (current.edit_revision !== target.targetEditRevision) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The target document changed after this candidate was staged" });
+        }
+        const written = await this.writeKnowledgeDocument(client, projectId, uid, String(target.documentId), {
+          title: proposed.title, contentJson: proposed.contentJson, contentHtml: proposed.contentHtml,
+          contentText: proposed.contentText, governedMetadata: proposed.governedMetadata,
+          expectedRevision: target.targetEditRevision, documentType: operation.documentType
+        }, current, { kind: "human_session" });
+        document = { documentId: String(written.row.id), editRevision: String(written.row.edit_revision), title: written.row.title,
+          status: written.row.status, documentType: written.row.document_type,
+          operation: written.contentChanged ? "update" : "no_change",
+          contentChanged: written.contentChanged };
+      }
+      const receipt = {
+        id: randomUUID(), decisionKey, proposalRevision: revision, reviewerId: uid, principalKind: "human_session",
+        action: "managed_document_apply", skillContext: currentSkills, proposalSnapshot: reviewed.proposal_snapshot,
+        document, appliedAt: new Date().toISOString()
+      };
+      const activity = [{ actor: "user", stage: "done", title: "Applied governed document proposal",
+        detail: document.operation === "no_change"
+          ? `No content or metadata changed; the document remains ${document.status}. Nothing was submitted or approved.`
+          : "Published one native Draft manual/policy revision. Submission and human approval remain separate decisions.",
+        createdAt: receipt.appliedAt, reviewerId: uid, proposalRevision: revision }];
+      await client.query(
+        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2",
+        [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]
+      );
+      await this.logProjectActivity(projectId, uid, "managed_document_proposal_applied", "ai_generation_request", taskId,
+        existing.user_story, { decisionKey, proposalRevision: revision, documentId: document.documentId, editRevision: document.editRevision, skillContext: currentSkills }, client);
+      // Give the published document its own history entry, not only the proposal task's, in the
+      // same transaction so a replay cannot append a second row for one publication.
+      if (document.operation !== "no_change") {
+        await this.logProjectActivity(projectId, uid, document.operation === "create" ? "created" : "updated",
+          "knowledge_document", document.documentId, document.title,
+          { source: "managed_document_proposal", taskId, proposalRevision: revision }, client);
+      }
+      return { receipt, replayed: false };
+    });
+    return { taskId, taskStatus: "done", ...result };
+  }
+
+  /** Human refusal of a candidate; nothing is published. */
+  async rejectManagedDocumentProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {},
+    principal?: ReviewPrincipal) {
+    this.requireManagedDocumentProposalPreview();
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    // The key identifies the decision, not the note attached to it: a retry after a lost response
+    // must replay the stored receipt even if the reason field arrived empty on the second attempt.
+    const decisionKey = proposalDigest({ action: "managed_document_reject", revision, reviewerId: uid });
+    const result = await this.db.transaction(async client => {
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      if (!existing || existing.provider !== "external_document_proposal") throw new NotFoundException({ error: "Document proposal not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      const prior = normalizeJsonArray(existing.save_events).find((entry: Body) => entry?.decisionKey === decisionKey);
+      if (prior) return { receipt: prior, replayed: true };
+      if (existing.task_status === "done") {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This document proposal was already applied or decided; reload its recorded outcome" });
+      }
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposal or its Skill basis changed since review; reload and review the exact revision again" });
+      }
+      const receipt = {
+        id: randomUUID(), decisionKey, proposalRevision: revision, reviewerId: uid, principalKind: "human_session",
+        action: "managed_document_reject", reason: reason || null, decidedAt: new Date().toISOString()
+      };
+      const activity = [{ actor: "user", stage: "done", title: "Rejected governed document proposal",
+        detail: reason || "Nothing was published.", createdAt: receipt.decidedAt, reviewerId: uid, proposalRevision: revision }];
+      await client.query("UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2",
+        [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]);
+      await this.logProjectActivity(projectId, uid, "managed_document_proposal_rejected", "ai_generation_request", taskId,
+        existing.user_story, { decisionKey, proposalRevision: revision, reason: reason || null }, client);
+      return { receipt, replayed: false };
+    });
+    return { taskId, taskStatus: "done", ...result };
   }
 
   async requirementProposalTask(projectId: string, userId: string | null | undefined, taskId: string) {
@@ -17429,6 +17818,8 @@ export class LegacyService implements OnModuleInit {
   private assertOrdinaryProposalMutation(row: Body): void {
     if (this.isRequirementBundleTask(row)) throw new ConflictException({ code: "REQUIREMENT_BUNDLE_IMMUTABLE",
       error: "Requirement bundles are immutable. Review the exact bundle and use its authorized Reject or Withdraw action." });
+    if (row.provider === "external_document_proposal") throw new ConflictException({ code: "MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE",
+      error: "Governed document candidates are immutable. Use the owner/manager Apply or Reject action." });
   }
 
   private assertGuardedPublicationAvailable(row: Body): void {
@@ -17644,7 +18035,7 @@ export class LegacyService implements OnModuleInit {
 
   async listTestcaseProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
-    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
+    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' AND provider IS DISTINCT FROM 'external_document_proposal' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
     return { list: await Promise.all(rows.rows.map(row => this.zyraTask(projectId, userId, String(row.id)))) };
   }
 
@@ -17713,6 +18104,16 @@ export class LegacyService implements OnModuleInit {
     const result = await runner.query("SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2", [taskId,projectId]);
     if (!result.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     const row = result.rows[0];
+    if (row.provider === "external_document_proposal") {
+      // Managed document candidates bind only their exact operation and pinned Skill context;
+      // unrelated testcase suites/custom fields must not change this review revision.
+      row.proposal_snapshot = {
+        operations: normalizeJsonArray(row.generated_payload),
+        skillContext: row.skill_context && Object.keys(row.skill_context).length ? row.skill_context : null
+      };
+      row.proposal_review_revision = proposalDigest(row.proposal_snapshot);
+      return row;
+    }
     row.proposal_snapshot.operations = this.reviewedTestcaseOperations(row, row.proposal_snapshot);
     row.proposal_review_revision = proposalDigest(row.proposal_snapshot);
     return row;
@@ -17725,6 +18126,7 @@ export class LegacyService implements OnModuleInit {
     const single = jiraKeys.length + linearKeys.length + notionIds.length === 1;
     return normalizeJsonArray(row.generated_payload).map((entry: Body) => {
       const opType = entry.opType || "create";
+      if (opType === MANAGED_DOCUMENT_OP_TYPE) return { ...entry, opType };
       if (opType !== "create") {
         const raw = { ...(entry.fields || {}) };
         if (raw.expectedSummary !== undefined && raw.description === undefined) raw.description = raw.expectedSummary;
@@ -22529,9 +22931,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const limit = pageNumber(query.limit, 50, 0, 100);
     const offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    // This generic history returns rows verbatim. While the governed document proposal surface is
+    // disabled, keep staged candidates out of it rather than exposing their payload and receipts.
+    const managedPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     const res = await this.db.query(
-      `SELECT * FROM ai_generation_requests WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-      [projectId, limit, offset]
+      `SELECT * FROM ai_generation_requests WHERE project_id = $1
+         AND ($4::boolean OR provider IS DISTINCT FROM 'external_document_proposal')
+       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset, managedPreview]
     );
     return { list: res.rows.map(toCamel) };
   }
@@ -22841,6 +23248,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       this.assertGuardedPublicationAvailable(existing.rows[0]);
+      // A governed document candidate is the exact artifact the owner reviews. Deleting its only
+      // operation would destroy that artifact and rewrite the review revision.
+      this.assertOrdinaryProposalMutation(existing.rows[0]);
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -22880,6 +23290,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       this.assertGuardedPublicationAvailable(existing.rows[0]);
+      // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
+      // under the reviewer without changing the exact revision they approved.
+      this.assertOrdinaryProposalMutation(existing.rows[0]);
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }
@@ -28459,13 +28872,19 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // payload as the case drafts. They are surfaced separately so the existing case-draft
     // renderer never mistakes them for testcase cards.
     const bundleEntries = rawDrafts.filter((entry: Body) => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
-    const caseEntries = rawDrafts.filter((entry: Body) => !REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
+    const managedEntries = rawDrafts.filter((entry: Body) => String(entry?.opType || "") === MANAGED_DOCUMENT_OP_TYPE);
+    const caseEntries = rawDrafts.filter((entry: Body) =>
+      !REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")) && String(entry?.opType || "") !== MANAGED_DOCUMENT_OP_TYPE);
     item.drafts = await Promise.all(caseEntries.map((entry: Body) => this.normalizeAiTaskDraftEntry(entry, snapshot?.targets)));
     if (bundleEntries.length) {
       item.requirementBundle = bundleEntries;
       item.skillContext = row.skill_context && Object.keys(row.skill_context).length
         ? row.skill_context
         : bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
+    }
+    if (managedEntries.length && process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1") {
+      item.managedDocumentProposalEntries = managedEntries;
+      item.skillContext = row.skill_context && Object.keys(row.skill_context).length ? row.skill_context : null;
     }
     if (this.isRequirementBundleTask(row)) {
       item.requirementDecision = this.requirementDecisionReceipt(row);
@@ -28474,16 +28893,34 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // without re-deriving it from the mutable requirement document.
       item.requirementApplyReceipt = this.requirementApplyReceipt(row);
     }
-    if (snapshot) {
+    const managedPreview = (row.provider !== "external_document_proposal" && managedEntries.length === 0) || process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
+    if (snapshot && managedPreview) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;
       delete item.proposalReviewRevision;
     }
+    if (!managedPreview) {
+      // The dedicated document-proposal surface (and staging itself) is disabled. The generic read
+      // must not become a side door to the unpublished governed content, its apply receipts or
+      // pinned Skill basis.
+      delete item.generatedPayload;
+      delete item.proposalSnapshot;
+      delete item.proposalRevision;
+      delete item.proposalReviewRevision;
+      delete item.saveEvents;
+      delete item.skillContext;
+      delete item.proposalProvenance;
+      delete item.proposalRequestKey;
+      delete item.proposalRequestDigest;
+      // The staging entry embeds the pinned Skill context, so the timeline is a side door too.
+      delete item.activityLog;
+      delete item.sourceSummary;
+    }
     item.jiraIssueKeys = normalizeJsonArray(row.jira_issue_keys);
     item.linearIssueKeys = normalizeJsonArray(row.linear_issue_keys);
     item.notionPageIds = normalizeJsonArray(row.notion_page_ids);
-    item.sources = normalizeJsonArray(row.source_summary);
-    item.activities = normalizeJsonArray(row.activity_log);
+    item.sources = managedPreview ? normalizeJsonArray(row.source_summary) : [];
+    item.activities = managedPreview ? normalizeJsonArray(row.activity_log) : [];
     // A Russian task's timeline and sources are rendered in Russian; the stored English is untouched
     // (see zyra-task-activity-ru.ts). Every other task is returned exactly as before.
     if (row.language === "ru") {
