@@ -60,10 +60,16 @@ export function readOnlyPilotCatalogGaps(tools) {
     .map(name => "native pilot read permission unavailable: " + name);
 }
 export function summarizeNativePilotCases(casesResponse, suitesResponse) {
-  const cases = Array.isArray(casesResponse) ? casesResponse : casesResponse?.testcases;
+  // Native list_testcases uses {rows, total}, the same paginated owner as REST and the
+  // established MCP E2E contract. Do not substitute an imagined array/testcases envelope.
+  const cases = casesResponse?.rows;
+  const reportedTotal = casesResponse?.total;
   const suites = suitesResponse?.suites;
-  if (!Array.isArray(cases) || !Array.isArray(suites) || cases.length > 25 || suites.length > 2000 ||
-      cases.some(value => !value || typeof value.id !== "string" || !value.id) ||
+  if (!Array.isArray(cases) || !Number.isSafeInteger(reportedTotal) || reportedTotal < 0 ||
+      !Array.isArray(suites) || cases.length > 25 || suites.length > 2000 ||
+      cases.length !== Math.min(reportedTotal, 25) ||
+      cases.some(value => !value || typeof value.id !== "string" || !value.id ||
+        typeof value.status !== "string") ||
       suites.some(value => !value || typeof value.id !== "string" || !value.id) ||
       new Set(cases.map(value => value.id)).size !== cases.length ||
       new Set(suites.map(value => value.id)).size !== suites.length) {
@@ -74,8 +80,9 @@ export function summarizeNativePilotCases(casesResponse, suitesResponse) {
     const key = Object.hasOwn(statusCounts, item.status) ? item.status : "Other";
     statusCounts[key]++;
   }
-  return { sampledCases: cases.length, sampleLimit: 25, suites: suites.length,
-    statusCounts, fullCaseTotalVerified: false, recordMutation: false };
+  return { sampledCases: cases.length, sampleLimit: 25, reportedCaseTotal: reportedTotal,
+    suites: suites.length, statusCounts, fullCaseTotalVerified: reportedTotal === cases.length,
+    writeToolCalls: 0, nativeRecordMutation: "not_assessed" };
 }
 
 const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
@@ -118,7 +125,7 @@ function shapeAt(schema, path) {
   return current && typeof current === "object" ? current : null;
 }
 
-export function catalogGaps(tools, { requireProposalPreview = false } = {}) {
+export function catalogGaps(tools, { requireProposalPreview = false, pilotReadOnly = false } = {}) {
   if (!Array.isArray(tools)) return { errors: ["tools/list did not return an array"], count: 0 };
   const errors = [];
   const names = [];
@@ -134,7 +141,10 @@ export function catalogGaps(tools, { requireProposalPreview = false } = {}) {
     if (seen.has(name)) errors.push(`duplicate tool: ${name}`);
     seen.add(name);
   }
-  for (const required of [...REQUIRED_TOOLS, ...(requireProposalPreview ? PROPOSAL_TOOLS : [])]) {
+  if (pilotReadOnly && requireProposalPreview) errors.push("read-only pilot cannot require write-scoped proposal tools");
+  const requiredForMode = pilotReadOnly
+    ? NATIVE_PILOT_READ_TOOLS : [...REQUIRED_TOOLS, ...(requireProposalPreview ? PROPOSAL_TOOLS : [])];
+  for (const required of requiredForMode) {
     if (!seen.has(required)) errors.push(`missing tool: ${required}`);
   }
   for (const retired of RETIRED_PUBLISHERS) {
@@ -143,7 +153,7 @@ export function catalogGaps(tools, { requireProposalPreview = false } = {}) {
   return { errors, count: names.length, names };
 }
 
-export function schemaGaps(tools) {
+export function schemaGaps(tools, { pilotReadOnly = false } = {}) {
   const errors = [];
   if (!Array.isArray(tools)) return { errors: ["tools/list did not return an array"] };
   const byName = new Map(tools.filter((t) => t && typeof t === "object" && t.name).map((t) => [t.name, t]));
@@ -160,6 +170,19 @@ export function schemaGaps(tools) {
       if (!(field in properties)) errors.push(`${requirement.tool}: missing field ${field}`);
     }
   }
+  if (pilotReadOnly) {
+    const testcaseSchema = byName.get("list_testcases")?.inputSchema;
+    const suiteSchema = byName.get("list_suites")?.inputSchema;
+    if (testcaseSchema?.type !== "object" ||
+        testcaseSchema.properties?.limit?.type !== "number" ||
+        testcaseSchema.properties?.offset?.type !== "number" ||
+        testcaseSchema.properties?.includeArchived?.type !== "boolean") {
+      errors.push("read-only pilot: list_testcases schema must advertise limit, offset and includeArchived");
+    }
+    if (suiteSchema?.type !== "object" || !suiteSchema.properties) {
+      errors.push("read-only pilot: list_suites schema is unavailable");
+    }
+  }
   const stage = byName.get("stage_testcase_changes")?.inputSchema;
   if (stage) {
     if (!stage.required?.includes("requestKey") || !stage.required?.includes("operations")) errors.push("stage_testcase_changes: requestKey and operations must be required");
@@ -169,11 +192,11 @@ export function schemaGaps(tools) {
   return { errors };
 }
 
-export function summarize({ tools, instructions, serverVersion, health, expectedGitSha, expectedToolCount, requireProposalPreview = false }) {
+export function summarize({ tools, instructions, serverVersion, health, expectedGitSha, expectedToolCount, requireProposalPreview = false, pilotReadOnly = false }) {
   const errors = [];
   const warnings = [];
-  const catalog = catalogGaps(tools, { requireProposalPreview });
-  const schemas = schemaGaps(tools);
+  const catalog = catalogGaps(tools, { requireProposalPreview, pilotReadOnly });
+  const schemas = schemaGaps(tools, { pilotReadOnly });
   errors.push(...catalog.errors, ...schemas.errors);
 
   if (typeof serverVersion !== "string" || !serverVersion) {
@@ -352,7 +375,8 @@ async function main() {
       health,
       expectedGitSha,
       expectedToolCount,
-      requireProposalPreview
+      requireProposalPreview,
+      pilotReadOnly: nativePilotReadOnly
     });
 
     // Response fields, including versions and duplicate tool names, are

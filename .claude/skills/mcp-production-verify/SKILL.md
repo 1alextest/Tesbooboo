@@ -131,9 +131,18 @@ After human approval of a project-bound MCP credential and its independently ver
 TLS origin, `TESBO_PILOT_READ_ONLY=1` on the existing
 `scripts/verify-production-mcp.sh` path checks the deployment build and catalog first,
 then calls only `list_testcases` (25-row sample including Archived) and `list_suites`.
-It reports bounded counts/status categories, **never names, IDs, source links, test data,
+It reports the native paginated `rows` sample and `total` count as aggregates with an explicit
+complete-versus-sampled flag, **never case names, IDs, source links, test data,
 credential material, or raw server errors**. No candidate is staged or official case
 published; it is not an execution or a claim of complete regression coverage.
+The report establishes **zero MCP write-tool calls by this checker**, not an independent
+proof that the underlying database was unchanged; native mutation is `not_assessed`.
+
+The pilot accepts the **two authorized native read tools only**; it never demands
+write-scoped model, graph or proposal tools merely to pass discovery. The normal
+production verifier retains its original broader tool requirements. Incompatible
+read-only and write-preview settings are refused, and the native list schemas must
+advertise bounded pagination and the archived-case switch.
 
 Use the existing dedicated TESBOPROJECT endpoint; this is neither a second project nor
 a new MCP client. A declined/missing grant, stale build, unsupported list tool, invalid

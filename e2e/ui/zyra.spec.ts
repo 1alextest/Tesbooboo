@@ -1694,6 +1694,29 @@ test.describe("zyra / agents (UI)", () => {
     await expect(acceptanceCriteria).toHaveValue(/Redirects to the dashboard on success/);
   });
 
+  test("ZYU-83 the task composer does not offer governed manuals or policies", async ({ browser }) => {
+    await allocateFakeAiKey();
+    const title = stamp("Governed manual");
+    const eligible = stamp("Eligible general");
+    await createKnowledgeDoc({ title: eligible, contentText: "Eligible general body" });
+    await createKnowledgeDoc({
+      title, documentType: "user_manual", contentText: "Governed body must not reach task context",
+      governedMetadata: {
+        schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "confidential",
+        distribution: "withheld", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+        effectivity: { from: null, to: null }, enforcementRefs: [],
+      },
+    });
+    const { dialog } = await openCreateModal(browser);
+    // The select is only rendered once at least one eligible document exists; either way neither
+    // the governed title nor its body may appear in the composer.
+    await expect(dialog).not.toContainText(title);
+    await expect(dialog).not.toContainText("Governed body must not reach task context");
+    const select = dialog.getByRole("combobox");
+    await expect(select).toContainText(eligible);
+    await expect(select).not.toContainText(title);
+  });
+
   test("ZYU-52 a Knowledge Base document with no Acceptance Criteria section leaves the field empty and puts everything in Context", async ({
     browser,
   }) => {

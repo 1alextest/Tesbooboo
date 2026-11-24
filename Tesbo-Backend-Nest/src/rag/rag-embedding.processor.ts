@@ -38,9 +38,12 @@ export class RagEmbeddingProcessor extends WorkerHost {
     const { projectId, sourceType, sourceId } = job.data;
     const table = sourceType === "document" ? "knowledge_documents" : "knowledge_files";
     const contentColumn = sourceType === "document" ? "content_text" : "extracted_text";
+    // Only documents carry governed types. Selected so a job queued before an item became (or
+    // was created as) a governed manual/policy can never put its text on the embedding wire.
+    const typeColumn = sourceType === "document" ? ", document_type" : "";
 
-    const sourceRes = await this.db.query<{ id: string; organization_id: string; content: string | null; embedding_content_hash: string | null }>(
-      `SELECT id, organization_id, ${contentColumn} AS content, embedding_content_hash FROM ${table} WHERE id = $1 AND project_id = $2 AND is_deleted = false`,
+    const sourceRes = await this.db.query<{ id: string; organization_id: string; content: string | null; embedding_content_hash: string | null; document_type?: string | null }>(
+      `SELECT id, organization_id, ${contentColumn} AS content, embedding_content_hash${typeColumn} FROM ${table} WHERE id = $1 AND project_id = $2 AND is_deleted = false`,
       [sourceId, projectId]
     );
     const source = sourceRes.rows[0];
@@ -50,6 +53,13 @@ export class RagEmbeddingProcessor extends WorkerHost {
     // stays excluded from retrieval via the is_deleted filter regardless of this status).
     if (!source) {
       await this.setStatus(table, sourceId, "unsupported").catch(() => undefined);
+      return;
+    }
+
+    // Exposure hold: governed manuals/policies are human-only until an owner accepts a
+    // distribution policy, so even an explicitly queued job must not call the embedding provider.
+    if (sourceType === "document" && (source.document_type === "user_manual" || source.document_type === "policy")) {
+      await this.setStatus(table, sourceId, "unsupported");
       return;
     }
 

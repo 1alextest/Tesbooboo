@@ -2739,6 +2739,413 @@ test.describe("knowledge base (UI)", () => {
     expect(storedDocument(documentId).text).toBe(MEMORY_TEXT);
   });
 
+  test("KBU-70 a governed manual saves typed metadata, submits an exact version and records an owner decision", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: "2026-01-01", to: null }, enforcementRefs: [],
+    };
+    const created = await api.post(kbUrl("/documents"), {
+      data: { title: stamp("Governed manual"), folderId: rootFolderId, documentType: "user_manual", contentText: "Manual body", contentHtml: "<p>Manual body</p>", governedMetadata: metadata },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+
+    const panel = page.getByTestId("governed-document-panel");
+    await expect(panel).toBeVisible();
+    await expect(page.getByTestId("governed-audience")).toHaveValue("internal");
+    await page.getByTestId("governed-audience").selectOption("external");
+    await page.getByTestId("governed-confidentiality").selectOption("confidential");
+    await page.getByTestId("governed-save-metadata").click();
+    await expect(panel).toContainText("Governance metadata saved");
+    const saved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(saved.governedMetadata).toMatchObject({ audience: "external", confidentiality: "confidential" });
+
+    await page.reload();
+    await expect(page.getByTestId("governed-document-panel")).toBeVisible();
+    // Edit the body and submit inside the autosave debounce: Submit must bind the visible body,
+    // not the previously persisted revision.
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" reviewed-now");
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
+    const submittedVersions = await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json();
+    const exactSubmitted = submittedVersions.list.find((version: { snapshotKind: string }) => version.snapshotKind === "submitted");
+    expect((await (await api.get(kbUrl(`/documents/${documentId}/versions/${exactSubmitted.id}`))).json()).contentText)
+      .toContain("reviewed-now");
+    await page.getByTestId("governed-approve").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+
+    const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(approved.status).toBe("approved");
+    expect(approved.reviewedVersionId).toBeTruthy();
+    await page.reload();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
+
+    // A later rejection must be reported as the current decision. The old bug preferred the first
+    // approved snapshot, so this reload showed "approved" and hid the reject action for v2.
+    const revisedResponse = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: { contentText: "Manual body revised", contentHtml: "<p>Manual body revised</p>", expectedRevision: approved.editRevision },
+    });
+    expect(revisedResponse.status(), await revisedResponse.text()).toBe(200);
+    const revised = await revisedResponse.json();
+    // The edit cleared the document's decision binding even though the approved snapshot remains
+    // in history; the panel must not keep reporting that historical approval.
+    await page.reload();
+    await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    await expect(page.getByTestId("governed-decision-superseded")).toBeVisible();
+    await expect(page.getByTestId("governed-submit")).toBeEnabled();
+    const secondSubmission = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: revised.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(secondSubmission.status(), await secondSubmission.text()).toBe(201);
+    const secondVersion = await secondSubmission.json();
+    await page.reload();
+    // The metadata save, approval and edit each add autosave/decision snapshots, so the second
+    // submission's number is not fixed at 2. Assert the number the API actually returned.
+    await expect(page.getByTestId("governed-submitted-version")).toContainText(`Submitted v${secondVersion.versionNumber}`);
+    await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    // QA is checked while the owner still has both actions, so "QA sees nothing" proves the role
+    // gate rather than the already-decided state hiding the buttons from everybody.
+    await expect(page.getByTestId("governed-reject")).toBeVisible();
+    const qaPage = await openDocument(browser, documentId, "qa");
+    await expect(qaPage.getByTestId("governed-approve")).toHaveCount(0);
+    await expect(qaPage.getByTestId("governed-reject")).toHaveCount(0);
+    await page.bringToFront();
+    await page.getByTestId("governed-reject").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("rejected");
+    await expect(page.getByTestId("governed-approve")).toHaveCount(0);
+    const rejected = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(rejected.status).toBe("rejected");
+
+    // Prior exact decisions stay openable read-only even though governed snapshots are never
+    // restorable through the content-history restore path.
+    await page.getByTestId("governed-version-open").first().click();
+    await expect(page.getByTestId("governed-version-detail")).toBeVisible();
+    await qaPage.reload();
+    await expect(qaPage.getByTestId("governed-decision")).toContainText("rejected");
+  });
+
+  test("KBU-71 a governed policy carries enforcement references through submit, decision and history", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "policy", confidentiality: "confidential",
+      distribution: "withheld", sourceAuthority: { kind: "regulatory", label: "Compliance", reference: "REG-2026-01" },
+      effectivity: { from: "2026-01-01", to: "2026-12-31" }, enforcementRefs: ["ACME-POL-1", "ISO-27001"],
+    };
+    const created = await api.post(kbUrl("/documents"), {
+      data: {
+        title: stamp("Governed policy"), folderId: rootFolderId, documentType: "policy",
+        contentText: "Access review policy", contentHtml: "<p>Access review policy</p>", governedMetadata: metadata,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    const panel = page.getByTestId("governed-document-panel");
+
+    await expect(page.getByTestId("governed-enforcement-refs")).toHaveValue("ACME-POL-1, ISO-27001");
+    await page.getByTestId("governed-enforcement-refs").fill("ACME-POL-2, ISO-27001");
+    await page.getByTestId("governed-save-metadata").click();
+    await expect(panel).toContainText("Governance metadata saved");
+    const saved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(saved.governedMetadata).toMatchObject({ subtype: "policy", enforcementRefs: ["ACME-POL-2", "ISO-27001"] });
+
+    await page.reload();
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Enforcement: ACME-POL-2, ISO-27001");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Subtype: policy");
+    await page.getByTestId("governed-approve").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+
+    const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(approved).toMatchObject({ status: "approved", documentType: "policy" });
+    expect(approved.governedMetadata).toMatchObject({ enforcementRefs: ["ACME-POL-2", "ISO-27001"] });
+    const history = await (await api.get(kbUrl(`/documents/${documentId}/history`))).json();
+    expect(history.events.map((event: { changedSummary: string }) => event.changedSummary)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^Submitted exact version /), expect.stringMatching(/^Approved exact version /)]),
+    );
+    await page.getByTestId("governed-version-open").first().click();
+    await expect(page.getByTestId("governed-version-detail")).toContainText("Enforcement: ACME-POL-2, ISO-27001");
+  });
+
+  test("KBU-72 a failed governed body save blocks submission and the retained draft retries", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), {
+      data: {
+        title: stamp("Governed retry"), folderId: rootFolderId, documentType: "user_manual",
+        contentText: "Original body", contentHtml: "<p>Original body</p>",
+        governedMetadata: {
+          schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+          distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+          effectivity: { from: null, to: null }, enforcementRefs: [],
+        },
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+
+    // Install the failure before typing so the 1.2 s autosave cannot race the interception.
+    await page.route(`**/knowledge-base/documents/${documentId}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "E2E forced save failure" }) });
+        return;
+      }
+      await route.continue();
+    });
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" retained-draft");
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("E2E forced save failure");
+    const failedVersions = await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json();
+    expect(failedVersions.list.filter((version: { snapshotKind: string }) => version.snapshotKind === "submitted")).toHaveLength(0);
+    await expect(page.locator(".ProseMirror").first()).toContainText("retained-draft");
+
+    await page.unroute(`**/knowledge-base/documents/${documentId}`);
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    const versions = await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json();
+    const submitted = versions.list.find((version: { snapshotKind: string }) => version.snapshotKind === "submitted");
+    expect((await (await api.get(kbUrl(`/documents/${documentId}/versions/${submitted.id}`))).json()).contentText)
+      .toContain("retained-draft");
+  });
+
+  for (const failureMode of ["before-commit", "after-commit"] as const) {
+    test(`KBU-73 governed Submit retries exact saved revision after ${failureMode} failure without duplicating the save`, async ({ browser }) => {
+      const created = await api.post(kbUrl("/documents"), {
+        data: {
+          title: stamp("Governed uncertain submit"), folderId: rootFolderId, documentType: "user_manual",
+          contentText: "Original body", contentHtml: "<p>Original body</p>",
+          governedMetadata: {
+            schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+            confidentiality: "internal", distribution: "internal",
+            sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+            effectivity: { from: null, to: null }, enforcementRefs: [],
+          },
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      const documentId = (await created.json()).id;
+      const page = await openDocument(browser, documentId);
+      await page.locator(".ProseMirror").first().click();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(" submission-retry");
+
+      let patchCount = 0;
+      await page.route(`**/knowledge-base/documents/${documentId}`, async (route) => {
+        if (route.request().method() === "PATCH") patchCount++;
+        await route.continue();
+      });
+      let firstSubmit = true;
+      await page.route(`**/knowledge-base/documents/${documentId}/submissions`, async (route) => {
+        if (firstSubmit && route.request().method() === "POST") {
+          firstSubmit = false;
+          if (failureMode === "after-commit") {
+            const response = await route.fetch();
+            expect(response.status()).toBe(201);
+          }
+          await route.fulfill({
+            status: 503, contentType: "application/json",
+            body: JSON.stringify({ error: "E2E simulated Submit response failure" }),
+          });
+          return;
+        }
+        await route.continue();
+      });
+
+      await page.getByTestId("governed-submit").click();
+      await expect(page.getByTestId("governed-document-panel")).toContainText("E2E simulated Submit response failure");
+      await expect(page.locator(".ProseMirror").first()).toContainText("submission-retry");
+      const patchesAfterFailure = patchCount;
+      expect(patchesAfterFailure).toBeGreaterThan(0);
+      await page.getByTestId("governed-submit").click();
+      await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+      expect(patchCount).toBe(patchesAfterFailure); // Retry must not write a new edit revision.
+      const versions = (await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).list as
+        Array<{ snapshotKind: string; id: string }>;
+      const submissions = versions.filter((version) => version.snapshotKind === "submitted");
+      expect(submissions).toHaveLength(1);
+      expect((await (await api.get(kbUrl(`/documents/${documentId}/versions/${submissions[0].id}`))).json()).contentText)
+        .toContain("submission-retry");
+    });
+  }
+
+  test("KBU-74 external edit after failed Submit cannot be silently overwritten on retry", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+      confidentiality: "internal", distribution: "internal",
+      sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Governed concurrent edit"), folderId: rootFolderId, documentType: "user_manual",
+      contentText: "Initial body", contentHtml: "<p>Initial body</p>", governedMetadata: metadata,
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" locally-authored");
+    let updates = 0;
+    await page.route(`**/knowledge-base/documents/${documentId}`, async route => {
+      if (route.request().method() === "PATCH") updates++;
+      await route.continue();
+    });
+    let failOnce = true;
+    await page.route(`**/knowledge-base/documents/${documentId}/submissions`, async route => {
+      if (failOnce && route.request().method() === "POST") {
+        failOnce = false;
+        await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "E2E uncertain submit" }) });
+      } else await route.continue();
+    });
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("E2E uncertain submit");
+    const saved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(saved.contentText).toContain("locally-authored");
+    const competing = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: { contentText: "Competing edit", contentHtml: "<p>Competing edit</p>", expectedRevision: saved.editRevision },
+    });
+    expect(competing.status(), await competing.text()).toBe(200);
+    const updatesBeforeRetry = updates;
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText(/changed|revision|conflict/i);
+    expect(updates).toBe(updatesBeforeRetry);
+    await expect(page.locator(".ProseMirror").first()).toContainText("locally-authored");
+    const authoritative = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(authoritative.contentText).toBe("Competing edit");
+    const versions = (await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).list as Array<{ snapshotKind: string }>;
+    expect(versions.filter(v => v.snapshotKind === "submitted")).toHaveLength(0);
+  });
+
+  test("KBU-75 lost Submit response replays exact receipt even after an owner decision", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Decided submission receipt"), folderId: rootFolderId, documentType: "user_manual",
+      contentText: "Decidable body", contentHtml: "<p>Decidable body</p>",
+      governedMetadata: {
+        schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+        confidentiality: "internal", distribution: "internal",
+        sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+        effectivity: { from: null, to: null }, enforcementRefs: [],
+      },
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    let patches = 0;
+    await page.route(`**/knowledge-base/documents/${documentId}`, async route => {
+      if (route.request().method() === "PATCH") patches++;
+      await route.continue();
+    });
+    let intercepted = false;
+    await page.route(`**/knowledge-base/documents/${documentId}/submissions`, async route => {
+      if (!intercepted && route.request().method() === "POST") {
+        intercepted = true;
+        const response = await route.fetch();
+        expect(response.status()).toBe(201);
+        const submitted = await response.json();
+        // A different authorized session can decide before the original author retries.
+        const decision = await api.post(kbUrl(`/documents/${documentId}/governed-approval`), {
+          data: { versionId: submitted.id },
+        });
+        expect(decision.status(), await decision.text()).toBe(201);
+        await route.fulfill({
+          status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "E2E response lost after decision" }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("E2E response lost after decision");
+    const beforeRetry = patches;
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+    expect(patches).toBe(beforeRetry);
+    const state = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(state.status).toBe("approved");
+    const history = (await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).list as
+      Array<{ snapshotKind: string }>;
+    expect(history.filter(version => version.snapshotKind === "submitted")).toHaveLength(1);
+    expect(history.filter(version => version.snapshotKind === "approved")).toHaveLength(1);
+  });
+
+  test("KBU-76 a decision is refused while the editor draft is unsaved and keeps the refusal visible", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const createdResponse = await api.post(kbUrl("/documents"), {
+      data: { title: stamp("Governed decision guard"), folderId: rootFolderId, documentType: "user_manual", contentText: "Decision body", governedMetadata: metadata },
+    });
+    expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    const created = await createdResponse.json();
+    const documentId = created.id;
+    const submitted = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: created.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(submitted.status(), await submitted.text()).toBe(201);
+
+    const page = await openDocument(browser, documentId);
+    await page.route(`**/knowledge-base/documents/${documentId}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "E2E forced autosave failure" }) });
+        return;
+      }
+      await route.continue();
+    });
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" unsaved decision draft");
+    await expect(page.getByText("E2E forced autosave failure")).toBeVisible({ timeout: 5000 });
+    await page.getByTestId("governed-approve").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("Save or discard the current editor draft");
+    expect((await (await api.get(kbUrl(`/documents/${documentId}`))).json()).status).toBe("draft");
+    expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id = ${literal(documentId)} AND snapshot_kind = 'approved';`)).toBe("0");
+  });
+
+  test("KBU-77 governed Submit retains a title edited during the in-flight write", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Governed title race"), folderId: rootFolderId, documentType: "user_manual",
+      contentText: "Original body", contentHtml: "<p>Original body</p>",
+      governedMetadata: {
+        schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+        confidentiality: "internal", distribution: "internal",
+        sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+        effectivity: { from: null, to: null }, enforcementRefs: [],
+      },
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let intercepted = false;
+    await page.route(`**/knowledge-base/documents/${documentId}`, async route => {
+      if (!intercepted && route.request().method() === "PATCH") {
+        intercepted = true;
+        await gate;
+      }
+      await route.continue();
+    });
+    await page.getByTestId("governed-submit").click();
+    try {
+      await expect.poll(() => intercepted).toBe(true);
+      await page.getByPlaceholder("Untitled document").fill("Title edited during Submit");
+    } finally {
+      release?.();
+    }
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    await expect(page.getByPlaceholder("Untitled document")).toHaveValue("Title edited during Submit");
+    await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },

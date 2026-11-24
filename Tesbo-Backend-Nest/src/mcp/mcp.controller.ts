@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { McpService } from "./mcp.service";
 import { MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
 import type { McpClientGrant } from "./mcp-access";
 import { unsupportedMcpProtocol } from "./mcp-protocol-compat";
+import { mcpOAuthDiscoveryPolicy, mcpOAuthProtectedResourceMetadata, mcpOAuthUnauthorizedChallenge } from "./mcp-oauth-discovery";
 
 /**
  * Tesbo MCP — HTTP transport.
@@ -43,6 +44,22 @@ import { unsupportedMcpProtocol } from "./mcp-protocol-compat";
 export class McpController {
   constructor(private readonly mcp: McpService) {}
 
+  /**
+   * Opt-in, read-only *preview* of project-specific RFC 9728 discovery.
+   * No OAuth issuer, client registration, token or MCP capability is activated.
+   * Path is exact and the resource is formed from trusted server configuration.
+   */
+  @Get("/.well-known/oauth-protected-resource/api/projects/:projectId/mcp")
+  protectedResourceMetadata(@Param("projectId") projectId: string) {
+    const policy = mcpOAuthDiscoveryPolicy();
+    if (!policy) throw new NotFoundException({ error: "OAuth discovery is not available" });
+    try {
+      return mcpOAuthProtectedResourceMetadata(policy, projectId);
+    } catch {
+      throw new NotFoundException({ error: "OAuth project resource is not available" });
+    }
+  }
+
   @Post("/api/projects/:projectId/mcp")
   async handle(
     @Req() req: AuthenticatedRequest,
@@ -50,7 +67,15 @@ export class McpController {
     @Param("projectId") projectId: string,
     @Body() body: unknown
   ) {
-    const principal = this.requirePrincipal(req);
+    // Authenticate independently of the URL parameter. Discovery only decorates
+    // an already-denied request; it can never select or bypass authentication.
+    let principal: NonNullable<AuthenticatedRequest["apiToken"]>;
+    try {
+      principal = this.requirePrincipal(req);
+    } catch (error) {
+      this.advertiseProtectedResource(res, projectId);
+      throw error;
+    }
     await this.respond(req, res, body, principal, projectId);
   }
 
@@ -141,10 +166,18 @@ export class McpController {
     res.status(201).json(result);
   }
 
+  private advertiseProtectedResource(res: Response, projectId: string): void {
+    // Preview only, never on the shared alias. Invalid project/configuration
+    // cannot alter the authentication refusal or advertise a misleading URL.
+    try {
+      const policy = mcpOAuthDiscoveryPolicy();
+      if (policy) res.setHeader("WWW-Authenticate", mcpOAuthUnauthorizedChallenge(policy, projectId));
+    } catch { /* refuse without discovery metadata */ }
+  }
+
   private requirePrincipal(req: AuthenticatedRequest) {
     const principal = req.apiToken;
     if (!principal) {
-      // Machine surface: must present a valid API bearer token (not a browser session).
       throw new UnauthorizedException({ error: "MCP requires a valid API token (Authorization: Bearer <token>)" });
     }
     return principal;

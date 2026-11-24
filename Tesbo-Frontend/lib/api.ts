@@ -4431,7 +4431,9 @@ export type KnowledgeDocumentType =
   | "test_data_note"
   | "api_note"
   | "release_note"
-  | "ai_memory";
+  | "ai_memory"
+  | "user_manual"
+  | "policy";
 export type KnowledgeDocumentStatus = "draft" | "published" | "approved" | "rejected";
 
 export interface KnowledgeDocument {
@@ -4444,6 +4446,8 @@ export interface KnowledgeDocument {
   contentHtml: string | null;
   contentText: string | null;
   documentType: KnowledgeDocumentType;
+  /** Typed audience/subtype/confidentiality/distribution/source-authority/effectivity metadata for governed manuals/policies. */
+  governedMetadata?: Record<string, unknown>;
   status: KnowledgeDocumentStatus;
   isAiGenerated: boolean;
   sourceProvider: string | null;
@@ -4623,7 +4627,7 @@ export function listKnowledgeDocuments(
 
 export function createKnowledgeDocument(
   projectId: string,
-  data: { folderId: string; title: string; documentType?: string; contentJson?: unknown; contentHtml?: string; contentText?: string }
+  data: { folderId: string; title: string; documentType?: string; contentJson?: unknown; contentHtml?: string; contentText?: string; governedMetadata?: Record<string, unknown> }
 ): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents`, { method: "POST", body: data });
 }
@@ -4673,7 +4677,7 @@ export function getKnowledgeDocumentHistory(
 export function updateKnowledgeDocument(
   projectId: string,
   documentId: string,
-  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; status: string; expectedRevision: string }>
+  data: Partial<{ title: string; contentJson: unknown; contentHtml: string; contentText: string; documentType: string; governedMetadata: Record<string, unknown>; status: string; expectedRevision: string }>
 ): Promise<KnowledgeDocument> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}`, { method: "PATCH", body: data });
 }
@@ -4714,6 +4718,39 @@ export function listKnowledgeDocumentVersions(
   documentId: string
 ): Promise<{ list: KnowledgeDocumentVersion[]; total: number }> {
   return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/versions`);
+}
+
+/** Submit the exact current revision as an immutable candidate version. */
+export function submitKnowledgeDocument(
+  projectId: string,
+  documentId: string,
+  data: { expectedRevision: string; submissionKey: string }
+): Promise<KnowledgeDocumentVersion> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/submissions`, { method: "POST", body: data });
+}
+
+/** Human exact-version decision for a governed manual/policy. */
+export function approveGovernedKnowledgeDocument(
+  projectId: string,
+  documentId: string,
+  versionId: string
+): Promise<KnowledgeDocument & { decidedVersionId: string; sourceVersionId: string; replayed: boolean }> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/governed-approval`, {
+    method: "POST",
+    body: { versionId },
+  });
+}
+
+export function rejectGovernedKnowledgeDocument(
+  projectId: string,
+  documentId: string,
+  versionId: string,
+  reason?: string
+): Promise<KnowledgeDocument & { decidedVersionId: string; sourceVersionId: string; replayed: boolean }> {
+  return api(`/api/projects/${projectId}/knowledge-base/documents/${documentId}/governed-rejection`, {
+    method: "POST",
+    body: { versionId, ...(reason ? { reason } : {}) },
+  });
 }
 
 export function getKnowledgeDocumentVersion(
