@@ -29,7 +29,7 @@ import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/hum
 import { readMcpAccess } from "../mcp/mcp-access";
 import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, nativeProposalProducerIdentity, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
 import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
-import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, REQUIREMENT_SKILL_TARGETS, type SkillResolution } from "../skills/skills-governance";
+import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, REQUIREMENT_SKILL_TARGETS, reviewedSkillTarget, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
 import { localizeZyraTaskEntry } from "./zyra-task-activity-ru";
@@ -16992,7 +16992,7 @@ export class LegacyService implements OnModuleInit {
       }
       // This is a current active-link readback, not a historical command receipt. Returning an
       // earlier link must still satisfy the same current case approval as an initial activation.
-      const reviewedLinkAuthority = await this.normalizeRequirementLinkAuthority(client, projectId, documentId, requirementVersionId, link, expectedCaseRevision, expectedApprovalRevision, replay);
+      const reviewedLinkAuthority = await this.assertRequirementLinkAuthority(client, projectId, documentId, requirementVersionId, link, expectedCaseRevision, expectedApprovalRevision);
       if (replay) return { link: toCamel(replay), retiredLinkId: String(link.id), replayed: true };
       // One live relation per case/criteria. Retire every active/proposed generation that would
       // collide with the current approved basis, not only the row the caller happened to read.
@@ -17305,24 +17305,18 @@ export class LegacyService implements OnModuleInit {
            ORDER BY CASE WHEN v.id=$2 THEN 0 ELSE 1 END,v.version_number DESC LIMIT 1`,
         [documentId, selected.requirementVersionId]
       )).rows[0];
-      const originatingContext = origin?.snapshot_metadata?.skillContext;
-      const originLinkSkill = normalizeJsonArray(originatingContext?.assignments).find((assignment: Body) =>
-        this.isRequirementLinkSkillTarget(assignment?.target));
-      if (!origin || !originLinkSkill || classifySkillResolution(originatingContext, originatingContext as SkillResolution) !== "current") throw unavailable();
+      const originLinkSkill = reviewedSkillTarget(origin?.snapshot_metadata?.skillContext, REQUIREMENT_SKILL_TARGETS.requirement_case_link);
+      if (!origin || !originLinkSkill) throw unavailable();
       const { linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = selected;
       result.push({ linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys,
-        originatingApprovedVersionId: String(origin.id), originatingLinkSkill: originLinkSkill });
+        originatingApprovedVersionId: String(origin.id), originatingLinkSkill: originLinkSkill,
+        sourceTestcaseRevision: String(link.testcase_revision), sourceTestcaseApprovalRevision: link.testcase_approval_revision == null ? null : String(link.testcase_approval_revision) });
     }
     return result;
   }
 
-  private isRequirementLinkSkillTarget(target: Body | null | undefined): boolean {
-    const required = REQUIREMENT_SKILL_TARGETS.requirement_case_link;
-    return target?.module === required.module && target?.subtype === required.subtype && target?.operation === required.operation;
-  }
-
-  private async normalizeRequirementLinkAuthority(client: PoolClient, projectId: string, documentId: string, requirementVersionId: string,
-    link: Body, expectedCaseRevision: string, expectedApprovalRevision: string, replay: Body | null) {
+  private async assertRequirementLinkAuthority(client: PoolClient, projectId: string, documentId: string, requirementVersionId: string,
+    link: Body, expectedCaseRevision: string, expectedApprovalRevision: string) {
     const approved = (await client.query(
       "SELECT snapshot_metadata FROM knowledge_document_versions WHERE id=$1 AND document_id=$2 AND snapshot_kind='approved'",
       [requirementVersionId, documentId]
@@ -17331,7 +17325,7 @@ export class LegacyService implements OnModuleInit {
     const pinned = metadata?.skillContext;
     const assignments = normalizeJsonArray(pinned?.assignments);
     const missingReview = () => new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "This link has no current reviewed Skill authority. Stage and review a requirement revision with the exact existing link selected." });
-    if (!approved || !assignments.some((entry: Body) => this.isRequirementLinkSkillTarget(entry?.target))) throw missingReview();
+    if (!approved || !reviewedSkillTarget(pinned, REQUIREMENT_SKILL_TARGETS.requirement_case_link)) throw missingReview();
     const sameVersion = String(link.requirement_version_id) === requirementVersionId
       || String(link.requirement_version_id) === String(metadata.sourceVersionId);
     const selected = normalizeJsonArray(metadata.carryForwardLinks).find((entry: Body) =>
@@ -17347,7 +17341,7 @@ export class LegacyService implements OnModuleInit {
     const current = await resolveEffectiveSkills(client, projectId, targets);
     this.assertCurrentSkillContext(pinned, current);
     return { skillContext: current, sourceVersionId: metadata.sourceVersionId, carriedSourceLinkId: selected?.linkId ?? null,
-      replayedLinkId: replay?.id ?? null };
+      originatingApprovedVersionId: selected?.originatingApprovedVersionId ?? requirementVersionId };
   }
 
   private normalizeRequirementBundle(rawOperations: unknown) {
