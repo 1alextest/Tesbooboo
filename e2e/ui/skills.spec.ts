@@ -2480,8 +2480,8 @@ test.describe("governed skills operator journey (UI)", () => {
       const applied = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
       expect(applied).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
       expect(applied.governedMetadata).toMatchObject({ confidentiality: "confidential" });
-      // A text-only candidate must not erase the rich body it did not propose.
-      expect(applied.contentHtml).toBe("<p>Base manual body</p>");
+      // The supplied HTML is applied, and the editor JSON the candidate did not propose is preserved.
+      expect(applied.contentHtml).toBe("<p>Revised manual body</p>");
       expect(applied.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] });
       await expect(panel).toContainText("Producer: api_token");
 
