@@ -10,10 +10,6 @@ import { mcpOAuthDiscoveryPolicy, mcpOAuthResource, type McpOAuthDiscoveryPolicy
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const MAX_CLIENTS = 20;
 
-type ProviderModel = {
-  find(value: string): Promise<any>;
-  new (...args: never[]): never;
-};
 type ProviderInstance = {
   callback(): (req: Request, res: Response, next?: (error?: unknown) => void) => void;
   interactionDetails(req: Request, res: Response): Promise<any>;
@@ -154,6 +150,7 @@ export class McpOAuthServer {
     const oidc = require("oidc-provider") as { Provider?: new (issuer: string, cfg: Record<string, unknown>) => ProviderInstance };
     if (typeof oidc?.Provider !== "function") throw new Error("Pinned OAuth authorization server is unavailable");
     const Provider = oidc.Provider;
+    const db = this.db;
     this.policy = policy;
     try {
       const provider = new Provider(policy.issuer, {
@@ -177,7 +174,7 @@ export class McpOAuthServer {
           url: (_ctx: unknown, interaction: { uid: string }) => `/api/oauth/interactions/${encodeURIComponent(interaction.uid)}`
         },
         async findAccount(_ctx: unknown, accountId: string) {
-          const row = await this.db.query("SELECT id FROM users WHERE id=$1", [accountId]);
+          const row = await db.query("SELECT id FROM users WHERE id=$1", [accountId]);
           if (!row.rows[0]) return undefined;
           return { accountId, async claims() { return { sub: accountId }; } };
         }
