@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type McpClientGrant, type OAuthMcpClientGrant, type ProjectMcpAccess } from "@/lib/api";
+import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type ApiMcpClientGrant, type McpClientGrant, type OAuthMcpClientGrant, type ProjectMcpAccess } from "@/lib/api";
 import { Button, Card, Field, FieldLabel, Input } from "@/components/ui";
 
 function clientGrantIdentity(client: McpClientGrant): string {
@@ -83,7 +83,7 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
     if (!access || saving || loading) return;
     const token = tokens.find(item => item.id === tokenId);
     if (!token || !clientName.trim()) { setError("Choose a current API token and enter the client name."); return; }
-    const scopes: McpClientGrant["scopes"] = [];
+    const scopes: ApiMcpClientGrant["scopes"] = [];
     if (token.scopes.includes("read")) scopes.push("read");
     if (allowWrite && token.scopes.includes("write")) scopes.push("write");
     if (!scopes.length) { setError("Choose a credential with read access, or explicitly allow its write access."); return; }
