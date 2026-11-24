@@ -1304,12 +1304,13 @@ test.describe("knowledge base v2 — folders and documents", () => {
 
     // A manager holds the same owner/manager authority as approval elsewhere.
     const approvedResponse = await asManager.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false });
-    expect(approvedResponse.status(), await approvedResponse.text()).toBe(200);
+    // Nest's default POST status is 201, including an idempotent replay.
+    expect(approvedResponse.status(), await approvedResponse.text()).toBe(201);
     const approved = await approvedResponse.json();
     expect(approved).toMatchObject({ status: "approved", sourceVersionId: submitted.id, replayed: false });
     expect(approved.reviewedVersionId).toBe(approved.decidedVersionId);
     const replay = await asManager.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false });
-    expect(replay.status()).toBe(200);
+    expect(replay.status()).toBe(201);
     expect((await replay.json()).replayed).toBe(true);
 
     // A human session is required: an owner-issued token cannot approve or reject.
