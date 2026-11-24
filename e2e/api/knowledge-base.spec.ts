@@ -1360,7 +1360,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
       });
       for (const [method, suffix, data] of [
         ["delete", `/folders/${governedFolder.id}`, undefined],
-        ["patch", `/folders/${governedFolder.id}`, { parentFolderId: rootFolderId }],
+        ["patch", `/folders/${governedFolder.id}/move`, { parentFolderId: rootFolderId }],
         ["patch", `/folders/${governedFolder.id}/restore`, undefined],
       ] as const) {
         const headers = { Authorization: `Bearer ${token.token}` };
