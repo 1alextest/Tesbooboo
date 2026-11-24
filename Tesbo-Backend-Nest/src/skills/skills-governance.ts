@@ -59,6 +59,11 @@ export function requirementBundleTargets(operations: Array<Record<string, any>>)
   for (const operation of operations) {
     const target = REQUIREMENT_SKILL_TARGETS[String(operation?.opType || "") as keyof typeof REQUIREMENT_SKILL_TARGETS];
     if (target) targets.set(targetKey(target), target);
+    // A selected existing link is a separate reviewed obligation even when no new case is created.
+    if (operation?.opType === "requirement_revision" && Array.isArray(operation.carryForwardLinks) && operation.carryForwardLinks.length > 0) {
+      const link = REQUIREMENT_SKILL_TARGETS.requirement_case_link;
+      targets.set(targetKey(link), link);
+    }
   }
   return [...targets.values()].sort((a, b) => compareText(targetKey(a), targetKey(b)));
 }
