@@ -78,7 +78,7 @@ describe("AuthMiddleware bearer precedence", () => {
       { sessionCookieName: "session" } as unknown as AppConfigService,
       f.otp as unknown as OtpService,
       f.api as unknown as ApiTokenService,
-      oauth as unknown as McpOAuthServer
+      oauth as unknown as InstanceType<typeof McpOAuthServer>
     );
     const req = {
       headers: { authorization: "Bearer verified-oauth-opaque-value" },
@@ -100,7 +100,7 @@ describe("AuthMiddleware bearer precedence", () => {
       { sessionCookieName: "session" } as unknown as AppConfigService,
       f.otp as unknown as OtpService,
       f.api as unknown as ApiTokenService,
-      oauth as unknown as McpOAuthServer
+      oauth as unknown as InstanceType<typeof McpOAuthServer>
     );
     const req = {
       headers: { authorization: "Bearer rejected-oauth" },
