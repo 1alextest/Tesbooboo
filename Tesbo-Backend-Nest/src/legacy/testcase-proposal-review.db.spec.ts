@@ -675,6 +675,89 @@ type Body=Record<string,any>;
       }
     });
 
+    it("uses the normalized owner/manager role for bundle apply at both authorization points",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      const taskIds:string[]=[];
+      let requirementId="";
+      let adminRequirementId="";
+      let appliedCaseId="";
+      let adminCaseId="";
+      let legacyId="";
+      const addMember=async(role:string,label:string)=>{
+        const id=(await admin.query("INSERT INTO users(email,name) VALUES ($1,$2) RETURNING id",[`apply-${label.replaceAll(" ","-")}-${randomUUID()}@tesbo.invalid`,label])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,id]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,$3)",[project,id,role]);
+        return id as string;
+      };
+      try{
+        legacyId=await addMember("test_manager","Legacy apply manager");
+
+        const legacyBundle=await stageBundle(ops()); taskIds.push(legacyBundle.id);
+        const applied=await service().applyRequirementProposal(project,legacyId,legacyBundle.id,
+          {expectedProposalRevision:legacyBundle.proposalRevision},human);
+        expect(applied.replayed).toBe(false);
+        requirementId=applied.receipt.requirement.documentId;
+        appliedCaseId=applied.receipt.testcase.id;
+        expect(applied.receipt.reviewerId).toBe(legacyId);
+
+        // The other documented legacy alias maps to the same manager interpretation.
+        await admin.query("UPDATE project_members SET role='admin' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+        const adminBundle=await stageBundle(ops()); taskIds.push(adminBundle.id);
+        const adminApplied=await service().applyRequirementProposal(project,legacyId,adminBundle.id,
+          {expectedProposalRevision:adminBundle.proposalRevision},human);
+        adminRequirementId=adminApplied.receipt.requirement.documentId;
+        adminCaseId=adminApplied.receipt.testcase.id;
+        expect(adminApplied.replayed).toBe(false);
+        await admin.query("UPDATE project_members SET role='test_manager' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+
+        // Hold the task row after the initial authorization check, change the role, then release:
+        // the post-wait check must re-read and normalize the current role.
+        const waitBundle=await stageBundle(ops()); taskIds.push(waitBundle.id);
+        const blocker=new Client({connectionString:url}); await blocker.connect();
+        let pending:Promise<{v?:Body;e?:Body}>|undefined;
+        try{
+          await blocker.query("BEGIN");
+          await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[waitBundle.id]);
+          pending=service().applyRequirementProposal(project,legacyId,waitBundle.id,
+            {expectedProposalRevision:waitBundle.proposalRevision},human).then(v=>({v}),e=>({e}));
+          // The suite shares a busy disposable PostgreSQL instance; wait longer than the generic
+          // polling helper so we observe the actual post-initial-lock wait, then release promptly.
+          const lockDeadline=Date.now()+30000;
+          let sawWait=false;
+          while(Date.now()<lockDeadline){
+            if(await waitingOn("%ai_generation_requests%FOR UPDATE%")){sawWait=true;break;}
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }
+          expect(sawWait).toBe(true);
+          await admin.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+          await blocker.query("COMMIT");
+          const settled=await Promise.race([
+            pending,
+            new Promise<{e?:Body}>((resolve)=>setTimeout(()=>resolve({e:{status:0,code:"TEST_WAIT_TIMEOUT"}}),30000))
+          ]);
+          expect(settled.e).toMatchObject({status:403});
+        }finally{
+          await blocker.query("ROLLBACK").catch(()=>undefined);
+          if(pending) await Promise.race([pending,new Promise(resolve=>setTimeout(resolve,5000))]);
+          await blocker.end();
+        }
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[waitBundle.id])).rows[0].task_status).toBe("in_review");
+      }finally{
+        for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
+        if(requirementId) await cleanupRequirement(requirementId);
+        if(adminRequirementId) await cleanupRequirement(adminRequirementId);
+        for(const id of [appliedCaseId,adminCaseId].filter(Boolean))
+          await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[id,project]);
+        for(const id of [legacyId].filter(Boolean)){
+          await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,id]);
+          await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,id]);
+          await admin.query("DELETE FROM users WHERE id=$1",[id]);
+        }
+        await cleanupSkills(skillIds);
+      }
+    },120000);
+
     it("refuses activation until the requirement version is approved",async()=>{
       const skills=await publishSkills();
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
