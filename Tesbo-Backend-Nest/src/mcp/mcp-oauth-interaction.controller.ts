@@ -11,7 +11,7 @@ type InteractionDetails = {
   prompt?: { name?: string };
   params?: { client_id?: string; scope?: string; resource?: string | string[] };
 };
-type ConsentBody = { action?: string; csrf?: string };
+type ConsentBody = { action?: string; csrf?: string; review?: string };
 
 function html(value: unknown): string {
   return String(value ?? "").replace(/[&<>"']/g, char =>
@@ -73,7 +73,13 @@ export class McpOAuthInteractionController {
     return { userId, clientId, projectId, resource, clientName: approved.clientName,
       projectName: project.name || project.key || projectId,
       refreshRequested: requestedScopes.includes("offline_access"), openidRequested: requestedScopes.includes("openid"),
-      allowedTools: approved.allowedTools };
+      allowedTools: approved.allowedTools, expiresAt: approved.expiresAt, accessRevision: approved.accessRevision };
+  }
+
+  /** Bind approval to the exact facts displayed, not just the interaction cookie.
+   * Cancellation remains available even if project policy changes. */
+  private reviewedProof(csrf: string, prompt: string, target: Awaited<ReturnType<McpOAuthInteractionController["reviewedTarget"]>>): string {
+    return oauthReferenceFingerprint("oauth:interaction-review", JSON.stringify([csrf, prompt, target]));
   }
 
   @Get("/interactions/:uid")
@@ -89,6 +95,7 @@ export class McpOAuthInteractionController {
     if (prompt !== "login" && prompt !== "consent") throw new ForbiddenException("Unsupported OAuth interaction");
     const target = await this.reviewedTarget(req, details);
     const csrf = this.csrf(req, uid);
+    const review = this.reviewedProof(csrf, prompt, target);
     const login = prompt === "login";
     const label = login ? "Continue as this Tesbo user" : "Authorize read-only access";
     res.setHeader("Cache-Control", "no-store");
@@ -100,10 +107,11 @@ export class McpOAuthInteractionController {
 <p>This action ${login ? "confirms which Tesbo account is signing in. You will still review the permissions before granting access." : "allows a verified OAuth client to READ data only. It cannot create, edit, publish, approve or execute tests."}</p>
 <dl><dt>Account</dt><dd>${html(userId)}</dd><dt>Client</dt><dd>${html(target.clientName)}</dd>
 <dt>Client ID</dt><dd>${html(target.clientId)}</dd><dt>Project</dt><dd>${html(target.projectName)}</dd>
-<dt>Permissions</dt><dd>Read-only QA records and tools: ${html(target.allowedTools ? target.allowedTools.join(", ") : "all permitted read-only tools")}</dd><dt>Reconnect</dt><dd>${target.refreshRequested ? "You are also granting offline read-only access until revoked." : "No offline access was requested; you may need to sign in again."}</dd></dl>
+<dt>Permissions</dt><dd>Read-only QA records and tools: ${html(target.allowedTools ? target.allowedTools.join(", ") : "all permitted read-only tools")}</dd><dt>Owner approval expiry</dt><dd>${html(target.expiresAt ?? "No fixed expiry")}</dd><dt>Reconnect</dt><dd>${target.refreshRequested ? "You are also granting offline read-only access until revoked." : "No offline access was requested; you may need to sign in again."}</dd></dl>
 <p class="muted">The project owner preapproved this client identity. You can cancel. You may later revoke the project grant. Login and consent do not publish test cases or approve Skills.</p>
 <form method="post" action="/api/oauth/interactions/${encodeURIComponent(uid)}">
 <input type="hidden" name="csrf" value="${html(csrf)}">
+<input type="hidden" name="review" value="${html(review)}">
 <button type="submit" name="action" value="approve">${label}</button>
 <button type="submit" name="action" value="deny" class="secondary">Cancel</button>
 </form></main></body></html>`);
@@ -135,14 +143,19 @@ export class McpOAuthInteractionController {
       await provider.interactionFinished(req, res, { error: "access_denied" }, { mergeWithLastSubmission: false });
       return;
     }
+    const prompt = details.prompt?.name;
+    if (prompt !== "login" && prompt !== "consent") throw new ForbiddenException("Unsupported OAuth prompt");
     const target = await this.reviewedTarget(req, details);
-    if (details.prompt?.name === "login") {
+    const review = this.reviewedProof(expected, prompt, target);
+    if (typeof body.review !== "string" || !safeEquals(body.review, review)) {
+      throw new ForbiddenException({ error: "OAuth permissions or review context changed. Reload the consent page and review again." });
+    }
+    if (prompt === "login") {
       await provider.interactionFinished(req, res,
         { login: { accountId: userId, remember: false } },
         { mergeWithLastSubmission: false });
       return;
     }
-    if (details.prompt?.name !== "consent") throw new ForbiddenException({ error: "Unsupported OAuth prompt" });
     const grant = new provider.Grant({ accountId: userId, clientId: target.clientId });
     grant.addResourceScope(target.resource, "mcp:read");
     if (target.openidRequested || target.refreshRequested) {
