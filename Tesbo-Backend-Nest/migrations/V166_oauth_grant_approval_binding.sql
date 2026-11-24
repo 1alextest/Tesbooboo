@@ -1,6 +1,6 @@
 -- OAuth consent provenance is subordinate to the existing revisioned project
 -- externalMcpAccess owner. It grants no authority independently.
--- Revocation removes these bindings atomically with the owner settings write;
+-- Revocation permanently tombstones bindings with the owner settings write;
 -- later approval of the same client id cannot resurrect an earlier token family.
 CREATE TABLE mcp_oauth_grant_approval_bindings (
   grant_fingerprint CHAR(64) PRIMARY KEY CHECK (grant_fingerprint ~ '^[a-f0-9]{64}$'),
