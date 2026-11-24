@@ -1505,6 +1505,7 @@ type Body=Record<string,any>;
           .toMatchObject({taskStatus:"done",replayed:true});
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[targetId])).rows[0].n).toBe(versionsAfter);
 
+        const policySkill=await skillFor("policies","internal","policy_revision"); skillIds.push(policySkill.doc.id);
         const createStaged=await service().stageManagedDocumentProposal(project,user,{
           requestKey:randomUUID(),operation:"create",folderId:folder,
           document:{title:`Agent policy ${randomUUID()}`,contentText:"Policy draft",contentHtml:"<p>Policy draft</p>",
