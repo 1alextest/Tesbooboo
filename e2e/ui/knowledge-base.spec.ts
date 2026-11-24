@@ -3022,6 +3022,59 @@ test.describe("knowledge base (UI)", () => {
     expect(versions.filter(v => v.snapshotKind === "submitted")).toHaveLength(0);
   });
 
+  test("KBU-75 lost Submit response replays exact receipt even after an owner decision", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Decided submission receipt"), folderId: rootFolderId, documentType: "user_manual",
+      contentText: "Decidable body", contentHtml: "<p>Decidable body</p>",
+      governedMetadata: {
+        schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+        confidentiality: "internal", distribution: "internal",
+        sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+        effectivity: { from: null, to: null }, enforcementRefs: [],
+      },
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    let patches = 0;
+    await page.route(`**/knowledge-base/documents/${documentId}`, async route => {
+      if (route.request().method() === "PATCH") patches++;
+      await route.continue();
+    });
+    let intercepted = false;
+    await page.route(`**/knowledge-base/documents/${documentId}/submissions`, async route => {
+      if (!intercepted && route.request().method() === "POST") {
+        intercepted = true;
+        const response = await route.fetch();
+        expect(response.status()).toBe(201);
+        const submitted = await response.json();
+        // A different authorized session can decide before the original author retries.
+        const decision = await api.post(kbUrl(`/documents/${documentId}/governed-approval`), {
+          data: { versionId: submitted.id },
+        });
+        expect(decision.status(), await decision.text()).toBe(201);
+        await route.fulfill({
+          status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "E2E response lost after decision" }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("E2E response lost after decision");
+    const beforeRetry = patches;
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+    expect(patches).toBe(beforeRetry);
+    const state = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(state.status).toBe("approved");
+    const history = (await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).list as
+      Array<{ snapshotKind: string }>;
+    expect(history.filter(version => version.snapshotKind === "submitted")).toHaveLength(1);
+    expect(history.filter(version => version.snapshotKind === "approved")).toHaveLength(1);
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
