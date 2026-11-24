@@ -30,7 +30,7 @@ import { readMcpAccess } from "../mcp/mcp-access";
 import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, nativeProposalProducerIdentity, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
 import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
 import { governedMetadataSnapshot, isGovernedDocumentType, normalizeGovernedMetadata } from "./governed-document-metadata";
-import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, type SkillResolution } from "../skills/skills-governance";
+import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, REQUIREMENT_SKILL_TARGETS, reviewedSkillTarget, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
 import { localizeZyraTaskEntry } from "./zyra-task-activity-ru";
@@ -13793,7 +13793,7 @@ export class LegacyService implements OnModuleInit {
   }
 
   private async writeKnowledgeGovernedVersion(client: PoolClient, doc: Body, uid: string, kind: "submitted" | "approved" | "rejected", expectedRevision: string, actorKind: string, submissionKey: string | null = null,
-    options: { authority?: string; criteria?: unknown; skillContext?: unknown; sourceVersionId?: string; reason?: string } = {}) {
+    options: { authority?: string; criteria?: unknown; skillContext?: unknown; sourceVersionId?: string; reason?: string; carryForwardLinks?: unknown } = {}) {
     const metadata = {
       schemaVersion: 1, actorId: uid, actorKind, expectedRevision,
       contentDigest: knowledgeDocumentContentDigest(doc), documentType: doc.document_type,
@@ -13806,7 +13806,8 @@ export class LegacyService implements OnModuleInit {
       ...(options.criteria === undefined ? {} : { criteria: options.criteria }),
       ...(options.skillContext === undefined ? {} : { skillContext: options.skillContext }),
       ...(options.sourceVersionId === undefined ? {} : { sourceVersionId: options.sourceVersionId }),
-      ...(options.reason === undefined ? {} : { reason: options.reason })
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
+      ...(options.carryForwardLinks === undefined ? {} : { carryForwardLinks: options.carryForwardLinks })
     };
     const governed = isGovernedDocumentType(doc.document_type);
     const summary = governed
@@ -16264,6 +16265,9 @@ export class LegacyService implements OnModuleInit {
         await this.assertRequirementDocumentBase(client, projectId, String(bundle.requirement.documentId), String(bundle.requirement.expectedRevision));
       }
       if (bundle.testcase) await this.assertProposalReferences(client, projectId, bundle.testcase.draft);
+      if (bundle.requirement.carryForwardLinks?.length) {
+        bundle.requirement.carryForwardLinks = await this.reviewRequirementCarryForward(client, projectId, String(bundle.requirement.documentId), bundle.requirement.criteria, bundle.requirement.carryForwardLinks);
+      }
       // Resolve inside the producer's transaction and pin the exact assignment/version basis into
       // the reviewed task. An unassigned or conflicting basis is still stageable, but apply refuses
       // it; a later assignment change cannot silently rewrite what this reviewer saw.
@@ -17202,6 +17206,13 @@ export class LegacyService implements OnModuleInit {
       const requirementOperation = operations.find((entry: Body) => entry.opType === "requirement_revision") as Body;
       const caseOperation = operations.find((entry: Body) => entry.opType === "testcase_create") as Body | undefined;
       const linkOperation = operations.find((entry: Body) => entry.opType === "requirement_case_link") as Body | undefined;
+      if (requirementOperation.carryForwardLinks?.length) {
+        await this.assertRequirementDocumentBase(client, projectId, String(requirementOperation.documentId), String(requirementOperation.expectedRevision));
+        const verified = await this.reviewRequirementCarryForward(client, projectId, String(requirementOperation.documentId), requirementOperation.criteria, requirementOperation.carryForwardLinks);
+        if (proposalDigest(verified) !== proposalDigest(requirementOperation.carryForwardLinks)) {
+          throw new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "The selected link basis changed; stage and review a refreshed requirement revision." });
+        }
+      }
       const requirement = await this.applyRequirementRevision(client, projectId, uid, requirementOperation, currentSkills);
       organizationId = requirement.organizationId;
       let testcase: Body | null = null;
@@ -17283,8 +17294,14 @@ export class LegacyService implements OnModuleInit {
           return { doc, approvedVersionId: String(reviewed.id), links: 0, replayed: true };
         }
       }
-      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
-        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed after this version was submitted; approve the exact submitted version or stage a refreshed revision" });
+      // A metadata-only revision can change selected link authority while leaving document
+      // content bytes unchanged. A superseded submission must not regain that authority.
+      const latestSubmission = (await client.query(
+        "SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1",
+        [documentId]
+      )).rows[0];
+      if (String(latestSubmission?.id) !== versionId || version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed or a newer revision was submitted; review the exact current submission before approving" });
       }
       // Re-resolve the exact basis the reviewed version pinned (requirement, link and case targets),
       // not only the requirement target, or every approval would compare against a smaller digest.
@@ -17295,8 +17312,15 @@ export class LegacyService implements OnModuleInit {
         pinnedTargets.length ? pinnedTargets : requirementBundleTargets([{ opType: "requirement_revision" }]));
       this.assertCurrentSkillContext(version.snapshot_metadata?.skillContext, current);
       const criteria = (doc.content_json as Body | null)?.criteria;
+      const carryForwardLinks = version.snapshot_metadata?.carryForwardLinks;
+      if (Array.isArray(carryForwardLinks) && carryForwardLinks.length) {
+        const verified = await this.reviewRequirementCarryForward(client, projectId, documentId, criteria, carryForwardLinks);
+        if (proposalDigest(verified) !== proposalDigest(carryForwardLinks)) {
+          throw new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "The selected link basis changed after submission; stage a new reviewed requirement revision." });
+        }
+      }
       const approved = await this.writeKnowledgeGovernedVersion(client, doc, uid, "approved", doc.edit_revision, "human_session", null,
-        { authority: "requirement_review", criteria, skillContext: current, sourceVersionId: versionId });
+        { authority: "requirement_review", criteria, skillContext: current, sourceVersionId: versionId, carryForwardLinks });
       const updated = (await client.query(
         `UPDATE knowledge_documents SET status='approved', reviewed_by=$2, reviewed_at=now(), reviewed_version_id=$3, updated_at=now()
           WHERE id=$1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
@@ -17345,6 +17369,8 @@ export class LegacyService implements OnModuleInit {
     const expectedRequirementVersionId = body.expectedRequirementVersionId === undefined
       ? null : String(body.expectedRequirementVersionId).toLowerCase();
     return this.db.transaction(async client => {
+      // Share the same project lock as assignment writers, proposal apply and requirement approval.
+      await this.lockSkillAssignments(client, projectId);
       const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
       // Use the same normalized role policy as requirement approval and the review surface:
       // legacy admin/test_manager values normalize to manager.
@@ -17396,6 +17422,7 @@ export class LegacyService implements OnModuleInit {
       }
       // This is a current active-link readback, not a historical command receipt. Returning an
       // earlier link must still satisfy the same current case approval as an initial activation.
+      const reviewedLinkAuthority = await this.assertRequirementLinkAuthority(client, projectId, documentId, requirementVersionId, link, expectedCaseRevision, expectedApprovalRevision);
       if (replay) return { link: toCamel(replay), retiredLinkId: String(link.id), replayed: true };
       // One live relation per case/criteria. Retire every active/proposed generation that would
       // collide with the current approved basis, not only the row the caller happened to read.
@@ -17412,7 +17439,7 @@ export class LegacyService implements OnModuleInit {
         [projectId, documentId, requirementVersionId, link.criterion_keys, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, uid]
       )).rows[0];
       await this.logProjectActivity(projectId, uid, "requirement_link_reapplied", "requirement_case_link", created.id, doc.id,
-        { retiredLinkId: linkId, requirementVersionId, testcaseId: link.testcase_id, testcaseRevision: expectedCaseRevision, approvalRevision: expectedApprovalRevision }, client);
+        { retiredLinkId: linkId, requirementVersionId, testcaseId: link.testcase_id, testcaseRevision: expectedCaseRevision, approvalRevision: expectedApprovalRevision, reviewedLinkAuthority }, client);
       return { link: toCamel(created), retiredLinkId: String(linkId), replayed: false };
     });
   }
@@ -17488,8 +17515,11 @@ export class LegacyService implements OnModuleInit {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(documentId)) throw new NotFoundException({ error: "Requirement not found" });
     const doc = (await this.db.query(
-      `SELECT id,title,content_json,reviewed_version_id,document_type,source_provider
-         FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false`, [documentId, projectId]
+      `SELECT d.id,d.title,d.content_json,d.reviewed_version_id,d.document_type,d.source_provider,
+              v.snapshot_metadata->'carryForwardLinks' AS approved_carry_forward
+         FROM knowledge_documents d
+         LEFT JOIN knowledge_document_versions v ON v.id=d.reviewed_version_id AND v.document_id=d.id AND v.snapshot_kind='approved'
+        WHERE d.id=$1 AND d.project_id=$2 AND d.is_deleted=false`, [documentId, projectId]
     )).rows[0];
     if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
     const approvedVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : null;
@@ -17497,6 +17527,10 @@ export class LegacyService implements OnModuleInit {
       `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1`, [documentId]
     )).rows[0];
     const latestSubmitted = latestSubmittedRow ? String(latestSubmittedRow.id) : null;
+    // Selected historical links are actionable before rebind, but are not current coverage.
+    // Read only the exact source IDs pinned by the current approved snapshot.
+    const selectedLinkIds = normalizeJsonArray(doc.approved_carry_forward)
+      .map((entry: Body) => String(entry?.linkId || "")).filter(isUuid);
     const rows = (await this.db.query(
       `SELECT l.id, l.criterion_keys, l.testcase_id, l.testcase_revision, l.testcase_approval_revision,
               l.requirement_version_id, testcases.title,
@@ -17522,12 +17556,12 @@ export class LegacyService implements OnModuleInit {
               AND ci.snapshot_approval_revision = l.testcase_approval_revision
          ) attempt ON true
         WHERE l.project_id=$1 AND l.requirement_id=$2 AND l.state='active'
-          AND l.requirement_version_id = ANY($3::uuid[])
+          AND (l.requirement_version_id = ANY($3::uuid[]) OR l.id = ANY($4::uuid[]))
         ORDER BY l.testcase_id,l.id`,
-      [projectId, documentId, [approvedVersionId, latestSubmitted].filter(Boolean)]
+      [projectId, documentId, [approvedVersionId, latestSubmitted].filter(Boolean), selectedLinkIds]
     )).rows;
     const criteria = normalizeJsonArray((doc.content_json as Body | null)?.criteria);
-    const cases = rows.map((row: Body) => {
+    const projectCase = (row: Body) => {
       const onApprovedVersion = approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId;
       const approved = onApprovedVersion && String(row.testcase_revision) === String(row.current_edit_revision)
         && row.testcase_approval_revision !== null && String(row.testcase_approval_revision) === String(row.current_approval_revision)
@@ -17551,7 +17585,12 @@ export class LegacyService implements OnModuleInit {
           ...(executed || !approved ? [] : ["NO_QUALIFYING_ATTEMPT"])
         ]
       };
-    });
+    };
+    const isCurrentBasis = (row: Body) => [approvedVersionId, latestSubmitted].includes(String(row.requirement_version_id));
+    const cases = rows.filter(isCurrentBasis).map(projectCase);
+    const pendingCarryForwardCases = rows.filter((row: Body) => !isCurrentBasis(row) && selectedLinkIds.includes(String(row.id)))
+      .map((row: Body) => ({ ...projectCase(row), authored: false, approved: false, executed: false, passing: false,
+        latestAttempt: null, attemptCount: 0, conflictingAttempts: false, reasons: ["REVIEWED_CARRY_FORWARD_PENDING"] }));
     const summary = criteria.map((criterion: Body) => {
       const key = String(criterion.key);
       const linked = cases.filter(item => item.criterionKeys.includes(key));
@@ -17571,7 +17610,7 @@ export class LegacyService implements OnModuleInit {
         passing: cases.some(item => item.passing),
         mixed: cases.some(item => item.conflictingAttempts)
       },
-      criteria: summary, cases,
+      criteria: summary, cases, pendingCarryForwardCases,
       basis: "Current approved requirement version and its exact active links; historical attempts remain readable and are not deleted."
     };
   }
@@ -17637,7 +17676,7 @@ export class LegacyService implements OnModuleInit {
       await client.query("INSERT INTO requirement_profiles(document_id,project_id,requirement_key,state) VALUES ($1,$2,$3,'active')", [doc.id, projectId, requirementKey]);
     }
     const version = await this.writeKnowledgeGovernedVersion(client, doc, uid, "submitted", String(doc.edit_revision), "human_session", String(operation.operationId),
-      { authority: "requirement_candidate", criteria, skillContext });
+      { authority: "requirement_candidate", criteria, skillContext, carryForwardLinks: operation.carryForwardLinks });
     return { documentId: String(doc.id), versionId: String(version.id), versionNumber: Number(version.version_number),
       editRevision: String(doc.edit_revision), organizationId: String(doc.organization_id) };
   }
@@ -17713,6 +17752,112 @@ export class LegacyService implements OnModuleInit {
     if (row.edit_revision !== expectedRevision) throw new ConflictException({ code: "REQUIREMENT_REVISION_CONFLICT", error: "The requirement changed since this revision was based on it" });
   }
 
+  /** A selection is an intent, never a caller-supplied Skill authorization. */
+  private normalizeRequirementCarryForward(raw: unknown, keys: Set<string>): Body[] {
+    if (!Array.isArray(raw) || raw.length > REQUIREMENT_MAX_CRITERIA) {
+      throw new BadRequestException({ error: "carryForwardLinks must be an array of at most 50 existing link selections" });
+    }
+    const ids = new Set<string>(), groups = new Set<string>();
+    return raw.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new BadRequestException({ error: "Invalid carry-forward selection" });
+      const item = value as Body;
+      const { linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = item;
+      if (Object.keys(item).some(key => !["linkId", "requirementVersionId", "testcaseId", "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"].includes(key))
+        || ![linkId, requirementVersionId, testcaseId].every(id => typeof id === "string" && isUuid(id))
+        || ![testcaseRevision, testcaseApprovalRevision].every(rev => typeof rev === "string" && /^[a-f0-9]{64}$/.test(rev))
+        || !Array.isArray(criterionKeys) || !criterionKeys.length || criterionKeys.length > REQUIREMENT_MAX_CRITERIA
+        || !criterionKeys.every(key => typeof key === "string" && keys.has(key))
+        || new Set(criterionKeys).size !== criterionKeys.length) {
+        throw new BadRequestException({ error: "Select exact existing link, requirement version, approved case revisions and ordered criteria in this revision" });
+      }
+      const group = JSON.stringify([testcaseId.toLowerCase(), criterionKeys]);
+      if (ids.has(linkId.toLowerCase()) || groups.has(group)) throw new BadRequestException({ error: "Duplicate carry-forward link group" });
+      ids.add(linkId.toLowerCase()); groups.add(group);
+      return { linkId: linkId.toLowerCase(), requirementVersionId: requirementVersionId.toLowerCase(), testcaseId: testcaseId.toLowerCase(),
+        testcaseRevision, testcaseApprovalRevision, criterionKeys };
+    });
+  }
+
+  /** Resolve the selected source from persisted native records, locking the current case basis.
+   * Caller holds the existing project Skill lock and the requirement document lock. Reused at
+   * stage, apply and approval; the returned historical basis is part of the exact reviewed payload.
+   */
+  private async reviewRequirementCarryForward(client: PoolClient, projectId: string, documentId: string, criteria: unknown, selections: Body[]): Promise<Body[]> {
+    const keys = new Set(normalizeJsonArray(criteria).map((criterion: Body) => String(criterion.key)));
+    const result: Body[] = [];
+    const unavailable = () => new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "An existing selected link or its approved case basis is unavailable or changed; review a refreshed selection." });
+    for (const selected of selections) {
+      const link = (await client.query(
+        "SELECT * FROM requirement_case_links WHERE id=$1 AND project_id=$2 AND requirement_id=$3 FOR UPDATE",
+        [selected.linkId, projectId, documentId]
+      )).rows[0];
+      if (!link || link.state !== "active" || String(link.requirement_version_id) !== selected.requirementVersionId
+        || String(link.testcase_id) !== selected.testcaseId
+        || JSON.stringify(link.criterion_keys) !== JSON.stringify(selected.criterionKeys)
+        || !selected.criterionKeys.every((key: string) => keys.has(key))) throw unavailable();
+      const lockedCase = (await client.query("SELECT id FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE", [selected.testcaseId, projectId])).rows[0];
+      if (!lockedCase) throw unavailable();
+      const current = (await client.query(
+        `SELECT ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision,
+                ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`,
+        [selected.testcaseId, projectId]
+      )).rows[0];
+      if (!current || !current.approval_current || String(current.edit_revision) !== selected.testcaseRevision
+        || String(current.approval_revision) !== selected.testcaseApprovalRevision) throw unavailable();
+      // The originating reviewed basis must exist, but need not still be effective: a fresh
+      // explicit review may intentionally choose a newly assigned Skill. Never synthesize it.
+      const origin = (await client.query(
+        `SELECT v.id,v.snapshot_metadata FROM knowledge_document_versions v
+           WHERE v.document_id=$1 AND v.snapshot_kind='approved'
+             AND (v.id=$2 OR v.snapshot_metadata->>'sourceVersionId'=$2::text)
+           ORDER BY CASE WHEN v.id=$2 THEN 0 ELSE 1 END,v.version_number DESC LIMIT 1`,
+        [documentId, selected.requirementVersionId]
+      )).rows[0];
+      const originLinkSkill = reviewedSkillTarget(origin?.snapshot_metadata?.skillContext, REQUIREMENT_SKILL_TARGETS.requirement_case_link);
+      if (!origin || !originLinkSkill) throw unavailable();
+      const { linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = selected;
+      const orderedCriteria = (value: unknown) => criterionKeys.map((key: string) => {
+        const criterion = normalizeJsonArray(value).find((item: Body) => item?.key === key);
+        if (!criterion || typeof criterion.text !== "string") throw unavailable();
+        return { key, text: criterion.text, normative: criterion.normative !== false };
+      });
+      result.push({ linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys,
+        originatingApprovedVersionId: String(origin.id), originatingLinkSkill: originLinkSkill,
+        originatingCriteria: orderedCriteria(origin.snapshot_metadata?.criteria), proposedCriteria: orderedCriteria(criteria),
+        sourceTestcaseRevision: String(link.testcase_revision), sourceTestcaseApprovalRevision: link.testcase_approval_revision == null ? null : String(link.testcase_approval_revision) });
+    }
+    return result;
+  }
+
+  private async assertRequirementLinkAuthority(client: PoolClient, projectId: string, documentId: string, requirementVersionId: string,
+    link: Body, expectedCaseRevision: string, expectedApprovalRevision: string) {
+    const approved = (await client.query(
+      "SELECT snapshot_metadata FROM knowledge_document_versions WHERE id=$1 AND document_id=$2 AND snapshot_kind='approved'",
+      [requirementVersionId, documentId]
+    )).rows[0];
+    const metadata = approved?.snapshot_metadata;
+    const pinned = metadata?.skillContext;
+    const assignments = normalizeJsonArray(pinned?.assignments);
+    const missingReview = () => new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "This link has no current reviewed Skill authority. Stage and review a requirement revision with the exact existing link selected." });
+    if (!approved || !reviewedSkillTarget(pinned, REQUIREMENT_SKILL_TARGETS.requirement_case_link)) throw missingReview();
+    const sameVersion = String(link.requirement_version_id) === requirementVersionId
+      || String(link.requirement_version_id) === String(metadata.sourceVersionId);
+    const selected = normalizeJsonArray(metadata.carryForwardLinks).find((entry: Body) =>
+      String(entry.testcaseId) === String(link.testcase_id) && JSON.stringify(entry.criterionKeys) === JSON.stringify(link.criterion_keys));
+    if (selected) {
+      // A carried group stays bounded to the case basis reviewed with this revision. The old
+      // selected row is retired on activation; a replay must still name its exact lineage.
+      if ((!sameVersion && String(selected.linkId) !== String(link.id))
+        || selected.testcaseRevision !== expectedCaseRevision || selected.testcaseApprovalRevision !== expectedApprovalRevision) throw missingReview();
+    } else if (!sameVersion) throw missingReview();
+    const targets = assignments.map((entry: Body) => entry?.target)
+      .filter((target: Body) => target && typeof target.module === "string" && typeof target.subtype === "string" && typeof target.operation === "string");
+    const current = await resolveEffectiveSkills(client, projectId, targets);
+    this.assertCurrentSkillContext(pinned, current);
+    return { skillContext: current, sourceVersionId: metadata.sourceVersionId, carriedSourceLinkId: selected?.linkId ?? null,
+      originatingApprovedVersionId: selected?.originatingApprovedVersionId ?? requirementVersionId };
+  }
+
   private normalizeRequirementBundle(rawOperations: unknown) {
     if (!Array.isArray(rawOperations) || rawOperations.length < 1 || rawOperations.length > 3) {
       throw new BadRequestException({ error: "operations must contain a requirement_revision, optional testcase_create and optional requirement_case_link" });
@@ -17751,7 +17896,11 @@ export class LegacyService implements OnModuleInit {
         const documentId = entry.documentId === undefined ? null : String(entry.documentId);
         const expectedRevision = entry.expectedRevision === undefined ? null : String(entry.expectedRevision);
         if (documentId && !expectedRevision) throw new BadRequestException({ error: "Revising an existing requirement requires expectedRevision" });
-        requirement = { opType, operationId, documentId, expectedRevision, title, description, criteria: normalizedCriteria, reason };
+        const carryForwardLinks = entry.carryForwardLinks === undefined ? undefined
+          : this.normalizeRequirementCarryForward(entry.carryForwardLinks, keys);
+        if (carryForwardLinks?.length && !documentId) throw new BadRequestException({ error: "Carrying existing links requires an existing requirement" });
+        requirement = { opType, operationId, documentId, expectedRevision, title, description, criteria: normalizedCriteria, reason,
+          ...(carryForwardLinks === undefined ? {} : { carryForwardLinks }) };
         return requirement;
       }
       if (opType === "testcase_create") {

@@ -1,4 +1,4 @@
-import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, skillResolutionDigest, skillResolutionMatches, type EffectiveSkill } from "./skills-governance";
+import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, reviewedSkillTarget, resolveEffectiveSkills, skillResolutionDigest, skillResolutionMatches, type EffectiveSkill } from "./skills-governance";
 
 const target = { module: "requirements", subtype: "functional", operation: "requirement_revision" };
 const linkTarget = { ...target, operation: "requirement_case_link" };
@@ -22,6 +22,26 @@ describe("governed skills resolution", () => {
       { module: "requirements", subtype: "functional", operation: "requirement_revision" },
       { module: "test_cases", subtype: "manual", operation: "testcase_create" }
     ]);
+  });
+
+  it("resolves link authority only for explicit nonempty carry-forward selections", () => {
+    expect(requirementBundleTargets([{ opType: "requirement_revision" }])).toEqual([target]);
+    expect(requirementBundleTargets([{ opType: "requirement_revision", carryForwardLinks: [] }])).toEqual([target]);
+    expect(requirementBundleTargets([{ opType: "requirement_revision", carryForwardLinks: [{ linkId: "selected" }] },
+      { opType: "requirement_case_link" }])).toEqual([linkTarget, target]);
+  });
+
+  it("reads only an intact historical pin for the requested target, without resolving a new assignment", async () => {
+    const pinned = await resolveEffectiveSkills(query([row("shared")]), "project", [target, linkTarget]);
+    const link = reviewedSkillTarget(pinned, linkTarget);
+    expect(link).toMatchObject({ assignmentId: "shared", target: linkTarget, skillVersionId: pinned.assignments[0].skillVersionId });
+    expect(reviewedSkillTarget({ ...pinned, digest: "f".repeat(64) }, linkTarget)).toBeNull();
+    const one = await resolveEffectiveSkills(query([row("shared")]), "project", [target]);
+    expect(reviewedSkillTarget(one, linkTarget)).toBeNull();
+    const duplicated = [pinned.assignments[0], pinned.assignments[0]];
+    expect(reviewedSkillTarget({ ...pinned, assignments: duplicated, digest: skillResolutionDigest(duplicated) }, linkTarget)).toBeNull();
+    expect(reviewedSkillTarget({ ...pinned, conflicts: [{ ...linkTarget, matches: 2 }] }, linkTarget)).toBeNull();
+    expect(reviewedSkillTarget({ ...pinned, assignments: [null] }, linkTarget)).toBeNull();
   });
 
   it("returns an unassigned basis when no active assignment matches", async () => {

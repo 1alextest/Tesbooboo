@@ -1658,6 +1658,8 @@ export interface RequirementCoverage {
   readings: { authored: boolean; approved: boolean; executed: boolean; passing: boolean; mixed: boolean };
   criteria: RequirementCoverageCriterion[];
   cases: RequirementCoverageCase[];
+  /** Reviewed historical source links pending explicit activation; not counted as current coverage. */
+  pendingCarryForwardCases?: RequirementCoverageCase[];
   basis: string;
 }
 
