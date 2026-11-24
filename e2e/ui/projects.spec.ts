@@ -485,7 +485,7 @@ test("MCP-P18 OAuth owner preapproval remains read-only, revocable and visibly n
   try {
     const stamp = Date.now().toString().slice(-8);
     const created = await api.post("/api/projects", {
-      data: { name: `MCP OAuth preapproval UI ${stamp}`, key: `MOAU${stamp}` }
+      data: { name: `OAuth MCP UI ${stamp}`, key: `MOAU${stamp}` }
     });
     expect(created.ok(), await created.text()).toBe(true);
     projectId = (await created.json()).id as string;
