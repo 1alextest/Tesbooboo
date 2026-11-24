@@ -425,6 +425,19 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   (`DOCUMENT_PROPOSAL_SKILL_STALE`), token apply refusal, revision-bound reject/replay and the
   no-change receipt.
 
+### 9.2 Merge and deployment record (2026-11-24)
+
+- PR #251 merged into `development` as `0bde8123726f0ad4c3b4e22d5fba4031a336e156`. The last
+  exact-head CI run at `9b1a61d6` passed all 32 required checks (1 expected skip), and fresh
+  Independent and White reviews at that head reported no BLOCKER or HIGH findings.
+- The Railway deployment for `0bde8123` reported success, and production `GET /api/health`
+  returned `{"status":"ok","gitSha":"0bde8123726f0ad4c3b4e22d5fba4031a336e156"}`.
+- Native Tesbo evidence writing remains unavailable in this session: the read-only MCP probe
+  requires a separately operator-approved origin file beside the project token, and no Tesbo MCP
+  tools are exposed to the agent. REQ-WPB-02 and REQ-WPB-03 stay `in_review`/unassigned with
+  execution **UNRUN**; the PR, CI and deployment evidence above is the authoritative record until
+  the native task can be updated.
+
 ---
 
 ## 10. PR #250 carried findings — disposition
