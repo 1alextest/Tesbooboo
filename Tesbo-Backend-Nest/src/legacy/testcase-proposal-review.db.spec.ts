@@ -1529,6 +1529,7 @@ type Body=Record<string,any>;
           .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_PROPOSAL_SKILL_STALE",applicability:"stale"}});
         expect((await admin.query("SELECT content_text FROM knowledge_documents WHERE id=$1",[targetId])).rows[0].content_text).toBe("Revised body");
 
+        const restaffedSkill=await skillFor("user_manuals","internal","manual_revision"); skillIds.push(restaffedSkill.doc.id);
         const changedStaged=await service().stageManagedDocumentProposal(project,user,{
           requestKey:randomUUID(),operation:"update",documentId:targetId,
           expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
