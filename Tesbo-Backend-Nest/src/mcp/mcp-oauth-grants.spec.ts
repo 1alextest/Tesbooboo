@@ -1,4 +1,5 @@
 import { McpService } from "./mcp.service";
+import { randomBytes } from "node:crypto";
 import { LegacyService } from "../legacy/legacy.service";
 import { DatabaseService } from "../database/database.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
@@ -88,9 +89,24 @@ describe("MCP revisioned owner grants — API token and OAuth client identity", 
 });
 
 describe("MCP read-only OAuth authorization uses the existing member/grant/tool owner", () => {
+  const originalKey = process.env.SECRETS_ENCRYPTION_KEY;
+  beforeAll(() => { process.env.SECRETS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64"); });
+  afterAll(() => {
+    if (originalKey === undefined) delete process.env.SECRETS_ENCRYPTION_KEY;
+    else process.env.SECRETS_ENCRYPTION_KEY = originalKey;
+  });
+  const simulatedBinding = () => ({
+    project_id: P, account_id: oauth().userId, client_id: clientId,
+    resource: oauth().resource, approval_revision: settings().revision,
+    settings: { externalMcpAccess: settings() }
+  });
+  const rows = (sql: string) => ({
+    rows: sql.includes("mcp_oauth_grant_approval_bindings")
+      ? [simulatedBinding()] : [{ settings: { externalMcpAccess: settings() } }]
+  });
   const listTestCases = jest.fn().mockResolvedValue([{ id: "case-1", title: "Existing test case" }]);
   const requireProjectAccess = jest.fn().mockResolvedValue({ organization_id: "org-1" });
-  const query = jest.fn().mockImplementation(async () => ({ rows: [{ settings: { externalMcpAccess: settings() } }] }));
+  const query = jest.fn().mockImplementation(async (sql: string) => rows(sql));
   const assertProjectWritable = jest.fn().mockResolvedValue(undefined);
   const service = new McpService(
     { requireProjectAccess, listTestCases } as unknown as LegacyService,
@@ -102,7 +118,7 @@ describe("MCP read-only OAuth authorization uses the existing member/grant/tool 
     listTestCases.mockClear();
     requireProjectAccess.mockClear();
     assertProjectWritable.mockClear();
-    query.mockReset().mockResolvedValue({ rows: [{ settings: { externalMcpAccess: settings() } }] });
+    query.mockReset().mockImplementation(async (sql: string) => rows(sql));
   });
 
   it("discovers only permitted read tools and calls a real existing QA read handler", async () => {
