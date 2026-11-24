@@ -1,7 +1,7 @@
 import { Injectable, ServiceUnavailableException } from "@nestjs/common";
 import type { INestApplication } from "@nestjs/common";
 import type { Request, Response } from "express";
-import type { DatabaseService } from "../database/database.service";
+import { DatabaseService } from "../database/database.service";
 import type { OAuthMachineContext } from "../common/request.types";
 import { createMcpOAuthPostgresAdapter } from "./mcp-oauth-postgres.adapter";
 import { isOAuthMcpGrant, readMcpAccess, type OAuthMcpClientGrant } from "../mcp/mcp-access";
