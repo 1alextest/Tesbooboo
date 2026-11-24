@@ -14,7 +14,7 @@ const meta = {
   "io.modelcontextprotocol/clientCapabilities": {}
 };
 const rpc = (method: string, params: Record<string, unknown> = {}, id: number = 1) =>
-  ({ jsonrpc: "2.0", id, method, params: { ...params, _meta: meta } });
+  ({ jsonrpc: "2.0", id, method, params: { _meta: meta, ...params } });
 
 function incoming(method: string, extras: Record<string, string> = {}): Pick<Request, "header"> {
   const headers: Record<string, string> = {
