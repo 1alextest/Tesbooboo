@@ -144,7 +144,7 @@ export class McpOAuthServer {
     return projectId;
   }
 
-  async approvedClient(clientId: string, resource: string): Promise<OAuthMcpClientGrant | null> {
+  async approvedClient(clientId: string, resource: string): Promise<(OAuthMcpClientGrant & { accessRevision: number }) | null> {
     const projectId = this.projectIdFromResource(resource);
     const row = (await this.db.query(
       "SELECT settings FROM projects WHERE id=$1 AND archived_at IS NULL", [projectId]
@@ -155,7 +155,7 @@ export class McpOAuthServer {
     const grant = access.clients.find(c => isOAuthMcpGrant(c) && c.oauthClientId === clientId);
     if (!grant || !isOAuthMcpGrant(grant) || grant.scopes.length !== 1 ||
         grant.scopes[0] !== "read" || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now()) return null;
-    return grant;
+    return { ...grant, accessRevision: access.revision };
   }
 
   requireActive(): ProviderInstance {
