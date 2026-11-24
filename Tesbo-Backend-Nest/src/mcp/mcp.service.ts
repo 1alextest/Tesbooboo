@@ -299,6 +299,11 @@ export class McpService {
     return !!tool && hasApprovedMcpToolPermission(principal.scopes, grant, tool.requiredScope, name);
   }
 
+  /** Consent uses the existing MCP project access boundary, not a new LegacyService consumer. */
+  async requireOAuthConsentProject(userId: string, projectId: string) {
+    return this.legacy.requireProjectAccess(userId, projectId);
+  }
+
   private async humanProjectManager(req: AuthenticatedRequest, projectId: string) {
     if (!req.userId || req.apiToken || req.oauthAccess) throw new ForbiddenException({ error: "An authenticated human session is required to manage external MCP access" });
     const project = await this.legacy.requireProjectAccess(req.userId, projectId);
