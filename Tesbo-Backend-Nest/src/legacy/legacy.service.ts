@@ -12606,7 +12606,7 @@ export class LegacyService implements OnModuleInit {
       if (nextDocumentType !== locked.rows[0].document_type) {
         await this.assertSkillsInactive(client, projectId, [documentId]);
       }
-      return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0]);
+      return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0], principal);
     });
     await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
     if (contentChanged && !isGovernedDocumentType(row.document_type)) this.enqueueEmbedding(row.organization_id, projectId, "document", documentId, "updated");
@@ -12616,7 +12616,8 @@ export class LegacyService implements OnModuleInit {
     return toCamel(row);
   }
 
-  private async writeKnowledgeDocument(client: PoolClient, projectId: string, uid: string, documentId: string, body: Body, doc: Body) {
+  private async writeKnowledgeDocument(client: PoolClient, projectId: string, uid: string, documentId: string, body: Body,
+    doc: Body, principal?: { kind: "human_session" | "api_token" }) {
     const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision);
     if (expectedRevision && expectedRevision !== doc.edit_revision) {
       throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "This document changed. Reload and review the current version before saving." });
