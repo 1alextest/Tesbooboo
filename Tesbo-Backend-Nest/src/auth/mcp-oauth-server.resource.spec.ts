@@ -1,4 +1,5 @@
 import type { DatabaseService } from "../database/database.service";
+import { randomBytes } from "node:crypto";
 import { McpOAuthServer } from "./mcp-oauth-server";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
@@ -13,6 +14,12 @@ const RESOURCE = `https://tesbo.example/api/projects/${PROJECT}/mcp`;
  * Synthetic opaque AS objects only; no real user/token or production project.
  */
 describe("OAuth access-token read-only resource and live revocation", () => {
+  const existingKey = process.env.SECRETS_ENCRYPTION_KEY;
+  beforeAll(() => { process.env.SECRETS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64"); });
+  afterAll(() => {
+    if (existingKey === undefined) delete process.env.SECRETS_ENCRYPTION_KEY;
+    else process.env.SECRETS_ENCRYPTION_KEY = existingKey;
+  });
   function fixture() {
     const settings: {
       externalMcpAccess: {
@@ -40,9 +47,17 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       getResourceScope: jest.fn((resource: string): string =>
         resource === RESOURCE ? "mcp:read" : "")
     };
+    const binding = {
+      project_id: PROJECT, account_id: "tesbo-member", client_id: CLIENT,
+      resource: RESOURCE, approval_revision: 1
+    };
     const findAccess = jest.fn(async () => token);
     const findGrant = jest.fn(async () => grant);
-    const query = jest.fn(async () => ({ rows: [{ settings }] }));
+    const query = jest.fn(async (sql: string) => ({
+      rows: String(sql).includes("mcp_oauth_grant_approval_bindings")
+        ? [{ ...binding, settings }]
+        : [{ settings }]
+    }));
     const svc = new McpOAuthServer({ query } as unknown as DatabaseService);
     // Inject test-only *verified-model* responses. Never enable a real
     // provider, mount an endpoint, or modify production OAuth configuration.
@@ -50,7 +65,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       provider: { AccessToken: { find: findAccess }, Grant: { find: findGrant } },
       policy: { issuer: ISSUER, resourceOrigin: "https://tesbo.example", scopes: ["mcp:read"] }
     });
-    return { svc, token, grant, settings, findAccess, findGrant, query };
+    return { svc, token, grant, binding, settings, findAccess, findGrant, query };
   }
 
   it("authenticates a current exact-audience token only as an OAuth machine principal", async () => {
@@ -106,6 +121,24 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     f.settings.externalMcpAccess.clients = [{ ...priorApproval }];
     f.settings.externalMcpAccess.revision++;
     expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
+
+    // A separate fresh human consent is bound to the NEW approval revision.
+    f.token.grantId = "new-consent-grant-2";
+    f.binding.approval_revision = f.settings.externalMcpAccess.revision;
+    expect(await f.svc.verifyAccessToken("new-opaque-credential")).not.toBeNull();
+  });
+
+  it("rejects a grant bound to a different account, resource or approval epoch", async () => {
+    for (const mismatch of [
+      { account_id: "other-subject" },
+      { client_id: "https://unapproved.example/client.json" },
+      { resource: "https://tesbo.example/api/projects/22222222-2222-4222-8222-222222222222/mcp" },
+      { approval_revision: 0 }
+    ]) {
+      const f = fixture();
+      Object.assign(f.binding, mismatch);
+      expect(await f.svc.verifyAccessToken("old-test-token")).toBeNull();
+    }
   });
 
   it("refuses wrong audience, wrong issuer origin and a different project resource", async () => {
