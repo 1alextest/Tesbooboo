@@ -541,7 +541,7 @@ test("bounded native inventory reports only counts, never case identities or sen
   const result = summarizeNativePilotCases(cases, suites);
   assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, reportedCaseTotal: 3, suites: 1,
     statusCounts: { Draft: 1, "In Review": 0, Approved: 1, Deprecated: 0, Archived: 0, Other: 1 },
-    fullCaseTotalVerified: true, recordMutation: false });
+    fullCaseTotalVerified: true, writeToolCalls: 0, nativeRecordMutation: "not_assessed" });
   for(const privateValue of ["private-case-A", "private-suite", "Sensitive", "Hidden", "synthetic-secret"]) {
     assert.ok(!JSON.stringify(result).includes(privateValue));
   }
@@ -569,7 +569,8 @@ test("native pilot invokes only two read tools and never discloses case identiti
   assert.deepEqual(run.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),["list_testcases","list_suites"]);
   assert.match(run.stdout,/"sampledCases":2/);
   assert.match(run.stdout,/"suites":1/);
-  assert.match(run.stdout,/"recordMutation":false/);
+  assert.match(run.stdout,/"writeToolCalls":0/);
+  assert.match(run.stdout,/"nativeRecordMutation":"not_assessed"/);
   for(const secret of ["private-case-1","private-suite","confidential","Unreleased","synthetic-file-token"]){
     assert.ok(!run.stdout.includes(secret));assert.ok(!run.stderr.includes(secret));
   }

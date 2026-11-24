@@ -135,6 +135,8 @@ It reports the native paginated `rows` sample and `total` count as aggregates wi
 complete-versus-sampled flag, **never case names, IDs, source links, test data,
 credential material, or raw server errors**. No candidate is staged or official case
 published; it is not an execution or a claim of complete regression coverage.
+The report establishes **zero MCP write-tool calls by this checker**, not an independent
+proof that the underlying database was unchanged; native mutation is `not_assessed`.
 
 The pilot accepts the **two authorized native read tools only**; it never demands
 write-scoped model, graph or proposal tools merely to pass discovery. The normal

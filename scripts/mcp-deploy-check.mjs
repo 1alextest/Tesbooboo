@@ -82,7 +82,7 @@ export function summarizeNativePilotCases(casesResponse, suitesResponse) {
   }
   return { sampledCases: cases.length, sampleLimit: 25, reportedCaseTotal: reportedTotal,
     suites: suites.length, statusCounts, fullCaseTotalVerified: reportedTotal === cases.length,
-    recordMutation: false };
+    writeToolCalls: 0, nativeRecordMutation: "not_assessed" };
 }
 
 const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
