@@ -48,7 +48,7 @@ function fixture() {
     }),
     approvedClient: jest.fn().mockResolvedValue({
       kind: "oauth_client", clientName: "QA <Reviewer> & Co",
-      scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null
+      scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null, accessRevision: 1
     })
   };
   const mcp = {
@@ -72,7 +72,9 @@ function fixture() {
     const output = String(res.send.mock.calls.at(-1)?.[0] ?? "");
     const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(output)?.[1];
     expect(csrf).toBeDefined();
-    return { csrf: csrf!, output };
+    const review = /name="review" value="([a-f0-9]{64})"/.exec(output)?.[1];
+    expect(review).toBeDefined();
+    return { csrf: csrf!, review: review!, output };
   };
   return {
     ctrl, req, res, oauth, provider, mcp, grantCalls, addResourceScope,
@@ -147,9 +149,9 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
 
   it("refuses cross-origin, invalid CSRF and invalid action before any grant is created", async () => {
     const f = fixture();
-    const { csrf } = await f.tokenFromPage();
+    const { csrf, review } = await f.tokenFromPage();
     const submit = (action: string, token: string) =>
-      f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action, csrf: token });
+      f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action, csrf: token, review });
     f.req.get = jest.fn(() => "https://evil.example") as unknown as typeof f.req.get;
     await expect(submit("approve", csrf)).rejects.toBeInstanceOf(ForbiddenException);
     f.req.get = jest.fn(() => "https://tesbo.example") as unknown as typeof f.req.get;
@@ -162,8 +164,8 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
 
   it("allows explicit cancellation without creating a consent grant", async () => {
     const f = fixture();
-    const { csrf } = await f.tokenFromPage();
-    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "deny", csrf });
+    const { csrf, review } = await f.tokenFromPage();
+    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "deny", csrf, review });
     expect(f.provider.interactionFinished).toHaveBeenCalledWith(f.req, f.res,
       { error: "access_denied" }, { mergeWithLastSubmission: false });
     expect(f.grantCalls).toHaveLength(0);
@@ -173,9 +175,9 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
   it("continues the existing human login, but does not grant tools or create OAuth consent", async () => {
     const f = fixture();
     f.details.prompt.name = "login";
-    const { csrf, output } = await f.tokenFromPage();
+    const { csrf, review, output } = await f.tokenFromPage();
     expect(output).toContain("You will still review the permissions");
-    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "approve", csrf });
+    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "approve", csrf, review });
     expect(f.provider.interactionFinished).toHaveBeenCalledWith(f.req, f.res,
       { login: { accountId: USER, remember: false } }, { mergeWithLastSubmission: false });
     expect(f.grantCalls).toHaveLength(0);
@@ -183,8 +185,8 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
 
   it("commits only the approved project resource and mcp:read in an explicit consent grant", async () => {
     const f = fixture();
-    const { csrf } = await f.tokenFromPage();
-    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "approve", csrf });
+    const { csrf, review } = await f.tokenFromPage();
+    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "approve", csrf, review });
     expect(f.grantCalls).toEqual([{ accountId: USER, clientId: CLIENT }]);
     expect(f.addResourceScope).toHaveBeenCalledTimes(1);
     expect(f.addResourceScope).toHaveBeenCalledWith(RESOURCE, "mcp:read");
@@ -194,14 +196,39 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
       { consent: { grantId: "retained-consent-grant" } }, { mergeWithLastSubmission: false });
   });
 
+  it("refuses an approval when the reviewed owner permissions or revision changed", async () => {
+    for (const change of [{ allowedTools: null }, { accessRevision: 2 }, { expiresAt: "2099-01-01T00:00:00.000Z" }, { clientName: "Changed client" }]) {
+      const f = fixture();
+      const { csrf, review } = await f.tokenFromPage();
+      const original = await f.oauth.approvedClient();
+      f.oauth.approvedClient.mockResolvedValue({ ...original, ...change });
+      await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+        { action: "approve", csrf, review })).rejects.toBeInstanceOf(ForbiddenException);
+      expect(f.save).not.toHaveBeenCalled();
+      expect(f.provider.interactionFinished).not.toHaveBeenCalled();
+    }
+  });
+
+  it("requires a review proof for approval but permits cancellation after revocation", async () => {
+    const f = fixture();
+    const { csrf } = await f.tokenFromPage();
+    await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+      { action: "approve", csrf })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.save).not.toHaveBeenCalled();
+    f.oauth.approvedClient.mockResolvedValue(null);
+    await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID, { action: "deny", csrf });
+    expect(f.provider.interactionFinished).toHaveBeenCalledWith(f.req, f.res,
+      { error: "access_denied" }, { mergeWithLastSubmission: false });
+  });
+
   it("refuses a revoked owner grant or removed project membership at submission time", async () => {
     for (const revoke of ["grant", "membership"]) {
       const f = fixture();
-      const { csrf } = await f.tokenFromPage();
+      const { csrf, review } = await f.tokenFromPage();
       if (revoke === "grant") f.oauth.approvedClient.mockResolvedValue(null);
       else f.mcp.requireOAuthConsentProject.mockRejectedValue(new ForbiddenException());
       await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
-        { action: "approve", csrf })).rejects.toThrow();
+        { action: "approve", csrf, review })).rejects.toThrow();
       expect(f.save).not.toHaveBeenCalled();
       expect(f.provider.interactionFinished).not.toHaveBeenCalled();
     }
