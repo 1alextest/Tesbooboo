@@ -443,6 +443,43 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
       run: { id: governedRun.cycleId }
     });
     expect(governedRun.manifest.cases[0]).toMatchObject({ testcaseId: caseId, sources: ["linked"] });
+
+    // Finish the real Tesbo Run read/report loop through the existing MCP tools, not a
+    // synthetic DB insertion or a test-case "Passed" shortcut. The fixture deliberately
+    // records Blocked: no external application was executed in this isolated QA test.
+    const admitted = await call("list_executions", { cycleId: governedRun.cycleId });
+    expect(admitted.executions).toHaveLength(1);
+    const admittedExecution = admitted.executions[0] as { id: string; testcaseId: string; status: string };
+    expect(admittedExecution).toMatchObject({ testcaseId: caseId, status: "Untested" });
+    const approvedRunBasis = scalar(`SELECT snapshot_approval_revision FROM cycle_items
+      WHERE cycle_id = ${literal(governedRun.cycleId)} AND testcase_id = ${literal(caseId!)};`);
+    expect(approvedRunBasis).toBe(approvedCase.approvalRevision);
+
+    const fixtureObservation = "CI-only blocked observation; no external target executed, no Passed result claimed";
+    const reported = await call("record_execution_result", {
+      executionId: admittedExecution.id, status: "Blocked", actualResult: fixtureObservation
+    });
+    expect(reported).toMatchObject({
+      ok: true, executionId: admittedExecution.id, status: "Blocked"
+    });
+    const persistedObservation = await call("get_execution", { executionId: admittedExecution.id });
+    expect(persistedObservation).toMatchObject({
+      id: admittedExecution.id, testcaseId: caseId, status: "Blocked",
+      actualResult: fixtureObservation
+    });
+    const allObservations = await call("list_executions", { cycleId: governedRun.cycleId });
+    expect(allObservations.executions).toHaveLength(1);
+    expect(allObservations.executions[0]).toMatchObject({
+      id: admittedExecution.id, testcaseId: caseId, status: "Blocked"
+    });
+    // Reading/recording a genuine native result cannot rewrite the approved definition
+    // snapshot or silently change the manual QA case into a new version.
+    expect(scalar(`SELECT snapshot_approval_revision FROM cycle_items
+      WHERE cycle_id = ${literal(governedRun.cycleId)} AND testcase_id = ${literal(caseId!)};`))
+      .toBe(approvedRunBasis);
+    expect((await call("get_testcase", { testcaseId: caseId })).approvalRevision)
+      .toBe(approvedCase.approvalRevision);
+
     // Remove the native run chain so the lifecycle's "no new run or execution" proof still holds.
     exec(
       `DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = ${literal(governedRun.cycleId)});`
