@@ -295,7 +295,11 @@ export default function KnowledgeDocumentPage() {
       pendingAutosave.current = null;
     }
     let versionNumber: number | null = null;
+    let submittedLocalRevision = editRevision.current;
     const saved = await writer.restore(async () => {
+      // Capture the local revision at the same time as the editor payload. Edits made
+      // during this asynchronous write must remain visibly unsaved on completion.
+      submittedLocalRevision = editRevision.current;
       const payload = latestContent.current;
       // Capture editor state when this queued operation begins, after previous writes drain.
       const editorSnapshot = JSON.stringify({
@@ -351,11 +355,17 @@ export default function KnowledgeDocumentPage() {
     });
     if (isMountedRef.current && writerRef.current === writer) {
       setDoc(saved);
-      setTitle(saved.title);
-      latestTitle.current = saved.title;
-      lastValidTitle.current = saved.title;
-      setSaveStatus("saved");
-      setError(null);
+      if (submittedLocalRevision !== editRevision.current) {
+        // Do not replace a title/body edited after our snapshot or claim it was saved.
+        // The existing editor debounce/manual Save owns that newer local revision.
+        setSaveStatus("unsaved");
+      } else {
+        setTitle(saved.title);
+        latestTitle.current = saved.title;
+        lastValidTitle.current = saved.title;
+        setSaveStatus("saved");
+        setError(null);
+      }
     }
     return { saved, versionNumber };
   }
