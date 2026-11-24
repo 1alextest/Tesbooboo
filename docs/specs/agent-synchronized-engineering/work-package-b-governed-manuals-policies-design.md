@@ -154,7 +154,10 @@ and preservation of visible content. KBU-74 forces a competing external edit aft
 first POST fails and asserts that retry neither overwrites the competing revision nor
 manufactures a submitted snapshot, while retaining the visible local draft. KBU-75 verifies that an exact-key retry
 returns the existing immutable submission receipt even when an authorized owner has
-already approved that version; retry must not rewrite or re-open the approved document. Official Tesbo execution remains
+already approved that version; retry must not rewrite or re-open the approved document.
+KBU-77 verifies a separate local-edit race: a title edited while the governed save/submit
+request is in flight must remain visible and unsaved rather than being overwritten by
+the older acknowledged response. This matches ordinary editor save revision fencing. Official Tesbo execution remains
 distinct from the Playwright CI result.
 
 ### 3.5 Mutation permission matrix
