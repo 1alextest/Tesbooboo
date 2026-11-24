@@ -910,6 +910,69 @@ type Body=Record<string,any>;
       }
     });
 
+    it.each(["activation","revocation"])("serializes link activation when %s obtains the Skill lock first",async winner=>{
+      const skills=await publishSkills();
+      const activationService=service(),revocationService=service();
+      let requirementId="",caseId="",taskId="",checkpoint=false,secondFinished=false,release=()=>{};
+      const gate=new Promise<void>(resolve=>{release=resolve;});
+      let activation:Promise<Body>|undefined,revocation:Promise<Body>|undefined,barrier:jest.SpyInstance|undefined;
+      try{
+        const staged=await stageBundle(ops());taskId=staged.id;
+        const applied=await service().applyRequirementProposal(project,user,taskId,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;caseId=applied.receipt.testcase.id;
+        const approval=await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const before=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:before.edit_revision,expectedApprovalRevision:before.approval_revision},human);
+        const current=await revisionsOf(caseId);
+        const request={expectedCaseRevision:current.edit_revision,expectedApprovalRevision:current.approval_revision,
+          expectedRequirementVersionId:approval.approvedVersionId};
+        const sourceLinkId=String(applied.receipt.link.id);
+        const linkAssignments=(await admin.query(
+          "SELECT id FROM skill_assignments WHERE project_id=$1 AND module='requirements' AND subtype='functional' AND operation='requirement_case_link' AND status='active'",[project])).rows;
+        expect(linkAssignments).toHaveLength(1);
+        const assignmentId=String(linkAssignments[0].id);
+        const internals=(winner==="activation"?activationService:revocationService) as unknown as Body;
+        const method=winner==="activation"?"assertRequirementLinkAuthority":"lockSkillAssignments";
+        const original=internals[method].bind(internals);
+        barrier=jest.spyOn(internals,method).mockImplementation(async(...args:unknown[])=>{
+          const result=await original(...args);checkpoint=true;await gate;return result;
+        });
+        const activate=()=>activationService.reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human)
+          .then(value=>({value}),error=>({error})).finally(()=>{if(winner==="revocation")secondFinished=true;});
+        const revoke=()=>revocationService.deactivateSkillAssignment(project,user,assignmentId,{},human)
+          .then(value=>({value}),error=>({error})).finally(()=>{if(winner==="activation")secondFinished=true;});
+        if(winner==="activation")activation=activate();else revocation=revoke();
+        expect(await waitUntil(()=>checkpoint)).toBe(true);
+        const baseline=await bundleWrites(taskId);
+        if(winner==="activation")revocation=revoke();else activation=activate();
+        expect(await waitUntil(()=>waitingOn("%pg_advisory_xact_lock%"))).toBe(true);
+        expect(secondFinished).toBe(false);
+        expect(await bundleWrites(taskId)).toEqual(baseline);
+        release();
+        const activated=await activation!,revoked=await revocation!;
+        expect(revoked.error).toBeUndefined();
+        expect(revoked.value).toMatchObject({assignment:{status:"inactive"},replayed:false});
+        const settled=await bundleWrites(taskId);
+        if(winner==="activation"){
+          expect(activated.error).toBeUndefined();
+          expect(activated.value).toMatchObject({replayed:false,link:{requirementVersionId:approval.approvedVersionId}});
+          expect(settled.links.filter(row=>row.id===activated.value.link.id)).toHaveLength(1);
+        }else{
+          expect(activated.error).toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+          for(const key of ["documents","versions","profiles","links","cases","approvals"] as const)expect(settled[key]).toEqual(baseline[key]);
+        }
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+        expect(await bundleWrites(taskId)).toEqual(settled);
+      }finally{
+        release();if(activation)await activation;if(revocation)await revocation;barrier?.mockRestore();
+        if(requirementId)await cleanupRequirement(requirementId);
+        if(taskId)await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[taskId,project]);
+        if(caseId)await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
+        await cleanupSkills([skills.requirement.doc.id,skills.cases.doc.id]);
+      }
+    },15000);
+
     it("replays activation only against the current approved requirement version",async()=>{
       const skills=await publishSkills();
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
@@ -980,11 +1043,17 @@ type Body=Record<string,any>;
           expectedRevision:await revision(requirementId),title:`Explicit rebind ${randomUUID()}`,
           criteria:[{key:"AC-1",text:"Reviewed updated obligation"},{key:"AC-2",text:"Neighbor remains distinct"}],carryForwardLinks:[selection]};
         // Malformed/foreign/duplicate selections cannot publish a task.
-        for(const carryForwardLinks of [[{...selection,originatingLinkSkill:{assignmentId:randomUUID()}}],
-          [selection,selection],[{...selection,linkId:randomUUID()}],[{...selection,criterionKeys:["AC-2"]}]]){
+        for(const {carryForwardLinks,status} of [
+          {carryForwardLinks:[{...selection,originatingLinkSkill:{assignmentId:randomUUID()}}],status:400},
+          {carryForwardLinks:[selection,selection],status:400},
+          {carryForwardLinks:[{...selection,linkId:randomUUID()}],status:409},
+          {carryForwardLinks:[{...selection,criterionKeys:["AC-2"]}],status:409}
+        ]){
           const beforeInvalid=await bundleWrites(stagedV2.id);
-          await expect(stageBundle([{...revisionOperation,carryForwardLinks}])).rejects.toMatchObject({status:expect.any(Number)});
+          const beforeTasks=(await admin.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 ORDER BY id",[project])).rows;
+          await expect(stageBundle([{...revisionOperation,carryForwardLinks}])).rejects.toMatchObject({status});
           expect(await bundleWrites(stagedV2.id)).toEqual(beforeInvalid);
+          expect((await admin.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 ORDER BY id",[project])).rows).toEqual(beforeTasks);
         }
         const v3=await stageBundle([revisionOperation]);taskIds.push(v3.id);
         expect(v3.skillContext.assignments.map((a:Body)=>a.target.operation).sort()).toEqual(["requirement_case_link","requirement_revision"]);
