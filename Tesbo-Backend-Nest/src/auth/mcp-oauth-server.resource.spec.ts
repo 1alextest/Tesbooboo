@@ -53,7 +53,8 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       resource: RESOURCE, approval_revision: 1, revoked_at: null as string | null
     };
     const bindings = new Map([[oauthReferenceFingerprint("oauth:Grant:id", "oidc-grant-1"), binding]]);
-    const findAccess = jest.fn(async () => token);
+    const findAccess = jest.fn(async (raw: string) => raw === "new-opaque-credential"
+      ? { ...token, grantId: "new-consent-grant-2" } : token);
     const findGrant = jest.fn(async () => grant);
     const query = jest.fn(async (sql: string, args?: unknown[]) => {
       if (String(sql).includes("mcp_oauth_grant_approval_bindings")) {
@@ -128,8 +129,8 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
 
     // A separate fresh human consent is bound to the NEW approval revision.
-    f.token.grantId = "new-consent-grant-2";
-    f.bindings.set(oauthReferenceFingerprint("oauth:Grant:id", f.token.grantId), {
+    const freshGrantId = "new-consent-grant-2";
+    f.bindings.set(oauthReferenceFingerprint("oauth:Grant:id", freshGrantId), {
       ...f.binding, revoked_at: null, approval_revision: f.settings.externalMcpAccess.revision
     });
     expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
