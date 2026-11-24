@@ -150,8 +150,9 @@ Keep pending ambiguity on network/readback failure; never manufacture success.
 Regression coverage: KBU-72 proves pre-UPDATE failure retains the editor draft without a
 submission. KBU-73 runs both pre-POST-commit failure and post-commit response loss,
 verifies same-key replay, no duplicate editor UPDATE, one immutable submitted version,
-and preservation of visible content. A conflicting external edit must surface as a
-conflict rather than overwrite the competing revision. Official Tesbo execution remains
+and preservation of visible content. KBU-74 forces a competing external edit after the
+first POST fails and asserts that retry neither overwrites the competing revision nor
+manufactures a submitted snapshot, while retaining the visible local draft. Official Tesbo execution remains
 distinct from the Playwright CI result.
 
 ### 3.5 Mutation permission matrix
