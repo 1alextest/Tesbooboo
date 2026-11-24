@@ -34,6 +34,7 @@ type ProviderInstance = {
   Grant: {
     new (input: { accountId: string; clientId: string }): {
       addResourceScope(resource: string, scope: string): void;
+      addOIDCScope(scope: string): void;
       save(): Promise<string>;
     };
     find(value: string): Promise<any>;
