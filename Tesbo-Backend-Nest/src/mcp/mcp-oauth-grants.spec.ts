@@ -65,7 +65,8 @@ describe("MCP revisioned owner grants — API token and OAuth client identity", 
     { ...grant, oauthClientId: "https://user:pass@chatgpt.example/client.json" },
     { ...grant, oauthClientId: "https://chatgpt.example/client.json#fragment" },
     { ...grant, oauthClientId: "https://chatgpt.example/client.json?next=admin" },
-    { ...grant, oauthClientId: "https://localhost/client.json" }
+    { ...grant, oauthClientId: "https://localhost/client.json" },
+    { ...grant, oauthClientId: "https://localhost:8443/client.json" }
   ])("refuses invalid, ambiguous or write-enabled OAuth client approvals: %j", candidate => {
     expect(() => validateMcpAccess({ enabled: true, revision: 0, clients: [candidate] })).toThrow();
   });
