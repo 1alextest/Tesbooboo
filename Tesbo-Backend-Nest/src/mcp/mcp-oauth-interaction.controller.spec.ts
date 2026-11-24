@@ -42,6 +42,8 @@ function fixture() {
   const oauth = {
     enabled: true, issuer: "https://tesbo.example/oauth",
     requireActive: jest.fn().mockReturnValue(provider),
+    bindIssuedGrant: jest.fn().mockResolvedValue(undefined),
+    discardUnboundGrant: jest.fn().mockResolvedValue(undefined),
     projectIdFromResource: jest.fn((value: string) => {
       if (value !== RESOURCE) throw new Error("invalid project resource");
       return PROJECT;
@@ -192,8 +194,22 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     expect(f.addResourceScope).toHaveBeenCalledWith(RESOURCE, "mcp:read");
     expect(f.addOIDCScope).toHaveBeenCalledWith("openid offline_access");
     expect(f.save).toHaveBeenCalledTimes(1);
+    expect(f.oauth.bindIssuedGrant).toHaveBeenCalledWith("retained-consent-grant", {
+      accountId: USER, clientId: CLIENT, projectId: PROJECT,
+      resource: RESOURCE, approvalRevision: 1
+    });
     expect(f.provider.interactionFinished).toHaveBeenCalledWith(f.req, f.res,
       { consent: { grantId: "retained-consent-grant" } }, { mergeWithLastSubmission: false });
+  });
+
+  it("fails closed when owner revokes consent after the provider saved the grant", async () => {
+    const f = fixture();
+    const { csrf, review } = await f.tokenFromPage();
+    f.oauth.bindIssuedGrant.mockRejectedValue(new Error("Owner revision changed after page confirmation"));
+    await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+      { action: "approve", csrf, review })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.oauth.discardUnboundGrant).toHaveBeenCalledWith("retained-consent-grant");
+    expect(f.provider.interactionFinished).not.toHaveBeenCalled();
   });
 
   it("refuses an approval when the reviewed owner permissions or revision changed", async () => {
