@@ -188,6 +188,35 @@ test('scope detects renamed protected files and keeps unrelated changes not appl
   snapshot.reviews = [];
   assert.equal(evaluateAssurance(snapshot).status, 'not_applicable');
 });
+test('agent instructions and living skills receive independent assurance even for rename and no-change claims', () => {
+  const guarded = [
+    'AGENTS.md',
+    'CLAUDE.md',
+    'skills-lock.json',
+    '.agents/skills/langfuse/SKILL.md',
+    '.claude/skills/mcp-production-verify/SKILL.md',
+    'docs/agent-skills/living-security-engineering/SKILL.md',
+    'docs/agent-skills/evidence-grounded-decisions/SKILL.md',
+    'docs/agent-skills/a-new-context/SKILL.md',
+  ];
+  for (const filename of guarded) {
+    assert.equal(requiresAssurance(filename), true, filename);
+    const snapshot = fixtureSnapshot();
+    snapshot.files = [{ filename, status: 'modified', sha: 'd'.repeat(40) }];
+    snapshot.reviews = [];
+    assert.equal(evaluateAssurance(snapshot).status, 'blocked', filename);
+    // A rename of governed guidance must not escape by moving the file elsewhere.
+    assert.equal(requiresAssurance({filename:'notes/archived.md',previous_filename:filename}), true);
+  }
+  const unrelated = fixtureSnapshot();
+  unrelated.files = [{filename:'README.md',status:'modified',sha:'d'.repeat(40)}];
+  unrelated.reviews = [];
+  assert.equal(evaluateAssurance(unrelated).status, 'not_applicable');
+  unrelated.reviewThreads = [{id:'finding',isResolved:false,isOutdated:true}];
+  assert.equal(evaluateAssurance(unrelated).status, 'blocked',
+    'all native unresolved findings block even unrelated file paths');
+});
+
 test('draft and unsupported target branches refuse; closed PRs receive no approval', () => {
   const draft = fixtureSnapshot(); draft.pr.draft = true; blocked(draft);
   const target = fixtureSnapshot(); target.pr.base.ref = 'unreviewed-feature'; blocked(target);
@@ -251,4 +280,47 @@ test('truncated or duplicated changed-file lists cannot become not applicable or
       await assert.rejects(run(gateOptions()), /incomplete or duplicated/);
     });
   }
+});
+
+
+test('all native findings block both protected and otherwise non-applicable changes', () => {
+  for (const filename of ['docs/specs/agent-synchronized-engineering/requirements.md', 'README.md']) {
+    const snapshot = fixtureSnapshot();
+    snapshot.files[0].filename = filename;
+    installReceipts(snapshot);
+    for (const isOutdated of [false, true]) {
+      snapshot.reviewThreads = [{ id: 'finding-1', isResolved: false, isOutdated }];
+      const report = evaluateAssurance(snapshot);
+      assert.equal(report.status, 'blocked');
+      assert.match(report.errors.join('\n'), /Unresolved native review finding: finding-1/);
+    }
+    snapshot.reviewThreads[0].isResolved = true;
+    assert.equal(evaluateAssurance(snapshot).status, filename === 'README.md' ? 'not_applicable' : 'analytical_evidence_accepted');
+  }
+});
+test('missing, malformed or duplicated thread inventory blocks clearance', () => {
+  for (const threads of [undefined, [{}], [{id:'x',isResolved:true,isOutdated:false},{id:'x',isResolved:true,isOutdated:false}]]) {
+    const snapshot = fixtureSnapshot();
+    snapshot.reviewThreads = threads;
+    blocked(snapshot);
+  }
+});
+test('later page unresolved finding blocks and incomplete pagination fails closed', async () => {
+  const resolved = { id: 'resolved', isResolved: true, isOutdated: false };
+  const open = { id: 'open', isResolved: false, isOutdated: true };
+  await withGitHub({ threadPages: [[resolved],[open]] }, async () => {
+    const result = await run(gateOptions());
+    assert.equal(result.status, 'blocked');
+    assert.match(result.errors.join('\n'), /Unresolved native review finding: open/);
+  });
+  await withGitHub({ threadPages: Array.from({length:6}, (_,i) => [{...resolved,id:String(i)}]) }, async () => {
+    await assert.rejects(run(gateOptions()), /pagination bound exceeded/);
+  });
+});
+test('same-head thread resolution changes the assurance state digest', () => {
+  const snapshot = fixtureSnapshot();
+  snapshot.reviewThreads = [{id:'finding',isResolved:true,isOutdated:false}];
+  const before = snapshotDigest(snapshot);
+  snapshot.reviewThreads[0].isResolved = false;
+  assert.notEqual(snapshotDigest(snapshot), before);
 });

@@ -22,10 +22,11 @@ jobs:
           node-version: "22"
       - name: Execute actual source, approval and status-publisher negative controls
         run: node --test scripts/assurance-pr-gate.test.mjs scripts/publish-assurance-status.test.mjs
-      - name: Compare reviewed core source blobs with current development
+      - name: Compare core source blobs with pinned development snapshot
         shell: bash
         run: |
           set -euo pipefail
+          # Source snapshot: 93ca0d6050f26cdad0c95c1bb62b15681ac90910
           while read -r expected file; do
             actual="$(git hash-object "$file")"
             if [ "$actual" != "$expected" ]; then
@@ -33,11 +34,11 @@ jobs:
               exit 1
             fi
           done <<'BLOBS'
-          ade522787581b2124d45c455c79ae833a6edaa2c scripts/assurance-pr-gate.mjs
-          fdf65bad0b0325f03a300ee415622336e155d0e0 scripts/assurance-pr-gate.test.mjs
+          c043af23925e4b6e06563302a3064e40c910abbc scripts/assurance-pr-gate.mjs
+          ee37a552925ec5903b424f9ffe09894f4eeb95a3 scripts/assurance-pr-gate.test.mjs
           856d664b0f6165ae6ffbfc75394866bd9c2379cf scripts/publish-assurance-status.mjs
-          670c01c986dafa933fe431b36603064933f238e5 scripts/publish-assurance-status.test.mjs
+          6d41964ad5a847fc3d0459361bde0d87a72b1fbc scripts/publish-assurance-status.test.mjs
           9b396e0aa7160b68453e99273a9ef285ea02f125 .github/assurance-policy.json
-          1d2f19d80e78b0cb2464eb6ee4bda6c49f084720 scripts/assurance-test-fixtures.mjs
+          6455960cdc6bf9f194d671fba334329c0527a640 scripts/assurance-test-fixtures.mjs
           3910a61102a8765876f5134475be1a2e1506da63 .github/workflows/assurance-pr-gate.yml
           BLOBS

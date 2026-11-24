@@ -67,7 +67,10 @@ export function requiresAssurance(file) {
   const names = typeof file === 'string' ? [file] : [file?.filename, file?.previous_filename];
   return names.some(name => typeof name === 'string' && (
     name.startsWith('docs/specs/agent-synchronized-engineering/') ||
-    [POLICY_PATH, 'docs/ci-quality.md', 'scripts/assurance-pr-gate.mjs',
+    name.startsWith('docs/agent-skills/') ||
+    name.startsWith('.agents/skills/') ||
+    name.startsWith('.claude/skills/') ||
+    [POLICY_PATH, 'AGENTS.md', 'CLAUDE.md', 'skills-lock.json', 'docs/ci-quality.md', 'scripts/assurance-pr-gate.mjs',
       'scripts/assurance-pr-gate.test.mjs', 'scripts/assurance-test-fixtures.mjs',
       'scripts/publish-assurance-status.mjs', 'scripts/publish-assurance-status.test.mjs',
       '.github/workflows/assurance-pr-gate.yml', '.github/workflows/ci-hygiene.yml'].includes(name)
@@ -140,8 +143,8 @@ export function evaluateAssurance(snapshot) {
     policyDigest: snapshot.policyDigest, inputManifestSha256: inputManifestDigest(snapshot),
     protectedPaths, provenance: PROVENANCE, errors: [], approvals: [], prState: pr.state };
   if (pr.state !== 'open') return { ...base, status: 'closed' };
-  if (!protectedPaths.length) return { ...base, status: 'not_applicable' };
-  const errors = [];
+  const errors = reviewThreadErrors(snapshot.reviewThreads);
+  if (!protectedPaths.length) return { ...base, errors, status: errors.length ? 'blocked' : 'not_applicable' };
   if (pr.draft) errors.push('Draft PR cannot satisfy final integration assurance');
   if (![policy.integrationBranch, policy.releaseBranch].includes(pr.base.ref)) errors.push('Target branch is outside the installed assurance policy');
   const authorizedReviews = reviews.filter(review => isImporter(review, snapshot));
@@ -271,6 +274,54 @@ async function verifyReviewEditMetadata(reviews, repository, prNumber, token, au
   });
 }
 
+/** All native inline findings must be resolved, including outdated threads.
+ * Thread resolution is necessary but not proof of scanner coverage or an authorized disposition.
+ */
+export function reviewThreadErrors(threads) {
+  if (!Array.isArray(threads) || threads.some(t => !text(t?.id) ||
+      typeof t.isResolved !== 'boolean' || typeof t.isOutdated !== 'boolean') ||
+      new Set(threads.map(t => t.id)).size !== threads.length) {
+    return ['Native finding thread inventory unavailable, malformed or duplicated'];
+  }
+  return threads.filter(t => !t.isResolved).map(t => `Unresolved native review finding: ${t.id}`);
+}
+
+async function captureReviewThreads(repository, pr, token, maxPages) {
+  const [owner, name] = repository.split('/');
+  const threads = [];
+  let cursor = null;
+  let total;
+  const seen = new Set();
+  for (let page = 0; page < maxPages; page++) {
+    const response = await fetch('https://api.github.com/graphql', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json',
+        'User-Agent': 'tesbo-assurance-gate' },
+      body: JSON.stringify({ query: 'query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){nameWithOwner pullRequest(number:$number){number headRefOid baseRefOid reviewThreads(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated}}}}}', variables: { owner, name, number: pr.number, cursor } }),
+    });
+    if (!response.ok) throw new Error('Native finding inventory unavailable');
+    const result = await response.json();
+    const repo = result.data?.repository;
+    const candidate = repo?.pullRequest;
+    const connection = candidate?.reviewThreads;
+    if (result.errors || repo?.nameWithOwner !== repository || candidate?.number !== pr.number ||
+        candidate.headRefOid !== pr.head.sha || candidate.baseRefOid !== pr.base.sha ||
+        !Number.isSafeInteger(connection?.totalCount) || connection.totalCount < 0 ||
+        !Array.isArray(connection.nodes) || typeof connection.pageInfo?.hasNextPage !== 'boolean' ||
+        (total !== undefined && connection.totalCount !== total)) throw new Error('Incomplete or changed native finding inventory');
+    total = connection.totalCount;
+    threads.push(...connection.nodes);
+    if (!connection.pageInfo.hasNextPage) {
+      if (threads.length !== total || reviewThreadErrors(threads).some(e => e.startsWith('Native finding'))) throw new Error('Incomplete native finding inventory');
+      return threads.sort((a,b) => a.id.localeCompare(b.id));
+    }
+    cursor = connection.pageInfo.endCursor;
+    if (!text(cursor) || seen.has(cursor)) throw new Error('Invalid native finding pagination');
+    seen.add(cursor);
+  }
+  throw new Error('Native finding pagination bound exceeded');
+}
+
 export async function captureSnapshot({ repository, prNumber, token, sourceSha, policyRaw }) {
   if (!REPO.test(repository ?? '') || !positiveInteger(prNumber) || !token || !SHA.test(sourceSha ?? '')) {
     throw new Error('Invalid trusted assurance inputs');
@@ -297,7 +348,8 @@ export async function captureSnapshot({ repository, prNumber, token, sourceSha, 
       (file.status === 'renamed' && !text(file.previous_filename)))) throw new Error('Incomplete changed-file identities');
   let reviews = await githubPages(repository, `/pulls/${prNumber}/reviews`, token, policy.maxPages);
   reviews = await verifyReviewEditMetadata(reviews, repository, prNumber, token, { repository: repo, policy });
-  return { repository: repo, pr, files, reviews, policy, policySha: sourceSha, policyDigest: sha256(policyRaw) };
+  const reviewThreads = await captureReviewThreads(repository, pr, token, policy.maxPages);
+  return { repository: repo, pr, files, reviews, reviewThreads, policy, policySha: sourceSha, policyDigest: sha256(policyRaw) };
 }
 
 export function snapshotDigest(snapshot) {
@@ -306,6 +358,7 @@ export function snapshotDigest(snapshot) {
       head: snapshot.pr.head.sha, base: snapshot.pr.base.sha, baseRef: snapshot.pr.base.ref },
     policySha: snapshot.policySha, policyDigest: snapshot.policyDigest,
     inputManifestSha256: inputManifestDigest(snapshot),
+    reviewThreads: snapshot.reviewThreads?.slice().sort((a,b) => a.id.localeCompare(b.id)),
     records: snapshot.reviews.filter(review => relevantReview(review, snapshot))
       .map(review => ({ id: review.id, userId: review.user?.id, userType: review.user?.type,
         state: review.state, head: review.commit_id, body: review.body, submittedAt: review.submitted_at,
