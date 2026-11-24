@@ -243,6 +243,14 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
     || (submittedDetail.contentHtml ?? null) !== (doc.contentHtml ?? null)
     || JSON.stringify(submittedDetail.contentJson ?? null) !== JSON.stringify(doc.contentJson ?? null)
     || JSON.stringify(submittedDetail.snapshotMetadata?.governedMetadata ?? null) !== JSON.stringify(doc.governedMetadata ?? null)
+    // These fields also participate in the server's content digest and snapshot binding.
+    || submittedDetail.snapshotMetadata?.folderId !== doc.folderId
+    || submittedDetail.snapshotMetadata?.documentType !== doc.documentType
+    || submittedDetail.snapshotMetadata?.sourceProvider !== (doc.sourceProvider ?? null)
+    || submittedDetail.snapshotMetadata?.sourceExternalId !== (doc.sourceExternalId ?? null)
+    || submittedDetail.snapshotMetadata?.sourceUrl !== (doc.sourceUrl ?? null)
+    || submittedDetail.snapshotMetadata?.sourceRole !== (doc.sourceRole ?? null)
+    || submittedDetail.snapshotMetadata?.isReadOnly !== (doc.isReadOnly ?? false)
   ));
   const submittedSuperseded = Boolean(currentDecision === "" && submittedVersion
     && (latestDecisionSnapshot?.snapshotMetadata?.sourceVersionId === submittedVersion.id
@@ -340,9 +348,9 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
             </div>
             {openedMetadata && (
               <p className="mb-2">
-                Audience: {openedMetadata.audience} · Confidentiality: {openedMetadata.confidentiality} · Distribution: {openedMetadata.distribution}
-                {" · "}Authority: {openedMetadata.sourceAuthority?.kind} — {openedMetadata.sourceAuthority?.label}
-                {" · "}Effectivity: {openedMetadata.effectivity?.from || "—"} to {openedMetadata.effectivity?.to || "—"}
+                Audience: {openedMetadata.audience} · Subtype: {openedMetadata.subtype} · Confidentiality: {openedMetadata.confidentiality} · Distribution: {openedMetadata.distribution}
+                {" · "}Authority: {openedMetadata.sourceAuthority?.kind} — {openedMetadata.sourceAuthority?.label}{openedMetadata.sourceAuthority?.reference ? ` (${openedMetadata.sourceAuthority.reference})` : ""}
+                {" · "}Effectivity: {openedMetadata.effectivity?.from || "—"} to {openedMetadata.effectivity?.to || "—"}{openedMetadata.enforcementRefs?.length ? ` · Enforcement: ${openedMetadata.enforcementRefs.join(", ")}` : ""}
               </p>
             )}
             <div className="max-h-64 overflow-auto"><VersionContent detail={openedVersion} /></div>

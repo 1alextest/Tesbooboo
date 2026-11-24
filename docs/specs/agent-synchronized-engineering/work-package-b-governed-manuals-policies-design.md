@@ -18,7 +18,8 @@ This note begins the Work Package B workflow. The first slice is deliberately bo
   effectivity and enforcement references distinct;
 - submitting an exact version through the existing governed-version writer;
 - an owner/manager exact-version approve/reject decision through the shared review machinery;
-- immutable history, diff and authoritative readback in the KB document surface.
+- immutable history, exact-version content and authoritative readback in the KB document surface (a computed
+  submitted-vs-current diff is a follow-up; the full exact snapshot is shown).
 
 It does **not** yet implement effective manual/policy Skill staging or agent-authored candidate apply,
 audience-specific public views, policy enforcement execution, or Zyra exposure of the new types. Those are
@@ -248,3 +249,6 @@ policy. An approved document does not become Zyra-visible merely because it is a
 15. **Zyra context picker (filtered).** The task composer no longer offers `user_manual`/`policy` documents,
     because selecting one copies its full text into the task context sent to the model. The backend snapshot and
     AI-context gates remain authoritative; a future exposure policy may reintroduce an explicitly labelled option.
+16. **Submitted-vs-current diff.** Governed snapshots intentionally carry no changed summary/fields, so the history
+    list does not render a text diff for them. The panel shows the complete exact snapshot and its metadata; a
+    computed diff against the current working copy is a follow-up, not a current capability.
