@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Delete, Get, NotFoundException, Optional, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { McpService } from "./mcp.service";
@@ -6,6 +6,7 @@ import { MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
 import type { McpClientGrant } from "./mcp-access";
 import { unsupportedMcpProtocol } from "./mcp-protocol-compat";
 import { mcpOAuthDiscoveryPolicy, mcpOAuthProtectedResourceMetadata, mcpOAuthUnauthorizedChallenge } from "./mcp-oauth-discovery";
+import { McpOAuthServer } from "../auth/mcp-oauth-server";
 
 /**
  * Tesbo MCP — HTTP transport.
@@ -42,7 +43,7 @@ import { mcpOAuthDiscoveryPolicy, mcpOAuthProtectedResourceMetadata, mcpOAuthUna
  */
 @Controller()
 export class McpController {
-  constructor(private readonly mcp: McpService) {}
+  constructor(private readonly mcp: McpService, @Optional() private readonly oauth?: McpOAuthServer) {}
 
   /**
    * Opt-in, read-only *preview* of project-specific RFC 9728 discovery.
@@ -67,6 +68,10 @@ export class McpController {
     @Param("projectId") projectId: string,
     @Body() body: unknown
   ) {
+    if (req.oauthAccess) {
+      await this.respondOAuth(req, res, body, projectId);
+      return;
+    }
     const principal = this.requirePrincipal(req, res, projectId);
     await this.respond(req, res, body, principal, projectId);
   }
@@ -109,6 +114,39 @@ export class McpController {
     }
     res.setHeader("Allow", "POST");
     res.status(405).json({ error: "The Tesbo MCP endpoint accepts POST only (no server-sent event stream, no session termination)." });
+  }
+
+  /**
+   * OAuth access is accepted only for a verified opaque bearer bound to this
+   * exact resource. The shared MCP service owns current membership, owner
+   * consent, read-scope intersection and every tool handler. This transport
+   * intentionally remains legacy-era until the 2026 stateless codec is tested.
+   */
+  private async respondOAuth(req: AuthenticatedRequest, res: Response, body: unknown, projectId: string) {
+    const principal = req.oauthAccess;
+    if (!principal || !this.oauth?.enabled) {
+      throw new UnauthorizedException({ error: "A valid OAuth access token is required" });
+    }
+    let resource: string;
+    try { resource = this.oauth.resource(projectId); }
+    catch { throw new UnauthorizedException({ error: "OAuth resource is unavailable" }); }
+    const unsupported = unsupportedMcpProtocol(body, req.header("MCP-Protocol-Version") ?? undefined);
+    if (unsupported) { res.status(400).json(unsupported); return; }
+    const result = await this.mcp.handleVerifiedOAuthReadOnlyRequest(
+      body, principal, projectId, this.oauth.issuer, resource
+    );
+    if ("error" in result && result.error.code === RpcCode.ProjectScopeDenied) {
+      res.status(403).json(result);
+      return;
+    }
+    if ("error" in result && result.error.code === RpcCode.ScopeDenied) {
+      const metadata = mcpOAuthDiscoveryPolicy();
+      if (metadata) res.setHeader("WWW-Authenticate",
+        `Bearer error="insufficient_scope", resource_metadata="${metadata.resourceOrigin}/.well-known/oauth-protected-resource/api/projects/${projectId}/mcp"`);
+      res.status(403).json(result);
+      return;
+    }
+    res.status(200).json(result);
   }
 
   private async respond(
