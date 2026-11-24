@@ -8,7 +8,7 @@ import { ProjectLookupService } from "../request-cache/project-lookup.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
 import type { AppConfigService } from "../config/app-config.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
-import { KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
+import { KNOWLEDGE_DOCUMENT_REVISION_SQL, knowledgeDocumentAiContextSql } from "./knowledge-document-revision";
 import { TESTCASE_APPROVAL_CURRENT_SQL, TESTCASE_APPROVAL_REVISION_SQL, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
 
 const url=process.env.DATABASE_URL || "";
@@ -1260,6 +1260,130 @@ type Body=Record<string,any>;
         if(taskId)await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[taskId,project]);
         if(caseId)await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
         await cleanupSkills(skillIds);
+      }
+    });
+
+    it("governs manual/policy metadata and exact submitted versions without Zyra exposure",async()=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",subtype:"manual",confidentiality:"internal",
+        distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:"2026-01-01",to:null},enforcementRefs:[]};
+      let docId="";
+      let duplicateId="";
+      let legacyId="";
+      let qaId="";
+      try{
+        const created=await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Governed manual ${randomUUID()}`,
+          documentType:"user_manual",contentText:"Manual body",contentHtml:"<p>Manual body</p>",governedMetadata:metadata});
+        docId=created.id;
+        expect(created.governedMetadata).toMatchObject({audience:"internal",subtype:"manual",confidentiality:"internal"});
+        // Exposure hold: the row is terminally unsupported so neither the boot sweep nor an
+        // explicitly queued job can send confidential text to an embedding provider.
+        expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[docId])).rows[0].embedding_status)
+          .toBe("unsupported");
+        // Draft governed content is excluded by the type filter, not merely because an approval
+        // snapshot is absent from the AI-context predicate.
+        const exposedDraft=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposedDraft.rows[0].n).toBe(0);
+
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Invalid manual ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,audience:"nope"}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Missing metadata ${randomUUID()}`,
+          documentType:"user_manual"})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Unknown metadata key ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,unexpected:true}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Impossible date ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,effectivity:{from:"2026-02-31",to:null}}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Inverted effectivity ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,effectivity:{from:"2026-06-01",to:"2026-01-01"}}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Manual enforcement ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,enforcementRefs:["ACME-1"]}})).rejects.toMatchObject({status:400});
+
+        const duplicate=await service().duplicateKnowledgeDocument(project,user,docId);
+        duplicateId=duplicate.id;
+        expect(duplicate.governedMetadata).toMatchObject({audience:"internal",subtype:"manual",confidentiality:"internal",distribution:"internal"});
+        expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[duplicateId])).rows[0].embedding_status)
+          .toBe("unsupported");
+
+        const submitted=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:created.editRevision,submissionKey:randomUUID()},human);
+        const detail=await service().getKnowledgeDocumentVersion(project,user,docId,submitted.id);
+        expect(detail.snapshotMetadata).toMatchObject({governedMetadata:{audience:"internal",subtype:"manual"}});
+
+        qaId=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Governed docs reader') RETURNING id",[`governed-reader-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,qaId]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,qaId]);
+        await expect(service().approveGovernedKnowledgeDocument(project,qaId,docId,{versionId:submitted.id},human))
+          .rejects.toMatchObject({status:403});
+
+        const changed=await service().updateKnowledgeDocument(project,user,docId,
+          {governedMetadata:{...metadata,confidentiality:"confidential"},expectedRevision:created.editRevision});
+        await expect(service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human))
+          .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_REVISION_CONFLICT"}});
+        await service().updateKnowledgeDocument(project,user,docId,
+          {governedMetadata:metadata,expectedRevision:changed.editRevision});
+        const approved=await service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human);
+        expect(approved).toMatchObject({status:"approved",sourceVersionId:submitted.id,replayed:false});
+        expect(approved.reviewedVersionId).toBe(approved.decidedVersionId);
+        const retry=await service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human);
+        expect(retry).toMatchObject({decidedVersionId:approved.decidedVersionId,replayed:true});
+        // Approval alone must not expose the manual to Zyra/RAG. Assert while the document is
+        // actually approved: doing this only after a rejection would pass for the wrong reason.
+        const exposedApproved=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposedApproved.rows[0].n).toBe(0);
+
+        // A later rejection must supersede the earlier approval as the current decision. The
+        // snapshot is bound to the exact newly submitted version, not to the document's latest
+        // content at review time.
+        const current=await service().getKnowledgeDocument(project,user,docId);
+        const edited=await service().updateKnowledgeDocument(project,user,docId,
+          {contentText:"Manual body revised",contentHtml:"<p>Manual body revised</p>",expectedRevision:current.editRevision});
+        const second=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:edited.editRevision,submissionKey:randomUUID()},human);
+        const rejected=await service().rejectGovernedKnowledgeDocument(project,user,docId,
+          {versionId:second.id,reason:"Effectivity is out of date"},human);
+        expect(rejected).toMatchObject({status:"rejected",sourceVersionId:second.id,replayed:false});
+        const rejectedRetry=await service().rejectGovernedKnowledgeDocument(project,user,docId,
+          {versionId:second.id,reason:"Effectivity is out of date"},human);
+        expect(rejectedRetry).toMatchObject({decidedVersionId:rejected.decidedVersionId,replayed:true});
+        const decisions=await admin.query(
+          `SELECT snapshot_kind,snapshot_metadata->>'sourceVersionId' AS source_version_id,version_number
+             FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind IN ('approved','rejected')
+            ORDER BY version_number`,[docId]);
+        expect(decisions.rows.map(row=>row.snapshot_kind)).toEqual(["approved","rejected"]);
+        expect(decisions.rows[1]).toMatchObject({snapshot_kind:"rejected",source_version_id:second.id});
+        expect((await admin.query("SELECT status,reviewed_version_id FROM knowledge_documents WHERE id=$1",[docId])).rows[0])
+          .toMatchObject({status:"rejected",reviewed_version_id:rejected.decidedVersionId});
+
+        const exposed=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposed.rows[0].n).toBe(0);
+        // Two identical submissions bind to different exact versions; approving the older one
+        // must not leave the latest submission showing as undecided.
+        const older=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:rejected.editRevision,submissionKey:randomUUID()},human);
+        await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:rejected.editRevision,submissionKey:randomUUID()},human);
+        await expect(service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:older.id},human))
+          .rejects.toMatchObject({status:409,response:{code:"GOVERNED_VERSION_SUPERSEDED"}});
+        await expect(service().updateKnowledgeDocument(project,user,docId,
+          {documentType:"general",expectedRevision:rejected.editRevision}))
+          .rejects.toMatchObject({status:400});
+
+        legacyId=(await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Legacy general ${randomUUID()}`,documentType:"general",contentText:"Legacy"})).id;
+        await expect(service().approveGovernedKnowledgeDocument(project,user,legacyId,{versionId:submitted.id},human))
+          .rejects.toMatchObject({status:400});
+      }finally{
+        for(const id of [docId,duplicateId,legacyId].filter(Boolean)){
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
+        }
+        if(qaId){
+          await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,qaId]);
+          await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,qaId]);
+          await admin.query("DELETE FROM users WHERE id=$1",[qaId]);
+        }
       }
     });
 

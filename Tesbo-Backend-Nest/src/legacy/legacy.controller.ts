@@ -1737,6 +1737,17 @@ export class LegacyController {
     return this.legacy.requirementCoverage(projectId, req.userId, documentId);
   }
 
+  // Work Package B first slice — exact-version human decisions for governed manuals/policies.
+  @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/governed-approval")
+  approveGovernedKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveGovernedKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/governed-rejection")
+  rejectGovernedKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectGovernedKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Post("/api/projects/:projectId/requirements/:documentId/links/:linkId/reapply")
   reapplyRequirementCaseLink(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Param("linkId") linkId: string, @Body() body: Record<string, any>) {
     return this.legacy.reapplyRequirementCaseLink(projectId, req.userId, documentId, linkId, body, { kind: req.apiToken ? "api_token" : "human_session" });
@@ -1971,7 +1982,7 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/knowledge-base/documents")
   createKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createKnowledgeDocument(projectId, req.userId, body);
+    return this.legacy.createKnowledgeDocument(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/knowledge-base/documents/:documentId/versions")
@@ -1996,7 +2007,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.restoreKnowledgeDocumentVersion(projectId, req.userId, documentId, body);
+    return this.legacy.restoreKnowledgeDocumentVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/approve-ai-memory")
@@ -2065,7 +2076,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.moveKnowledgeDocument(projectId, req.userId, documentId, body);
+    return this.legacy.moveKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/restore")
@@ -2075,7 +2086,7 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/duplicate")
   duplicateKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId")
@@ -2085,7 +2096,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.updateKnowledgeDocument(projectId, req.userId, documentId, body);
+    return this.legacy.updateKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   // Zyra AI Memory's only write path for people: correct or remove one entry (owner/manager only).

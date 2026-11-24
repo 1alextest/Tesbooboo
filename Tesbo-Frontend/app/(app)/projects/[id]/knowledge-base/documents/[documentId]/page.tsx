@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { JSONContent } from "@tiptap/react";
 import {
@@ -37,6 +37,7 @@ import RichTextEditor from "@/components/knowledge-base/RichTextEditor";
 import { DocumentComments } from "@/components/knowledge-base/DocumentComments";
 import { ZyraMemoryEntries } from "@/components/knowledge-base/ZyraMemoryEntries";
 import { ChangeHistoryList } from "@/components/knowledge-base/ChangeHistory";
+import { GovernedDocumentPanel } from "@/components/knowledge-base/GovernedDocumentPanel";
 import { blankDocumentFlagKey } from "@/lib/validation";
 import { formatDateTime } from "@/lib/date";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/workflows";
@@ -72,6 +73,8 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   release_note: "Release Note",
   requirement_note: "Requirement",
   test_data_note: "Test Data",
+  user_manual: "User Manual",
+  policy: "Policy",
 };
 
 function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
@@ -260,6 +263,13 @@ export default function KnowledgeDocumentPage() {
       writer.close();
       if (writerRef.current === writer) writerRef.current = null;
     };
+  }, [projectId, documentId]);
+
+  const refreshDocument = useCallback(async () => {
+    const data = await getKnowledgeDocument(projectId, documentId);
+    setDoc(data);
+    setTitle(data.title);
+    setBreadcrumb(data.breadcrumb);
   }, [projectId, documentId]);
 
   useEffect(() => {
@@ -884,6 +894,12 @@ export default function KnowledgeDocumentPage() {
         <div className="mb-3 flex items-center justify-between rounded-lg border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-4 py-2.5 text-[13px] text-[var(--warning-foreground)]">
           <span>{anchorMissMessage}</span>
           <button onClick={() => setAnchorMissMessage(null)}><IconX size={15} /></button>
+        </div>
+      )}
+
+      {!isSyncedMirror && !isZyraMemory && (doc.documentType === "user_manual" || doc.documentType === "policy") && (
+        <div className="mb-4">
+          <GovernedDocumentPanel projectId={projectId} doc={doc} canManage={canApprove} onChanged={refreshDocument} />
         </div>
       )}
 

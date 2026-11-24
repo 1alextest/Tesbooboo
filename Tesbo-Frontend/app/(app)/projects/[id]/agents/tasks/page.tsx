@@ -156,7 +156,11 @@ export default function ZyraTasksPage() {
       const agentState = await getZyraAgent(projectId);
       setState(agentState);
       const kb = await listKnowledgeDocuments(projectId).catch(() => ({ list: [], total: 0 }));
-      const items = kb.list || [];
+      // Governed manuals/policies are under an exposure hold. Selecting one here copies its full
+      // text into the task context sent to the model, so do not offer them until an owner accepts
+      // an exposure policy.
+      const items = (kb.list || []).filter((item: { documentType?: string }) =>
+        item.documentType !== "user_manual" && item.documentType !== "policy");
       setKnowledgeItems(items);
       setError(null);
       setPageCache(`agents-tasks:${projectId}`, { state: agentState, knowledgeItems: items });

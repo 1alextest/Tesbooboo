@@ -71,6 +71,23 @@ describe("RagIngestionService — enqueue generations", () => {
     expect(jobIds(add)).toEqual(["document-d-1000", "document-d-2000"]);
   });
 
+  it("never re-enqueues governed manuals or policies from the boot-time sweep", async () => {
+    const query = jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const add = jest.fn().mockResolvedValue(undefined);
+    const service = new RagIngestionService(
+      { add } as unknown as Queue,
+      { query } as unknown as DatabaseService
+    );
+
+    await service.resumeInterruptedEmbeddings();
+
+    const [documentsSql] = query.mock.calls[0] as [string, unknown[]];
+    expect(documentsSql).toContain("document_type NOT IN ('user_manual','policy')");
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it("still enqueues with a fresh id when the status update fails or finds no row", async () => {
     const query = jest.fn().mockRejectedValueOnce(new Error("db down")).mockResolvedValueOnce({ rows: [] });
     const add = jest.fn().mockResolvedValue(undefined);

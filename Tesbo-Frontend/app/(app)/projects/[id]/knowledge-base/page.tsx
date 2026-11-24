@@ -136,7 +136,19 @@ type DocumentTemplate = {
   description: string;
   documentType: string;
   content: DocNode | null;
+  governedMetadata?: Record<string, unknown>;
 };
+
+const GOVERNED_DEFAULT_METADATA = (subtype: "manual" | "policy") => ({
+  schemaVersion: "tesbo-governed-document/1",
+  audience: "internal",
+  subtype,
+  confidentiality: "internal",
+  distribution: "internal",
+  sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+  effectivity: { from: null, to: null },
+  enforcementRefs: [] as string[],
+});
 
 const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
   {
@@ -210,6 +222,34 @@ const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
       heading(2, "Sample Users"), paragraph(),
       heading(2, "Input Data"), paragraph(),
       heading(2, "Boundary Values"), paragraph()
+    ),
+  },
+  {
+    key: "user_manual",
+    label: "User Manual",
+    description: "Governed audience-specific guidance; review and approval are separate.",
+    documentType: "user_manual",
+    governedMetadata: GOVERNED_DEFAULT_METADATA("manual"),
+    content: doc(
+      heading(1, "User Manual"),
+      heading(2, "Purpose"), paragraph(),
+      heading(2, "Audience"), paragraph(),
+      heading(2, "Instructions"), paragraph(),
+      heading(2, "Support"), paragraph()
+    ),
+  },
+  {
+    key: "policy",
+    label: "Policy",
+    description: "Governed policy or standard with source authority and effectivity.",
+    documentType: "policy",
+    governedMetadata: GOVERNED_DEFAULT_METADATA("policy"),
+    content: doc(
+      heading(1, "Policy"),
+      heading(2, "Purpose"), paragraph(),
+      heading(2, "Scope"), paragraph(),
+      heading(2, "Requirements"), paragraph(),
+      heading(2, "Exceptions"), paragraph()
     ),
   },
 ];
@@ -1263,6 +1303,7 @@ function KnowledgeBasePageInner() {
         folderId: selectedFolderId,
         title,
         documentType: template.documentType,
+        ...(template.governedMetadata ? { governedMetadata: template.governedMetadata } : {}),
         ...body,
       });
       if (template.key === "blank") {

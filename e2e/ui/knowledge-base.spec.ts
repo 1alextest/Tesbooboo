@@ -2739,6 +2739,88 @@ test.describe("knowledge base (UI)", () => {
     expect(storedDocument(documentId).text).toBe(MEMORY_TEXT);
   });
 
+  test("KBU-70 a governed manual saves typed metadata, submits an exact version and records an owner decision", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: "2026-01-01", to: null }, enforcementRefs: [],
+    };
+    const created = await api.post(kbUrl("/documents"), {
+      data: { title: stamp("Governed manual"), folderId: rootFolderId, documentType: "user_manual", contentText: "Manual body", contentHtml: "<p>Manual body</p>", governedMetadata: metadata },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+
+    const panel = page.getByTestId("governed-document-panel");
+    await expect(panel).toBeVisible();
+    await expect(page.getByTestId("governed-audience")).toHaveValue("internal");
+    await page.getByTestId("governed-audience").selectOption("external");
+    await page.getByTestId("governed-confidentiality").selectOption("confidential");
+    await page.getByTestId("governed-save-metadata").click();
+    await expect(panel).toContainText("Governance metadata saved");
+    const saved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(saved.governedMetadata).toMatchObject({ audience: "external", confidentiality: "confidential" });
+
+    await page.reload();
+    await expect(page.getByTestId("governed-document-panel")).toBeVisible();
+    await page.getByTestId("governed-submit").click();
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
+    await page.getByTestId("governed-approve").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+
+    const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(approved.status).toBe("approved");
+    expect(approved.reviewedVersionId).toBeTruthy();
+    await page.reload();
+    await expect(page.getByTestId("governed-decision")).toContainText("approved");
+    await expect(page.getByTestId("governed-submitted-metadata")).toContainText("Audience: external");
+
+    // A later rejection must be reported as the current decision. The old bug preferred the first
+    // approved snapshot, so this reload showed "approved" and hid the reject action for v2.
+    const revisedResponse = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: { contentText: "Manual body revised", contentHtml: "<p>Manual body revised</p>", expectedRevision: approved.editRevision },
+    });
+    expect(revisedResponse.status(), await revisedResponse.text()).toBe(200);
+    const revised = await revisedResponse.json();
+    // The edit cleared the document's decision binding even though the approved snapshot remains
+    // in history; the panel must not keep reporting that historical approval.
+    await page.reload();
+    await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    await expect(page.getByTestId("governed-decision-superseded")).toBeVisible();
+    await expect(page.getByTestId("governed-submit")).toBeEnabled();
+    const secondSubmission = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: revised.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(secondSubmission.status(), await secondSubmission.text()).toBe(201);
+    const secondVersion = await secondSubmission.json();
+    await page.reload();
+    // The metadata save, approval and edit each add autosave/decision snapshots, so the second
+    // submission's number is not fixed at 2. Assert the number the API actually returned.
+    await expect(page.getByTestId("governed-submitted-version")).toContainText(`Submitted v${secondVersion.versionNumber}`);
+    await expect(page.getByTestId("governed-decision")).toHaveCount(0);
+    // QA is checked while the owner still has both actions, so "QA sees nothing" proves the role
+    // gate rather than the already-decided state hiding the buttons from everybody.
+    await expect(page.getByTestId("governed-reject")).toBeVisible();
+    const qaPage = await openDocument(browser, documentId, "qa");
+    await expect(qaPage.getByTestId("governed-approve")).toHaveCount(0);
+    await expect(qaPage.getByTestId("governed-reject")).toHaveCount(0);
+    await page.bringToFront();
+    await page.getByTestId("governed-reject").click();
+    await expect(page.getByTestId("governed-decision")).toContainText("rejected");
+    await expect(page.getByTestId("governed-approve")).toHaveCount(0);
+    const rejected = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    expect(rejected.status).toBe("rejected");
+
+    // Prior exact decisions stay openable read-only even though governed snapshots are never
+    // restorable through the content-history restore path.
+    await page.getByTestId("governed-version-open").first().click();
+    await expect(page.getByTestId("governed-version-detail")).toBeVisible();
+    await qaPage.reload();
+    await expect(qaPage.getByTestId("governed-decision")).toContainText("rejected");
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
