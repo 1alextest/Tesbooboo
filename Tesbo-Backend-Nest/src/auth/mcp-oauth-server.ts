@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import { DatabaseService } from "../database/database.service";
 import type { OAuthMachineContext } from "../common/request.types";
 import { createMcpOAuthPostgresAdapter } from "./mcp-oauth-postgres.adapter";
+import { bindOAuthGrantToApproval, currentOAuthGrantBinding, type OAuthGrantBasis } from "./mcp-oauth-grant-binding";
 import { isOAuthMcpGrant, readMcpAccess, type OAuthMcpClientGrant } from "../mcp/mcp-access";
 import { mcpOAuthDiscoveryPolicy, mcpOAuthResource, type McpOAuthDiscoveryPolicy } from "../mcp/mcp-oauth-discovery";
 
@@ -158,6 +159,16 @@ export class McpOAuthServer {
     return { ...grant, accessRevision: access.revision };
   }
 
+  /** Bind only a newly human-consented Grant to the locked current project-owner epoch. */
+  async bindIssuedGrant(grantId: string, basis: OAuthGrantBasis): Promise<void> {
+    await bindOAuthGrantToApproval(this.db, grantId, basis);
+  }
+
+  /** Remove a provider artifact left unbound when approval changed during consent. */
+  async discardUnboundGrant(grantId: string): Promise<void> {
+    await new (createMcpOAuthPostgresAdapter(this.db))("Grant").destroy(grantId);
+  }
+
   requireActive(): ProviderInstance {
     if (!this.provider) throw new ServiceUnavailableException({ error: "OAuth is disabled" });
     return this.provider;
@@ -185,7 +196,7 @@ export class McpOAuthServer {
     this.policy = policy;
     try {
       const provider = new Provider(policy.issuer, {
-        adapter: createMcpOAuthPostgresAdapter(this.db),
+        adapter: createMcpOAuthPostgresAdapter(this.db, { requireLiveGrantBinding: true }),
         jwks,
         clients,
         cookies: { keys: cookieKeys, long: { signed: true }, short: { signed: true } },
@@ -266,7 +277,11 @@ export class McpOAuthServer {
       const grant = await this.provider.Grant.find(token.grantId);
       if (!grant || grant.accountId !== token.accountId || grant.clientId !== token.clientId ||
           grant.getResourceScope(resource) !== "mcp:read") return null;
-      if (!(await this.approvedClient(token.clientId, resource))) return null;
+      const approval = await this.approvedClient(token.clientId, resource);
+      if (!approval || !(await currentOAuthGrantBinding(this.db, token.grantId, {
+        projectId, accountId: token.accountId, clientId: token.clientId,
+        resource, approvalRevision: approval.accessRevision
+      }))) return null;
       return {
         kind: "oauth_access", issuer: this.policy.issuer, subject: token.accountId,
         clientId: token.clientId, grantId: token.grantId, userId: token.accountId,
