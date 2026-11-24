@@ -19,6 +19,7 @@
  * Optional:
  *   EXPECTED_TOOL_COUNT=47   informational; a mismatch is a warning, because grants filter tools.
  *   REQUIRE_PROPOSAL_PREVIEW=1  require the isolated, default-off proposal review capability.
+ *   TESBO_PILOT_READ_ONLY=1    sample existing project cases/suites through authorized MCP reads ONLY.
  *   TESBO_API_HEALTH_URL     defaults to <origin>/api/health derived from TESBO_MCP_URL.
  *
  * Exit code is 1 on any failed requirement. The token is never printed, and server error text is
@@ -45,6 +46,38 @@ export const REQUIRED_TOOLS = [
 
 export const PROPOSAL_TOOLS = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task",
   "stage_requirement_change_bundle", "get_requirement_proposal_task", "list_requirement_proposals"];
+
+/**
+ * Optional read-only external-client pilot of the EXISTING project-scoped native repository.
+ * The tool names are fixed here, not taken from a model or server response. Never print cases,
+ * suite names, source refs, project IDs, or token-bearing JSON. This is inventory, NOT a Run.
+ */
+export const NATIVE_PILOT_READ_TOOLS = ["list_testcases", "list_suites"];
+export function readOnlyPilotCatalogGaps(tools) {
+  if (!Array.isArray(tools)) return ["native pilot tool catalog is unavailable"];
+  const names = new Set(tools.map(item => item?.name));
+  return NATIVE_PILOT_READ_TOOLS.filter(name => !names.has(name))
+    .map(name => "native pilot read permission unavailable: " + name);
+}
+export function summarizeNativePilotCases(casesResponse, suitesResponse) {
+  const cases = Array.isArray(casesResponse) ? casesResponse : casesResponse?.testcases;
+  const suites = suitesResponse?.suites;
+  if (!Array.isArray(cases) || !Array.isArray(suites) || cases.length > 25 || suites.length > 2000 ||
+      cases.some(value => !value || typeof value.id !== "string" || !value.id) ||
+      suites.some(value => !value || typeof value.id !== "string" || !value.id) ||
+      new Set(cases.map(value => value.id)).size !== cases.length ||
+      new Set(suites.map(value => value.id)).size !== suites.length) {
+    throw new Error("Native pilot inventory is incomplete or outside its bounded read contract");
+  }
+  const statusCounts = { Draft: 0, "In Review": 0, Approved: 0, Deprecated: 0, Archived: 0, Other: 0 };
+  for (const item of cases) {
+    const key = Object.hasOwn(statusCounts, item.status) ? item.status : "Other";
+    statusCounts[key]++;
+  }
+  return { sampledCases: cases.length, sampleLimit: 25, suites: suites.length,
+    statusCounts, fullCaseTotalVerified: false, recordMutation: false };
+}
+
 const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",
   "bulk_create_testcases", "bulk_update_testcases", "bulk_archive_testcases", "link_requirement_to_testcase", "unlink_requirement_from_testcase", "clone_test_suite", "create_suite", "update_suite"];
 
@@ -219,6 +252,35 @@ async function rpc(endpoint, token, body, session) {
   return { json, session: response.headers.get("mcp-session-id") || undefined };
 }
 
+async function nativeReadOnlyPilot(endpoint, token, session, tools) {
+  const gaps = readOnlyPilotCatalogGaps(tools);
+  if (gaps.length) throw new Error(gaps.join("; "));
+  const parsed = new URL(endpoint);
+  // A shared MCP endpoint cannot prove which project an authorized list belongs to.
+  if (!/^\/api\/projects\/[^/]+\/mcp\/?$/.test(parsed.pathname)) {
+    throw new Error("Native pilot requires the existing project-specific MCP endpoint");
+  }
+  const invokeRead = async (id, name, args) => {
+    try {
+      const answer = await rpc(endpoint, token, {
+        jsonrpc: "2.0", id, method: "tools/call",
+        params: { name, arguments: args }
+      }, session);
+      const result = answer.json?.result;
+      if (result?.isError === true || !Array.isArray(result?.content) ||
+          result.content.length !== 1 || result.content[0]?.type !== "text" ||
+          typeof result.content[0].text !== "string") throw new Error("Invalid result");
+      return JSON.parse(result.content[0].text);
+    } catch {
+      // Native data and service error text are private; emit a fixed failure.
+      throw new Error("Native pilot read refused or unavailable (details withheld)");
+    }
+  };
+  const cases = await invokeRead(3, "list_testcases", { limit: 25, offset: 0, includeArchived: true });
+  const suites = await invokeRead(4, "list_suites", {});
+  return summarizeNativePilotCases(cases, suites);
+}
+
 async function main() {
   const endpoint = String(process.env.TESBO_MCP_URL || "").trim();
   const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || "");
@@ -226,6 +288,7 @@ async function main() {
   const expectedGitSha = String(process.env.EXPECTED_GIT_SHA || "").trim();
   const expectedToolCount = String(process.env.EXPECTED_TOOL_COUNT || "").trim();
   const requireProposalPreview = process.env.REQUIRE_PROPOSAL_PREVIEW === "1";
+  const nativePilotReadOnly = process.env.TESBO_PILOT_READ_ONLY === "1";
   if (!endpoint || !tokenFile) {
     console.error("TESBO_MCP_URL and TESBO_MCP_TOKEN_FILE must be set; use verify-production-mcp.sh.");
     process.exit(2);
@@ -304,6 +367,12 @@ async function main() {
     if (result.missingTools.length) print(`  missing:  ${result.missingTools.join(", ")}`);
     for (const warning of result.warnings) print(`  warning:  ${warning}`);
     for (const error of result.errors) print(`  FAIL:     ${error}`);
+    if (nativePilotReadOnly) {
+      if (!result.ok) throw new Error("Native read-only pilot requires a verified build/catalog");
+      const pilot = await nativeReadOnlyPilot(endpoint, token, initialized.session, tools);
+      print("  pilot:    " + JSON.stringify(pilot));
+      print("  pilot:    sampled authorized records; no official case write, approval or execution");
+    }
     print(result.ok ? "OK" : "FAILED");
     process.exit(result.ok ? 0 : 1);
   } catch (error) {

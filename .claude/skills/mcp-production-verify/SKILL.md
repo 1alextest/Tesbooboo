@@ -123,3 +123,20 @@ This closes the exposure class where a plausible-looking, arbitrary HTTPS projec
 - [ ] Checker exited 0 against a fresh session.
 - [ ] Negative consent probe behaved fail-closed (or consent was knowingly already on).
 - [ ] Report states host, SHA, fingerprint and tool count, and says what was not proven.
+
+
+## Optional TESBOPROJECT read-only pilot
+
+After human approval of a project-bound MCP credential and its independently verified
+TLS origin, `TESBO_PILOT_READ_ONLY=1` on the existing
+`scripts/verify-production-mcp.sh` path checks the deployment build and catalog first,
+then calls only `list_testcases` (25-row sample including Archived) and `list_suites`.
+It reports bounded counts/status categories, **never names, IDs, source links, test data,
+credential material, or raw server errors**. No candidate is staged or official case
+published; it is not an execution or a claim of complete regression coverage.
+
+Use the existing dedicated TESBOPROJECT endpoint; this is neither a second project nor
+a new MCP client. A declined/missing grant, stale build, unsupported list tool, invalid
+response or shared/unbound endpoint **fails closed**. Completion still requires the
+separately authorized native staging/human review/approval and actual version-bound Run
+journey in the existing platform.

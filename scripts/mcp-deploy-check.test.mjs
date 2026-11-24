@@ -6,7 +6,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
-import { REQUIRED_TOOLS, PROPOSAL_TOOLS, catalogFingerprint, catalogGaps, schemaGaps, summarize } from "./mcp-deploy-check.mjs";
+import { REQUIRED_TOOLS, PROPOSAL_TOOLS, NATIVE_PILOT_READ_TOOLS,
+  readOnlyPilotCatalogGaps, summarizeNativePilotCases, catalogFingerprint, catalogGaps,
+  schemaGaps, summarize } from "./mcp-deploy-check.mjs";
 
 const text = { type: "string" };
 const citations = { type: "array" };
@@ -342,6 +344,7 @@ function invokeSyntheticMcp({ script = "mcp-deploy-check.mjs", mode = "complete"
     const hook = path.join(x.dir, "mock-fetch.mjs");
     const tools = validTools();
     if (mode === "duplicate-name-echo") tools.push(tool(fileToken), tool(fileToken));
+    if (mode.startsWith("pilot-") && mode !== "pilot-missing-tool") tools.push(tool("list_testcases"), tool("list_suites"));
     const instructions = "Synthetic MCP instructions";
     const build = mode === "version-echo" ? fileToken : "a".repeat(40);
     const version = `0.1.0+${build}.${catalogFingerprint(tools, instructions)}`;
@@ -354,7 +357,7 @@ const tools = ${JSON.stringify(tools)};
 globalThis.fetch = async (url, init = {}) => {
   const pathname = new URL(url).pathname;
   const authorization = init.headers?.Authorization ?? init.headers?.authorization ?? null;
-  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, JSON.stringify({ pathname, authorization, redirect: init.redirect, environmentBearerPresent: Boolean(process.env.TESBO_MCP_TOKEN) }) + "\\n");
+  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, JSON.stringify({ pathname, authorization, redirect: init.redirect, method: pathname === "/api/health" ? null : JSON.parse(init.body).method, tool: pathname === "/api/health" ? null : JSON.parse(init.body).params?.name || null, environmentBearerPresent: Boolean(process.env.TESBO_MCP_TOKEN) }) + "\\n");
   const mode = process.env.TESBO_MCP_TEST_MODE;
   if (mode === "native-header-validation") new Request(url, init);
   if (mode === "transport-error") throw new Error("Synthetic transport rejected " + authorization);
@@ -371,6 +374,17 @@ globalThis.fetch = async (url, init = {}) => {
     return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message: token } }), { status: 201 });
   }
   const request = JSON.parse(init.body);
+  if (request.method === "tools/call") {
+    if (mode === "pilot-refused") return new Response(JSON.stringify({jsonrpc:"2.0",error:{
+      code:-32001,message:authorization+" rejected"}}),{status:201});
+    const payload=request.params.name==="list_testcases"
+      ? (mode==="pilot-malformed" ? {unexpected:true} : [
+          {id:"private-case-1",title:"Highly confidential title",status:"Draft"},
+          {id:"private-case-2",title:"Unreleased feature",status:"Approved"}])
+      : {suites:[{id:"private-suite",name:"Top secret suite"}]};
+    return new Response(JSON.stringify({jsonrpc:"2.0",result:{
+      isError:false,content:[{type:"text",text:JSON.stringify(payload)}]}}),{status:201});
+  }
   const result = request.method === "initialize"
     ? { serverInfo: { version: ${JSON.stringify(version)} }, ...(mode === "missing-instructions" ? {} : { instructions: ${JSON.stringify(instructions)} }) }
     : { tools };
@@ -383,7 +397,7 @@ globalThis.fetch = async (url, init = {}) => {
       env: { ...process.env, NODE_OPTIONS: shell ? `--import=${pathToFileURL(hook).href}` : "", TESBO_MCP_URL: endpoint,
         TESBO_MCP_TOKEN_FILE: x.token, TESBO_MCP_TOKEN: environmentToken,
         EXPECTED_GIT_SHA: "a".repeat(40), EXPECTED_TOOL_COUNT: "", REQUIRE_PROPOSAL_PREVIEW: "",
-        TESBO_API_HEALTH_URL: "", TESBO_MCP_TEST_EVENTS: events, TESBO_MCP_TEST_MODE: mode },
+        TESBO_PILOT_READ_ONLY: mode.startsWith("pilot-") ? "1" : "", TESBO_API_HEALTH_URL: "", TESBO_MCP_TEST_EVENTS: events, TESBO_MCP_TEST_MODE: mode },
       encoding: "utf8", timeout: 12000
     });
     assert.equal(child.error, undefined, child.error?.message);
@@ -492,4 +506,82 @@ test("health and authenticated MCP redirects are refused without following anoth
   assert.equal(rpc.status, 1, rpc.stdout + rpc.stderr);
   assert.equal(rpc.requests.length, 2);
   assert.ok(rpc.requests.every(row => row.redirect === "manual"));
+});
+
+
+test("TESBOPROJECT pilot requires both pre-existing authorized read tools, not write methods", () => {
+  const allowed = [...validTools(), tool("list_testcases"), tool("list_suites")];
+  assert.deepEqual(NATIVE_PILOT_READ_TOOLS, ["list_testcases", "list_suites"]);
+  assert.deepEqual(readOnlyPilotCatalogGaps(allowed), []);
+  assert.deepEqual(readOnlyPilotCatalogGaps(validTools()), [
+    "native pilot read permission unavailable: list_testcases",
+    "native pilot read permission unavailable: list_suites"
+  ]);
+  assert.deepEqual(readOnlyPilotCatalogGaps(null), ["native pilot tool catalog is unavailable"]);
+});
+
+test("bounded native inventory reports only counts, never case identities or sensitive fields", () => {
+  const cases = [
+    { id: "private-case-A", title: "Sensitive medical case", status: "Draft", sourceRefs: ["private"] },
+    { id: "private-case-B", title: "Hidden client name", status: "Approved", token: "synthetic-secret" },
+    { id: "private-case-C", title: "Unknown confidential title", status: "not-known" }
+  ];
+  const suites = { suites: [{ id: "private-suite", name: "Secret owner suite" }] };
+  const result = summarizeNativePilotCases(cases, suites);
+  assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, suites: 1,
+    statusCounts: { Draft: 1, "In Review": 0, Approved: 1, Deprecated: 0, Archived: 0, Other: 1 },
+    fullCaseTotalVerified: false, recordMutation: false });
+  for(const privateValue of ["private-case-A", "private-suite", "Sensitive", "Hidden", "synthetic-secret"]) {
+    assert.ok(!JSON.stringify(result).includes(privateValue));
+  }
+});
+
+test("pilot refuses malformed, duplicate and unbounded native records", () => {
+  const one = {id:"same",status:"Draft"};
+  const suites = {suites:[{id:"s1"}]};
+  for(const c of [[one,one],[{}],new Array(26).fill(0).map((_,i)=>({id:String(i)}))]){
+    assert.throws(()=>summarizeNativePilotCases(c,suites),/incomplete|bounded/);
+  }
+  assert.throws(()=>summarizeNativePilotCases([one],{suites:[{name:"missing id"}]}),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({unexpected:[]},suites),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases([one],{suites:new Array(2001).fill(0).map((_,i)=>({id:String(i)}))}),/incomplete|bounded/);
+});
+
+test("native pilot invokes only two read tools and never discloses case identities",()=>{
+  const run=invokeSyntheticMcp({mode:"pilot-readonly"});
+  assert.equal(run.status,0,run.stdout+run.stderr);
+  assert.deepEqual(run.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),["list_testcases","list_suites"]);
+  assert.match(run.stdout,/"sampledCases":2/);
+  assert.match(run.stdout,/"suites":1/);
+  assert.match(run.stdout,/"recordMutation":false/);
+  for(const secret of ["private-case-1","private-suite","confidential","Unreleased","synthetic-file-token"]){
+    assert.ok(!run.stdout.includes(secret));assert.ok(!run.stderr.includes(secret));
+  }
+  assert.equal(run.requests[0].authorization,null);
+  assert.equal(run.requests.filter(x=>x.authorization).length,4);
+  assert.ok(run.requests.every(x=>x.redirect==="manual"));
+});
+test("native pilot missing read grants refuses without an attempted record query",()=>{
+  const run=invokeSyntheticMcp({mode:"pilot-missing-tool"});
+  assert.equal(run.status,1,run.stdout+run.stderr);
+  assert.match(run.stderr,/native pilot read permission unavailable/);
+  assert.equal(run.requests.filter(x=>x.method==="tools/call").length,0);
+});
+test("native pilot failure never reflects server token or private result",()=>{
+  for(const mode of ["pilot-refused","pilot-malformed"]){
+    const run=invokeSyntheticMcp({mode});
+    assert.equal(run.status,1,run.stdout+run.stderr);
+    assert.equal(run.requests.filter(x=>x.method==="tools/call").length,mode==="pilot-refused"?1:2);
+    for(const secret of ["synthetic-file-token","Highly confidential title","private-case-1"]){
+      assert.ok(!run.stdout.includes(secret));assert.ok(!run.stderr.includes(secret));
+    }
+  }
+});
+
+test("native pilot accepts the same project-path trailing slash as the approved-origin guard",()=>{
+  const result=invokeSyntheticMcp({mode:"pilot-readonly",
+    endpoint:"https://trusted.example.test/api/projects/example/mcp/"});
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  assert.deepEqual(result.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),
+    ["list_testcases","list_suites"]);
 });
