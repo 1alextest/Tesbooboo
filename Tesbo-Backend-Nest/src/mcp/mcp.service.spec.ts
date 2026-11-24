@@ -538,6 +538,35 @@ describe("McpService", () => {
       expect(res.error.message).toMatch(/"folderId"/i);
     });
 
+    it("stages a manual document candidate through the shared proposal owner", async () => {
+      const previous = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+      process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = "1";
+      try {
+        const stageManagedDocumentProposal = jest.fn().mockResolvedValue({ id: "task-doc-1", skillContext: { status: "resolved" } });
+        const legacy = makeLegacy({ stageManagedDocumentProposal });
+        const svc = new McpService(legacy, makeDb().db, writableLimits);
+        const body = {
+          requestKey: "agent-manual-1", operation: "update", documentId: "doc-1",
+          expectedRevision: "a".repeat(64),
+          document: { title: "Revised manual", contentText: "Body", governedMetadata: { schemaVersion: "tesbo-governed-document/1" } },
+          reason: "Security update",
+        };
+        const res: any = await svc.handleRequest(
+          rpc("tools/call", { name: "propose_manual_revision", arguments: body }),
+          principal(),
+          "proj-1"
+        );
+        expect(res.error).toBeUndefined();
+        expect(stageManagedDocumentProposal).toHaveBeenCalledWith("proj-1", "user-1",
+          expect.objectContaining({ ...body, documentType: "user_manual" }),
+          expect.objectContaining({ kind: "api_token", transport: "mcp", tokenId: expect.any(String) }),
+          "user_manual");
+      } finally {
+        if (previous === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = previous;
+      }
+    });
+
     it("passes the token's user through to create_knowledge_folder", async () => {
       const { db } = makeDb();
       const legacy = makeLegacy();
@@ -2107,8 +2136,8 @@ describe("MCP native model draft preview", () => {
   it("advertises a bounded exact schema and returns the shared native result without writes", async () => {
     const { svc, query } = setup();
     const list: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
-    expect(list.result.tools).toHaveLength(proposalReviewPreviewEnabled() ? 52 : 46);
-    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(proposalReviewPreviewEnabled() ? 52 : 46);
+    expect(list.result.tools).toHaveLength(proposalReviewPreviewEnabled() ? 56 : 46);
+    expect(new Set(list.result.tools.map((tool: any) => tool.name)).size).toBe(proposalReviewPreviewEnabled() ? 56 : 46);
     const tool = list.result.tools.find((t: any) => t.name === "preview_behavior_model_draft");
     expect(tool.inputSchema).toMatchObject({ additionalProperties: false, required: ["model"],
       properties: { model: { additionalProperties: false, properties: { states: { maxItems: 32 }, transitions: { maxItems: 64 } } } } });

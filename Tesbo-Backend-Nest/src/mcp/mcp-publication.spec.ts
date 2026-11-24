@@ -45,7 +45,8 @@ const taskId = "33333333-3333-4333-8333-333333333333";
 const testcaseId = "44444444-4444-4444-8444-444444444444";
 const revision = "a".repeat(64);
 const previewTools = ["stage_testcase_changes", "list_testcase_proposals", "get_testcase_proposal_task",
-  "stage_requirement_change_bundle", "get_requirement_proposal_task", "list_requirement_proposals"];
+  "stage_requirement_change_bundle", "get_requirement_proposal_task", "list_requirement_proposals",
+  "propose_manual_revision", "propose_policy_revision", "get_document_proposal", "list_document_proposals"];
 const principal = (scopes = ["read", "write"]) => ({ tokenId, projectId, userId: "issuer-user", scopes });
 const rpc = (name: string, args: Record<string, unknown> = {}) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
 
@@ -120,12 +121,12 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
     }
   );
 
-  it("advertises exactly 52 callable tools with preview on, with 26 read and 26 write tools", async () => {
+  it("advertises exactly 56 callable tools with preview on, with 28 read and 28 write tools", async () => {
     const f = fixture();
     const all = (await f.list()).result.tools;
-    expect(all).toHaveLength(52);
-    expect((await f.list(["read"])).result.tools).toHaveLength(26);
-    expect((await f.list(["write"])).result.tools).toHaveLength(26);
+    expect(all).toHaveLength(56);
+    expect((await f.list(["read"])).result.tools).toHaveLength(28);
+    expect((await f.list(["write"])).result.tools).toHaveLength(28);
     expect(all.map((tool: any) => tool.name)).toEqual(expect.arrayContaining(previewTools));
     for (const name of DIRECT_TESTCASE_PUBLISHERS) expect(all.map((tool: any) => tool.name)).not.toContain(name);
     expect(all.map((tool: any) => tool.name).some((name: string) => /approve|apply/.test(name))).toBe(false);

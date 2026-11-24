@@ -28,7 +28,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'b2f9ce02a06a7a688591b03e555008246df9e985',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'5854e79c30d0ce369e4db71799a2cc2a22f6bf90',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'df925a57c30f6c281dec27c82b77be517e0e33ae',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',
@@ -47,7 +47,7 @@ export const CHECKS=WORKFLOW_SOURCES.flatMap(source=>source.contexts);
 const PUBLISHER_SOURCES=[
  {path:'.github/workflows/assurance-pr-gate.yml',sha:'3910a61102a8765876f5134475be1a2e1506da63'},
  {path:'.github/assurance-policy.json',sha:'9b396e0aa7160b68453e99273a9ef285ea02f125'},
- {path:'scripts/assurance-pr-gate.mjs',sha:'ade522787581b2124d45c455c79ae833a6edaa2c'},
+ {path:'scripts/assurance-pr-gate.mjs',sha:'e96deb68c4db8274252170c27f766861ac32ad7b'},
  {path:'scripts/publish-assurance-status.mjs',sha:'856d664b0f6165ae6ffbfc75394866bd9c2379cf'}
 ];
 export const required=phase=>phase==='foundation'?CHECKS:phase==='assurance'?[...CHECKS,'specification-assurance']:(()=>{throw Error('Invalid phase')})();

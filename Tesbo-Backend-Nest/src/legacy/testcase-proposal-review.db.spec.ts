@@ -1621,6 +1621,129 @@ type Body=Record<string,any>;
       }
     },120000);
 
+    it("stages an agent manual candidate with a pinned Skill and applies only a native draft",async()=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",subtype:"manual",confidentiality:"internal",
+        distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:null,to:null},enforcementRefs:[]};
+      const skillIds:string[]=[];
+      let targetId="",createdId="",taskId="",createTaskId="",staleTaskId="",changedTaskId="";
+      try{
+        const skill=await skillFor("user_manuals","internal","manual_revision"); skillIds.push(skill.doc.id);
+        const target=await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Agent manual ${randomUUID()}`,
+          documentType:"user_manual",contentText:"Base body",contentHtml:"<p>Base body</p>",governedMetadata:metadata});
+        targetId=target.id;
+        const producer={kind:"api_token" as const,transport:"rest" as const,tokenId:token};
+        const staged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"update",documentId:targetId,expectedRevision:target.editRevision,
+          document:{title:`${target.title} revised`,contentText:"Revised body",contentHtml:"<p>Revised body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Revised body"}]}]},
+            governedMetadata:{...metadata,confidentiality:"confidential"}},reason:"Security update"
+        },producer);
+        taskId=staged.id;
+        expect(staged).toMatchObject({taskStatus:"in_review",skillContext:{status:"resolved"}});
+        const view=await service().managedDocumentProposalTask(project,user,taskId);
+        expect(view.managedDocumentProposal).toMatchObject({operation:"update",documentType:"user_manual",
+          target:{documentId:targetId,editRevision:target.editRevision},skillApplicability:{status:"current"}});
+        expect(view.managedDocumentProposal.proposed).toMatchObject({contentText:"Revised body",governedMetadata:{confidentiality:"confidential"}});
+        expect(view.managedDocumentProposal.diff.summary).toBeTruthy();
+        const untouched=(await admin.query(`SELECT content_text,governed_metadata,status,${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS r FROM knowledge_documents WHERE id=$1`,[targetId])).rows[0];
+        expect(untouched).toMatchObject({content_text:"Base body",status:"draft",r:target.editRevision});
+        await expect(service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},
+          {kind:"api_token"})).rejects.toMatchObject({status:403,response:{code:"HUMAN_REVIEW_REQUIRED"}});
+        await expect(service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},human))
+          .resolves.toMatchObject({taskStatus:"done",replayed:false,receipt:{document:{documentId:targetId,status:"draft"}}});
+        const after=await admin.query("SELECT content_text,governed_metadata,status,reviewed_version_id FROM knowledge_documents WHERE id=$1",[targetId]);
+        expect(after.rows[0]).toMatchObject({content_text:"Revised body",status:"draft",reviewed_version_id:null});
+        expect(after.rows[0].governed_metadata).toMatchObject({confidentiality:"confidential"});
+        const versionsAfter=(await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[targetId])).rows[0].n;
+        expect(await service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},human))
+          .toMatchObject({taskStatus:"done",replayed:true});
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[targetId])).rows[0].n).toBe(versionsAfter);
+
+        const policySkill=await skillFor("policies","internal","policy_revision"); skillIds.push(policySkill.doc.id);
+        const createStaged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"create",folderId:folder,
+          document:{title:`Agent policy ${randomUUID()}`,contentText:"Policy draft",contentHtml:"<p>Policy draft</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Policy draft"}]}]},
+            governedMetadata:{...metadata,subtype:"policy",enforcementRefs:["ACME-1"]}},reason:"New policy"
+        },producer,"policy");
+        createTaskId=createStaged.id;
+        const createView=await service().managedDocumentProposalTask(project,user,createStaged.id);
+        const created=await service().applyManagedDocumentProposal(project,user,createStaged.id,{expectedProposalRevision:createView.proposalRevision},human);
+        createdId=created.receipt.document.documentId;
+        expect((await admin.query("SELECT document_type,status,governed_metadata,embedding_status FROM knowledge_documents WHERE id=$1",[createdId])).rows[0])
+          .toMatchObject({document_type:"policy",status:"draft",embedding_status:"unsupported",governed_metadata:{subtype:"policy",enforcementRefs:["ACME-1"]}});
+
+        const staleStaged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"update",documentId:targetId,
+          expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
+          document:{title:`${target.title} stale`,contentText:"Stale body",contentHtml:"<p>Stale body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Stale body"}]}]},governedMetadata:metadata}
+        },producer);
+        staleTaskId=staleStaged.id;
+        const staleView=await service().managedDocumentProposalTask(project,user,staleTaskId);
+        await service().deactivateSkillAssignment(project,user,skill.assignmentId,{},human);
+        await expect(service().applyManagedDocumentProposal(project,user,staleTaskId,{expectedProposalRevision:staleView.proposalRevision},human))
+          .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_PROPOSAL_SKILL_STALE",applicability:"stale"}});
+        expect((await admin.query("SELECT content_text FROM knowledge_documents WHERE id=$1",[targetId])).rows[0].content_text).toBe("Revised body");
+
+        const restaffedSkill=await skillFor("user_manuals","internal","manual_revision"); skillIds.push(restaffedSkill.doc.id);
+        const changedStaged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"update",documentId:targetId,
+          expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
+          document:{title:`${target.title} changed`,contentText:"Changed body",contentHtml:"<p>Changed body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Changed body"}]}]},governedMetadata:metadata}
+        },producer);
+        changedTaskId=changedStaged.id;
+        const changedView=await service().managedDocumentProposalTask(project,user,changedTaskId);
+        await service().updateKnowledgeDocument(project,user,targetId,
+          {contentText:"Concurrent edit",expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision});
+        await expect(service().applyManagedDocumentProposal(project,user,changedTaskId,{expectedProposalRevision:changedView.proposalRevision},human))
+          .rejects.toMatchObject({status:409,response:{code:"PROPOSAL_TARGET_CONFLICT"}});
+        expect((await admin.query("SELECT content_text FROM knowledge_documents WHERE id=$1",[targetId])).rows[0].content_text).toBe("Concurrent edit");
+
+        // With the preview capability off, the dedicated routes refuse and the generic read must
+        // not become a side door to the same unpublished governed content, receipts or Skill basis.
+        const priorPreview=process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        try{
+          process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="0";
+          await expect(service().managedDocumentProposalTask(project,user,changedTaskId))
+            .rejects.toMatchObject({status:501});
+          const redacted=await service().zyraTask(project,user,changedTaskId);
+          expect(redacted.generatedPayload).toBeUndefined();
+          expect(redacted.proposalSnapshot).toBeUndefined();
+          expect(redacted.proposalRevision).toBeUndefined();
+          expect(redacted.saveEvents).toBeUndefined();
+          expect(redacted.skillContext).toBeUndefined();
+          expect(redacted.proposalReviewRevision).toBeUndefined();
+          expect(redacted.proposalProvenance).toBeUndefined();
+          expect(redacted.proposalRequestKey).toBeUndefined();
+          expect(redacted.proposalRequestDigest).toBeUndefined();
+          expect(redacted.activityLog).toBeUndefined();
+          expect(redacted.sourceSummary).toBeUndefined();
+          expect(redacted.managedDocumentProposalEntries).toBeUndefined();
+          expect(redacted.managedDocumentProposal).toBeUndefined();
+          expect(redacted.activities).toEqual([]);
+          expect(redacted.sources).toEqual([]);
+          const history=await service().aiHistory(project,user,{limit:"100"});
+          expect(history.list.some((entry:Body)=>entry.id===changedTaskId)).toBe(false);
+        }finally{
+          if(priorPreview===undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+          else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED=priorPreview;
+        }
+      }finally{
+        for(const id of [targetId,createdId].filter(Boolean)){
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
+        }
+        for(const id of [taskId,createTaskId,staleTaskId,changedTaskId].filter(Boolean)) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
+        await cleanupSkills(skillIds);
+      }
+    },120000);
+
     it.each(["apply","approval"])("marks a resolved pin stale after revocation before %s and preserves every native write",async phase=>{
       const skills=await publishSkills();
       let requirementId="";

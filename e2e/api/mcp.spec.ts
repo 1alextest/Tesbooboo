@@ -281,8 +281,8 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     const catalog = (await rpc("tools/list")).result.tools as Array<{ name: string }>;
     // Credential-visible catalog: the retired direct testcase publishers are hidden, so this is
     // fewer than the full registry even though the token has write scope.
-    expect(catalog).toHaveLength(52);
-    expect(new Set(catalog.map(item => item.name)).size).toBe(52);
+    expect(catalog).toHaveLength(56);
+    expect(new Set(catalog.map(item => item.name)).size).toBe(56);
     expect(catalog.map(item => item.name)).toContain("list_qa_graph_changes");
     expect(catalog.map(item => item.name)).toEqual(
       expect.arrayContaining([
@@ -792,8 +792,8 @@ test.describe("MCP sessions keep a client's tool list current across deploys", (
       // This test runs only in the explicitly enabled isolated preview profile. Counts are the
       // credential-visible catalog: retired direct publishers are hidden, and the governed-run
       // tool from the Model Studio work is visible to a write token.
-      expect(names, "freshly initialized deployed preview catalog").toHaveLength(52);
-      expect(new Set(names).size, "MCP names must be unique").toBe(52);
+      expect(names, "freshly initialized deployed preview catalog").toHaveLength(56);
+      expect(new Set(names).size, "MCP names must be unique").toBe(56);
       expect(names).toEqual(expect.arrayContaining([
         "list_qa_graph_changes", "capture_qa_graph_change", "preview_behavior_model_draft", "create_behavior_model",
         "save_behavior_model_revision", "link_behavior_model_case", "get_behavior_model_coverage", "archive_behavior_model",

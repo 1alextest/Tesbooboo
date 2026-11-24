@@ -33,6 +33,9 @@ jobs:
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
     name: Codacy Security Scan
     runs-on: ubuntu-latest
+    # Bound an unresponsive scanner; a timeout fails the job and cannot publish SARIF.
+    # This is an operational ceiling, not proof of completed analysis.
+    timeout-minutes: 180
     steps:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout code

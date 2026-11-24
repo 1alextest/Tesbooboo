@@ -306,3 +306,7 @@ The baseline: **any change that alters what the product does**, anywhere in
   fix. A fix without a failing-first test does not satisfy this rule.
 
 Exempt: docs, comments, formatting, and changes wholly inside `e2e/` itself.
+
+## PR and release finding reconciliation
+
+Before claiming PR/release acceptance, apply [engineering principle 18](AGENTS.md#engineering-principles--canonical) and its [independent finding reconciliation procedure](docs/agent-scope-discipline.md#independent-finding-reconciliation). Read actual security-bot threads, available alert/annotation evidence and scanner execution details, not only green workflow summaries. Record exact-head dispositions and unresolved access/coverage gaps in the existing PR handoff; Security and White must review the applicable evidence before clearance. Do not dismiss or suppress findings simply to make checks green. This is an assurance obligation, not authority to alter rulesets, approve your own changes or merge a draft.
