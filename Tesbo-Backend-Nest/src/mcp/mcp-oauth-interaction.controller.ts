@@ -163,6 +163,17 @@ export class McpOAuthInteractionController {
         ...(target.refreshRequested ? ["offline_access"] : [])].join(" "));
     }
     const grantId = await grant.save();
+    try {
+      await this.oauth.bindIssuedGrant(grantId, {
+        accountId: userId, clientId: target.clientId, resource: target.resource,
+        projectId: target.projectId, approvalRevision: target.accessRevision
+      });
+    } catch {
+      // A revoked or modified approval must never complete an OAuth consent.
+      // An unbound provider Grant grants no authority and is best-effort destroyed.
+      await this.oauth.discardUnboundGrant(grantId).catch(() => undefined);
+      throw new ForbiddenException({ error: "Project owner approval or membership changed during consent. Review and authorize again." });
+    }
     await provider.interactionFinished(req, res,
       { consent: { grantId } },
       { mergeWithLastSubmission: false });
