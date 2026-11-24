@@ -66,7 +66,7 @@ export function validateMcpAccess(value: unknown, knownTools?: ReadonlySet<strin
       let parsed: URL;
       try { parsed = new URL(client.oauthClientId); } catch { return fail("OAuth client_id must be an approved HTTPS URL"); }
       if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password ||
-          parsed.hash || parsed.search || parsed.origin === "https://localhost" ||
+          parsed.hash || parsed.search || parsed.hostname === "localhost" ||
           parsed.href !== client.oauthClientId) {
         return fail("OAuth client_id must be a canonical HTTPS URL without credentials or fragments");
       }
