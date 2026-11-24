@@ -97,7 +97,7 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     members.mockResolvedValue({ name: "Existing project", key: "TES" });
     approvedClient.mockResolvedValue({
       kind: "oauth_client", clientName: "QA approved browser client",
-      scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null
+      scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null, accessRevision: 1
     });
     details.mockResolvedValue({
       prompt: { name: "consent" },
@@ -129,13 +129,15 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     expect(html).toContain("list_testcases");
     const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(html)?.[1];
     expect(csrf).toBeDefined();
+    const review = /name="review" value="([a-f0-9]{64})"/.exec(html)?.[1];
+    expect(review).toBeDefined();
     const post = await request(UID, {
       method: "POST",
       headers: {
         "Origin": "https://tesbo.example",
         "Content-Type": "application/x-www-form-urlencoded"
       },
-      body: new URLSearchParams({ action: "approve", csrf: csrf! })
+      body: new URLSearchParams({ action: "approve", csrf: csrf!, review: review! })
     });
     expect(post.status).toBe(200);
     expect(await post.json()).toEqual({ completedInteraction: { consent: { grantId: "ci-only-grant" } } });
@@ -143,6 +145,28 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     expect(save).toHaveBeenCalledTimes(1);
     expect(finish).toHaveBeenCalledTimes(1);
     expect(resolveSession).toHaveBeenCalledWith(SESSION);
+  });
+
+  it("rejects a stale displayed permission review through the real HTTP form", async () => {
+    const page = await request(UID);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(html)?.[1];
+    const review = /name="review" value="([a-f0-9]{64})"/.exec(html)?.[1];
+    expect(csrf).toBeDefined();
+    expect(review).toBeDefined();
+    approvedClient.mockResolvedValue({
+      kind: "oauth_client", clientName: "QA approved browser client",
+      scopes: ["read"], allowedTools: null, expiresAt: null, accessRevision: 2
+    });
+    const post = await request(UID, {
+      method: "POST",
+      headers: { Origin: "https://tesbo.example", "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ action: "approve", csrf: csrf!, review: review! })
+    });
+    expect(post.status).toBe(403);
+    expect(save).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
   });
 
   it.each([
