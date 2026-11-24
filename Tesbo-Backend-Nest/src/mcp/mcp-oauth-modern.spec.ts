@@ -32,6 +32,39 @@ describe("OAuth-only modern MCP 2026 stateless codec", () => {
       "https://tesbo.example")).toEqual({ ok: true, method: "server/discover", id: 1 });
   });
 
+  it("accepts omitted descriptive clientInfo while still requiring capabilities and the exact protocol", () => {
+    const minimal = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    };
+    expect(validateModernMcpRequest(incoming("tools/list"),
+      rpc("tools/list", { _meta: minimal }), "https://tesbo.example"))
+      .toEqual({ ok: true, method: "tools/list", id: 1 });
+
+    // Descriptive names are not verified client identities. Even a name such
+    // as 'owner' must not affect the authenticated token or grant.
+    const claimed = {
+      ...minimal,
+      "io.modelcontextprotocol/clientInfo": { name: "project-owner", version: "999" }
+    };
+    expect(validateModernMcpRequest(incoming("tools/list"),
+      rpc("tools/list", { _meta: claimed }), "https://tesbo.example"))
+      .toEqual({ ok: true, method: "tools/list", id: 1 });
+
+    for (const broken of [
+      { ...minimal, "io.modelcontextprotocol/clientCapabilities": undefined },
+      { ...minimal, "io.modelcontextprotocol/clientCapabilities": null },
+      { ...minimal, "io.modelcontextprotocol/clientInfo": { name: "client" } },
+      { ...minimal, "io.modelcontextprotocol/clientInfo": "untrusted" }
+    ]) {
+      const result = validateModernMcpRequest(incoming("tools/list"),
+        rpc("tools/list", { _meta: broken }), "https://tesbo.example");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.body)
+        .toHaveProperty("error", expect.objectContaining({ code: -32600 }));
+    }
+  });
+
   it("accepts read-only tools/list and correctly mirrored tools/call names", () => {
     expect(validateModernMcpRequest(incoming("tools/list"), rpc("tools/list"), "https://tesbo.example"))
       .toEqual({ ok: true, method: "tools/list", id: 1 });
