@@ -509,7 +509,7 @@ describe("McpService", () => {
       expect((legacy as any).moveKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "doc-1", {
         documentId: "doc-1",
         folderId: "folder-2"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects move_knowledge_document without folderId", async () => {
