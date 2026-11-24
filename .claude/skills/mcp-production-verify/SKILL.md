@@ -131,7 +131,8 @@ After human approval of a project-bound MCP credential and its independently ver
 TLS origin, `TESBO_PILOT_READ_ONLY=1` on the existing
 `scripts/verify-production-mcp.sh` path checks the deployment build and catalog first,
 then calls only `list_testcases` (25-row sample including Archived) and `list_suites`.
-It reports bounded counts/status categories, **never names, IDs, source links, test data,
+It reports the native paginated `rows` sample and `total` count as aggregates with an explicit
+complete-versus-sampled flag, **never case names, IDs, source links, test data,
 credential material, or raw server errors**. No candidate is staged or official case
 published; it is not an execution or a claim of complete regression coverage.
 

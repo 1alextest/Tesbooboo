@@ -60,10 +60,16 @@ export function readOnlyPilotCatalogGaps(tools) {
     .map(name => "native pilot read permission unavailable: " + name);
 }
 export function summarizeNativePilotCases(casesResponse, suitesResponse) {
-  const cases = Array.isArray(casesResponse) ? casesResponse : casesResponse?.testcases;
+  // Native list_testcases uses {rows, total}, the same paginated owner as REST and the
+  // established MCP E2E contract. Do not substitute an imagined array/testcases envelope.
+  const cases = casesResponse?.rows;
+  const reportedTotal = casesResponse?.total;
   const suites = suitesResponse?.suites;
-  if (!Array.isArray(cases) || !Array.isArray(suites) || cases.length > 25 || suites.length > 2000 ||
-      cases.some(value => !value || typeof value.id !== "string" || !value.id) ||
+  if (!Array.isArray(cases) || !Number.isSafeInteger(reportedTotal) || reportedTotal < 0 ||
+      !Array.isArray(suites) || cases.length > 25 || suites.length > 2000 ||
+      cases.length !== Math.min(reportedTotal, 25) ||
+      cases.some(value => !value || typeof value.id !== "string" || !value.id ||
+        typeof value.status !== "string") ||
       suites.some(value => !value || typeof value.id !== "string" || !value.id) ||
       new Set(cases.map(value => value.id)).size !== cases.length ||
       new Set(suites.map(value => value.id)).size !== suites.length) {
@@ -74,8 +80,9 @@ export function summarizeNativePilotCases(casesResponse, suitesResponse) {
     const key = Object.hasOwn(statusCounts, item.status) ? item.status : "Other";
     statusCounts[key]++;
   }
-  return { sampledCases: cases.length, sampleLimit: 25, suites: suites.length,
-    statusCounts, fullCaseTotalVerified: false, recordMutation: false };
+  return { sampledCases: cases.length, sampleLimit: 25, reportedCaseTotal: reportedTotal,
+    suites: suites.length, statusCounts, fullCaseTotalVerified: reportedTotal === cases.length,
+    recordMutation: false };
 }
 
 const RETIRED_PUBLISHERS = ["create_testcase", "update_testcase", "archive_testcase", "restore_testcase", "duplicate_testcase",

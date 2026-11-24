@@ -378,9 +378,13 @@ globalThis.fetch = async (url, init = {}) => {
     if (mode === "pilot-refused") return new Response(JSON.stringify({jsonrpc:"2.0",error:{
       code:-32001,message:authorization+" rejected"}}),{status:201});
     const payload=request.params.name==="list_testcases"
-      ? (mode==="pilot-malformed" ? {unexpected:true} : [
-          {id:"private-case-1",title:"Highly confidential title",status:"Draft"},
-          {id:"private-case-2",title:"Unreleased feature",status:"Approved"}])
+      ? (mode==="pilot-malformed" ? {unexpected:true} :
+         mode==="pilot-short-page" ? {rows:[{id:"private-case-1",status:"Draft"}],total:4} :
+         mode==="pilot-large-total" ? {rows:new Array(25).fill(0).map((_,i)=>({
+           id:"private-case-"+i,title:"Sensitive",status:"Draft"})),total:38} :
+         {rows:[
+           {id:"private-case-1",title:"Highly confidential title",status:"Draft"},
+           {id:"private-case-2",title:"Unreleased feature",status:"Approved"}],total:2})
       : {suites:[{id:"private-suite",name:"Top secret suite"}]};
     return new Response(JSON.stringify({jsonrpc:"2.0",result:{
       isError:false,content:[{type:"text",text:JSON.stringify(payload)}]}}),{status:201});
@@ -521,16 +525,16 @@ test("TESBOPROJECT pilot requires both pre-existing authorized read tools, not w
 });
 
 test("bounded native inventory reports only counts, never case identities or sensitive fields", () => {
-  const cases = [
+  const cases = { rows: [
     { id: "private-case-A", title: "Sensitive medical case", status: "Draft", sourceRefs: ["private"] },
     { id: "private-case-B", title: "Hidden client name", status: "Approved", token: "synthetic-secret" },
     { id: "private-case-C", title: "Unknown confidential title", status: "not-known" }
-  ];
+  ], total: 3 };
   const suites = { suites: [{ id: "private-suite", name: "Secret owner suite" }] };
   const result = summarizeNativePilotCases(cases, suites);
-  assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, suites: 1,
+  assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, reportedCaseTotal: 3, suites: 1,
     statusCounts: { Draft: 1, "In Review": 0, Approved: 1, Deprecated: 0, Archived: 0, Other: 1 },
-    fullCaseTotalVerified: false, recordMutation: false });
+    fullCaseTotalVerified: true, recordMutation: false });
   for(const privateValue of ["private-case-A", "private-suite", "Sensitive", "Hidden", "synthetic-secret"]) {
     assert.ok(!JSON.stringify(result).includes(privateValue));
   }
@@ -539,12 +543,17 @@ test("bounded native inventory reports only counts, never case identities or sen
 test("pilot refuses malformed, duplicate and unbounded native records", () => {
   const one = {id:"same",status:"Draft"};
   const suites = {suites:[{id:"s1"}]};
-  for(const c of [[one,one],[{}],new Array(26).fill(0).map((_,i)=>({id:String(i)}))]){
-    assert.throws(()=>summarizeNativePilotCases(c,suites),/incomplete|bounded/);
-  }
-  assert.throws(()=>summarizeNativePilotCases([one],{suites:[{name:"missing id"}]}),/incomplete|bounded/);
-  assert.throws(()=>summarizeNativePilotCases({unexpected:[]},suites),/incomplete|bounded/);
-  assert.throws(()=>summarizeNativePilotCases([one],{suites:new Array(2001).fill(0).map((_,i)=>({id:String(i)}))}),/incomplete|bounded/);
+  for (const response of [
+    {rows:[one,one], total:2}, {rows:[{}], total:1},
+    {rows:new Array(26).fill(0).map((_,i)=>({id:String(i),status:"Draft"})), total:26},
+    {rows:[one],total:3}, {rows:[one], total:0},
+    {rows:[one],total:"1"}, {rows:[one],total:1.5},
+    {rows:[]}, {testcases:[one],total:1},
+    [one]
+  ]) assert.throws(()=>summarizeNativePilotCases(response,suites),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({rows:[one],total:1},{suites:[{name:"missing id"}]}),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({rows:[one],total:1},{suites:new Array(2001).fill(0).map((_,i)=>({id:String(i)}))}),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({rows:[one],total:1},{suites:[{id:"s1"},{id:"s1"}]}),/incomplete|bounded/);
 });
 
 test("native pilot invokes only two read tools and never discloses case identities",()=>{
@@ -584,4 +593,27 @@ test("native pilot accepts the same project-path trailing slash as the approved-
   assert.equal(result.status,0,result.stdout+result.stderr);
   assert.deepEqual(result.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),
     ["list_testcases","list_suites"]);
+});
+
+test("native paginated total reports a bounded sample rather than claiming every case was read",()=>{
+  const list = { rows: Array.from({length:25},(_,i)=>({id:"private-"+i,status:"Draft"})),total:38 };
+  const result = summarizeNativePilotCases(list,{suites:[]});
+  assert.deepEqual([result.sampledCases,result.reportedCaseTotal,result.fullCaseTotalVerified],
+    [25,38,false]);
+  assert.ok(!JSON.stringify(result).includes("private-"));
+  assert.deepEqual(summarizeNativePilotCases({rows:[],total:0},{suites:[]}).statusCounts,
+    {Draft:0,"In Review":0,Approved:0,Deprecated:0,Archived:0,Other:0});
+});
+
+test("live-entrypoint fixture enforces native rows/total pagination completeness",()=>{
+  const valid=invokeSyntheticMcp({mode:"pilot-large-total"});
+  assert.equal(valid.status,0,valid.stdout+valid.stderr);
+  assert.match(valid.stdout,/"reportedCaseTotal":38/);
+  assert.match(valid.stdout,/"sampledCases":25/);
+  assert.match(valid.stdout,/"fullCaseTotalVerified":false/);
+  assert.ok(!valid.stdout.includes("private-case-"));
+  const short=invokeSyntheticMcp({mode:"pilot-short-page"});
+  assert.equal(short.status,1,short.stdout+short.stderr);
+  assert.match(short.stderr,/incomplete or outside its bounded read contract/);
+  assert.ok(!short.stderr.includes("private-case-"));
 });
