@@ -188,6 +188,31 @@ test('scope detects renamed protected files and keeps unrelated changes not appl
   snapshot.reviews = [];
   assert.equal(evaluateAssurance(snapshot).status, 'not_applicable');
 });
+test('agent instructions and living skills receive independent assurance even for rename and no-change claims', () => {
+  const guarded = [
+    'AGENTS.md',
+    'docs/agent-skills/living-security-engineering/SKILL.md',
+    'docs/agent-skills/evidence-grounded-decisions/SKILL.md',
+    'docs/agent-skills/a-new-context/SKILL.md',
+  ];
+  for (const filename of guarded) {
+    assert.equal(requiresAssurance(filename), true, filename);
+    const snapshot = fixtureSnapshot();
+    snapshot.files = [{ filename, status: 'modified', sha: 'd'.repeat(40) }];
+    snapshot.reviews = [];
+    assert.equal(evaluateAssurance(snapshot).status, 'blocked', filename);
+    // A rename of governed guidance must not escape by moving the file elsewhere.
+    assert.equal(requiresAssurance({filename:'notes/archived.md',previous_filename:filename}), true);
+  }
+  const unrelated = fixtureSnapshot();
+  unrelated.files = [{filename:'README.md',status:'modified',sha:'d'.repeat(40)}];
+  unrelated.reviews = [];
+  assert.equal(evaluateAssurance(unrelated).status, 'not_applicable');
+  unrelated.reviewThreads = [{id:'finding',isResolved:false,isOutdated:true}];
+  assert.equal(evaluateAssurance(unrelated).status, 'blocked',
+    'all native unresolved findings block even unrelated file paths');
+});
+
 test('draft and unsupported target branches refuse; closed PRs receive no approval', () => {
   const draft = fixtureSnapshot(); draft.pr.draft = true; blocked(draft);
   const target = fixtureSnapshot(); target.pr.base.ref = 'unreviewed-feature'; blocked(target);
