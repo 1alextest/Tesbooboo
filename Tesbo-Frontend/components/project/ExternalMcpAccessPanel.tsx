@@ -1,8 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type McpClientGrant, type ProjectMcpAccess } from "@/lib/api";
+import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type McpClientGrant, type OAuthMcpClientGrant, type ProjectMcpAccess } from "@/lib/api";
 import { Button, Card, Field, FieldLabel, Input } from "@/components/ui";
+
+function clientGrantIdentity(client: McpClientGrant): string {
+  return "tokenId" in client ? `api:${client.tokenId}` : `oauth:${client.oauthClientId}`;
+}
 
 type ExternalMcpAccessPanelProps = { projectId: string; canManage: boolean; refreshKey?: number };
 
@@ -24,6 +28,9 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
   const [allowWrite, setAllowWrite] = useState(false);
   const [expiresAt, setExpiresAt] = useState("");
   const [tools, setTools] = useState("");
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientName, setOauthClientName] = useState("");
+  const [oauthExpiresAt, setOauthExpiresAt] = useState("");
   const requestGeneration = useRef<{ active: boolean } | null>(null);
   const pendingSave = useRef<{ active: boolean } | null>(null);
 
@@ -34,6 +41,7 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
     pendingSave.current = null;
     setAccess(null); setTokens([]); setError(null); setNotice(null); setSaving(false);
     setTokenId(""); setClientName(""); setAllowWrite(false); setExpiresAt(""); setTools("");
+    setOauthClientId(""); setOauthClientName(""); setOauthExpiresAt("");
     setLoading(canManage);
     if (!canManage) return () => { generation.active = false; };
     Promise.all([getProjectMcpAccess(projectId), listApiKeys(projectId)]).then(([next, nextTokens]) => {
@@ -89,8 +97,34 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
     }
   }
 
+  async function addOauthClient(event: FormEvent) {
+    event.preventDefault();
+    if (!access || saving || loading || !canManage) return;
+    const candidate = oauthClientId.trim();
+    let parsed: URL;
+    try { parsed = new URL(candidate); } catch { setError("Enter the canonical HTTPS URL of the OAuth client metadata document."); return; }
+    if (candidate !== parsed.href || parsed.protocol !== "https:" || parsed.username || parsed.password ||
+        parsed.hash || parsed.search || parsed.hostname === "localhost" || !oauthClientName.trim()) {
+      setError("The OAuth client ID must be a canonical HTTPS URL and the client must have a name.");
+      return;
+    }
+    if (access.clients.some(client => clientGrantIdentity(client) === `oauth:${candidate}`)) {
+      setError("That OAuth client already has a project grant.");
+      return;
+    }
+    const grant: OAuthMcpClientGrant = {
+      kind: "oauth_client", oauthClientId: candidate, clientName: oauthClientName.trim(),
+      scopes: ["read"], allowedTools: null,
+      expiresAt: oauthExpiresAt ? new Date(oauthExpiresAt).toISOString() : null
+    };
+    if (await save({ ...access, clients: [...access.clients, grant] },
+      "Read-only OAuth client identity preapproved. This is not a connection; the user must still complete login and consent.")) {
+      setOauthClientId(""); setOauthClientName(""); setOauthExpiresAt("");
+    }
+  }
+
   if (!canManage) return <p className="text-sm text-[var(--muted)]">A project owner or manager must enable external MCP access and approve each client credential.</p>;
-  const availableTokens = tokens.filter(token => !access?.clients.some(client => client.tokenId === token.id));
+  const availableTokens = tokens.filter(token => !access?.clients.some(client => "tokenId" in client && client.tokenId === token.id));
   const selectedToken = tokens.find(token => token.id === tokenId);
 
   return <Card className="space-y-4 p-4" aria-labelledby="external-mcp-heading">
@@ -114,16 +148,17 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
       </div>
       <ul className="space-y-3" aria-label="Approved MCP clients">
         {access.clients.map(client => {
-          const token = tokens.find(item => item.id === client.tokenId);
-          return <li key={client.tokenId} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] p-3">
+          const isOauth = "kind" in client && client.kind === "oauth_client";
+          const token = "tokenId" in client ? tokens.find(item => item.id === client.tokenId) : undefined;
+          return <li key={clientGrantIdentity(client)} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] p-3">
             <div className="min-w-0 text-sm">
               <p className="font-semibold break-words">{client.clientName}</p>
-              <p className="text-[var(--muted)]">{token ? `${token.name} · ${token.tokenPrefix}` : "Credential revoked or unavailable"}</p>
+              <p className="text-[var(--muted)]">{isOauth ? `OAuth identity preapproved (not connected): ${"oauthClientId" in client ? client.oauthClientId : ""}` : token ? `${token.name} · ${token.tokenPrefix}` : "Credential revoked or unavailable"}</p>
               <p>{client.scopes.join(" + ")} · {client.allowedTools ? `Tools: ${client.allowedTools.join(", ")}` : "All tools within these scopes"}</p>
               <p>{client.expiresAt ? `Expires ${new Date(client.expiresAt).toLocaleString()}` : "No grant expiry set"}</p>
               {token && <p className="text-[var(--muted)]">Credential last used: {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : "Never"}</p>}
             </div>
-            <Button variant="secondary" disabled={saving || loading} onClick={() => void save({ ...access, clients: access.clients.filter(item => item.tokenId !== client.tokenId) }, "Client access revoked. Subsequent MCP requests are blocked.")}>Revoke {client.clientName}</Button>
+            <Button variant="secondary" disabled={saving || loading} onClick={() => void save({ ...access, clients: access.clients.filter(item => clientGrantIdentity(item) !== clientGrantIdentity(client)) }, "Client access revoked. Subsequent MCP requests are blocked.")}>Revoke {client.clientName}</Button>
           </li>;
         })}
       </ul>
@@ -144,6 +179,32 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
         <p className="text-xs text-[var(--muted)]">The grant is bound to this credential, not to a name supplied by the connecting app. Use a different credential for each client.</p>
         <Button type="submit" disabled={saving || loading || !tokenId || !clientName.trim()}>Approve client</Button>
         <Button type="button" variant="secondary" disabled={saving || loading} onClick={() => setReloadKey(key => key + 1)}>Reload credentials</Button>
+      </form>
+      <form onSubmit={addOauthClient} className="space-y-3 border-t border-[var(--border)] pt-4" aria-labelledby="oauth-client-grant-title">
+        <h3 id="oauth-client-grant-title" className="font-semibold">Preapprove an OAuth client — read only</h3>
+        <p className="text-sm text-[var(--muted)]">
+          This approves a client identity in the existing project policy. It does not connect the app,
+          grant consent on a user&apos;s behalf, issue an OAuth token, or permit publishing test cases.
+          Each user must separately authorize access when OAuth becomes available.
+        </p>
+        <Field><FieldLabel htmlFor="mcp-oauth-client-id">OAuth client ID metadata URL (HTTPS)</FieldLabel>
+          <Input id="mcp-oauth-client-id" type="url" value={oauthClientId} maxLength={2048}
+            disabled={saving || loading} onChange={event => setOauthClientId(event.target.value)}
+            placeholder="https://client.example/oauth/client.json" />
+        </Field>
+        <Field><FieldLabel htmlFor="mcp-oauth-client-name">Client label</FieldLabel>
+          <Input id="mcp-oauth-client-name" value={oauthClientName} maxLength={100}
+            disabled={saving || loading} onChange={event => setOauthClientName(event.target.value)}
+            placeholder="Read-only QA client" />
+        </Field>
+        <Field><FieldLabel htmlFor="mcp-oauth-client-expiry">Project approval expiry (optional)</FieldLabel>
+          <Input id="mcp-oauth-client-expiry" type="datetime-local" value={oauthExpiresAt}
+            disabled={saving || loading} onChange={event => setOauthExpiresAt(event.target.value)} />
+        </Field>
+        <p className="text-xs text-[var(--muted)]">Read-only scope only. Client metadata must be verified during the future OAuth handshake; this label is not evidence of client authenticity.</p>
+        <Button type="submit" disabled={saving || loading || !oauthClientId.trim() || !oauthClientName.trim()}>
+          Preapprove read-only client
+        </Button>
       </form>
     </>}
   </Card>;
