@@ -16336,7 +16336,16 @@ export class LegacyService implements OnModuleInit {
         (principal.kind === "api_token" && !isUuid(String(principal.tokenId || "")))) {
       throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
     }
-    const documentType = forcedType ?? String(body.documentType || "");
+    let documentType = forcedType ?? String(body.documentType || "");
+    // An update may omit documentType; the locked target is authoritative. Derive the type for
+    // validation, then re-check it inside the transaction where the row is locked.
+    if (!documentType && String(body.operation || "") === "update" && isUuid(String(body.documentId || ""))) {
+      const targetType = (await this.db.query(
+        "SELECT document_type FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false",
+        [String(body.documentId), projectId]
+      )).rows[0]?.document_type;
+      if (targetType) documentType = String(targetType);
+    }
     if (!isGovernedDocumentType(documentType)) throw new BadRequestException({ error: "documentType must be user_manual or policy" });
     const requestKey = typeof body.requestKey === "string" ? body.requestKey.trim() : "";
     if (!requestKey || requestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
