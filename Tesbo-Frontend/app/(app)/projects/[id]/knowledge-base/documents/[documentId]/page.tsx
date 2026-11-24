@@ -366,8 +366,10 @@ export default function KnowledgeDocumentPage() {
     if (!writer) throw new Error("Reload this document before reviewing it.");
     // A decision binds the exact submitted revision. Do not silently drop an unsaved editor draft:
     // make the reviewer save/discard it (which re-drafts and requires a refreshed submission) first.
-    // saveStatus covers a debounce that already failed, where the timer/refs are null.
-    if (saveTimer.current || pendingAutosave.current || saveStatus !== "saved" || writer.needsReadback) {
+    // saveStatus covers a debounce that already failed, where the timer/refs are null. Do not
+    // include writer.needsReadback: a failed decision also sets it, and retrying the decision must
+    // remain possible without an unrelated document save.
+    if (saveTimer.current || pendingAutosave.current || saveStatus !== "saved") {
       throw new Error("Save or discard the current editor draft before approving or rejecting this submitted version.");
     }
     const updated = await writer.restore(() => decision === "approved"
