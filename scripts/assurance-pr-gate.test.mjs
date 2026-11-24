@@ -191,6 +191,10 @@ test('scope detects renamed protected files and keeps unrelated changes not appl
 test('agent instructions and living skills receive independent assurance even for rename and no-change claims', () => {
   const guarded = [
     'AGENTS.md',
+    'CLAUDE.md',
+    'skills-lock.json',
+    '.agents/skills/langfuse/SKILL.md',
+    '.claude/skills/mcp-production-verify/SKILL.md',
     'docs/agent-skills/living-security-engineering/SKILL.md',
     'docs/agent-skills/evidence-grounded-decisions/SKILL.md',
     'docs/agent-skills/a-new-context/SKILL.md',
