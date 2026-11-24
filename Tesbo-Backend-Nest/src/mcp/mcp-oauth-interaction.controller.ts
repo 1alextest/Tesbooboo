@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { oauthReferenceFingerprint } from "../common/crypto.util";
 import { AppConfigService } from "../config/app-config.service";
-import { LegacyService } from "../legacy/legacy.service";
+import { McpService } from "./mcp.service";
 import { McpOAuthServer } from "../auth/mcp-oauth-server";
 
 type InteractionDetails = {
@@ -36,7 +36,7 @@ function safeEquals(left: string, right: string): boolean {
 export class McpOAuthInteractionController {
   constructor(
     private readonly oauth: McpOAuthServer,
-    private readonly legacy: LegacyService,
+    private readonly mcp: McpService,
     private readonly config: AppConfigService
   ) {}
 
@@ -68,7 +68,7 @@ export class McpOAuthInteractionController {
     const projectId = this.oauth.projectIdFromResource(resource);
     const approved = await this.oauth.approvedClient(clientId, resource);
     if (!approved) throw new ForbiddenException({ error: "Project owner has not approved this OAuth client" });
-    const project = await this.legacy.requireProjectAccess(userId, projectId);
+    const project = await this.mcp.requireOAuthConsentProject(userId, projectId);
     const requestedScopes = scope.split(/\s+/);
     return { userId, clientId, projectId, resource, clientName: approved.clientName,
       projectName: project.name || project.key || projectId,
