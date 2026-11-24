@@ -714,6 +714,7 @@ type Body=Record<string,any>;
         // Hold the task row after the initial authorization check, change the role, then release:
         // the post-wait check must re-read and normalize the current role.
         const waitBundle=await stageBundle(ops()); taskIds.push(waitBundle.id);
+        const beforeWait=await bundleWrites(waitBundle.id);
         const blocker=new Client({connectionString:url}); await blocker.connect();
         let pending:Promise<{v?:Body;e?:Body}>|undefined;
         try{
@@ -743,6 +744,21 @@ type Body=Record<string,any>;
           await blocker.end();
         }
         expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[waitBundle.id])).rows[0].task_status).toBe("in_review");
+        const afterWait=await bundleWrites(waitBundle.id);
+        expect({documents:afterWait.documents,cases:afterWait.cases,links:afterWait.links})
+          .toEqual({documents:beforeWait.documents,cases:beforeWait.cases,links:beforeWait.links});
+
+        // Rejection is the same authority decision as approval; a legacy alias can reject, and
+        // the refusal leaves no requirement, case or link behind.
+        await admin.query("UPDATE project_members SET role='test_manager' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+        const rejectionBundle=await stageBundle(ops()); taskIds.push(rejectionBundle.id);
+        const beforeRejection=await bundleWrites(rejectionBundle.id);
+        await service().rejectRequirementProposal(project,legacyId,rejectionBundle.id,
+          {expectedProposalRevision:rejectionBundle.proposalRevision,reason:"Legacy role rejection"},human);
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[rejectionBundle.id])).rows[0].task_status).toBe("done");
+        const afterRejection=await bundleWrites(rejectionBundle.id);
+        expect({documents:afterRejection.documents,cases:afterRejection.cases,links:afterRejection.links})
+          .toEqual({documents:beforeRejection.documents,cases:beforeRejection.cases,links:beforeRejection.links});
       }finally{
         for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
         if(requirementId) await cleanupRequirement(requirementId);
@@ -754,6 +770,58 @@ type Body=Record<string,any>;
           await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,id]);
           await admin.query("DELETE FROM users WHERE id=$1",[id]);
         }
+        await cleanupSkills(skillIds);
+      }
+    },120000);
+
+    it("re-reads the project's proposal capability after the task wait",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let taskId="";
+      let pending:Promise<{v?:Body;e?:Body}>|undefined;
+      const blocker=new Client({connectionString:url}); await blocker.connect();
+      const before=(await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings;
+      try{
+        const bundle=await stageBundle(ops()); taskId=bundle.id;
+        const beforeCapability=await bundleWrites(bundle.id);
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[taskId]);
+        pending=service().applyRequirementProposal(project,user,taskId,
+          {expectedProposalRevision:bundle.proposalRevision},human).then(v=>({v}),e=>({e}));
+        const deadline=Date.now()+30000;
+        let sawWait=false;
+        while(Date.now()<deadline){
+          if(await waitingOn("%ai_generation_requests%FOR UPDATE%")){sawWait=true;break;}
+          await new Promise(resolve=>setTimeout(resolve,50));
+        }
+        expect(sawWait).toBe(true);
+        // The initial preflight saw the capability enabled; disable it while the apply waits.
+        // Replace each intermediate object explicitly: jsonb_set does not create a path through a
+        // JSON null intermediate, which would leave the setting unchanged and pass for the wrong reason.
+        await admin.query(
+          `UPDATE projects SET settings=jsonb_set(COALESCE(settings,'{}'::jsonb),'{zyraAgent}',
+             jsonb_set(COALESCE(settings->'zyraAgent','{}'::jsonb),'{capabilities}',
+               jsonb_set(COALESCE(settings#>'{zyraAgent,capabilities}','{}'::jsonb),'{testcaseStorage}','false'::jsonb,true),true),true)
+           WHERE id=$1`,
+          [project]);
+        expect((await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings)
+          .toMatchObject({zyraAgent:{capabilities:{testcaseStorage:false}}});
+        await blocker.query("COMMIT");
+        const settled=await Promise.race([
+          pending,
+          new Promise<{e?:Body}>((resolve)=>setTimeout(()=>resolve({e:{status:0,code:"TEST_WAIT_TIMEOUT"}}),30000))
+        ]);
+        expect(settled.e).toMatchObject({status:403});
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[taskId])).rows[0].task_status).toBe("in_review");
+        const afterCapability=await bundleWrites(bundle.id);
+        expect({documents:afterCapability.documents,cases:afterCapability.cases,links:afterCapability.links})
+          .toEqual({documents:beforeCapability.documents,cases:beforeCapability.cases,links:beforeCapability.links});
+      }finally{
+        await blocker.query("ROLLBACK").catch(()=>undefined);
+        if(pending) await Promise.race([pending,new Promise(resolve=>setTimeout(resolve,5000))]);
+        await blocker.end();
+        await admin.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",[project,JSON.stringify(before ?? {})]);
+        if(taskId) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[taskId]);
         await cleanupSkills(skillIds);
       }
     },120000);
