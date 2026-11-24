@@ -152,7 +152,9 @@ submission. KBU-73 runs both pre-POST-commit failure and post-commit response lo
 verifies same-key replay, no duplicate editor UPDATE, one immutable submitted version,
 and preservation of visible content. KBU-74 forces a competing external edit after the
 first POST fails and asserts that retry neither overwrites the competing revision nor
-manufactures a submitted snapshot, while retaining the visible local draft. Official Tesbo execution remains
+manufactures a submitted snapshot, while retaining the visible local draft. KBU-75 verifies that an exact-key retry
+returns the existing immutable submission receipt even when an authorized owner has
+already approved that version; retry must not rewrite or re-open the approved document. Official Tesbo execution remains
 distinct from the Playwright CI result.
 
 ### 3.5 Mutation permission matrix
