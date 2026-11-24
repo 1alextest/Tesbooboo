@@ -26,13 +26,13 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
       }]
     };
     const binding = { project_id: PROJECT, account_id: ACCOUNT,
-      client_id: CLIENT, resource: RESOURCE, approval_revision: 3 };
+      client_id: CLIENT, resource: RESOURCE, approval_revision: 3, revoked_at: null as string | null };
     const encoded = encryptSecret(JSON.stringify({
       grantId: GRANT, accountId: ACCOUNT, clientId: CLIENT
     }));
     const query = jest.fn(async (sql: string) => {
       if (sql.includes("mcp_oauth_grant_approval_bindings")) {
-        return { rows: [{ ...binding, settings: { externalMcpAccess: state } }] };
+        return { rows: binding.revoked_at ? [] : [{ ...binding, settings: { externalMcpAccess: state } }] };
       }
       if (sql.includes("mcp_oauth_provider_artifacts")) {
         return { rows: [{ encrypted_payload: encoded, consumed_at: null }] };
@@ -63,6 +63,7 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(true);
     f.state.clients = [];
     f.state.revision = 4;
+    f.binding.revoked_at = "2026-11-24T00:00:00.000Z";
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
     f.state.clients = [{
       kind: "oauth_client", oauthClientId: CLIENT, clientName: "Consent client",
@@ -70,8 +71,12 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     }];
     f.state.revision = 5;
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
-    f.binding.approval_revision = 5; // A separate, newly consented binding may become valid.
-    expect(await currentOAuthGrantBinding(db, GRANT)).toBe(true);
+    f.binding.approval_revision = 5; // Tampering with epoch cannot clear the tombstone.
+    expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
+    const fresh = fixture();
+    fresh.state.revision = 5;
+    fresh.binding.approval_revision = 5;
+    expect(await currentOAuthGrantBinding({ query: fresh.query } as unknown as DatabaseService, GRANT)).toBe(true);
     f.query.mockRejectedValueOnce(new Error("Postgres unavailable"));
     expect(await currentOAuthGrantBinding(db, GRANT)).toBe(false);
   });
@@ -90,6 +95,7 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     expect(await access.find("synthetic-access-token")).toBeDefined();
     f.state.revision = 4;
     f.state.clients = [];
+    f.binding.revoked_at = "2026-11-24T00:00:00.000Z";
     for (const item of [grants, refresh, codes, access]) {
       expect(await item.find("synthetic-token")).toBeUndefined();
     }
