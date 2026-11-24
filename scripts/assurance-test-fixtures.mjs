@@ -23,7 +23,7 @@ export function fixtureSnapshot() {
   pr: { number: 7, state: 'open', draft: false, changed_files: 1, user: { id: 42, login: 'owner' },
     head: { sha: fixtureHead }, base: { sha: fixtureBase, ref: 'development', repo: { id: 7 } } },
   files: [{ filename: 'docs/specs/agent-synchronized-engineering/requirements.md', status: 'modified', sha: 'd'.repeat(40) }],
-  reviews: [], policy: parsePolicy(fixturePolicyRaw), policySha: fixtureSource,
+  reviews: [], reviewThreads: [], policy: parsePolicy(fixturePolicyRaw), policySha: fixtureSource,
   policyDigest: sha256(fixturePolicyRaw) };
   return installReceipts(snapshot);
 }
@@ -69,12 +69,22 @@ export async function withGitHub(options, action) {
     if (options.deny?.({ url, method, captures })) return { ok: false, status: 403 };
     let data;
     if (url.pathname === '/graphql') {
-      const ids = JSON.parse(init.body).variables.ids;
-      data = { data: { nodes: ids.map(id => {
+      const variables = JSON.parse(init.body).variables;
+      const ids = variables.ids;
+      if (ids) data = { data: { nodes: ids.map(id => {
         const review = snapshot.reviews.find(item => item.node_id === id);
         return review ? { id, body: review.body, state: review.state, lastEditedAt: review.lastEditedAt,
           commit: { oid: review.commit_id }, pullRequest: { number: 7, repository: { nameWithOwner: fixtureRepository } } } : null;
       }) } };
+      else {
+        const pages = options.threadPages ?? [snapshot.reviewThreads];
+        const index = variables.cursor === null ? 0 : Number(variables.cursor);
+        data = { data: { repository: { nameWithOwner: fixtureRepository, pullRequest: {
+          number: 7, headRefOid: snapshot.pr.head.sha, baseRefOid: snapshot.pr.base.sha,
+          reviewThreads: { totalCount: pages.flat().length, nodes: pages[index],
+            pageInfo: { hasNextPage: index + 1 < pages.length, endCursor: String(index + 1) } }
+        } } } };
+      }
       if (options.graphqlError) data = { errors: [{ message: 'Synthetic API denial' }] };
     } else {
       const suffix = url.pathname.slice(`/repos/${fixtureRepository}`.length);

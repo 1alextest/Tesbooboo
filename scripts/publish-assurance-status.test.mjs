@@ -183,3 +183,23 @@ test('selection cannot smuggle an alternate repository or executable string', as
   await assert.rejects(refreshAssurance({ ...gateOptions(), prNumber: '7; echo unexpected' }), /Invalid PR selection/);
   assert.equal(JSON.parse(fixturePolicyRaw).contract, 'tesbo-coordinator-attested-ai-assurance/v1');
 });
+
+
+test('unresolved native finding prevents publishing success even with valid assurance receipts', async () => {
+  const snapshot = fixtureSnapshot();
+  snapshot.reviewThreads = [{id:'scanner-finding',isResolved:false,isOutdated:true}];
+  await withGitHub({snapshot}, async ({checks}) => {
+    assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
+    assert.match(checks[0].output.summary, /Unresolved native review finding/);
+  });
+});
+test('same-head finding arriving during publication invalidates the published check', async () => {
+  await withGitHub({afterCreate: snapshot => {
+    snapshot.reviewThreads.push({id:'late-finding',isResolved:false,isOutdated:false});
+  }}, async ({checks}) => {
+    assert.equal((await publishAssuranceStatus(options())).conclusion, 'failure');
+    assert.equal(checks.length, 2);
+    assert.equal(checks[1].id, checks[0].id);
+    assert.equal(checks[1].conclusion, 'failure');
+  });
+});
