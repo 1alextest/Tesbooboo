@@ -136,6 +136,12 @@ complete-versus-sampled flag, **never case names, IDs, source links, test data,
 credential material, or raw server errors**. No candidate is staged or official case
 published; it is not an execution or a claim of complete regression coverage.
 
+The pilot accepts the **two authorized native read tools only**; it never demands
+write-scoped model, graph or proposal tools merely to pass discovery. The normal
+production verifier retains its original broader tool requirements. Incompatible
+read-only and write-preview settings are refused, and the native list schemas must
+advertise bounded pagination and the archived-case switch.
+
 Use the existing dedicated TESBOPROJECT endpoint; this is neither a second project nor
 a new MCP client. A declined/missing grant, stale build, unsupported list tool, invalid
 response or shared/unbound endpoint **fails closed**. Completion still requires the

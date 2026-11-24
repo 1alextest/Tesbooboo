@@ -344,7 +344,14 @@ function invokeSyntheticMcp({ script = "mcp-deploy-check.mjs", mode = "complete"
     const hook = path.join(x.dir, "mock-fetch.mjs");
     const tools = validTools();
     if (mode === "duplicate-name-echo") tools.push(tool(fileToken), tool(fileToken));
-    if (mode.startsWith("pilot-") && mode !== "pilot-missing-tool") tools.push(tool("list_testcases"), tool("list_suites"));
+    if (mode.startsWith("pilot-")) {
+      // A real read-only credential never sees the writer-heavy default catalog.
+      tools.length = 0;
+      tools.push(tool("list_testcases", {
+        limit: {type:"number"}, offset: {type:"number"}, includeArchived: {type:"boolean"}
+      }));
+      if (mode !== "pilot-missing-tool") tools.push(tool("list_suites"));
+    }
     const instructions = "Synthetic MCP instructions";
     const build = mode === "version-echo" ? fileToken : "a".repeat(40);
     const version = `0.1.0+${build}.${catalogFingerprint(tools, instructions)}`;
@@ -616,4 +623,36 @@ test("live-entrypoint fixture enforces native rows/total pagination completeness
   assert.equal(short.status,1,short.stdout+short.stderr);
   assert.match(short.stderr,/incomplete or outside its bounded read contract/);
   assert.ok(!short.stderr.includes("private-case-"));
+});
+
+test("read-only pilot accepts a least-privilege catalog with no write capabilities",()=>{
+  const tools=[tool("list_testcases",{
+    limit:{type:"number"},offset:{type:"number"},includeArchived:{type:"boolean"}
+  }),tool("list_suites")];
+  const instructions="Pilot least-privilege instructions";
+  const version="0.1.0+abc123."+catalogFingerprint(tools,instructions);
+  assert.deepEqual(catalogGaps(tools,{pilotReadOnly:true}).errors,[]);
+  assert.deepEqual(schemaGaps(tools,{pilotReadOnly:true}).errors,[]);
+  assert.deepEqual(catalogGaps(tools).errors,
+    REQUIRED_TOOLS.map(name=>"missing tool: "+name));
+  const result=summarize({tools,instructions,serverVersion:version,
+    health:{gitSha:"abc123"},expectedGitSha:"abc123",pilotReadOnly:true});
+  assert.equal(result.ok,true,JSON.stringify(result.errors));
+  assert.equal(result.toolCount,2);
+  assert.equal(result.fingerprintCheck,"matches");
+  assert.equal(summarize({tools,instructions,serverVersion:version,
+    health:{gitSha:"abc123"},expectedGitSha:"abc123"}).ok,false);
+});
+
+test("pilot rejects hidden/renamed read schemas and incompatible write-preview requirements",()=>{
+  const tools=[tool("list_testcases",{
+    limit:{type:"number"},offset:{type:"number"},includeArchived:{type:"boolean"}
+  }),tool("list_suites")];
+  delete tools[0].inputSchema.properties.includeArchived;
+  assert.match(schemaGaps(tools,{pilotReadOnly:true}).errors.join("\n"),/includeArchived/);
+  tools[0].inputSchema.properties.includeArchived={type:"boolean"};
+  tools[1].inputSchema.properties=null;
+  assert.match(schemaGaps(tools,{pilotReadOnly:true}).errors.join("\n"),/list_suites/);
+  assert.match(catalogGaps(tools,{pilotReadOnly:true,requireProposalPreview:true}).errors.join("\n"),
+    /cannot require write-scoped proposal tools/);
 });
