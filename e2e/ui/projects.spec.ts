@@ -479,6 +479,57 @@ test("MCP-P18 UI approves a named credential, shows stale conflicts, and revokes
   }
 });
 
+test("MCP-P18 OAuth owner preapproval remains read-only, revocable and visibly not connected", async ({ page }) => {
+  const api = await apiContext();
+  let projectId: string | undefined;
+  try {
+    const stamp = Date.now().toString().slice(-8);
+    const created = await api.post("/api/projects", {
+      data: { name: `MCP OAuth preapproval UI ${stamp}`, key: `MOAU${stamp}` }
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    projectId = (await created.json()).id as string;
+    const route = `/api/projects/${projectId}/mcp-access`;
+    const read = async () => {
+      const res = await api.get(route);
+      expect(res.ok(), await res.text()).toBe(true);
+      return res.json();
+    };
+    await page.goto(`/projects/${projectId}/settings?tab=apiTokens`);
+    const panel = page.getByRole("heading", { name: "External AI & MCP Access" }).locator("..").locator("..");
+    await expect(panel.getByText("External MCP: Off", { exact: true })).toBeVisible();
+    await panel.getByLabel("OAuth client ID metadata URL (HTTPS)").fill("https://client.example.test/oauth/client.json");
+    await panel.getByLabel("Client label").fill("Read-only UI reviewer");
+    await panel.getByRole("button", { name: "Preapprove read-only client" }).click();
+    await expect(panel.getByText(/Read-only OAuth client identity preapproved/)).toBeVisible();
+    await expect(panel.getByText(/OAuth identity preapproved \(not connected\)/)).toBeVisible();
+    const saved = await read();
+    expect(saved.enabled).toBe(false);
+    expect(saved.clients).toEqual([{
+      kind: "oauth_client",
+      oauthClientId: "https://client.example.test/oauth/client.json",
+      clientName: "Read-only UI reviewer",
+      scopes: ["read"], allowedTools: null, expiresAt: null
+    }]);
+
+    // Direct REST tampering cannot turn the preapproval into an OAuth write grant.
+    const writeAttempt = await api.put(route, { data: {
+      ...saved, clients: [{ ...saved.clients[0], scopes: ["read", "write"] }]
+    }, failOnStatusCode: false });
+    expect(writeAttempt.status(), "OAuth preapproval cannot mint write scope").toBe(400);
+    expect((await read()).clients).toEqual(saved.clients);
+
+    await panel.getByRole("button", { name: "Revoke Read-only UI reviewer" }).click();
+    await expect(panel.getByText("No client credentials are approved.")).toBeVisible();
+    expect((await read()).clients).toEqual([]);
+    await page.reload();
+    await expect(page.getByText("No client credentials are approved.")).toBeVisible();
+  } finally {
+    if (projectId) await api.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+    await api.dispose();
+  }
+});
+
 test("MCP-P18 delayed save and failed project reload never expose another project's editable grants", async ({ page }) => {
   test.slow();
   const api = await apiContext();
