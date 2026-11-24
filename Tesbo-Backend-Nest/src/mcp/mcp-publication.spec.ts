@@ -171,6 +171,11 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
       { ...operation, carryForwardLinks: [{ ...selection, originatingLinkSkill: { assignmentId: tokenId } }] }
     ] });
     expect(forged.error.code).toBe(RpcCode.InvalidParams);
+    expect(forged.error.message).toMatch(/server-derived/);
+    const unknown = await f.call("stage_requirement_change_bundle", { requestKey: "unknown-carry-forward", operations: [
+      { ...operation, carryForwardLinks: [{ ...selection, clientCertified: true }] }
+    ] });
+    expect(unknown.error.code).toBe(RpcCode.InvalidParams);
     expect(f.legacy.stageRequirementChangeBundle).toHaveBeenCalledTimes(1);
   });
 

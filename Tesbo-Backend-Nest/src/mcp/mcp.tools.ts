@@ -2016,6 +2016,25 @@ export function buildMcpTools(): McpTool[] {
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
         }
+        // The MCP dispatcher advertises nested additionalProperties:false but does not
+        // enforce that schema. Reject caller-provided review/Skill metadata at this boundary;
+        // the native proposal owner still independently verifies link identity and authority.
+        if (Array.isArray(args.operations)) {
+          const selectionKeys = new Set(["linkId", "requirementVersionId", "testcaseId",
+            "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"]);
+          for (const operation of args.operations) {
+            if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
+                operation.opType !== "requirement_revision" ||
+                !Array.isArray(operation.carryForwardLinks)) continue;
+            for (const link of operation.carryForwardLinks) {
+              if (!link || typeof link !== "object" || Array.isArray(link)) continue;
+              if (Object.keys(link).some(key => !selectionKeys.has(key))) {
+                throw new McpError(RpcCode.InvalidParams,
+                  "carryForwardLinks accepts selection identities only; reviewed Skill authority is server-derived");
+              }
+            }
+          }
+        }
         const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false, operation: "requirement" });
         try {
           const task = await ctx.legacy.stageRequirementChangeBundle(ctx.projectId, ctx.userId,
