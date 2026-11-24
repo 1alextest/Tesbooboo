@@ -7,7 +7,7 @@ import { isOAuthMcpGrant, readMcpAccess } from "../mcp/mcp-access";
  * exact existing project-owner approval revision. It NEVER supplies authority
  * on its own: the current owner settings remain the only permission source.
  *
- * The grant id is never stored or logged in plaintext. Every resource/token
+ * The grant id is never stored or logged in plaintext; a revoked binding remains a permanent tombstone. Every resource/token
  * read must verify the binding AND the owner's current grant.
  */
 export type OAuthGrantBasis = {
@@ -40,7 +40,7 @@ export async function currentOAuthGrantBinding(
       `SELECT b.project_id,b.account_id,b.client_id,b.resource,b.approval_revision,p.settings
          FROM mcp_oauth_grant_approval_bindings b
          JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
-        WHERE b.grant_fingerprint=$1`,
+        WHERE b.grant_fingerprint=$1 AND b.revoked_at IS NULL`,
       [fingerprint(grantId)]
     )).rows[0];
     if (!row || !Number.isSafeInteger(Number(row.approval_revision)) ||
