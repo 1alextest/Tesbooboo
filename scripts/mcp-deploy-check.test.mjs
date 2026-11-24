@@ -577,10 +577,11 @@ test("native pilot invokes only two read tools and never discloses case identiti
   assert.equal(run.requests.filter(x=>x.authorization).length,4);
   assert.ok(run.requests.every(x=>x.redirect==="manual"));
 });
-test("native pilot missing read grants refuses without an attempted record query",()=>{
+test("native pilot missing read grants refuses at catalog validation before record queries",()=>{
   const run=invokeSyntheticMcp({mode:"pilot-missing-tool"});
   assert.equal(run.status,1,run.stdout+run.stderr);
-  assert.match(run.stderr,/native pilot read permission unavailable/);
+  assert.match(run.stdout,/missing tool: list_suites/);
+  assert.match(run.stderr,/Native read-only pilot requires a verified build\/catalog/);
   assert.equal(run.requests.filter(x=>x.method==="tools/call").length,0);
 });
 test("native pilot failure never reflects server token or private result",()=>{
