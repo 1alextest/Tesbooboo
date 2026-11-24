@@ -12,6 +12,7 @@ import { McpOAuthServer } from "../auth/mcp-oauth-server";
 import { AppConfigService } from "../config/app-config.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { McpOAuthInteractionController } from "./mcp-oauth-interaction.controller";
+import { McpService } from "./mcp.service";
 import type { AuthenticatedRequest } from "../common/request.types";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
@@ -66,6 +67,7 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
       providers: [
         { provide: McpOAuthServer, useValue: oauth },
         { provide: LegacyService, useValue: legacy },
+        { provide: McpService, useValue: { requireOAuthConsentProject: members } },
         { provide: AppConfigService, useValue: config },
         { provide: APP_GUARD, useClass: ApiTokenRestGuard }
       ]
