@@ -3110,6 +3110,42 @@ test.describe("knowledge base (UI)", () => {
     expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id = ${literal(documentId)} AND snapshot_kind = 'approved';`)).toBe("0");
   });
 
+  test("KBU-77 governed Submit retains a title edited during the in-flight write", async ({ browser }) => {
+    const created = await api.post(kbUrl("/documents"), { data: {
+      title: stamp("Governed title race"), folderId: rootFolderId, documentType: "user_manual",
+      contentText: "Original body", contentHtml: "<p>Original body</p>",
+      governedMetadata: {
+        schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+        confidentiality: "internal", distribution: "internal",
+        sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+        effectivity: { from: null, to: null }, enforcementRefs: [],
+      },
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const page = await openDocument(browser, documentId);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let intercepted = false;
+    await page.route(`**/knowledge-base/documents/${documentId}`, async route => {
+      if (!intercepted && route.request().method() === "PATCH") {
+        intercepted = true;
+        await gate;
+      }
+      await route.continue();
+    });
+    await page.getByTestId("governed-submit").click();
+    try {
+      await expect.poll(() => intercepted).toBe(true);
+      await page.getByPlaceholder("Untitled document").fill("Title edited during Submit");
+    } finally {
+      release?.();
+    }
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    await expect(page.getByPlaceholder("Untitled document")).toHaveValue("Title edited during Submit");
+    await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
