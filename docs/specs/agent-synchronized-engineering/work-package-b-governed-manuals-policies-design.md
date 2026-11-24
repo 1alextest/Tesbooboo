@@ -135,6 +135,25 @@ For `user_manual` and `policy` only:
 | KB UI | Type templates, metadata form, submit-for-review, exact submitted-version review/readback/approve/reject, a read-only exact-version timeline, and history. Submit routes through the editor write queue and writes the current editor body + metadata before the exact submission. |
 | Zyra AI context / RAG | New types excluded until the exposure policy in §8 is approved. New and duplicated governed rows are created `embedding_status='unsupported'`; the boot sweep and embedding processor also exclude `user_manual`/`policy` so a status reset or an already-queued job cannot leak text. |
 
+### 3.4.1 Ambiguous Submit recovery
+
+A governed Submit crosses two distinct server commits: editor UPDATE and immutable submission POST.
+The editor write queue serializes these client actions but does not make them an atomic DB transaction.
+After UPDATE acknowledges, retain the returned edit revision, immutable submission key, and
+a snapshot fingerprint of the editor title/body/metadata. If POST fails or its response is lost,
+the next same-key attempt must **not repeat UPDATE**: first read the authoritative document
+and replay POST with the original revision/key. The server's exact-key receipt resolves
+a prior successful POST, even if a later decision changed document status. Reject retries
+after intervening local editor changes rather than quietly submitting a different draft.
+Keep pending ambiguity on network/readback failure; never manufacture success.
+
+Regression coverage: KBU-72 proves pre-UPDATE failure retains the editor draft without a
+submission. KBU-73 runs both pre-POST-commit failure and post-commit response loss,
+verifies same-key replay, no duplicate editor UPDATE, one immutable submitted version,
+and preservation of visible content. A conflicting external edit must surface as a
+conflict rather than overwrite the competing revision. Official Tesbo execution remains
+distinct from the Playwright CI result.
+
 ### 3.5 Mutation permission matrix
 
 All governed mutation paths use the shared `assertAgentMayTouchGoverned` owner and the existing KB role rules.
