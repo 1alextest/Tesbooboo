@@ -16870,8 +16870,14 @@ export class LegacyService implements OnModuleInit {
           return { doc, approvedVersionId: String(reviewed.id), links: 0, replayed: true };
         }
       }
-      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
-        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed after this version was submitted; approve the exact submitted version or stage a refreshed revision" });
+      // A metadata-only revision can change selected link authority while leaving document
+      // content bytes unchanged. A superseded submission must not regain that authority.
+      const latestSubmission = (await client.query(
+        "SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1",
+        [documentId]
+      )).rows[0];
+      if (String(latestSubmission?.id) !== versionId || version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed or a newer revision was submitted; review the exact current submission before approving" });
       }
       // Re-resolve the exact basis the reviewed version pinned (requirement, link and case targets),
       // not only the requirement target, or every approval would compare against a smaller digest.
