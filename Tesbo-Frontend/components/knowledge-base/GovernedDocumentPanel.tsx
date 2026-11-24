@@ -3,12 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
-  approveGovernedKnowledgeDocument,
   getKnowledgeDocumentVersion,
   listKnowledgeDocumentVersions,
-  rejectGovernedKnowledgeDocument,
-  submitKnowledgeDocument,
-  updateKnowledgeDocument,
   type KnowledgeDocument,
   type KnowledgeDocumentVersion,
   type KnowledgeDocumentVersionDetail,
@@ -66,11 +62,14 @@ function decisionOf(version: KnowledgeDocumentVersion | undefined): string {
   return version?.snapshotKind === "approved" ? "approved" : version?.snapshotKind === "rejected" ? "rejected" : "";
 }
 
-export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: {
+export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, onSaveMetadata, onSubmitForReview, onDecide }: {
   projectId: string;
   doc: KnowledgeDocument;
   canManage: boolean;
   onChanged: () => Promise<void> | void;
+  onSaveMetadata: (metadata: Record<string, unknown>) => Promise<KnowledgeDocument>;
+  onSubmitForReview: (metadata: Record<string, unknown>, submissionKey: string) => Promise<{ versionNumber: number }>;
+  onDecide: (decision: "approved" | "rejected", versionId: string, reason?: string) => Promise<KnowledgeDocument>;
 }) {
   const [metadata, setMetadata] = useState<Metadata>(() => metadataOf(doc));
   const [versions, setVersions] = useState<KnowledgeDocumentVersion[]>([]);
@@ -83,7 +82,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [reason, setReason] = useState("");
-  const submissionKey = useRef<{ revision: string; key: string } | null>(null);
+  const submissionKey = useRef<{ revision: string | undefined; key: string } | null>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -155,16 +154,13 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
     setBusy(true);
     setError(null);
     try {
-      const updated = await updateKnowledgeDocument(projectId, doc.id, {
-        governedMetadata: metadata as unknown as Record<string, unknown>,
-        expectedRevision: doc.editRevision,
-      });
+      const updated = await onSaveMetadata(metadata as unknown as Record<string, unknown>);
       setMetadataDirty(false);
       await onChanged();
-      setMessage("Governance metadata saved. The exact content and metadata can now be submitted for review.");
+      setMessage("Governance metadata saved with the current body. The exact revision can now be submitted for review.");
       return updated;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The governance metadata could not be saved.");
+      setError(err instanceof Error ? err.message : "The governance metadata could not be saved. Your draft remains in the editor.");
       return null;
     } finally {
       if (mounted.current) setBusy(false);
@@ -176,23 +172,18 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
     setError(null);
     setMessage(null);
     try {
-      const saved = await updateKnowledgeDocument(projectId, doc.id, {
-        governedMetadata: metadata as unknown as Record<string, unknown>,
-        expectedRevision: doc.editRevision,
-      });
-      setMetadataDirty(false);
-      const revision = saved.editRevision;
-      if (!revision) throw new Error("Reload the document before submitting this revision.");
-      const existing = submissionKey.current;
-      const key = existing?.revision === revision ? existing.key : crypto.randomUUID();
-      submissionKey.current = { revision, key };
-      const version = await submitKnowledgeDocument(projectId, doc.id, { expectedRevision: revision, submissionKey: key });
+      const key = submissionKey.current?.key ?? crypto.randomUUID();
+      submissionKey.current = { revision: doc.editRevision, key };
+      const version = await onSubmitForReview(metadata as unknown as Record<string, unknown>, key);
       submissionKey.current = null;
+      setMetadataDirty(false);
       await load();
       await onChanged();
       setMessage(`Submitted v${version.versionNumber} as an immutable candidate. Review and approval are separate.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "The exact version could not be submitted.");
+      // Do not reload here: load() clears the error, and the retained draft/uncertain submission
+      // must stay visible until the author resolves or retries it.
+      setError(err instanceof Error ? err.message : "The exact version could not be submitted. Your draft remains in the editor.");
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -204,13 +195,14 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
     setError(null);
     setMessage(null);
     try {
-      const result = decisionKind === "approved"
-        ? await approveGovernedKnowledgeDocument(projectId, doc.id, submittedVersion.id)
-        : await rejectGovernedKnowledgeDocument(projectId, doc.id, submittedVersion.id, reason.trim() || undefined);
+      await onDecide(decisionKind, submittedVersion.id, reason.trim() || undefined);
       await load();
       await onChanged();
-      setMessage(`${decisionKind === "approved" ? "Approved" : "Rejected"} submitted v${submittedVersion.versionNumber} exactly (${result.replayed ? "already recorded" : "recorded"}).`);
+      setMessage(`${decisionKind === "approved" ? "Approved" : "Rejected"} submitted v${submittedVersion.versionNumber} exactly.`);
     } catch (err) {
+      // Refresh the submitted-version view first, then set the error: load() clears errors, so
+      // setting it after load keeps the refusal visible while the panel shows the current version.
+      await load();
       if (err instanceof ApiError && err.status === 409 && err.code === "DOCUMENT_REVISION_CONFLICT") {
         setError("The document changed after this version was submitted. Review the current submitted version or submit a refreshed revision.");
       } else if (err instanceof ApiError && err.status === 403) {
@@ -220,7 +212,6 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
       } else {
         setError(err instanceof Error ? err.message : "The decision could not be recorded.");
       }
-      await load();
     } finally {
       if (mounted.current) setBusy(false);
     }

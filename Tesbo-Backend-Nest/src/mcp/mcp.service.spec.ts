@@ -589,7 +589,7 @@ describe("McpService", () => {
       expect((legacy as any).moveKnowledgeFolder).toHaveBeenCalledWith("proj-1", "user-7", "folder-1", {
         folderId: "folder-1",
         parentFolderId: "folder-2"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects move_knowledge_folder without parentFolderId", async () => {
@@ -745,7 +745,7 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).deleteKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1");
+      expect((legacy as any).deleteKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1", { kind: "api_token" });
     });
 
     it("rejects archive_knowledge_document without documentId", async () => {
@@ -805,7 +805,7 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).restoreKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1");
+      expect((legacy as any).restoreKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1", { kind: "api_token" });
     });
 
     it("rejects restore_knowledge_document without documentId", async () => {

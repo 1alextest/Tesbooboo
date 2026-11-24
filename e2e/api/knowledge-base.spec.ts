@@ -1340,13 +1340,37 @@ test.describe("knowledge base v2 — folders and documents", () => {
         ["post", `/documents/${doc.id}/duplicate`, {}],
         ["patch", `/documents/${doc.id}/move`, { folderId: rootFolderId }],
         ["post", `/documents/${doc.id}/restore-version`, { versionId: submitted.id }],
+        ["post", `/documents/${doc.id}/submissions`, { expectedRevision: approved.editRevision, submissionKey: randomUUID() }],
+        ["delete", `/documents/${doc.id}`, undefined],
+        ["patch", `/documents/${doc.id}/restore`, undefined],
       ] as const) {
         const headers = { Authorization: `Bearer ${token.token}` };
         const result = method === "post"
           ? await anon.post(kbUrl(suffix), { headers, data, failOnStatusCode: false })
-          : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
+          : method === "delete"
+            ? await anon.delete(kbUrl(suffix), { headers, failOnStatusCode: false })
+            : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
         expect(result.status(), `${method} ${suffix} — ${await result.text()}`).toBe(403);
       }
+      // Folder cascades are the same mutation as archiving/moving the documents beneath them.
+      const governedFolder = await createFolder({ name: stamp("Governed folder") });
+      const folderDoc = await createDocument({
+        title: stamp("Governed in folder"), folderId: governedFolder.id, documentType: "user_manual",
+        contentText: "Folder governed body", governedMetadata: metadata,
+      });
+      for (const [method, suffix, data] of [
+        ["delete", `/folders/${governedFolder.id}`, undefined],
+        ["patch", `/folders/${governedFolder.id}/move`, { parentFolderId: rootFolderId }],
+        ["patch", `/folders/${governedFolder.id}/restore`, undefined],
+      ] as const) {
+        const headers = { Authorization: `Bearer ${token.token}` };
+        const result = method === "delete"
+          ? await anon.delete(kbUrl(suffix), { headers, failOnStatusCode: false })
+          : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
+        expect(result.status(), `${method} folder ${suffix} — ${await result.text()}`).toBe(403);
+      }
+      expect(scalar(`SELECT is_deleted FROM knowledge_documents WHERE id=${literal(folderDoc.id)};`)).toBe("f");
+      expect(scalar(`SELECT is_deleted FROM knowledge_folders WHERE id=${literal(governedFolder.id)};`)).toBe("f");
     } finally {
       await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
     }
