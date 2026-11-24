@@ -452,7 +452,7 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     const admittedExecution = admitted.executions[0] as { id: string; testcaseId: string; status: string };
     expect(admittedExecution).toMatchObject({ testcaseId: caseId, status: "Untested" });
     const approvedRunBasis = scalar(`SELECT snapshot_approval_revision FROM cycle_items
-      WHERE cycle_id = ${literal(governedRun.cycleId)} AND testcase_id = ${literal(caseId)};`);
+      WHERE cycle_id = ${literal(governedRun.cycleId)} AND testcase_id = ${literal(caseId!)};`);
     expect(approvedRunBasis).toBe(approvedCase.approvalRevision);
 
     const fixtureObservation = "CI-only blocked observation; no external target executed, no Passed result claimed";
@@ -475,7 +475,7 @@ test("MCP-P07 disposable proposal review lifecycle preserves project and run bou
     // Reading/recording a genuine native result cannot rewrite the approved definition
     // snapshot or silently change the manual QA case into a new version.
     expect(scalar(`SELECT snapshot_approval_revision FROM cycle_items
-      WHERE cycle_id = ${literal(governedRun.cycleId)} AND testcase_id = ${literal(caseId)};`))
+      WHERE cycle_id = ${literal(governedRun.cycleId)} AND testcase_id = ${literal(caseId!)};`))
       .toBe(approvedRunBasis);
     expect((await call("get_testcase", { testcaseId: caseId })).approvalRevision)
       .toBe(approvedCase.approvalRevision);
