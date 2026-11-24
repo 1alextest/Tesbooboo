@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { Client } from "pg";
 import { expect, request as newRequest, test, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { issueMcpTestToken } from "../utils/mcp-access";
@@ -809,5 +810,63 @@ test("generic KB writes cannot bypass active Skill assignments and recovery neve
       exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
     }
     for (const id of folders.reverse()) exec(`DELETE FROM knowledge_folders WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+  }
+});
+
+test("apply re-reads testcase storage after the task wait and refuses a disabled capability", async ({ request }) => {
+  const skillDocs: string[] = [];
+  const taskIds: string[] = [];
+  const beforeSettings = scalar(`SELECT settings::text FROM projects WHERE id=${literal(ctx.projectId)};`) || "{}";
+  const blocker = new Client({ connectionString: env.dbUrl });
+  try {
+    const makeSkill = (module: string, subtype: string, operation: string) => createApprovedSkill(request, skillDocs, module, subtype, operation);
+    const assign = async (skill: { documentId: string; versionId: string }, module: string, subtype: string, operation: string) => {
+      const assigned = await request.post(`${base}/skill-assignments`, { data: { skillDocumentId: skill.documentId, versionId: skill.versionId, module, subtype, operation } });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+    };
+    const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
+    await assign(requirementSkill, "requirements", "functional", "requirement_revision");
+    await assign(requirementSkill, "requirements", "functional", "requirement_case_link");
+    const caseSkill = await makeSkill("test_cases", "manual", "testcase_create");
+    await assign(caseSkill, "test_cases", "manual", "testcase_create");
+
+    const { operations } = bundleOperations({ title: `E2E capability wait ${Date.now()}` });
+    const stagedResponse = await stageRest(request, operations);
+    expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+    const staged = await stagedResponse.json();
+    taskIds.push(staged.id);
+
+    await blocker.connect();
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE", [staged.id]);
+    const applyPromise = request.post(`${base}/requirements/proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    // Let the request reach the task-row wait; its preflight is non-locking.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // jsonb_set does not create a path through a JSON null intermediate, so replace each level.
+    exec(`UPDATE projects SET settings=jsonb_set(COALESCE(settings,'{}'::jsonb),'{zyraAgent}',
+      jsonb_set(COALESCE(settings->'zyraAgent','{}'::jsonb),'{capabilities}',
+        jsonb_set(COALESCE(settings#>'{zyraAgent,capabilities}','{}'::jsonb),'{testcaseStorage}','false'::jsonb,true),true),true)
+      WHERE id=${literal(ctx.projectId)};`);
+    expect(JSON.parse(scalar(`SELECT settings::text FROM projects WHERE id=${literal(ctx.projectId)};`)).zyraAgent.capabilities.testcaseStorage).toBe(false);
+    await blocker.query("COMMIT");
+
+    const refused = await applyPromise;
+    expect(refused.status(), await refused.text()).toBe(403);
+    expect((await refused.json()).error).toContain("Testcase proposal storage is disabled");
+    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id=${literal(staged.id)};`)).toBe("in_review");
+    expect(scalar(`SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=${literal(ctx.projectId)} AND title=${literal(operations[0].title)};`)).toBe("0");
+    expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(operations[1].draft.title)};`)).toBe("0");
+  } finally {
+    await blocker.query("ROLLBACK").catch(() => undefined);
+    await blocker.end().catch(() => undefined);
+    exec(`UPDATE projects SET settings=${literal(beforeSettings)}::jsonb WHERE id=${literal(ctx.projectId)};`);
+    for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    for (const id of skillDocs) {
+      exec(`DELETE FROM skill_assignments WHERE project_id=${literal(ctx.projectId)} AND skill_document_id=${literal(id)};`);
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
   }
 });

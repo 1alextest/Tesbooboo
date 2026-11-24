@@ -783,6 +783,7 @@ type Body=Record<string,any>;
       const before=(await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings;
       try{
         const bundle=await stageBundle(ops()); taskId=bundle.id;
+        const beforeCapability=await bundleWrites(bundle.id);
         await blocker.query("BEGIN");
         await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[taskId]);
         pending=service().applyRequirementProposal(project,user,taskId,
@@ -812,6 +813,9 @@ type Body=Record<string,any>;
         ]);
         expect(settled.e).toMatchObject({status:403});
         expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[taskId])).rows[0].task_status).toBe("in_review");
+        const afterCapability=await bundleWrites(bundle.id);
+        expect({documents:afterCapability.documents,cases:afterCapability.cases,links:afterCapability.links})
+          .toEqual({documents:beforeCapability.documents,cases:beforeCapability.cases,links:beforeCapability.links});
       }finally{
         await blocker.query("ROLLBACK").catch(()=>undefined);
         if(pending) await Promise.race([pending,new Promise(resolve=>setTimeout(resolve,5000))]);
