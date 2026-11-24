@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { expect, request as newRequest, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { exec, literal, scalar } from "../utils/psql";
 import {
   loginAs,
@@ -8,6 +9,9 @@ import {
   type RbacTenant,
 } from "../utils/rbac-tenant";
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
+import { verifyZyraReviewCloseFeedback } from "../utils/zyra-review-feedback";
+import { env } from "../utils/env";
+import { approveTestcase } from "../utils/testcase-approval";
 
 /*
  * The Agents screens: the agent picker, Zyra's chat, Zyra's settings, the task board, and the task
@@ -71,6 +75,936 @@ test.describe("zyra / agents (UI)", () => {
 
   test.afterEach(() => {
     if (tenant) purgeZyra(tenant);
+  });
+
+  function modelUiDraft() {
+    return { schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "ready",
+      states: [{ id: "ready", label: "Ready" }, { id: "done", label: "Done" }],
+      transitions: [{ id: "complete", from: "ready", to: "done", action: "Complete the action", expectedObservation: "Completion is visible" }] };
+  }
+  function modelUiRecords(projectId: string) {
+    return scalar(`SELECT json_build_object(
+      'cases',(SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs',(SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'executions',(SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'bugs',(SELECT COUNT(*) FROM bugs WHERE project_id=${literal(projectId)}),
+      'graph',(SELECT COUNT(*) FROM graph_capture_history WHERE project_id=${literal(projectId)}),
+      'links',(SELECT COUNT(*) FROM graph_review_run_case_links WHERE project_id=${literal(projectId)})
+    )::text;`);
+  }
+  async function openModelUi(browser: Browser, as: "owner" | "qa" = "qa") {
+    const page = await open(browser, "/agents/zyra/changes", as);
+    const panel = page.getByTestId("model-draft-preview");
+    await panel.locator("summary").focus();
+    await page.keyboard.press("Enter");
+    await expect(panel.getByLabel("Draft model JSON", { exact: true })).toBeVisible();
+    return { page, panel, editor: panel.getByLabel("Draft model JSON", { exact: true }) };
+  }
+
+  test("model draft preview UI inspects real drafts with honest diagnostics, keyboard access and no saved records", async ({ browser }, testInfo) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    await expect(submit).toBeDisabled();
+    await panel.getByRole("button", { name: "Load example draft" }).focus();
+    await page.keyboard.press("Enter");
+    const sent = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");
+    await submit.focus(); await page.keyboard.press("Enter");
+    const response = await sent; expect(response.status()).toBe(200); const native = await response.json();
+    const result = panel.getByRole("region", { name: "Draft model preview result", exact: true });
+    await expect(result).toBeVisible();
+    await expect(result.getByRole("status")).toContainText("Unapproved draft; source unverified; runtime evidence: none");
+    await expect(result.getByRole("table", { name: "Draft states", exact: true }).getByRole("row")).toHaveCount(native.states.length + 1);
+    await expect(result.getByRole("table", { name: "Draft transitions", exact: true }).getByRole("row")).toHaveCount(native.transitions.length + 1);
+    await expect(result).toContainText("Terminal state: done");
+    await result.getByText("Candidate fingerprint", { exact: true }).click();
+    await expect(result).toContainText(native.candidateDigest);
+    const draft = modelUiDraft();
+    draft.states.push({ id: "isolated", label: '<img src=x onerror="window.modelPreviewInjected=true">' });
+    draft.transitions.push({ id: "unreachable", from: "isolated", to: "done", action: "Unreachable action", expectedObservation: "Unreachable observation" });
+    await editor.fill(JSON.stringify(draft)); await expect(result).toHaveCount(0);
+    await submit.click(); await expect(result).toContainText("Unreachable state: isolated");
+    await expect(result).toContainText("Unreachable transition: unreachable");
+    await expect(result.getByText(draft.states[2].label, { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { modelPreviewInjected?: boolean }).modelPreviewInjected)).toBeUndefined();
+    await expect(result.locator("img")).toHaveCount(0);
+    await testInfo.attach("model-preview-desktop", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+    // Sidebar's existing width transition takes 200ms; measure the chosen
+    // collapsed layout, not an intermediate animated width. Keep overflow strict.
+    await expect(page.getByRole("complementary")).toHaveCSS("width", "60px");
+    await expect(editor).toBeVisible();
+    expect(await panel.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    const scrollRegion = result.getByRole("region", { name: "Draft states and transitions" });
+    await scrollRegion.focus(); await expect(scrollRegion).toBeFocused();
+    await testInfo.attach("model-preview-mobile", { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
+    await page.reload(); await panel.locator("summary").click();
+    await expect(editor).toHaveValue(""); await expect(result).toHaveCount(0);
+    expect(modelUiRecords(projectId)).toBe(before);
+  });
+
+  test("model draft preview graph preserves native cycles, parallel edges and keyboard inspection without writes", async ({ browser }, testInfo) => {
+    const before = modelUiRecords(tenant!.mainProjectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const draft = modelUiDraft();
+    draft.states.push({ id: "isolated", label: '<img src=x onerror="window.graphInjected=true">' });
+    draft.transitions.push(
+      { id: "return", from: "done", to: "ready", action: "Return", expectedObservation: "Ready again" },
+      { id: "loop", from: "ready", to: "ready", action: "Stay ready", expectedObservation: "Still ready" },
+      { id: "parallel", from: "ready", to: "done", action: "Alternative completion", expectedObservation: "Alternative result" },
+      { id: "unreachable", from: "isolated", to: "done", action: "Never observed", expectedObservation: "Unapproved expectation" });
+    await editor.fill(JSON.stringify(draft));
+    const sent = page.waitForResponse(r => r.url().endsWith("/changes/model-preview") && r.request().method() === "POST");
+    await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    const response = await sent; expect(response.status()).toBe(200); const native = await response.json();
+    const graph = panel.getByRole("region", { name: "Draft state graph", exact: true });
+    await expect(graph.getByRole("img")).toHaveAccessibleName("3 draft states and 5 directed transitions");
+    expect(await graph.locator("[data-model-state]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-model-state"))))
+      .toEqual(native.states.map((s: { id: string }) => s.id));
+    expect(await graph.locator("[data-model-transition]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-model-transition"))))
+      .toEqual(native.transitions.map((t: { id: string }) => t.id));
+    const inspect = graph.getByLabel("Inspect draft transition", { exact: true });
+    await inspect.focus();
+    // Native select keyboard navigation, not a pointer-only SVG interaction.
+    await page.keyboard.press("Home"); await page.keyboard.press("End");
+    const selected = native.transitions.at(-1);
+    await expect(inspect).toHaveValue(selected.id);
+    const details = graph.locator("dl");
+    await expect(details).toContainText(selected.action);
+    await expect(details).toContainText(selected.expectedObservation);
+    await inspect.selectOption("loop"); await expect(details).toContainText("Ready (ready) → Ready (ready)");
+    await inspect.selectOption("parallel"); await expect(details).toContainText("Alternative completion");
+    await inspect.selectOption("unreachable"); await expect(details).toContainText("Unreachable; no runtime evidence");
+    await expect(graph.locator("img,script,a")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { graphInjected?: boolean }).graphInjected)).toBeUndefined();
+    const scroll = graph.getByRole("region", { name: "Scrollable draft graph", exact: true });
+    expect(await scroll.evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    await testInfo.attach("draft-graph-desktop", { body: await scroll.screenshot(), contentType: "image/png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true });
+    if (await collapse.isVisible()) await collapse.click();
+    await expect(page.getByRole("complementary")).toHaveCSS("width", "60px");
+    const actualSize = graph.getByRole("checkbox", { name: "Show graph at actual size" });
+    await actualSize.focus(); await page.keyboard.press("Space"); await expect(actualSize).toBeChecked();
+    await scroll.focus(); await expect(scroll).toBeFocused();
+    expect(await scroll.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await expect.poll(() => graph.locator('[data-model-state="isolated"]').evaluate(el => {
+      const box = el.getBoundingClientRect(), pane = el.closest("svg")!.parentElement!.getBoundingClientRect();
+      return box.x + box.width / 2 >= pane.left && box.x + box.width / 2 <= pane.right &&
+        box.y + box.height / 2 >= pane.top && box.y + box.height / 2 <= pane.bottom;
+    })).toBe(true);
+    await testInfo.attach("draft-graph-mobile", { body: await scroll.screenshot(), contentType: "image/png" });
+    await editor.fill("{}"); await expect(graph).toHaveCount(0);
+    expect(modelUiRecords(tenant!.mainProjectId)).toBe(before);
+  });
+
+  test("model draft preview graph handles one empty state and maximum native bounds without inventing edges", async ({ browser }) => {
+    const before = modelUiRecords(tenant!.mainProjectId);
+    const { panel, editor } = await openModelUi(browser);
+    const graph = panel.getByRole("region", { name: "Draft state graph", exact: true });
+    const draft = { ...modelUiDraft(), states: [{ id: "ready", label: "Ready" }], transitions: [] as ReturnType<typeof modelUiDraft>["transitions"] };
+    await editor.fill(JSON.stringify(draft)); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(graph.getByRole("img")).toHaveAccessibleName("1 draft states and 0 directed transitions");
+    await expect(graph.locator("[data-model-state]")).toHaveCount(1);
+    await expect(graph.locator("[data-model-transition]")).toHaveCount(0);
+    await expect(graph.getByLabel("Inspect draft transition", { exact: true })).toHaveCount(0);
+    await expect(graph).toContainText("This graph has no declared transitions.");
+    const maximum = { ...modelUiDraft(), initialStateId: "s0",
+      states: Array.from({ length: 32 }, (_, n) => ({ id: `s${n}`, label: `State ${n}` })),
+      transitions: Array.from({ length: 64 }, (_, n) => ({ id: `t${n}`, from: `s${n % 32}`, to: `s${(n + 1) % 32}`,
+        action: `Action ${n}`, expectedObservation: `Observation ${n}` })) };
+    await editor.fill(JSON.stringify(maximum)); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(graph.getByRole("img")).toHaveAccessibleName("32 draft states and 64 directed transitions");
+    await expect(graph.locator("[data-model-state]")).toHaveCount(32);
+    await expect(graph.locator("[data-model-transition]")).toHaveCount(64);
+    await expect(graph.locator("path[d*='NaN'],path[d*='Infinity']")).toHaveCount(0);
+    await graph.getByLabel("Inspect draft transition", { exact: true }).selectOption("t63");
+    await expect(graph.locator("dl")).toContainText("Action 63");
+    await panel.getByRole("button", { name: "Clear draft", exact: true }).click(); await expect(graph).toHaveCount(0);
+    expect(modelUiRecords(tenant!.mainProjectId)).toBe(before);
+  });
+
+  test("model draft preview UI preserves invalid drafts and fails closed on disabled, denied and incompatible responses", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    let posts = 0;
+    page.on("request", request => { if (request.url().endsWith("/changes/model-preview") && request.method() === "POST") posts++; });
+    await editor.fill("   "); await expect(submit).toBeDisabled();
+    await editor.fill("{broken"); await submit.click();
+    await expect(panel.getByRole("alert")).toContainText("Enter valid JSON"); expect(posts).toBe(0);
+    for (const candidate of [null, [], true, 42, "not a model"]) {
+      await editor.fill(JSON.stringify(candidate)); await submit.click();
+      await expect(panel.getByRole("alert")).toContainText("Enter a JSON model object");
+      expect(posts).toBe(0); await expect(editor).toHaveValue(JSON.stringify(candidate));
+    }
+    for (const candidate of [{}, { ...modelUiDraft(), semantics: "CONCURRENT" },
+      { ...modelUiDraft(), states: Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, label: "State" })) }]) {
+      const value = JSON.stringify(candidate); await editor.fill(value);
+      const pending = page.waitForResponse(response => response.url().endsWith("/changes/model-preview") && response.request().method() === "POST");
+      await submit.click(); const response = await pending;
+      expect([400, 422]).toContain(response.status());
+      await expect(panel.getByRole("alert")).toContainText((await response.json()).error);
+      await expect(editor).toHaveValue(value); await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    }
+    await editor.fill(JSON.stringify(modelUiDraft()));
+    for (const [status, error] of [[503, "Model draft preview is not enabled"], [403, "Project membership required"], [500, "Preview service unavailable"]] as const) {
+      await page.route(endpoint, route => route.request().method() === "POST"
+        ? route.fulfill({ status, json: { error } }) : route.continue());
+      await submit.click(); await expect(panel.getByRole("alert")).toHaveText(error);
+      await expect(editor).toHaveValue(JSON.stringify(modelUiDraft()));
+      await page.unroute(endpoint);
+    }
+    await page.route(endpoint, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      const response = await route.fetch(); const body = await response.json(); body.approval = "APPROVED";
+      await route.fulfill({ response, json: body });
+    });
+    await submit.click(); await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    await page.unroute(endpoint);
+    // An otherwise trusted HTTP response must not be rendered as structurally
+    // accepted when its displayed rows disagree with its own definition, or
+    // when the envelope adds an unauthorized business authority assertion.
+    for (const corruption of ["different-state-label", "foreign-transition", "foreign-diagnostic",
+      "hidden-publication", "duplicate-state-id", "different-model-version"] as const) {
+      await page.route(endpoint, async route => {
+        if (route.request().method() !== "POST") return route.continue();
+        const response = await route.fetch();
+        const body = await response.json();
+        if (corruption === "different-state-label") body.states[0].label = "Forged display label";
+        if (corruption === "foreign-transition") body.transitions[0].from = "outside";
+        if (corruption === "foreign-diagnostic") body.diagnostics.push({ code: "TERMINAL_STATE", elementId: "outside" });
+        if (corruption === "hidden-publication") body.published = true;
+        if (corruption === "duplicate-state-id") body.states[1].id = body.states[0].id;
+        if (corruption === "different-model-version") body.definition.schemaVersion = "tesbo-fsm-draft/2";
+        await route.fulfill({ response, json: body });
+      });
+      await submit.click();
+      await expect(panel.getByRole("alert")).toContainText("supported unapproved draft preview");
+      await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+      await expect(editor).toHaveValue(JSON.stringify(modelUiDraft()));
+      await page.unroute(endpoint);
+    }
+    await page.route(endpoint, route => route.request().method() === "POST" ? route.abort("failed") : route.continue());
+    await submit.click(); await expect(panel.getByRole("alert")).toContainText("draft remains unsaved");
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "GET" ? route.fulfill({ json: {
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: false, semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64
+    } }) : route.continue());
+    await page.reload(); await panel.locator("summary").click();
+    await expect(panel.getByRole("status")).toHaveText("Draft model preview is not enabled.");
+    await expect(editor).toHaveCount(0);
+    await page.unroute(endpoint);
+    await page.route(endpoint, route => route.request().method() === "GET" ? route.fulfill({ json: {
+      schemaVersion: "tesbo-fsm-preview-availability/1", enabled: true,
+      semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64,
+      publication: "APPROVED" // Unknown authority must not unlock editing.
+    } }) : route.continue());
+    await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await expect(panel.getByRole("alert")).toContainText("Preview availability could not be verified");
+    await expect(editor).toHaveCount(0);
+    await page.unroute(endpoint);
+    await panel.getByRole("button", { name: "Check preview availability" }).click();
+    await expect(editor).toBeVisible(); await expect(editor).toHaveValue("");
+    expect(modelUiRecords(projectId)).toBe(before);
+  });
+
+  test("model draft preview UI discards delayed responses after edits and cancellation without replay", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, before = modelUiRecords(projectId);
+    const { page, panel, editor } = await openModelUi(browser);
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const releases: Array<() => void> = [], finished: Array<Promise<void>> = [];
+    let posts = 0;
+    await page.route(endpoint, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      posts++;
+      if (posts === 2) return route.continue();
+      const response = await route.fetch();
+      let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+      let finish!: () => void; finished.push(new Promise<void>(resolve => { finish = resolve; })); releases.push(release);
+      await gate;
+      try { await route.fulfill({ response }); } catch { /* Client cancellation is the scenario under test. */ }
+      finally { finish(); }
+    });
+    const submit = panel.getByRole("button", { name: "Preview draft", exact: true });
+    const result = panel.getByRole("region", { name: "Draft model preview result", exact: true });
+    try {
+      await editor.fill(JSON.stringify(modelUiDraft())); await submit.dblclick();
+      await expect.poll(() => releases.length).toBe(1); expect(posts).toBe(1);
+      const changed = modelUiDraft(); changed.states[0].label = "New draft only";
+      await editor.fill(JSON.stringify(changed)); await expect(result).toHaveCount(0);
+      await submit.click(); await expect(result).toContainText("New draft only");
+      releases[0](); await finished[0]; await expect(result).toContainText("New draft only"); expect(posts).toBe(2);
+      await submit.click(); await expect.poll(() => releases.length).toBe(2);
+      await panel.getByRole("button", { name: "Cancel preview" }).focus(); await page.keyboard.press("Enter");
+      await expect(panel.getByRole("status")).toContainText("Preview cancelled");
+      releases[1](); await finished[1]; await expect(result).toHaveCount(0); expect(posts).toBe(3);
+      await expect(editor).toHaveValue(JSON.stringify(changed));
+      expect(modelUiRecords(projectId)).toBe(before);
+    } finally { for (const release of releases) release(); await page.unroute(endpoint); }
+  });
+
+  test("model draft preview UI clears state through native project navigation and denies a foreign project", async ({ browser }) => {
+    const { page, panel, editor } = await openModelUi(browser, "owner");
+    await editor.fill(JSON.stringify(modelUiDraft())); await panel.getByRole("button", { name: "Preview draft", exact: true }).click();
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "All Projects", exact: true }).click();
+    await page.locator(`a[href="/projects/${tenant!.secondProjectId}/dashboard"]`).click();
+    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
+    await page.getByRole("link", { name: /Agent workspace/ }).click();
+    await page.getByRole("link", { name: "Change review", exact: true }).click();
+    await panel.locator("summary").click(); await expect(editor).toHaveValue("");
+    await expect(panel.getByRole("region", { name: "Draft model preview result", exact: true })).toHaveCount(0);
+    const qa = await open(browser, "/agents/zyra/changes", "qa");
+    // ProjectDataProvider rejects this project before child inspectors mount.
+    // Assert the real outer access boundary, not an endpoint it never calls.
+    const denied = qa.waitForResponse(response => response.url().endsWith(`/api/projects/${tenant!.secondProjectId}`));
+    await qa.goto(`/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
+    expect([403, 404]).toContain((await denied).status());
+    await expect(qa).toHaveURL(/\/projects$/);
+    await expect(qa.getByTestId("model-draft-preview")).toHaveCount(0);
+  });
+
+  test("owner can inspect root-free source setup while QA cannot provision it", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const owner = await open(browser, "/agents/zyra/changes", "owner");
+    const settings = owner.getByTestId("zyra-source-binding");
+    await expect(settings).toBeVisible();
+    await settings.locator("summary").click();
+    await expect(settings).toContainText("No project source binding has been configured.");
+    await settings.getByLabel("Source repository identity").fill("org/repo");
+    await settings.getByLabel("Approved checkout key").fill("not-approved");
+    await settings.getByLabel("Source Git ref").fill("development");
+    await settings.getByLabel("Source selection prefixes").fill("src");
+    await settings.getByRole("checkbox", { name: "Enable configured source capture" }).check();
+    await settings.getByRole("button", { name: "Save source binding" }).click();
+    await expect(settings.getByRole("alert")).toBeVisible();
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`))).toBe(0);
+    await owner.close();
+
+    const qa = await open(browser, "/agents/zyra/changes", "qa");
+    await expect(qa.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    await expect(qa.getByTestId("zyra-source-binding")).toHaveCount(0);
+  });
+
+  test("source binding pending save preserves submitted fields and recovers from native refusal", async ({ browser }, testInfo) => {
+    const projectId = tenant!.mainProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const settings = page.getByTestId("zyra-source-binding");
+    await settings.locator("summary").click();
+    const repository = settings.getByLabel("Source repository identity");
+    const checkout = settings.getByLabel("Approved checkout key");
+    const ref = settings.getByLabel("Source Git ref");
+    const prefixes = settings.getByLabel("Source selection prefixes");
+    const enabled = settings.getByRole("checkbox", { name: "Enable configured source capture" });
+    await repository.fill("org/repo");
+    await checkout.fill("not-approved");
+    await ref.fill("development");
+    await prefixes.fill("src");
+    await enabled.check();
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const intercepted = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    await page.route(`**/api/projects/${projectId}/agents/zyra/changes/source-binding`, async route => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts++;
+      // Exercise the genuine native refusal. Only response timing is controlled;
+      // no approved checkout or successful persistence is fabricated.
+      const response = await route.fetch();
+      expect(response.status()).toBe(400);
+      expect(route.request().postDataJSON()).toEqual({ repositoryId: "org/repo",
+        checkoutKey: "not-approved", refName: "development", selectionPrefixes: ["src"], enabled: true });
+      started();
+      await gate;
+      await route.fulfill({ response });
+    });
+    try {
+      await settings.getByRole("button", { name: "Save source binding", exact: true }).dblclick();
+      await intercepted;
+      await expect(settings.getByRole("button", { name: "Saving source binding…" })).toBeDisabled();
+      for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeDisabled();
+      await testInfo.attach("source-binding-pending-save", { body: await settings.screenshot(), contentType: "image/png" });
+      expect(attempts).toBe(1);
+      release();
+      await expect(settings.getByRole("alert")).toContainText("administrator-approved checkout");
+      for (const input of [repository, checkout, ref, prefixes, enabled]) await expect(input).toBeEnabled();
+      await expect(repository).toHaveValue("org/repo");
+      await expect(checkout).toHaveValue("not-approved");
+      await expect(ref).toHaveValue("development");
+      await expect(prefixes).toHaveValue("src");
+      await expect(enabled).toBeChecked();
+      await settings.getByRole("button", { name: "Save source binding", exact: true }).click();
+      await expect.poll(() => attempts).toBe(2);
+      await expect(settings.getByRole("button", { name: "Save source binding", exact: true })).toBeEnabled();
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+  });
+
+  test("change history ignores late pagination replies and retains the latest authorized page", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
+    // Real committed baseline rows, not invented case/run/execution records. Only the
+    // transport timing of one read response is controlled to reproduce a response race.
+    exec(`INSERT INTO graph_capture_history
+      (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+      SELECT ${literal(projectId)}, 'e2e-history-race', 'e2e-race-scope',
+        'e2e-history-race-' || ${literal(stamp)} || '-' || n::text,
+        jsonb_build_object('snapshot', jsonb_build_object('projectId', ${literal(projectId)},
+          'revision', 'e2e-history-race-' || ${literal(stamp)} || '-' || n::text,
+          'nodes', '[]'::jsonb, 'edges', '[]'::jsonb),
+          'inventoryStatus', 'complete', 'unresolvedDiagnostics', '[]'::jsonb,
+          'contractId', 'e2e-history-race', 'sourceScopeFingerprint', 'e2e-race-scope')
+      FROM generate_series(1, 27) AS n;`);
+    const page = await open(browser, "/agents/zyra/changes", "qa");
+    const older = page.getByRole("button", { name: "Older observations" });
+    await expect(older).toBeVisible();
+    let releaseFirst: (() => void) | undefined;
+    let firstIntercepted: (() => void) | undefined;
+    const held = new Promise<void>(resolve => { firstIntercepted = resolve; });
+    const gate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let requests = 0;
+    await page.route(url => url.pathname.endsWith("/agents/zyra/changes") &&
+      url.searchParams.has("beforeId"), async route => {
+      if (++requests === 1) {
+        firstIntercepted?.();
+        await gate;
+        await route.fulfill({ status: 200, contentType: "application/json",
+          body: JSON.stringify({ entries: [] }) }).catch(() => {});
+      } else {
+        await route.continue();
+      }
+    });
+    try {
+      await older.click();
+      await held;
+      // Same cursor, newer request. It returns the genuine two older rows.
+      await older.click();
+      await expect(page.getByText("Older observations")).toHaveCount(0);
+      await expect(page.locator("section[aria-label='Graph change history'] article")).toHaveCount(2);
+      releaseFirst?.();
+      await expect(page.locator("section[aria-label='Graph change history'] article")).toHaveCount(2);
+      await expect(page.getByText("No committed graph observations are available for this project.")).toHaveCount(0);
+    } finally {
+      releaseFirst?.();
+      await page.unrouteAll({ behavior: "wait" });
+      // This suite reuses its disposable tenant across tests: remove the graph
+      // fixture explicitly, rather than poisoning later history assertions.
+      exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)}
+        AND revision LIKE ${literal("e2e-history-race-" + stamp + "-%")};`);
+    }
+  });
+
+  test("change review refuses duplicate source capture while first request is pending", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/capture`;
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const intercepted = new Promise<void>(resolve => { started = resolve; });
+    let attempts = 0;
+    await page.route(endpoint, async route => {
+      attempts++;
+      started();
+      await gate;
+      try { await route.fulfill({ status: 503, json: { error: "Injected capture unavailable" } }); }
+      catch { /* A navigated-away request can be cancelled. */ }
+    });
+    try {
+      const capture = page.getByRole("button", { name: "Capture configured source" });
+      await capture.dblclick();
+      await intercepted;
+      await expect(page.getByRole("button", { name: "Capturing…" })).toBeDisabled();
+      expect(attempts).toBe(1);
+      release();
+      await expect(page.getByText("Injected capture unavailable", { exact: true })).toBeVisible();
+      await expect(capture).toBeEnabled();
+      expect(attempts).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+  });
+
+  test("change review discards late source-capture feedback after project navigation", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, otherProjectId = tenant!.secondProjectId;
+    const before = Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+      WHERE project_id=${literal(projectId)};`));
+    const page = await open(browser, "/agents/zyra/changes", "owner");
+    const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/capture`;
+    let release!: () => void, intercepted!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { intercepted = resolve; });
+    await page.route(endpoint, async route => {
+      intercepted();
+      await gate;
+      try { await route.fulfill({ status: 503, json: { error: "Stale source capture response" } }); }
+      catch { /* Navigating away may cancel an in-flight request. */ }
+    });
+    try {
+      await page.getByRole("button", { name: "Capture configured source" }).click();
+      await started;
+      await page.goto(`${env.webBaseUrl}/projects/${otherProjectId}/agents/zyra/changes`);
+      await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      release();
+      await expect(page.getByText("Stale source capture response")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Capture configured source" })).toBeEnabled();
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_capture_history
+        WHERE project_id=${literal(projectId)};`))).toBe(before);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
+  test("change review serializes native notification retries across different receipts", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, stamp = Date.now().toString();
+    const saved: string[] = [];
+    const capture = (revision: string) => JSON.stringify({
+      snapshot: { projectId, revision, nodes: [], edges: [] }, inventoryStatus: "complete",
+      unresolvedDiagnostics: [], contractId: "e2e-notify-serialization",
+      sourceScopeFingerprint: "e2e-notify-serialization"
+    });
+    try {
+      for (let n = 0; n < 2; n++) {
+        const revision = `notify-serialization-${stamp}-${n}`;
+        const receipt = {
+          id: revision, projectId, status: "needs_qa_triage",
+          source: { contractId: "e2e-notify-serialization", scopeFingerprint: "e2e-notify-serialization",
+            fromRevision: "before", toRevision: revision },
+          changed: { addedNodeIds: [], modifiedNodeIds: [], removedNodeIds: [],
+            addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+          candidates: [], unlinkedCaseNodeIds: [],
+          evidence: { basis: "cached_source_reference_only", upstreamFreshness: "unverified",
+            coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" }
+        };
+        saved.push(scalar(`INSERT INTO graph_capture_history
+          (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+          VALUES (${literal(projectId)}, 'e2e-notify-serialization', 'e2e-notify-serialization',
+            ${literal(revision)}, ${literal(capture(revision))}::jsonb,
+            ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`));
+      }
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      const buttons = page.getByRole("button", { name: "Notify QA reviewers" });
+      await expect(buttons).toHaveCount(2);
+      let release!: () => void, signal!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { signal = resolve; });
+      let attempts = 0;
+      const endpoint = `**/api/projects/${projectId}/agents/zyra/changes/*/notify`;
+      await page.route(endpoint, async route => {
+        attempts++;
+        signal();
+        await gate;
+        try { await route.fulfill({ status: 503, json: { error: "Injected retry failure" } }); }
+        catch { /* Route teardown can cancel an in-flight read of the response. */ }
+      });
+      try {
+        await buttons.first().click();
+        await started;
+        await expect(buttons).toHaveCount(1);
+        await expect(page.getByRole("button", { name: "Checking notification…" })).toBeDisabled();
+        await expect(buttons).toBeDisabled();
+        expect(attempts).toBe(1);
+        release();
+        await expect(page.getByText("Injected retry failure", { exact: true })).toBeVisible();
+        await expect(buttons).toHaveCount(2);
+        await expect(buttons.first()).toBeEnabled();
+        await expect(buttons.last()).toBeEnabled();
+        expect(attempts).toBe(1);
+      } finally { release(); await page.unrouteAll({ behavior: "wait" }); }
+    } finally {
+      for (const id of saved) {
+        exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)} AND id=${literal(id)}::bigint;`);
+      }
+    }
+  });
+
+  test("Zyra opens native change review, handles missing source bindings and preserves zero executions", async ({ browser }) => {
+    const page = await open(browser, "/agents/zyra", "qa");
+    await page.getByRole("link", { name: "Change review" }).click();
+    await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+    const workflow = page.getByRole("navigation", { name: "Native QA workflow" });
+    for (const [name, suffix] of [["Requirements", "requirements"], ["Test cases", "testcases"],
+      ["Test runs and execution", "cycles"], ["Defects", "bugs"]] as const) {
+      await expect(workflow.getByRole("link", { name })).toHaveAttribute(
+        "href", `/projects/${tenant!.mainProjectId}/${suffix}`
+      );
+    }
+    await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    await expect(page.getByText(/no case is failed, executed or approved/i)).toBeVisible();
+    await page.getByRole("button", { name: "Capture configured source" }).click();
+    // Next also exposes a route-announcer alert; assert the native refusal itself.
+    await expect(page.getByText("Project source binding is not enabled or configured", { exact: true })).toBeVisible();
+    // No approved checkout exists in this disposable test tenant; don't
+    // fabricate one or claim capture success.
+    await expect(page.getByText("No committed graph observations are available for this project.")).toBeVisible();
+    const resolvedResponse = await api.get("/api/route-resolve", { params: { project: tenant!.mainProjectId } });
+    expect(resolvedResponse.ok()).toBeTruthy();
+    const resolved = await resolvedResponse.json();
+    expect(resolved.projectId).toBe(tenant!.mainProjectId);
+    expect(resolved.projectKey).toEqual(expect.any(String));
+    await page.getByRole("link", { name: "Back to Zyra" }).click();
+    // RouteParamsProvider deliberately canonicalizes UUID URLs to readable
+    // references. Assert the exact resolved project, not either spelling.
+    await expect(page).toHaveURL((url) =>
+      url.pathname === `/projects/${encodeURIComponent(resolved.projectKey)}/agents/zyra`);
+    await expect(page.getByRole("link", { name: "Change review" })).toBeVisible();
+  });
+
+  test("graph review links an explicitly nominated case to its existing canonical record", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const stamp = Date.now().toString();
+    const baseRevision = `e2e-graph-base-${stamp}`;
+    const reviewRevision = `e2e-graph-change-${stamp}`;
+    const sourceOnlyRevision = `e2e-graph-unlinked-${stamp}`;
+    let caseId: string | undefined;
+    let createdRunId: string | undefined;
+    let uncertainRunId: string | undefined;
+    try {
+      const human = await loginAs(tenant!.owner);
+      try {
+        const created = await human.post(`/api/projects/${projectId}/testcases`, {
+          data: { title: "E2E linked graph review", status: "Draft" }
+        });
+        expect(created.status(), await created.text()).toBe(201);
+        const caseRow = await created.json() as { id: string };
+        caseId = caseRow.id;
+        await approveTestcase(human, projectId, caseId);
+      } finally {
+        await human.dispose();
+      }
+      const nodeId = JSON.stringify(["test_case", projectId, caseId]);
+      const capture = (revision: string) => JSON.stringify({
+        snapshot: { projectId, revision, nodes: [], edges: [] },
+        inventoryStatus: "complete", unresolvedDiagnostics: [],
+        contractId: "e2e-native-graph-v1", sourceScopeFingerprint: "e2e-local-source"
+      });
+      const receipt = {
+        id: `e2e-review-${stamp}`, projectId, status: "needs_qa_triage",
+        source: { contractId: "e2e-native-graph-v1", scopeFingerprint: "e2e-local-source",
+          fromRevision: baseRevision, toRevision: reviewRevision },
+        changed: { addedNodeIds: [], modifiedNodeIds: [nodeId], removedNodeIds: [],
+          addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+        candidates: [{ caseNodeId: nodeId, reasons: ["case_changed"], requirementNodeIds: [] }],
+        unlinkedCaseNodeIds: [],
+        evidence: { basis: "cached_source_reference_only", upstreamFreshness: "unverified",
+          coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" }
+      };
+      exec(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(baseRevision)}, ${literal(capture(baseRevision))}::jsonb);`);
+      const historyId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(reviewRevision)}, ${literal(capture(reviewRevision))}::jsonb,
+          ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`);
+
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      const link = page.getByRole("link", { name: "Open existing test case" });
+      await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
+      await expect(page.getByText("Review reason: case_changed")).toBeVisible();
+      // The new read-only explanation stays within the existing QA review page,
+      // using the actual persisted native receipt and authenticated project membership.
+      const explanation = page.getByRole("region", { name: "Evidence-bounded impact explanation" });
+      const analysisResponse = page.waitForResponse(response =>
+        response.url().endsWith(`/agents/zyra/changes/${historyId}/analysis`) &&
+        response.request().method() === "GET"
+      );
+      await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+      const explained = await analysisResponse;
+      expect(explained.status(), await explained.text()).toBe(200);
+      expect(await explained.json()).toMatchObject({
+        projectId, receiptId: receipt.id, coverageAssertion: "none",
+        executionAssertion: "none", sourceFreshness: "unverified",
+        candidateEffects: [{ caseNodeId: nodeId, consequence: "review_existing_case_expectations" }]
+      });
+      await expect(explanation).toContainText("Possible test-case review effects, not confirmed business consequences");
+      await expect(explanation).toContainText("policy and user-manual consequences");
+      await expect(explanation).toContainText("No case or approval was modified");
+      await explanation.getByRole("button", { name: "Hide impact explanation" }).click();
+
+      await expect(page.getByText(/execution and coverage unverified/i)).toBeVisible();
+      // Trigger the actual native notification path from a disposable tenant,
+      // verify durable rows, then replay. No test execution or case mutation.
+      const countNotifications = () => Number(scalar(`SELECT COUNT(*)::int FROM notifications
+        WHERE dedupe_key = ${literal(`qa_change_review:${projectId}:${historyId}`)};`));
+      expect(countNotifications()).toBe(0);
+      await page.getByRole("button", { name: "Notify QA reviewers" }).click();
+      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      const delivered = countNotifications();
+      expect(delivered).toBeGreaterThan(0);
+      await page.getByRole("button", { name: "Notify QA reviewers" }).click();
+      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      expect(countNotifications(), "repeat notification is idempotent").toBe(delivered);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
+        JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
+        WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
+
+      const prepare = page.getByTestId("graph-review-run-" + historyId);
+      await prepare.locator("summary").click();
+      const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
+      await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
+      await prepare.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await expect(create).toBeDisabled(); // Environment is not fabricated from a source receipt.
+      await prepare.getByLabel("Execution environment").fill("Disposable QA");
+      await prepare.getByLabel("New run name").fill("E2E Graph QA triage " + stamp);
+
+      // Simulate a lost attachment response AFTER the native server committed it.
+      // Retry must reuse the one already-created run, not create a duplicate.
+      const pathPattern = "**/api/cycles/*/testcases";
+      let interrupted = false;
+      const intercept = async (route: import("@playwright/test").Route) => {
+        if (interrupted || route.request().method() !== "POST") return route.continue();
+        interrupted = true;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        await route.fulfill({
+          status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "Injected response failure after successful attachment" })
+        });
+      };
+      await page.route(pathPattern, intercept);
+      try {
+        await create.click();
+        await expect(prepare.getByRole("alert")).toContainText(/already exists/i);
+      } finally {
+        await page.unroute(pathPattern, intercept);
+      }
+      expect(interrupted).toBe(true);
+      const runLink = prepare.getByRole("link", { name: "Open native test run" });
+      const href = await runLink.getAttribute("href");
+      expect(href).toMatch(new RegExp("^/projects/" + projectId + "/cycles/[0-9a-f-]{36}$"));
+      createdRunId = href!.split("/").at(-1)!;
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycles
+        WHERE id=${literal(createdRunId)} AND project_id=${literal(projectId)};`))).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+      await prepare.getByRole("button", { name: "Retry adding to same test run" }).click();
+      await expect(prepare.getByRole("status")).toContainText(/1 case\(s\) requested; 0 newly added; 1 skipped/);
+      // The separate handoff relationship is persisted after native case
+      // attachment, never on graph nomination alone.
+      const linkedCount = (runId: string) => Number(scalar(
+        "SELECT COUNT(*)::int FROM graph_review_run_case_links WHERE project_id=" +
+        literal(projectId) + " AND history_id=" + literal(historyId) +
+        " AND cycle_id=" + literal(runId) + " AND testcase_id=" + literal(caseId!) + ";"
+      ));
+      expect(linkedCount(createdRunId!)).toBe(1);
+      await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText(/native status:|no active execution record/);
+      await expect(prepare.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText(/not verification or approval|no result inferred/);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
+        JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE ci.cycle_id=${literal(createdRunId)}
+          AND e.status IN ('Passed','Failed','Blocked');`))).toBe(0);
+
+      // Reopen the same receipt and select its existing run. Re-adding a
+      // canonical case must be idempotent through the native API.
+      await page.reload();
+      const reopened = page.getByTestId("graph-review-run-" + historyId);
+      await reopened.locator("summary").click();
+      await reopened.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await reopened.getByRole("radio", { name: "Add to existing test run" }).check();
+      await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
+      await reopened.getByRole("button", { name: "Add selected cases to run" }).click();
+      await expect(reopened.getByRole("status")).toContainText(/0 newly added; 1 skipped/);
+      expect(linkedCount(createdRunId!)).toBe(1); // Re-add does not duplicate durable provenance.
+      await expect(reopened.getByRole("region", { name: "Persisted QA handoffs" }))
+        .toContainText("selected case");
+
+      // Progress the canonical execution independently of the graph. The
+      // persisted handoff must reflect the actual native result and attachment
+      // metadata after a manual refresh, never manufacture either value.
+      const item = scalar("SELECT id FROM cycle_items WHERE cycle_id=" +
+        literal(createdRunId!) + " AND testcase_id=" + literal(caseId!) + ";");
+      let progressedExecutionId = scalar("SELECT id FROM executions WHERE cycle_item_id=" +
+        literal(item) + " AND deleted_at IS NULL;");
+      if (!progressedExecutionId) {
+        progressedExecutionId = scalar("INSERT INTO executions(cycle_item_id,status) VALUES (" +
+          literal(item) + ", 'Untested') RETURNING id;");
+      }
+      exec("UPDATE executions SET status='Failed', executed_at=now(), actual_result=" +
+        literal("Observed mismatch in disposable QA run") +
+        ", defect_key='BUG-17' WHERE id=" + literal(progressedExecutionId) + ";");
+      exec("INSERT INTO attachments(project_id,entity_type,entity_id,file_name,storage_path) VALUES (" +
+        literal(projectId) + ", 'execution', " + literal(progressedExecutionId) +
+        ", 'fixture-observation.txt', 'fixture://metadata-only');");
+      await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+      const handoffs = reopened.getByRole("region", { name: "Persisted QA handoffs" });
+      await expect(handoffs).toContainText("native status: Failed");
+      await expect(handoffs).toContainText("Source/run commit provenance unavailable; target build NOT verified.");
+      const gaps = reopened.getByRole("region", { name: "QA verification gaps" });
+      await expect(gaps).toContainText("1 nominated case");
+      await expect(gaps).toContainText("1 with a subsequently recorded native result");
+      await expect(gaps).toContainText("1 with later evidence-file metadata");
+      await expect(gaps).toContainText("No coverage, deployed build match");
+      await expect(handoffs).toContainText("active evidence metadata: 1");
+      await expect(handoffs).toContainText("1 added after handoff");
+      await expect(handoffs).toContainText("recorded after handoff; build provenance not verified");
+      await expect(handoffs).toContainText("defect reference: BUG-17");
+      // Metadata row exists, but no object was ever stored at that path. Explicit byte
+      // verification must report it unavailable rather than letting the count imply evidence.
+      await reopened.getByRole("button", { name: "Verify evidence bytes" }).click();
+      await expect(handoffs).toContainText(
+        "evidence bytes: 0 of 1 readable; 1 unavailable; availability is not content review"
+      );
+      await expect(handoffs.getByRole("link", { name: "Open native execution" }))
+        .toHaveAttribute("href",
+          "/projects/" + projectId + "/cycles/" + createdRunId +
+          "/execute/" + progressedExecutionId);
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)};`))).toBe(1);
+
+
+      // A durable handoff is NOT currently selected after the native cycle item
+      // is soft-removed. Restore the exact fixture even if a browser check fails.
+      const attachedItem = scalar(`SELECT id FROM cycle_items
+        WHERE cycle_id=${literal(createdRunId)} AND testcase_id=${literal(caseId)}
+          AND deleted_at IS NULL;`);
+      exec(`UPDATE cycle_items SET deleted_at=now() WHERE id=${literal(attachedItem)};`);
+      try {
+        await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+        await expect(gaps).toContainText("0 currently attached to active native runs");
+        await expect(gaps).toContainText("1 nominated case(s) have only historical");
+        await expect(handoffs).toContainText("case no longer active in this run");
+      } finally {
+        exec(`UPDATE cycle_items SET deleted_at=NULL WHERE id=${literal(attachedItem)};`);
+      }
+      await reopened.getByRole("button", { name: "Refresh recorded handoffs" }).click();
+      await expect(gaps).toContainText("1 currently attached to active native runs");
+
+      // A lost CREATE response might follow a successful database commit.
+      // Do not blindly retry: find the already-created run in the native list.
+      await page.reload();
+      const uncertain = page.getByTestId("graph-review-run-" + historyId);
+      await uncertain.locator("summary").click();
+      await uncertain.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      const uncertainName = "E2E Unconfirmed graph run " + stamp;
+      await uncertain.getByLabel("New run name").fill(uncertainName);
+      await uncertain.getByLabel("Execution environment").fill("Disposable QA");
+      const createPath = "**/api/projects/" + projectId + "/cycles";
+      let injectedCreateLoss = false;
+      const interceptCreate = async (route: import("@playwright/test").Route) => {
+        if (injectedCreateLoss || route.request().method() !== "POST") return route.continue();
+        injectedCreateLoss = true;
+        const response = await route.fetch();
+        expect(response.ok(), await response.text()).toBeTruthy();
+        uncertainRunId = (await response.json()).id as string;
+        await route.fulfill({ status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: "Injected create response loss after commit" }) });
+      };
+      await page.route(createPath, interceptCreate);
+      try {
+        await uncertain.getByRole("button", { name: "Create run and add selected cases" }).click();
+        await expect(uncertain.getByRole("alert").first()).toContainText(/Run creation outcome unconfirmed/);
+      } finally {
+        await page.unroute(createPath, interceptCreate);
+      }
+      expect(injectedCreateLoss).toBe(true);
+      expect(uncertainRunId).toBeTruthy();
+      await expect(uncertain.getByRole("button", { name: "Create run and add selected cases" })).toBeDisabled();
+      const countRun = () => Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND name=" + literal(uncertainName) + ";"));
+      expect(countRun()).toBe(1);
+      await uncertain.getByRole("radio", { name: "Add to existing test run" }).check();
+      await uncertain.getByRole("button", { name: "Refresh available test runs" }).click();
+      await uncertain.getByLabel("Existing open test run").selectOption(uncertainRunId!);
+      await uncertain.getByRole("button", { name: "Add selected cases to run" }).click();
+      await expect(uncertain.getByRole("status")).toContainText(/1 newly added; 0 skipped/);
+      expect(linkedCount(uncertainRunId!)).toBe(1);
+      expect(linkedCount(createdRunId!)).toBe(1);
+      expect(Number(scalar("SELECT COUNT(*)::int FROM cycle_items WHERE cycle_id=" +
+        literal(uncertainRunId!) + " AND testcase_id=" + literal(caseId) + ";"))).toBe(1);
+      expect(countRun()).toBe(1);
+
+      // A graph candidate still in Draft must be refused before run creation
+      // or any ambiguous-mutation state. Native Test Runs only select Approved cases.
+      exec("UPDATE testcases SET status='Draft' WHERE id=" + literal(caseId!) + ";");
+      const beforeDraft = Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND deleted_at IS NULL;"));
+      await page.reload();
+      const rejected = page.getByTestId("graph-review-run-" + historyId);
+      await rejected.locator("summary").click();
+      await rejected.getByRole("checkbox", { name: "Select linked case 1" }).check();
+      await rejected.getByLabel("Execution environment").fill("Disposable QA");
+      await rejected.getByRole("button", { name: "Create run and add selected cases" }).click();
+      await expect(rejected.getByRole("alert")).toContainText("Only Approved test cases");
+      await expect(rejected.getByRole("alert")).not.toContainText("Run creation outcome unconfirmed");
+      expect(Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
+        literal(projectId) + " AND deleted_at IS NULL;"))).toBe(beforeDraft);
+
+      // A source-only change has no nominated cases. Do not hide its triage
+      // section or expose run creation as a substitute for identifying scope.
+      const sourceOnlyReceipt = {
+        ...receipt, id: "e2e-source-only-" + stamp, candidates: [],
+        unlinkedCaseNodeIds: [],
+        changed: { ...receipt.changed, modifiedNodeIds: ["implementation_file:src/app.ts"] }
+      };
+      const sourceOnlyHistoryId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(sourceOnlyRevision)}, ${literal(capture(sourceOnlyRevision))}::jsonb,
+          ${literal(JSON.stringify(sourceOnlyReceipt))}::jsonb) RETURNING id;`);
+      await page.goto("/projects/" + projectId + "/agents/zyra/changes");
+      const sourceOnly = page.getByTestId("graph-review-run-" + sourceOnlyHistoryId);
+      await expect(sourceOnly.getByText("Review source-only QA gaps")).toBeVisible();
+      await sourceOnly.locator("summary").click();
+      const sourceGaps = sourceOnly.getByRole("region", { name: "QA verification gaps" });
+      await expect(sourceGaps).toContainText("0 nominated case");
+      await expect(sourceGaps).toContainText("Changed graph nodes have no nominated cases");
+      await expect(sourceOnly.getByRole("button", { name: "Create run and add selected cases" })).toHaveCount(0);
+
+      const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
+      expect(resolvedResponse.ok()).toBeTruthy();
+      const resolved = await resolvedResponse.json();
+      expect(resolved.projectId).toBe(projectId);
+      expect(resolved.testcaseId).toBe(caseId);
+      expect(resolved.projectKey).toEqual(expect.any(String));
+      expect(resolved.testcaseRef).toEqual(expect.any(String));
+      await page.getByRole("link", { name: "Open existing test case" }).click();
+      await expect(page).toHaveURL((url) => url.pathname ===
+        `/projects/${encodeURIComponent(resolved.projectKey)}/testcases/${encodeURIComponent(resolved.testcaseRef)}`);
+    } finally {
+      for (const runId of [createdRunId, uncertainRunId]) {
+        if (!runId) continue;
+        exec("DELETE FROM attachments WHERE project_id=" + literal(projectId) +
+          " AND entity_type='execution' AND entity_id IN (SELECT e.id FROM executions e" +
+          " JOIN cycle_items ci ON ci.id=e.cycle_item_id WHERE ci.cycle_id=" + literal(runId) + ");");
+      }
+      exec("DELETE FROM graph_review_run_case_links WHERE project_id=" + literal(projectId) +
+        " AND history_id IN (SELECT id FROM graph_capture_history WHERE project_id=" +
+        literal(projectId) + " AND revision=" + literal(reviewRevision) + ");");
+      for (const runId of [createdRunId, uncertainRunId]) {
+        if (!runId) continue;
+        exec("DELETE FROM executions WHERE cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id=" +
+          literal(runId) + ");");
+        exec("DELETE FROM cycle_items WHERE cycle_id=" + literal(runId) + ";");
+        exec("DELETE FROM cycles WHERE id=" + literal(runId) + ";");
+      }
+      exec(`DELETE FROM notifications WHERE dedupe_key IN
+        (SELECT 'qa_change_review:' || project_id::text || ':' || id::text
+           FROM graph_capture_history
+          WHERE project_id=${literal(projectId)} AND revision=${literal(reviewRevision)});`);
+      exec(`DELETE FROM graph_capture_history WHERE project_id = ${literal(projectId)}
+         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(sourceOnlyRevision)});`);
+      if (caseId) exec(`DELETE FROM testcases WHERE id = ${literal(caseId)};`);
+    }
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -346,7 +1280,7 @@ test.describe("zyra / agents (UI)", () => {
 
   function draftTitles(taskId: string): string[] {
     const raw = scalar(
-      `SELECT COALESCE(jsonb_agg(d->>'title'), '[]'::jsonb)::text FROM ai_generation_requests r, jsonb_array_elements(r.generated_payload) d WHERE r.id = ${literal(taskId)};`,
+      `SELECT COALESCE(jsonb_agg(COALESCE(d.value->'draft'->>'title', d.value->'fields'->>'title', d.value->>'title') ORDER BY d.ordinality), '[]'::jsonb)::text FROM ai_generation_requests r, jsonb_array_elements(r.generated_payload) WITH ORDINALITY AS d(value, ordinality) WHERE r.id = ${literal(taskId)};`,
     );
     return JSON.parse(raw || "[]");
   }
@@ -358,6 +1292,171 @@ test.describe("zyra / agents (UI)", () => {
     await page.goto(`/projects/${tenant!.mainProjectId}${path}`);
     return page;
   }
+
+  test("requirement change bundle is reviewed and rejected from the native task page without publishing", async ({ browser }) => {
+    const title = `E2E UI requirement bundle ${Date.now()}`;
+    const caseTitle = `E2E UI bundle case ${Date.now()}`;
+    const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+    const operations = [
+      { opType: "requirement_revision", operationId: requirementOperationId, title,
+        description: "A staged requirement revision.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+      { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle,
+        description: "The full candidate must be reviewable", preconditions: "A prepared review account",
+        steps: [{ action: "Open the native bundle", expectedResult: "Every staged field is readable" }],
+        postconditions: "No official case has been created", testData: "The reviewed candidate remains inert" } },
+      { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+    ];
+    const staged = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals`, {
+      data: { requestKey: `ui-requirement-bundle-${Date.now()}`, operations, title },
+    });
+    expect(staged.status(), await staged.text()).toBe(201);
+    const task = await staged.json();
+    try {
+      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const panel = page.getByTestId("requirement-change-bundle");
+      await expect(panel).toBeVisible();
+      await expect(page.getByTestId("requirement-bundle-candidate")).toContainText(title);
+      await expect(page.getByTestId("requirement-bundle-case")).toContainText(caseTitle);
+      const caseFields = page.getByTestId("requirement-bundle-case-fields");
+      for (const text of ["The full candidate must be reviewable", "A prepared review account", "Open the native bundle",
+        "Every staged field is readable", "No official case has been created", "The reviewed candidate remains inert"]) {
+        await expect(caseFields).toContainText(text);
+      }
+      const complete = page.getByTestId("requirement-bundle-full-content");
+      await complete.locator("summary").click();
+      await expect(complete.locator("pre")).toContainText(requirementOperationId);
+      await expect(complete.locator("pre")).toContainText(testcaseOperationId);
+      await expect(complete.locator("pre")).toContainText("A prepared review account");
+      await expect(page.getByTestId("requirement-bundle-link")).toContainText("AC-1");
+      await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("Publication is blocked");
+      await expect(page.getByRole("button", { name: "Close task", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: /^Feedback(?: \(\d+\))?$/ }).click();
+      await page.locator("textarea").first().fill("Regenerate this exact requirement bundle with different content");
+      await expect(page.getByRole("button", { name: "Send feedback", exact: true })).toBeDisabled();
+      const decisionRequest = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith(`/requirements/proposals/${task.id}/reject`));
+      await panel.getByRole("button", { name: "Reject", exact: true }).click();
+      expect((await decisionRequest).postDataJSON()).toEqual({ expectedProposalRevision: task.proposalRevision });
+      await expect(panel.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
+      await expect(page.getByTestId("requirement-bundle-recorded-decision")).toContainText("Recorded outcome: rejected");
+      // Rejected and withdrawn bundles also end as taskStatus "done"; that must never read as applied/published.
+      await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("not published");
+      await expect(page.getByTestId("requirement-bundle-publication-gate")).not.toContainText("This bundle is published");
+      await expect(panel).not.toContainText("Applied. The exact submitted requirement version");
+      const after = await api.get(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}`);
+      expect(after.ok(), await after.text()).toBe(true);
+      expect(await after.json()).toMatchObject({ taskStatus: "done", requirementDecision: { decision: "rejected", proposalRevision: task.proposalRevision } });
+      expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("0");
+    } finally {
+      exec(`DELETE FROM ai_generation_requests WHERE id=${literal(task.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+    }
+  });
+
+  test("requirement change bundle applies from the native task page once effective skills resolve", async ({ browser }) => {
+    const suffix = Date.now();
+    const base = `/api/projects/${tenant!.mainProjectId}`;
+    const skillDocs: string[] = [];
+    let taskId = "";
+    let requirementId = "";
+    const makeSkill = async (module: string, subtype: string, operation: string) => {
+      const created = await api.post(`${base}/skills`, { data: {
+        title: `UI governed skill ${operation} ${suffix}`, module, subtype,
+        skillKey: `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`,
+        instructions: "Require observable outcomes and exact reviewed sources."
+      } });
+      expect(created.ok(), await created.text()).toBe(true);
+      const doc = await created.json();
+      skillDocs.push(doc.id);
+      const submitted = await api.post(`${base}/knowledge-base/documents/${doc.id}/submissions`, { data: {
+        expectedRevision: doc.editRevision, submissionKey: randomUUID()
+      } });
+      expect(submitted.ok(), await submitted.text()).toBe(true);
+      const version = await submitted.json();
+      const approved = await api.patch(`${base}/skills/${doc.id}/approve`, { data: { versionId: version.id } });
+      expect(approved.ok(), await approved.text()).toBe(true);
+      const approval = await approved.json();
+      const assigned = await api.post(`${base}/skill-assignments`, { data: {
+        skillDocumentId: doc.id, versionId: approval.approvedVersionId, module, subtype, operation
+      } });
+      expect(assigned.ok(), await assigned.text()).toBe(true);
+      return { documentId: doc.id as string, versionId: approval.approvedVersionId as string };
+    };
+    try {
+      const requirementSkill = await makeSkill("requirements", "functional", "requirement_revision");
+      await api.post(`${base}/skill-assignments`, { data: {
+        skillDocumentId: requirementSkill.documentId, versionId: requirementSkill.versionId,
+        module: "requirements", subtype: "functional", operation: "requirement_case_link"
+      } });
+      await makeSkill("test_cases", "manual", "testcase_create");
+
+      const title = `UI governed requirement ${suffix}`;
+      const caseTitle = `UI governed case ${suffix}`;
+      const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
+      const stagedResponse = await api.post(`${base}/requirements/proposals`, { data: {
+        requestKey: `ui-governed-${suffix}`, title,
+        operations: [
+          { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Applied from the native task review.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
+          { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+        ]
+      } });
+      expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+      taskId = (await stagedResponse.json()).id;
+
+      const page = await open(browser, `/agents/tasks/${taskId}`);
+      const panel = page.getByTestId("requirement-change-bundle");
+      await expect(panel).toBeVisible();
+      await expect(panel.getByTestId("requirement-bundle-skills")).toContainText("requirements/functional/requirement_revision");
+      const apply = panel.getByTestId("requirement-bundle-apply");
+      await expect(apply).toBeVisible();
+      await apply.click();
+      await expect(apply).toHaveCount(0);
+      const after = await api.get(`${base}/requirements/proposals/${taskId}`);
+      expect(after.ok(), await after.text()).toBe(true);
+      expect(await after.json()).toMatchObject({ taskStatus: "done" });
+      expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("1");
+      requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
+      expect(requirementId).not.toBe("");
+    } finally {
+      if (taskId) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(taskId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      if (requirementId) {
+        exec(`DELETE FROM requirement_case_links WHERE project_id=${literal(tenant!.mainProjectId)} AND requirement_id=${literal(requirementId)};`);
+        exec(`DELETE FROM requirement_profiles WHERE document_id=${literal(requirementId)};`);
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(requirementId)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(requirementId)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+      for (const id of skillDocs) {
+        exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)};`);
+        exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      }
+    }
+  });
+
+  test("requirement change bundle reconciles a stale opposite decision with its recorded outcome", async ({ browser }) => {
+    const staged = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals`, {
+      data: { requestKey: randomUUID(), operations: [{ opType: "requirement_revision", operationId: randomUUID(),
+        title: `E2E competing bundle ${Date.now()}`, criteria: [{ key: "AC-1", text: "Only one exact decision is recorded" }] }] },
+    });
+    expect(staged.status(), await staged.text()).toBe(201);
+    const task = await staged.json();
+    try {
+      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const panel = page.getByTestId("requirement-change-bundle");
+      await expect(panel.getByRole("button", { name: "Withdraw", exact: true })).toBeVisible();
+      const rejected = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}/reject`, {
+        data: { expectedProposalRevision: task.proposalRevision, reason: "Another reviewer recorded this outcome" },
+      });
+      expect(rejected.ok(), await rejected.text()).toBe(true);
+      const staleResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/requirements/proposals/${task.id}/withdraw`));
+      await panel.getByRole("button", { name: "Withdraw", exact: true }).click();
+      expect((await staleResponse).status()).toBe(409);
+      await expect(page.getByTestId("requirement-bundle-recorded-decision")).toContainText("Recorded outcome: rejected");
+      await expect(page.getByText("Requirement change bundle withdrawn. Nothing was published.", { exact: true })).toHaveCount(0);
+      await expect(panel.getByRole("button", { name: "Withdraw", exact: true })).toHaveCount(0);
+      expect(scalar(`SELECT COUNT(*)::int FROM audit_logs WHERE entity_id=${literal(task.id)} AND action IN ('requirement_proposal_rejected','requirement_proposal_withdrawn');`)).toBe("1");
+    } finally {
+      exec(`DELETE FROM ai_generation_requests WHERE id=${literal(task.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+    }
+  });
 
   function modal(page: Page, title: string): Locator {
     return page
@@ -593,6 +1692,29 @@ test.describe("zyra / agents (UI)", () => {
     await expect(context).not.toHaveValue(/wrong password/);
     await expect(acceptanceCriteria).toHaveValue(/Shows an error on a wrong password/);
     await expect(acceptanceCriteria).toHaveValue(/Redirects to the dashboard on success/);
+  });
+
+  test("ZYU-83 the task composer does not offer governed manuals or policies", async ({ browser }) => {
+    await allocateFakeAiKey();
+    const title = stamp("Governed manual");
+    const eligible = stamp("Eligible general");
+    await createKnowledgeDoc({ title: eligible, contentText: "Eligible general body" });
+    await createKnowledgeDoc({
+      title, documentType: "user_manual", contentText: "Governed body must not reach task context",
+      governedMetadata: {
+        schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "confidential",
+        distribution: "withheld", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+        effectivity: { from: null, to: null }, enforcementRefs: [],
+      },
+    });
+    const { dialog } = await openCreateModal(browser);
+    // The select is only rendered once at least one eligible document exists; either way neither
+    // the governed title nor its body may appear in the composer.
+    await expect(dialog).not.toContainText(title);
+    await expect(dialog).not.toContainText("Governed body must not reach task context");
+    const select = dialog.getByRole("combobox");
+    await expect(select).toContainText(eligible);
+    await expect(select).not.toContainText(title);
   });
 
   test("ZYU-52 a Knowledge Base document with no Acceptance Criteria section leaves the field empty and puts everything in Context", async ({
@@ -1751,6 +2873,91 @@ test.describe("zyra / agents (UI)", () => {
       .toBe(1);
   });
 
+  test("ZYR-P07 UI publishes only the human-selected external proposals without a model key", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}`;
+    const titles = [stamp("External selected proposal"), stamp("External remaining proposal")];
+    const agentState = await (await api.get(`${base}/agents/zyra`)).json();
+    expect(agentState.aiKey, "this round trip must not depend on an allocated model key").toBeNull();
+    const issued = await api.post(`${base}/apikeys`, { data: { name: stamp("External proposal client"), scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBeTruthy();
+    const token = await issued.json();
+    const machine = await newRequest.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] }, extraHTTPHeaders: { Authorization: `Bearer ${token.token}` } });
+    try {
+      const staged = await machine.post(`${base}/agents/zyra/tasks/proposals`, { data: {
+        requestKey: randomUUID(),
+        title: stamp("External review task"),
+        operations: titles.map((title) => ({ opType: "create", draft: { title, priority: "P2", description: "Exact external proposal content", steps: [] }, reason: "External QA finding for human review" })),
+      } });
+      expect(staged.status(), await staged.text()).toBe(201);
+      const task = await staged.json();
+      expect(task.drafts).toHaveLength(2);
+      expect(task.proposalRevision).toEqual(expect.any(String));
+      const caseCount = (title: string) => Number(scalar(`SELECT count(*) FROM testcases WHERE project_id = ${literal(projectId)} AND title = ${literal(title)};`));
+      expect(titles.map(caseCount), "staging must not publish native Draft cases").toEqual([0, 0]);
+      const deniedSave = await machine.post(`${base}/agents/zyra/tasks/${task.id}/save`, { data: { expectedProposalRevision: task.proposalRevision, selectedDraftIndexes: [0] } });
+      expect(deniedSave.status(), await deniedSave.text()).toBe(403);
+      expect(titles.map(caseCount)).toEqual([0, 0]);
+
+      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const dialog = await openSaveFor(page, new RegExp(escapeRegExp(titles[0])));
+      await dialog.getByText("Inspect the saved proposal and target content", { exact: true }).click();
+      await expect(dialog.locator("pre")).toContainText("Exact external proposal content");
+      await dialog.getByRole("combobox").selectOption("none");
+      const sent = page.waitForRequest(isSaveRequest(task.id));
+      await dialog.getByRole("button", { name: "Save", exact: true }).click();
+      expect((await sent).postDataJSON()).toMatchObject({ expectedProposalRevision: task.proposalRevision, selectedDraftIndexes: [0] });
+      await expect(dialog).toHaveCount(0);
+      await expect.poll(() => titles.map(caseCount)).toEqual([1, 0]);
+      const remaining = await (await api.get(`${base}/agents/zyra/tasks/${task.id}`)).json();
+      expect(remaining).toMatchObject({ taskStatus: "in_review", savedCount: 1 });
+      expect(remaining.drafts).toHaveLength(1);
+      expect(remaining.drafts[0].title).toBe(titles[1]);
+      expect(remaining.proposalRevision).not.toBe(task.proposalRevision);
+      expect(scalar(`SELECT status FROM testcases WHERE project_id = ${literal(projectId)} AND title = ${literal(titles[0])};`)).toBe("Draft");
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(titles[1])) })).toBeVisible();
+    } finally {
+      await machine.dispose();
+      await api.delete(`${base}/apikeys/${token.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("ZYR-P07 UI refuses a changed proposal without publishing or creating an orphan suite", async ({ browser }) => {
+    const originalTitle = stamp("Reviewed proposal");
+    const changedTitle = stamp("Changed proposal");
+    const suiteName = stamp("Atomic proposal suite");
+    const projectId = tenant!.mainProjectId;
+    const base = `/api/projects/${projectId}`;
+    const staged = await api.post(`${base}/agents/zyra/tasks/proposals`, { data: {
+      requestKey: randomUUID(), operations: [{ opType: "create", draft: { title: originalTitle, priority: "P2", steps: [] } }],
+    } });
+    expect(staged.status(), await staged.text()).toBe(201);
+    const task = await staged.json();
+    const page = await open(browser, `/agents/tasks/${task.id}`);
+    const dialog = await openSaveFor(page, new RegExp(escapeRegExp(originalTitle)));
+    await dialog.getByText("Inspect the saved proposal and target content", { exact: true }).click();
+    await expect(dialog.locator("pre")).toContainText(originalTitle);
+    await dialog.getByRole("combobox").selectOption("new");
+    await dialog.getByRole("textbox").fill(suiteName);
+    const changed = await api.patch(`${base}/agents/zyra/tasks/${task.id}/drafts/0`, { data: { title: changedTitle } });
+    expect(changed.ok(), await changed.text()).toBeTruthy();
+    const response = page.waitForResponse((res) => isSaveRequest(task.id)(res.request()));
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await response).status()).toBe(409);
+    await expect(dialog.getByRole("alert")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(dialog.locator("pre")).toContainText(originalTitle);
+    expect(Number(scalar(`SELECT count(*) FROM testcases WHERE project_id = ${literal(projectId)} AND title IN (${literal(originalTitle)}, ${literal(changedTitle)});`))).toBe(0);
+    expect(Number(scalar(`SELECT count(*) FROM suites WHERE project_id = ${literal(projectId)} AND name = ${literal(suiteName)};`))).toBe(0);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.reload();
+    const fresh = await openSaveFor(page, new RegExp(escapeRegExp(changedTitle)));
+    await fresh.getByRole("combobox").selectOption("none");
+    await fresh.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(fresh).toHaveCount(0);
+    await expect.poll(() => Number(scalar(`SELECT count(*) FROM testcases WHERE project_id = ${literal(projectId)} AND title = ${literal(changedTitle)};`))).toBe(1);
+  });
+
   /*
    * "[Zyra] Severity and Component Are Missing in Generated Test Cases" — drives the actual Save
    * button (not the API directly, see api/zyra.spec.ts ZYR-A-71..74 for that half) to prove the
@@ -1831,7 +3038,8 @@ test.describe("zyra / agents (UI)", () => {
 
   test("ZYU-129 'No suite' hides every suite field and saves the draft unassigned", async ({ browser }) => {
     const title = stamp("No suite draft");
-    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [] }] });
+    const stagedSuiteId = await seedSuite(stamp("Originally proposed suite"));
+    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [], suiteId: stagedSuiteId }] });
     const page = await open(browser, `/agents/tasks/${taskId}`);
     const dialog = await openSaveFor(page, new RegExp(escapeRegExp(title)));
 
@@ -1843,7 +3051,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const request = page.waitForRequest(isSaveRequest(taskId));
     await save.click();
-    expect((await request).postDataJSON().suiteId).toBeUndefined();
+    expect((await request).postDataJSON().suiteId).toBeNull();
     await expect(dialog).toHaveCount(0);
     await expect(page.getByText("1 testcase saved.")).toBeVisible();
     await expect
@@ -1855,7 +3063,8 @@ test.describe("zyra / agents (UI)", () => {
     const title = stamp("Existing suite draft");
     const suiteName = stamp("Target suite");
     const suiteId = await seedSuite(suiteName);
-    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [] }] });
+    const stagedSuiteId = await seedSuite(stamp("Different proposed suite"));
+    const taskId = seedTask({ drafts: [{ title, priority: "P1", preconditions: "", steps: [], suiteId: stagedSuiteId }] });
     const page = await open(browser, `/agents/tasks/${taskId}`);
     const dialog = await openSaveFor(page, new RegExp(escapeRegExp(title)));
     const save = dialog.getByRole("button", { name: "Save" });
@@ -1940,7 +3149,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const request = page.waitForRequest(isSaveRequest(taskId));
     await dialog.getByRole("button", { name: "Save" }).click();
-    expect((await request).postDataJSON().suiteId).toBeUndefined();
+    expect((await request).postDataJSON().suiteId).toBeNull();
     await expect
       .poll(() => scalar(`SELECT COALESCE(suite_id::text, 'NULL') FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(title)};`))
       .toBe("NULL");
@@ -2431,7 +3640,7 @@ test.describe("zyra / agents (UI)", () => {
    *  ZYR-A-91's allocateFakeAiKey comment). */
   async function allocateFakeProviderKey(ai: FakeAiServer): Promise<void> {
     const keyRes = await api.post("/api/workspace/ai-keys", {
-      data: { name: `E2E ui feedback fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E ui feedback fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -3612,6 +4821,34 @@ test.describe("zyra / agents (UI)", () => {
       .toBe("in_review");
   });
 
+  for (const language of ["en", "ru"] as const) {
+    for (const saveFirst of [true, false]) {
+      test(`Zyra close feedback ${language}: ${saveFirst ? "partial save stays saved" : "closing saves no drafts"}`, async ({ browser }) => {
+        const { taskId, sessionId } = seedChatReviewBatch();
+        exec(`UPDATE zyra_chat_sessions SET language=${literal(language)} WHERE id=${literal(sessionId)};`);
+        exec(`UPDATE ai_generation_requests SET language=${literal(language)} WHERE id=${literal(taskId)};`);
+        const page = await open(browser, "/agents/zyra");
+        const requestBase = new URL(`/api/projects/${tenant!.mainProjectId}`, env.apiBaseUrl).toString();
+        await verifyZyraReviewCloseFeedback({
+          page, request: api, taskUrl: `${requestBase}/agents/zyra/tasks/${taskId}`, language, saveFirst,
+          settleSavedCases: async (ids) => {
+            // Embedding bookkeeping no longer writes testcase_versions (V150 excludes it), so the
+            // durable "the enqueue happened, and the keyless worker put it back to pending" signal
+            // is embedding_queued_at, which the enqueue sets and the worker never clears.
+            await expect.poll(() => Number(scalar(`SELECT COUNT(*) FROM testcases t
+              WHERE t.id=ANY(ARRAY[${ids.map(literal).join(",")}]::uuid[]) AND t.embedding_status='pending' AND t.embedding_queued_at IS NOT NULL;`)),
+            { message: "keyless save embedding bookkeeping must finish before the close baseline" }).toBe(ids.length);
+          },
+          repositorySnapshot: async () => scalar(`SELECT jsonb_build_object(
+            'cases',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=${literal(tenant!.mainProjectId)}),'[]'::jsonb),
+            'history',COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.testcase_id,v.version) FROM testcase_versions v JOIN testcases t ON t.id=v.testcase_id
+              WHERE t.project_id=${literal(tenant!.mainProjectId)}),'[]'::jsonb))::text;`),
+        });
+        expect(Number(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)};`))).toBe(saveFirst ? 1 : 0);
+      });
+    }
+  }
+
   /*
    * Regression test for the Test Case Repository not reflecting a Zyra save until a manual reload.
    * The Test Cases page seeds its first render from an in-memory, per-tab cache (pageDataCache,
@@ -4230,7 +5467,7 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await api.post("/api/workspace/ai-keys", {
-      data: { name: `E2E ui chat fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E ui chat fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);

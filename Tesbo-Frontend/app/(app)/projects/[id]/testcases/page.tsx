@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +30,7 @@ import {
   updateSuite,
   deleteSuite,
   getTestCase,
+  approveTestCase,
   createTestCase,
   updateTestCase,
   deleteTestCase,
@@ -56,6 +57,7 @@ import {
   type ZyraSourceRef,
   notionPageKey,
 } from "@/lib/api";
+import { createSavedView, deleteSavedView, listSavedViews, type SavedTestCaseView } from "@/lib/api";
 import { ZyraContextDrawer } from "@/components/agents/ZyraContextDrawer";
 
 // Same 5-entry map as ZyraCitationsList/ZyraCitationsBadge — kept local rather than importing from
@@ -68,6 +70,7 @@ const CONTEXT_TYPE_LABEL: Record<ZyraSourceRef["type"], string> = {
   bug: "Bug",
 };
 import { RepositoryTestCaseTable, type RepoTcSort, type RepoTcSortColumn } from "@/components/testcases/RepositoryTestCaseTable";
+import { TestCaseApprovalReview, type TestCaseApprovalSnapshot } from "@/components/testcases/TestCaseApprovalReview";
 import { useTopBarSlots } from "@/components/TopBarSlots";
 import { Breadcrumbs } from "@/components/workflows";
 import {
@@ -114,6 +117,7 @@ const MAX_PAGE_SIZE = 500;
 const BULK_NO_CHANGE = "";
 const DEFAULT_PAGE_SIZE = 25;
 const TESTCASE_STATUSES = ["Draft", "In Review", "Approved", "Deprecated", "Archived"];
+const EDITABLE_TESTCASE_STATUSES = TESTCASE_STATUSES.filter((value) => value !== "Approved");
 // "Not set" is a real stored value (a case nobody has prioritised yet, e.g. one migrated from a tool
 // whose priority was blank). It is last so it never reads as a rank, and sorts after P3.
 const TESTCASE_PRIORITIES = ["P0", "P1", "P2", "P3", "Not set"];
@@ -123,6 +127,19 @@ const TESTCASE_TYPES = [
   "Acceptance", "Usability", "Compatibility", "Exploratory", "Other",
 ];
 const TESTCASE_AUTOMATION_TYPES = ["Automated", "Not Automated", "To Be Automated", "Can't Automate"];
+// Mirrors the backend's finite review vocabulary. A view is an authoring lens, not execution status.
+const TESTCASE_TECHNIQUES = [
+  "equivalence_partitioning", "boundary_value_analysis", "decision_table", "state_testing",
+  "use_case_testing", "pairwise_testing", "error_guessing", "security_perspective", "general",
+] as const;
+const TESTCASE_REVIEW_VIEWS = [
+  { value: "positive", label: "Positive" },
+  { value: "negative", label: "Negative" },
+  { value: "end_to_end", label: "End to End" },
+  { value: "state", label: "State" },
+  { value: "upstream_downstream", label: "Upstream & Downstream" },
+  { value: "ux_ui_functionality", label: "UX/UI Functionality" },
+] as const;
 /* Matches SUITE_TEXT_MAX_LENGTH in legacy.service.ts: the most a suite description / preconditions may hold. */
 const SUITE_TEXT_MAX_LENGTH = 20000;
 /* Create-form-only sentinel for an unselected Suite: "" is already the real "No suite" value
@@ -308,6 +325,7 @@ function automationTone(a: string) {
 export default function TestCasesPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { currentUser } = useAppData();
   const projectId = params.id as string;
@@ -326,6 +344,9 @@ export default function TestCasesPage() {
   const activeLinearIssueKey = searchParams.get("linearIssueKey") || "";
   // A Notion test case links by full page id; the chip below shows the short `notion:xxxxxxxx` label.
   const activeNotionPageId = searchParams.get("notionPageId") || "";
+  // Deep link from requirement coverage ("supporting case") and evidence surfaces. It seeds the
+  // same search the reviewer would type; it is not a separate filter or authority.
+  const activeSearch = searchParams.get("search") || "";
 
   // Take over the shared TopBar with this page's breadcrumb + actions (portaled below),
   // and hide the default global "Search projects" search while this page is mounted.
@@ -390,6 +411,7 @@ export default function TestCasesPage() {
   const [panelTab, setPanelTab] = useState<PanelTab>("overview");
   const [panelTestcaseId, setPanelTestcaseId] = useState<string | null>(null);
   const [panelLoading, setPanelLoading] = useState(false);
+  const panelLoadRequestRef = useRef(0);
   const [panelSaving, setPanelSaving] = useState(false);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelSuccess, setPanelSuccess] = useState<string | null>(null);
@@ -413,6 +435,8 @@ export default function TestCasesPage() {
   const [automationStatus, setAutomationStatus] = useState("Not Automated");
   const [component, setComponent] = useState("");
   const [severity, setSeverity] = useState("");
+  const [technique, setTechnique] = useState("");
+  const [reviewViews, setReviewViews] = useState<string[]>([]);
   const [suiteId, setSuiteId] = useState("");
   const [testcaseIdPrefix, setTestcaseIdPrefix] = useState(defaultTestcaseIdPrefix);
   const [panelJiraIssueKey, setPanelJiraIssueKey] = useState("");
@@ -424,6 +448,10 @@ export default function TestCasesPage() {
   // via openViewPanel), so it always reflects the latest known-persisted values.
   const [panelOriginalStatus, setPanelOriginalStatus] = useState<string | null>(null);
   const [panelOriginalSuiteId, setPanelOriginalSuiteId] = useState<string | null>(null);
+  const [panelEditRevision, setPanelEditRevision] = useState<string | null>(null);
+  const [loadedFormFingerprint, setLoadedFormFingerprint] = useState<string | null>(null);
+  const [approvalReview, setApprovalReview] = useState<{ id: string; editRevision: string; approvalRevision: string; snapshot: TestCaseApprovalSnapshot } | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   // Bugs filed against this test case (edit mode only — a case being created has none yet).
   const [panelBugs, setPanelBugs] = useState<BugItem[]>([]);
@@ -455,9 +483,12 @@ export default function TestCasesPage() {
   const [bulkAutomationStatus, setBulkAutomationStatus] = useState("Not Automated");
   const [bulkSeverity, setBulkSeverity] = useState("Medium");
   const [bulkTargetSuiteId, setBulkTargetSuiteId] = useState("");
+  const bulkUpdateHasChanges = [bulkStatus, bulkPriority, bulkAutomationStatus, bulkSeverity].some((value) => value !== BULK_NO_CHANGE);
 
   const [deleteSuiteId, setDeleteSuiteId] = useState<string | null>(null);
   const [deleteSuiteSaving, setDeleteSuiteSaving] = useState(false);
+  const [deleteSuiteError, setDeleteSuiteError] = useState<string | null>(null);
+  const [repositoryRefreshWarning, setRepositoryRefreshWarning] = useState<"suite-delete" | "bulk" | null>(null);
 
   const [isRenameSuiteModalOpen, setIsRenameSuiteModalOpen] = useState(false);
   const [renameSuiteId, setRenameSuiteId] = useState<string | null>(null);
@@ -467,11 +498,15 @@ export default function TestCasesPage() {
   const [isRenamingSuite, setIsRenamingSuite] = useState(false);
   const [renameSuiteError, setRenameSuiteError] = useState("");
 
-  const [suiteSearch, setSuiteSearch] = useState("");
+  const [suiteSearch, setSuiteSearch] = useState(activeSearch);
   const [suiteStatusFilter, setSuiteStatusFilter] = useState("all");
   const [suitePriorityFilter, setSuitePriorityFilter] = useState("all");
   const [suiteTypeFilter, setSuiteTypeFilter] = useState("all");
   const [suiteAutomationFilter, setSuiteAutomationFilter] = useState("all");
+  const [suiteTechniqueFilter, setSuiteTechniqueFilter] = useState("all");
+  const [suiteViewFilter, setSuiteViewFilter] = useState("all");
+  const [savedViews, setSavedViews] = useState<SavedTestCaseView[]>([]);
+  const [activeSavedViewId, setActiveSavedViewId] = useState("");
   const [customFieldFilters, setCustomFieldFilters] = useState<CustomFieldFilterCondition[]>([]);
   // Custom tag ids for the toolbar's Tags filter — a case matches when it carries any of them.
   const [suiteTagFilter, setSuiteTagFilter] = useState<string[]>([]);
@@ -531,6 +566,7 @@ export default function TestCasesPage() {
     setPageCache(cacheKey, next);
     setSuites(next.suites);
     setRepoSummary(next.repoSummary);
+    setRepositoryRefreshWarning(null);
   }, [projectId, customFieldDefinitions, customTags, cacheKey]);
 
   useEffect(() => {
@@ -576,6 +612,20 @@ export default function TestCasesPage() {
     for (const [key, list] of map) map.set(key, sortSuites(list));
     return map;
   }, [suites]);
+  const deleteSuiteSubtreeIds = useMemo(() => {
+    const ids = new Set<string>();
+    const pending = deleteSuiteId ? [deleteSuiteId] : [];
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      for (const child of childrenBySuiteId.get(id) ?? []) pending.push(child.id);
+    }
+    return ids;
+  }, [deleteSuiteId, childrenBySuiteId]);
+  const suiteToDelete = suites.find((suite) => suite.id === deleteSuiteId);
+  const deleteSuiteDescendantCount = Math.max(0, deleteSuiteSubtreeIds.size - 1);
+  const deleteSuiteCaseCount = suiteToDelete?.recursiveTestCaseCount ?? 0;
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === activeSuiteId) ?? null,
     [suites, activeSuiteId]
@@ -674,6 +724,8 @@ export default function TestCasesPage() {
     suitePriorityFilter !== "all",
     suiteTypeFilter !== "all",
     suiteAutomationFilter !== "all",
+    suiteTechniqueFilter !== "all",
+    suiteViewFilter !== "all",
     activeJiraIssueKey !== "",
     customFieldFilters.length > 0,
     suiteTagFilter.length > 0,
@@ -724,6 +776,13 @@ export default function TestCasesPage() {
     return Math.max(0, repositoryTotalCount - suiteCaseCountSum);
   }, [repoSummary, repositoryTotalCount, suiteCaseCountSum]);
 
+  // The URL is the authoritative deep-link seed. A new search replaces the current query while
+  // this page stays mounted, and navigating back to a URL without one clears the box; ordinary
+  // typing never changes the param, so it is not overwritten.
+  useEffect(() => {
+    setSuiteSearch(activeSearch);
+  }, [activeSearch]);
+
   useEffect(() => {
     const timeout = setTimeout(() => {
       setDebouncedSuiteSearch(suiteSearch.trim());
@@ -765,6 +824,8 @@ export default function TestCasesPage() {
     suitePriorityFilter,
     suiteTypeFilter,
     suiteAutomationFilter,
+    suiteTechniqueFilter,
+    suiteViewFilter,
     activeJiraIssueKey,
     activeLinearIssueKey,
     activeNotionPageId,
@@ -806,6 +867,8 @@ export default function TestCasesPage() {
         priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
         type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
         automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
+        technique: suiteTechniqueFilter === "all" ? undefined : suiteTechniqueFilter,
+        view: suiteViewFilter === "all" ? undefined : suiteViewFilter,
         jiraIssueKey: activeJiraIssueKey || undefined,
         linearIssueKey: activeLinearIssueKey || undefined,
         notionPageId: activeNotionPageId || undefined,
@@ -844,6 +907,8 @@ export default function TestCasesPage() {
     suiteStatusFilter,
     suiteTypeFilter,
     suiteAutomationFilter,
+    suiteTechniqueFilter,
+    suiteViewFilter,
     activeJiraIssueKey,
     activeLinearIssueKey,
     activeNotionPageId,
@@ -875,6 +940,8 @@ export default function TestCasesPage() {
       priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
       type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
       automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
+        technique: suiteTechniqueFilter === "all" ? undefined : suiteTechniqueFilter,
+        view: suiteViewFilter === "all" ? undefined : suiteViewFilter,
       jiraIssueKey: activeJiraIssueKey || undefined,
       linearIssueKey: activeLinearIssueKey || undefined,
       notionPageId: activeNotionPageId || undefined,
@@ -891,6 +958,8 @@ export default function TestCasesPage() {
       suitePriorityFilter,
       suiteTypeFilter,
       suiteAutomationFilter,
+      suiteTechniqueFilter,
+      suiteViewFilter,
       activeJiraIssueKey,
       activeLinearIssueKey,
       activeNotionPageId,
@@ -929,6 +998,9 @@ export default function TestCasesPage() {
   }
 
   function fillFormFromTestCase(data: Record<string, unknown>) {
+    const revision = typeof data.editRevision === "string" && /^[a-f0-9]{64}$/.test(data.editRevision) ? data.editRevision : null;
+    setPanelEditRevision(revision);
+    if (!revision) setPanelError("Case edit revision is unavailable. Reload the latest case before saving changes.");
     setTitle((data.title as string) ?? "");
     setDescription((data.description as string) ?? "");
     setPreconditions((data.preconditions as string) ?? "");
@@ -947,6 +1019,8 @@ export default function TestCasesPage() {
     setAutomationStatus((data.automationStatus as string) ?? "");
     setComponent((data.component as string) ?? "");
     setSeverity((data.severity as string) ?? "");
+    setTechnique(typeof data.technique === "string" ? data.technique : "");
+    setReviewViews(Array.isArray(data.reviewViews) ? data.reviewViews.map(String) : []);
     // `formSuiteId` (the suite the list view happens to be filtered on) belongs to the CREATE
     // form's default, not this one — this always has a real fetched value, so an unfiled case
     // (data.suiteId === null) must show/stay "No suite", not silently adopt whatever suite the
@@ -959,7 +1033,62 @@ export default function TestCasesPage() {
     setPanelSourceRefs(Array.isArray(data.sourceRefs) ? (data.sourceRefs as ZyraSourceRef[]) : []);
   }
 
+  function editorFingerprint(data: Record<string, unknown>, fields: Record<string, unknown>, tags: string[]): string {
+    const textKeys = ["title", "description", "preconditions", "postconditions", "testData", "estimatedDuration", "attachments", "type", "priority", "automationStatus", "component", "severity", "technique", "suiteId"];
+    return JSON.stringify({
+      text: textKeys.map((key) => String(data[key] ?? "")),
+      status: String(data.status ?? "Draft"),
+      steps: parseSteps(data.steps),
+      reviewViews: Array.isArray(data.reviewViews) ? data.reviewViews.map(String) : [],
+      fields: Object.entries(fields).sort(([a], [b]) => a.localeCompare(b)),
+      tags: [...tags].sort(),
+    });
+  }
+
+  function hasUnsavedReviewChanges(): boolean {
+    return !loadedFormFingerprint || loadedFormFingerprint !== editorFingerprint({
+      title, description, preconditions, postconditions, testData, estimatedDuration, attachments,
+      type, priority, status, automationStatus, component, severity, technique, suiteId, steps, reviewViews,
+    }, customFieldValues, panelTagIds);
+  }
+
+  async function openApprovalReview() {
+    if (!panelTestcaseId || panelSaving || hasUnsavedReviewChanges()) return;
+    setPanelSaving(true);
+    setPanelError(null);
+    try {
+      const data = await getTestCase(projectId, panelTestcaseId);
+      const snapshot = data.approvalSnapshot as TestCaseApprovalSnapshot | undefined;
+      if (typeof data.editRevision !== "string" || typeof data.approvalRevision !== "string" || !snapshot?.case
+          || !Array.isArray(snapshot.customFields) || !Array.isArray(snapshot.customTags)) {
+        throw new Error("The complete reviewed version is unavailable. Reload the case before approving it.");
+      }
+      setApprovalError(null);
+      setApprovalReview({ id: panelTestcaseId, editRevision: data.editRevision, approvalRevision: data.approvalRevision, snapshot });
+    } catch (error) {
+      setPanelError(error instanceof Error ? error.message : "Could not load the version for review.");
+    } finally { setPanelSaving(false); }
+  }
+
+  async function submitApprovalReview() {
+    if (!approvalReview || panelSaving) return;
+    setPanelSaving(true);
+    try {
+      await approveTestCase(projectId, approvalReview.id, approvalReview.editRevision, approvalReview.approvalRevision);
+      const reviewedId = approvalReview.id;
+      setApprovalReview(null);
+      await loadSuitesAndSummary();
+      await loadSelectedSuiteCases();
+      await openViewPanel(reviewedId);
+      setPanelSuccess("The reviewed version was approved.");
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : "Could not confirm approval. Reload the case to check its current state.");
+    } finally { setPanelSaving(false); }
+  }
+
   function resetForm(defaultSuiteId?: string | null) {
+    setPanelEditRevision(null);
+    setLoadedFormFingerprint(null);
     setTitle("");
     setDescription("");
     setPreconditions("");
@@ -975,6 +1104,8 @@ export default function TestCasesPage() {
     setAutomationStatus("");
     setComponent("");
     setSeverity("");
+    setTechnique("");
+    setReviewViews([]);
     setSuiteId(defaultSuiteId ?? formSuiteId ?? UNSELECTED_SUITE_ID);
     setTestcaseIdPrefix(defaultTestcaseIdPrefix);
     setPanelJiraIssueKey("");
@@ -994,6 +1125,7 @@ export default function TestCasesPage() {
   }
 
   async function openCreatePanel() {
+    panelLoadRequestRef.current += 1;
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1002,6 +1134,7 @@ export default function TestCasesPage() {
   }
 
   async function openCreatePanelForSuite(targetSuiteId: string) {
+    panelLoadRequestRef.current += 1;
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1010,6 +1143,7 @@ export default function TestCasesPage() {
   }
 
   async function openViewPanel(testcaseId: string) {
+    const requestId = ++panelLoadRequestRef.current;
     setPanelError(null);
     setPanelLoading(true);
     setPanelTestcaseId(testcaseId);
@@ -1022,32 +1156,109 @@ export default function TestCasesPage() {
     // suites/repoSummary patch would be based on stale data, and falls back to a real refetch instead.
     setPanelOriginalStatus(null);
     setPanelOriginalSuiteId(null);
+    setPanelEditRevision(null);
     setCustomFieldErrors({});
+    setLoadedFormFingerprint(null);
     setSelectedSourceRef(null);
     try {
       const [data, customFields, bugs, tags] = await Promise.all([
         getTestCase(projectId, testcaseId),
-        getCustomFieldValues(projectId, testcaseId).catch(() => []),
+        getCustomFieldValues(projectId, testcaseId),
         listBugs(projectId, { testcaseId }).catch(() => []),
-        getTestCaseTags(projectId, testcaseId).catch(() => []),
+        getTestCaseTags(projectId, testcaseId),
       ]);
+      if (requestId !== panelLoadRequestRef.current) return;
       fillFormFromTestCase(data);
       setPanelCustomFields(customFields);
       setCustomFieldValues(Object.fromEntries(customFields.map((f) => [f.id, f.value])));
       setPanelBugs(bugs);
       setPanelTagIds(tags.map((t) => t.id));
+      setLoadedFormFingerprint(editorFingerprint(data, Object.fromEntries(customFields.map((f) => [f.id, f.value])), tags.map((t) => t.id)));
     } catch {
-      setPanelError("Failed to load test case details.");
+      if (requestId === panelLoadRequestRef.current) setPanelError("Failed to load the complete test case details. Reload before editing or approving.");
     } finally {
-      setPanelLoading(false);
+      if (requestId === panelLoadRequestRef.current) setPanelLoading(false);
     }
   }
 
   function closePanel() {
+    panelLoadRequestRef.current += 1;
     setPanelMode("closed");
     setPanelTestcaseId(null);
     setPanelError(null);
+    setPanelEditRevision(null);
+    setApprovalReview(null);
     setSelectedSourceRef(null);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void listSavedViews(projectId)
+      .then((views) => { if (!cancelled) setSavedViews(views); })
+      .catch(() => { if (!cancelled) setSavedViews([]); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  function currentFilterSnapshot(): Record<string, unknown> {
+    const filters: Record<string, unknown> = {};
+    if (suiteSearch.trim()) filters.search = suiteSearch.trim();
+    if (suiteStatusFilter !== "all") filters.status = suiteStatusFilter;
+    if (suitePriorityFilter !== "all") filters.priority = suitePriorityFilter;
+    if (suiteTypeFilter !== "all") filters.type = suiteTypeFilter;
+    if (suiteAutomationFilter !== "all") filters.automationStatus = suiteAutomationFilter;
+    if (suiteTechniqueFilter !== "all") filters.technique = suiteTechniqueFilter;
+    if (suiteViewFilter !== "all") filters.view = suiteViewFilter;
+    return filters;
+  }
+
+  function applySavedView(viewId: string) {
+    setActiveSavedViewId(viewId);
+    if (!viewId) return;
+    const view = savedViews.find((entry) => entry.id === viewId);
+    if (!view) return;
+    const filters = view.filters || {};
+    setSuiteSearch(String(filters.search ?? ""));
+    setSuiteStatusFilter(String(filters.status ?? "all"));
+    setSuitePriorityFilter(String(filters.priority ?? "all"));
+    setSuiteTypeFilter(String(filters.type ?? "all"));
+    setSuiteAutomationFilter(String(filters.automationStatus ?? "all"));
+    setSuiteTechniqueFilter(String(filters.technique ?? "all"));
+    setSuiteViewFilter(String(filters.view ?? "all"));
+    setSuiteCasesPage(1);
+  }
+
+  async function saveCurrentView() {
+    const name = window.prompt("Name this view", "");
+    if (!name || !name.trim()) return;
+    try {
+      const created = await createSavedView(projectId, { name: name.trim(), filters: currentFilterSnapshot() });
+      setSavedViews((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setActiveSavedViewId(created.id);
+    } catch (err) {
+      setSuiteCasesError(err instanceof Error ? err.message : "Failed to save view.");
+    }
+  }
+
+  async function deleteActiveView() {
+    if (!activeSavedViewId) return;
+    const view = savedViews.find((entry) => entry.id === activeSavedViewId);
+    if (!view || !window.confirm(`Delete the view "${view.name}"?`)) return;
+    try {
+      await deleteSavedView(projectId, view.id);
+      setSavedViews((prev) => prev.filter((entry) => entry.id !== view.id));
+      setActiveSavedViewId("");
+    } catch (err) {
+      setSuiteCasesError(err instanceof Error ? err.message : "Failed to delete view.");
+    }
+  }
+
+  function clearSearch() {
+    setSuiteSearch("");
+    if (!searchParams.get("search")) return;
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("search");
+    const qs = next.toString();
+    router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
   }
 
   function clearSuiteFilters() {
@@ -1056,10 +1267,20 @@ export default function TestCasesPage() {
     setSuitePriorityFilter("all");
     setSuiteTypeFilter("all");
     setSuiteAutomationFilter("all");
+    setSuiteTechniqueFilter("all");
+    setSuiteViewFilter("all");
+    setActiveSavedViewId("");
     setCustomFieldFilters([]);
     setSuiteTagFilter([]);
     setSuiteCasesPage(1);
-    if (activeJiraIssueKey) router.replace(`/projects/${projectId}/testcases`);
+    if (activeJiraIssueKey) {
+      router.replace(`/projects/${projectId}/testcases`);
+    } else if (searchParams.get("search")) {
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("search");
+      const qs = next.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    }
   }
 
   function addStep() {
@@ -1141,6 +1362,8 @@ export default function TestCasesPage() {
           priority: suitePriorityFilter === "all" ? undefined : suitePriorityFilter,
           type: suiteTypeFilter === "all" ? undefined : suiteTypeFilter,
           automationStatus: suiteAutomationFilter === "all" ? undefined : suiteAutomationFilter,
+        technique: suiteTechniqueFilter === "all" ? undefined : suiteTechniqueFilter,
+        view: suiteViewFilter === "all" ? undefined : suiteViewFilter,
           jiraIssueKey: activeJiraIssueKey || undefined,
           linearIssueKey: activeLinearIssueKey || undefined,
           notionPageId: activeNotionPageId || undefined,
@@ -1193,8 +1416,10 @@ export default function TestCasesPage() {
 
   async function handleBulkActionConfirm() {
     if (!bulkAction || selectedCaseIds.length === 0 || bulkSaving) return;
+    if (bulkAction === "update" && !bulkUpdateHasChanges) return;
     setBulkSaving(true);
     setBulkError(null);
+    let actionConfirmed = false;
     try {
       if (bulkAction === "delete") {
         await bulkDeleteTestCases(projectId, { testcaseIds: selectedCaseIds });
@@ -1219,25 +1444,33 @@ export default function TestCasesPage() {
           suiteId: bulkTargetSuiteId || UNASSIGNED_SUITE_ID,
         });
       }
+      actionConfirmed = true;
       const refreshPanelTestcaseId = panelTestcaseId && selectedCaseIdSet.has(panelTestcaseId) ? panelTestcaseId : null;
+      // The mutation succeeded. Retire the submitted selection/dialog before any
+      // follow-up read: a refresh failure must not offer to submit the same write again.
+      setSelectedCaseIds([]);
+      setIsBulkActionModalOpen(false);
+      setBulkAction("");
+      setBulkTargetSuiteId("");
+      if (bulkAction === "delete" && refreshPanelTestcaseId) closePanel();
       // Kept as a real refetch, deliberately: a bulk selection can include records never fully
       // loaded (selectAllMatchingCases only ever accumulates ids), so their prior status/suite isn't
       // known here and can't be safely patched — only the now-redundant customFieldDefinitions
       // refetch is dropped (bulk actions never touch field definitions).
       await loadSuitesAndSummary();
       await loadSelectedSuiteCases();
-      if (bulkAction === "delete" && refreshPanelTestcaseId) {
-        closePanel();
-      } else if (refreshPanelTestcaseId) {
+      if (bulkAction !== "delete" && refreshPanelTestcaseId) {
         await openViewPanel(refreshPanelTestcaseId);
       }
-      setSelectedCaseIds([]);
-      setIsBulkActionModalOpen(false);
-      setBulkAction("");
-      setBulkTargetSuiteId("");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to apply bulk action.";
-      setBulkError(message);
+      if (actionConfirmed) {
+        // Reuse Suite deletion's repository recovery; the list loader still owns
+        // its separate inline Retry when it handles a paginated-list read failure.
+        setRepositoryRefreshWarning("bulk");
+      } else {
+        const message = err instanceof Error ? err.message : "Failed to apply bulk action.";
+        setBulkError(message);
+      }
     } finally {
       setBulkSaving(false);
     }
@@ -1319,27 +1552,17 @@ export default function TestCasesPage() {
     setRenameSuiteError("");
     try {
       const trimmedName = renameSuiteInputValue.trim();
-      // The backend writes parent_id verbatim (no COALESCE), so an edit that omits it would move the
-      // suite to the root. Sending the current parent back keeps the suite where it is.
-      const current = suites.find((suite) => suite.id === renameSuiteId);
+      // A text edit does not request a move. Let the writer preserve the live parent rather
+      // than re-sending one from a potentially stale sidebar snapshot.
       await updateSuite(renameSuiteId, {
         name: trimmedName,
         description: renameSuiteDescription.trim(),
         preconditions: renameSuitePreconditions.trim(),
-        parentId: current?.parentId ?? null,
       });
       setIsRenameSuiteModalOpen(false);
       setRenameSuiteId(null);
-      // NOT patched client-side, deliberately, unlike suite create: the backend's updateSuite writes
-      // `parent_id = $3` with no COALESCE (unlike name/position), so a rename call that omits
-      // parentId — which this one always does — silently reparents the suite to root server-side.
-      // That's a pre-existing backend bug, out of scope here, but a client-only name patch would
-      // additionally HIDE it for the rest of this SPA session (the stale local parentId keeps
-      // showing the suite nested where it was, while the server now disagrees) — a real change in
-      // what the user sees after a rename, which the "no behaviour change" bar for this phase
-      // doesn't allow. A real listSuites() refetch keeps today's actual behavior (any such
-      // reparenting is visible immediately) while still skipping the repoSummary/
-      // customFieldDefinitions/paginated-list refetch a full refreshData() would also do.
+      // Refresh authoritative hierarchy/text, including any concurrent explicit move, without
+      // the unrelated repository/custom-field/paginated-list work of a full refreshData().
       const freshSuites = await listSuites(projectId);
       applyTestCasesPatch({ suites: freshSuites });
     } catch (err) {
@@ -1349,12 +1572,28 @@ export default function TestCasesPage() {
     }
   }
 
+  function openDeleteSuiteModal(suiteId: string) {
+    setDeleteSuiteError(null);
+    setDeleteSuiteId(suiteId);
+  }
+
+  function closeDeleteSuiteModal() {
+    if (deleteSuiteSaving) return;
+    setDeleteSuiteId(null);
+    setDeleteSuiteError(null);
+  }
+
   async function handleDeleteSuiteConfirm(mode: "deleteTestcases" | "moveToDefault") {
     if (!deleteSuiteId || deleteSuiteSaving) return;
     setDeleteSuiteSaving(true);
+    setDeleteSuiteError(null);
+    setRepositoryRefreshWarning(null);
+    let deletionConfirmed = false;
     try {
       await deleteSuite(deleteSuiteId, mode);
-      if (activeSuiteId === deleteSuiteId) {
+      deletionConfirmed = true;
+      const viewingDeletedSubtree = !!activeSuiteId && deleteSuiteSubtreeIds.has(activeSuiteId);
+      if (viewingDeletedSubtree) {
         router.replace(`/projects/${projectId}/testcases`);
       }
       setDeleteSuiteId(null);
@@ -1363,7 +1602,18 @@ export default function TestCasesPage() {
       // compute. Only the redundant customFieldDefinitions refetch is dropped (a suite delete never
       // touches field definitions).
       await loadSuitesAndSummary();
-      await loadSelectedSuiteCases();
+      // Navigation owns the next list fetch. Do not start another request through the
+      // old closure for a child whose entire subtree was just removed.
+      if (!viewingDeletedSubtree) await loadSelectedSuiteCases();
+    } catch (err) {
+      if (deletionConfirmed) {
+        // DELETE succeeded. Keep the modal closed and never offer a blind repeat of it.
+        setRepositoryRefreshWarning("suite-delete");
+      } else {
+        // Preserve the transport's "outcome unconfirmed" wording after response loss;
+        // a rejected promise does not establish that the server rolled back.
+        setDeleteSuiteError(err instanceof Error ? err.message : "Could not confirm suite deletion.");
+      }
     } finally {
       setDeleteSuiteSaving(false);
     }
@@ -1400,6 +1650,10 @@ export default function TestCasesPage() {
 
   async function handleArchivePanelTestCase() {
     if (!panelTestcaseId || panelSaving) return;
+    if (!panelEditRevision) {
+      setPanelError("Reload the latest case before saving changes.");
+      return;
+    }
     const ok = window.confirm("Archive this test case?");
     if (!ok) return;
     setPanelSaving(true);
@@ -1408,7 +1662,7 @@ export default function TestCasesPage() {
       // Server-confirmed prior status (not the edit form's own status state, which could reflect an
       // unsaved dropdown change) — same reasoning as handleDeletePanelTestCase.
       const priorStatus = suiteCases.find((tc) => tc.id === panelTestcaseId)?.status;
-      await updateTestCase(projectId, panelTestcaseId, { status: "Archived" });
+      await updateTestCase(projectId, panelTestcaseId, { status: "Archived", expectedRevision: panelEditRevision });
       // No suite/bySuite/total change: archiving neither removes the case (deleted_at is untouched)
       // nor moves it to a different suite — only its status column changes (verified against the
       // backend's suite-count and repository-summary queries; see applyStatusChange's own comment).
@@ -1425,11 +1679,15 @@ export default function TestCasesPage() {
 
   async function handleUnarchivePanelTestCase() {
     if (!panelTestcaseId || panelSaving) return;
+    if (!panelEditRevision) {
+      setPanelError("Reload the latest case before saving changes.");
+      return;
+    }
     setPanelSaving(true);
     setPanelError(null);
     try {
       const priorStatus = suiteCases.find((tc) => tc.id === panelTestcaseId)?.status;
-      await updateTestCase(projectId, panelTestcaseId, { status: "Draft" });
+      await updateTestCase(projectId, panelTestcaseId, { status: "Draft", expectedRevision: panelEditRevision });
       if (priorStatus) applyTestCasesPatch({ repoSummary: applyStatusChange(repoSummary, priorStatus, "Draft") });
       await loadSelectedSuiteCases();
       await openViewPanel(panelTestcaseId);
@@ -1444,6 +1702,11 @@ export default function TestCasesPage() {
   async function handlePanelSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (panelMode !== "create" && panelMode !== "edit") return;
+    if (panelSaving || panelLoading) return;
+    if (panelMode === "edit" && !panelEditRevision) {
+      setPanelError("Reload the latest case before saving changes.");
+      return;
+    }
 
     // Required custom fields must be filled before the test case can be saved. Checked
     // client-side against whichever list is currently in scope — the edit-mode tab is
@@ -1479,10 +1742,12 @@ export default function TestCasesPage() {
           attachments,
           type,
           priority,
-          status,
+          status: status === "Approved" ? "In Review" : status,
           automationStatus,
           component,
           severity,
+          technique: technique || undefined,
+          reviewViews,
           testcaseIdPrefix,
           customFieldValues,
           customTagIds: selectedTagIds,
@@ -1500,17 +1765,20 @@ export default function TestCasesPage() {
         // refetched. loadSelectedSuiteCases() still runs for real: the filters above just changed,
         // so the list it fetches is genuinely different, not just "one row added" — that can't be
         // patched client-side. setSuiteCasesPage(1) above already resets the page it's sliced to.
-        applyTestCasesPatch(applySingleCaseDelta(suites, repoSummary, status, effectiveSuiteId, 1));
+        applyTestCasesPatch(applySingleCaseDelta(suites, repoSummary, status === "Approved" ? "In Review" : status, effectiveSuiteId, 1));
         await loadSelectedSuiteCases();
-        setPanelSuccess("Test case created successfully.");
-        setTimeout(() => setPanelSuccess(null), 4000);
         if (submitAction === "create-next") {
           resetForm(effectiveSuiteId ?? activeSuiteId);
         } else {
           await openViewPanel(created.id);
         }
+        // Reopening the canonical saved case resets transient panel messages.
+        // Announce success AFTER the round-trip so the user actually sees it.
+        setPanelSuccess("Test case created successfully.");
+        setTimeout(() => setPanelSuccess(null), 4000);
       } else if (panelMode === "edit" && panelTestcaseId) {
         await updateTestCase(projectId, panelTestcaseId, {
+          expectedRevision: panelEditRevision,
           suiteId: suiteId || undefined,
           title,
           description,
@@ -1522,15 +1790,15 @@ export default function TestCasesPage() {
           attachments,
           type,
           priority,
-          status,
+          status: status === "Approved" ? "In Review" : status,
           automationStatus,
           component,
           severity,
+          technique: technique || null,
+          reviewViews,
           customFieldValues,
           customTagIds: panelTagIds,
         });
-        setPanelSuccess("Test case updated successfully.");
-        setTimeout(() => setPanelSuccess(null), 4000);
         // panelOriginalStatus/SuiteId are the values fillFormFromTestCase last set from a real fetch
         // (i.e. what's actually persisted before this save) — status/suiteId here are the just-
         // submitted new values. customFieldDefinitions is dropped (never changes on a testcase edit).
@@ -1551,7 +1819,7 @@ export default function TestCasesPage() {
           applyTestCasesPatch(
             applyTestCaseEditDelta(suites, repoSummary, {
               oldStatus: panelOriginalStatus,
-              newStatus: status,
+              newStatus: status === "Approved" ? "In Review" : status,
               oldSuiteId: panelOriginalSuiteId,
               newSuiteId: suiteId || null,
             })
@@ -1561,6 +1829,8 @@ export default function TestCasesPage() {
         await loadSelectedSuiteCases();
         await openViewPanel(panelTestcaseId);
         setPanelTab(savedTab);
+        setPanelSuccess("Test case updated successfully.");
+        setTimeout(() => setPanelSuccess(null), 4000);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to save test case.";
@@ -1869,7 +2139,7 @@ export default function TestCasesPage() {
                                 title="Delete suite"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setDeleteSuiteId(suite.id);
+                                  openDeleteSuiteModal(suite.id);
                                 }}
                                 className="mr-1 flex h-5 w-5 items-center justify-center rounded text-[var(--error-foreground)] hover:bg-[var(--surface)] hover:opacity-80"
                               >
@@ -1936,7 +2206,7 @@ export default function TestCasesPage() {
                                         title="Delete suite"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          setDeleteSuiteId(child.id);
+                                          openDeleteSuiteModal(child.id);
                                         }}
                                         className="flex h-5 w-5 items-center justify-center rounded text-[var(--error-foreground)] hover:bg-[var(--surface)] hover:opacity-80"
                                       >
@@ -2014,7 +2284,7 @@ export default function TestCasesPage() {
                     {suiteSearch && (
                       <button
                         type="button"
-                        onClick={() => setSuiteSearch("")}
+                        onClick={clearSearch}
                         aria-label="Clear search"
                         className="shrink-0 rounded-full p-0.5 text-[var(--muted-soft)] transition-colors hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]"
                       >
@@ -2151,6 +2421,55 @@ export default function TestCasesPage() {
                         <option key={option} value={option}>{option}</option>
                       ))}
                     </select>
+                    <select
+                      value={suiteTechniqueFilter}
+                      onChange={(e) => setSuiteTechniqueFilter(e.target.value)}
+                      aria-label="Filter by technique"
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="all">All techniques</option>
+                      {TESTCASE_TECHNIQUES.map((option) => (
+                        <option key={option} value={option}>{option.split("_").join(" ")}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={suiteViewFilter}
+                      onChange={(e) => setSuiteViewFilter(e.target.value)}
+                      aria-label="Filter by review view"
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="all">All review views</option>
+                      {TESTCASE_REVIEW_VIEWS.map((view) => (
+                        <option key={view.value} value={view.value}>{view.label}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={activeSavedViewId}
+                      onChange={(e) => applySavedView(e.target.value)}
+                      aria-label="Saved views"
+                      className="h-[30px] rounded-[6px] border border-[var(--border)] bg-[var(--background)] px-2.5 text-[12px] text-[var(--ink-600)] outline-none"
+                    >
+                      <option value="">Saved views…</option>
+                      {savedViews.map((view) => (
+                        <option key={view.id} value={view.id}>{view.name}{view.isShared ? " (shared)" : ""}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={saveCurrentView}
+                      className="h-[30px] shrink-0 rounded-[6px] border border-[var(--border)] px-2.5 text-[12px] font-medium text-[var(--ink-600)] hover:bg-[var(--ink-100)]"
+                    >
+                      Save view
+                    </button>
+                    {activeSavedViewId && (
+                      <button
+                        type="button"
+                        onClick={deleteActiveView}
+                        className="h-[30px] shrink-0 rounded-[6px] border border-[var(--border)] px-2.5 text-[12px] font-medium text-[var(--error-foreground)] hover:bg-[var(--surface-secondary)]"
+                      >
+                        Delete view
+                      </button>
+                    )}
                     <CustomFieldFilterPopover
                       definitions={customFieldDefinitions}
                       conditions={customFieldFilters}
@@ -2239,6 +2558,12 @@ export default function TestCasesPage() {
                 )}
 
                 {/* Content */}
+                {repositoryRefreshWarning && (
+                  <div role="alert" className="mx-4 mt-3 rounded-lg border border-[var(--warning)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--warning-foreground)]">
+                    <p>{repositoryRefreshWarning === "suite-delete" ? "Suite deleted" : "Bulk action completed"}, but the repository could not be refreshed. Reload to see its current state.</p>
+                    <Button variant="secondary" className="mt-2" onClick={() => window.location.reload()}>Reload repository</Button>
+                  </div>
+                )}
                 {suiteCasesError ? (
                   <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-sm text-[var(--error-foreground)]">
                     <p>{suiteCasesError}</p>
@@ -2446,9 +2771,19 @@ export default function TestCasesPage() {
             {(panelError || panelSuccess) && (
               <div className="shrink-0 px-6 pt-3">
                 {panelError && (
-                  <p className="rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
-                    {panelError}
-                  </p>
+                  <div role="alert" className="rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
+                    <p>{panelError}</p>
+                    {panelMode === "edit" && panelTestcaseId && (
+                      <button type="button" className="mt-2 underline" disabled={panelSaving || panelLoading}
+                        onClick={() => {
+                          if (window.confirm("Reload the latest test case? This discards your unsaved changes.")) {
+                            void openViewPanel(panelTestcaseId);
+                          }
+                        }}>
+                        Reload latest case
+                      </button>
+                    )}
+                  </div>
                 )}
                 {panelSuccess && (
                   <p className="rounded-lg border border-[var(--success)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--success-foreground)]">
@@ -2520,7 +2855,7 @@ export default function TestCasesPage() {
                         <Field>
                           <FieldLabel>Status</FieldLabel>
                           <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                            {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                            {EDITABLE_TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                           </Select>
                         </Field>
                         <Field>
@@ -2544,6 +2879,28 @@ export default function TestCasesPage() {
                             <option value="">Select</option>
                             {TESTCASE_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
                           </Select>
+                        </Field>
+                        <Field>
+                          <FieldLabel>Technique</FieldLabel>
+                          <Select value={technique} onChange={(e) => setTechnique(e.target.value)}>
+                            <option value="">Not classified</option>
+                            {TESTCASE_TECHNIQUES.map((t) => <option key={t} value={t}>{t.split("_").join(" ")}</option>)}
+                          </Select>
+                        </Field>
+                        <Field className="col-span-3">
+                          <FieldLabel>Review views</FieldLabel>
+                          <div className="flex flex-wrap gap-3">
+                            {TESTCASE_REVIEW_VIEWS.map((view) => (
+                              <label key={view.value} className="flex items-center gap-1.5 text-[12px] text-[var(--foreground)]">
+                                <input
+                                  type="checkbox"
+                                  checked={reviewViews.includes(view.value)}
+                                  onChange={(e) => setReviewViews((prev) => e.target.checked ? [...prev, view.value] : prev.filter((v) => v !== view.value))}
+                                />
+                                {view.label}
+                              </label>
+                            ))}
+                          </div>
                         </Field>
                       </div>
                       <Field>
@@ -2667,7 +3024,8 @@ export default function TestCasesPage() {
                             <Field>
                               <FieldLabel>Status</FieldLabel>
                               <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                                {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                                {status === "Approved" && <option value="Approved" disabled>Approved — changes require review</option>}
+                                {EDITABLE_TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                               </Select>
                             </Field>
                             <Field>
@@ -2691,6 +3049,28 @@ export default function TestCasesPage() {
                                 <option value="">Select</option>
                                 {TESTCASE_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
                               </Select>
+                            </Field>
+                            <Field>
+                              <FieldLabel>Technique</FieldLabel>
+                              <Select value={technique} onChange={(e) => setTechnique(e.target.value)}>
+                                <option value="">Not classified</option>
+                                {TESTCASE_TECHNIQUES.map((t) => <option key={t} value={t}>{t.split("_").join(" ")}</option>)}
+                              </Select>
+                            </Field>
+                            <Field className="col-span-2 sm:col-span-3">
+                              <FieldLabel>Review views</FieldLabel>
+                              <div className="flex flex-wrap gap-3">
+                                {TESTCASE_REVIEW_VIEWS.map((view) => (
+                                  <label key={view.value} className="flex items-center gap-1.5 text-[12px] text-[var(--foreground)]">
+                                    <input
+                                      type="checkbox"
+                                      checked={reviewViews.includes(view.value)}
+                                      onChange={(e) => setReviewViews((prev) => e.target.checked ? [...prev, view.value] : prev.filter((v) => v !== view.value))}
+                                    />
+                                    {view.label}
+                                  </label>
+                                ))}
+                              </div>
                             </Field>
                           </div>
                           <Field>
@@ -2849,7 +3229,7 @@ export default function TestCasesPage() {
               <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] px-6 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <Button type="submit" form="panel-form-global" variant="primary" onClick={() => setSubmitAction("create")} disabled={panelSaving}>
+                    <Button type="submit" form="panel-form-global" variant="primary" onClick={() => setSubmitAction("create")} disabled={panelSaving || panelLoading || (panelMode === "edit" && !panelEditRevision)}>
                       {panelSaving ? "Saving..." : panelMode === "create" ? "Create" : "Save changes"}
                     </Button>
                     {panelMode === "create" && (
@@ -2858,6 +3238,13 @@ export default function TestCasesPage() {
                       </Button>
                     )}
                     <Button variant="secondary" onClick={closePanel} disabled={panelSaving}>Cancel</Button>
+                    {panelMode === "edit" && status !== "Archived" && (
+                      <Button type="button" variant="secondary" onClick={() => void openApprovalReview()}
+                        disabled={panelSaving || panelLoading || hasUnsavedReviewChanges()}
+                        title={hasUnsavedReviewChanges() ? "Save your changes before reviewing this version" : "Review the exact saved content and its dependencies"}>
+                        Review for approval
+                      </Button>
+                    )}
                   </div>
                   {panelMode === "edit" && panelTestcaseId && (
                     <div className="flex items-center gap-2">
@@ -2968,16 +3355,21 @@ export default function TestCasesPage() {
       {/* ── Delete Suite Modal ── */}
       <Modal
         open={!!deleteSuiteId}
-        onClose={() => { if (!deleteSuiteSaving) setDeleteSuiteId(null); }}
+        onClose={closeDeleteSuiteModal}
         title="Delete suite"
       >
         <p className="text-sm text-[var(--muted)]">
-          This suite contains test cases. What would you like to do with them?
+          Delete &ldquo;{suiteToDelete?.name ?? "this suite"}&rdquo;?
         </p>
-        {deleteSuiteId && (childrenBySuiteId.get(deleteSuiteId)?.length ?? 0) > 0 && (
+        <p className="mt-2 text-sm text-[var(--muted)]">
+          {deleteSuiteCaseCount === 0
+            ? `No test cases are currently assigned to this suite${deleteSuiteDescendantCount ? " or its sub-suites" : ""}.`
+            : `${deleteSuiteCaseCount} test case${deleteSuiteCaseCount === 1 ? " is" : "s are"} currently assigned to this suite${deleteSuiteDescendantCount ? " and its sub-suites" : ""}.`}
+        </p>
+        {deleteSuiteDescendantCount > 0 && (
           <p className="mt-2 rounded-lg border border-[var(--warning)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--warning-foreground)]">
-            This suite has {childrenBySuiteId.get(deleteSuiteId)?.length} sub-suite
-            {childrenBySuiteId.get(deleteSuiteId)?.length === 1 ? "" : "s"}. Deleting it may affect those too.
+            Both options delete this suite and its {deleteSuiteDescendantCount} sub-suite
+            {deleteSuiteDescendantCount === 1 ? "" : "s"}, including any nested suites.
           </p>
         )}
         <div className="mt-5 flex flex-col gap-3">
@@ -2988,7 +3380,7 @@ export default function TestCasesPage() {
             className="w-full rounded-lg border border-[var(--border)] px-4 py-3 text-left hover:bg-[var(--surface-secondary)] disabled:opacity-50"
           >
             <span className="block text-sm font-medium text-[var(--foreground)]">Delete suite only</span>
-            <span className="mt-0.5 block text-xs text-[var(--muted)]">Move all test cases to the Default Suite</span>
+            <span className="mt-0.5 block text-xs text-[var(--muted)]">Keep all test cases from this suite and its sub-suites, unassigned under &ldquo;No suites&rdquo;.</span>
           </button>
           <button
             type="button"
@@ -2997,16 +3389,23 @@ export default function TestCasesPage() {
             className="w-full rounded-lg border border-[var(--error)] px-4 py-3 text-left hover:bg-[var(--surface-secondary)] disabled:opacity-50"
           >
             <span className="block text-sm font-medium text-[var(--error-foreground)]">Delete suite and all test cases</span>
-            <span className="mt-0.5 block text-xs text-[var(--muted)]">Permanently delete the suite and all its test cases</span>
+            <span className="mt-0.5 block text-xs text-[var(--muted)]">Remove test cases in this suite and every sub-suite from the repository.</span>
           </button>
         </div>
+        <p className="mt-3 text-xs text-[var(--muted)]">Existing run results and test case version history are retained.</p>
+        {deleteSuiteError && (
+          <div role="alert" className="mt-3 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
+            <p>{deleteSuiteError}</p>
+            <Button variant="secondary" className="mt-2" onClick={() => window.location.reload()}>Reload repository</Button>
+          </div>
+        )}
         {deleteSuiteSaving && (
           <p className="mt-3 text-xs text-[var(--muted)]">Processing...</p>
         )}
         <div className="mt-4 flex justify-end">
           <Button
             variant="secondary"
-            onClick={() => { if (!deleteSuiteSaving) setDeleteSuiteId(null); }}
+            onClick={closeDeleteSuiteModal}
             disabled={deleteSuiteSaving}
           >
             Cancel
@@ -3029,6 +3428,7 @@ export default function TestCasesPage() {
           <FieldLabel>Action</FieldLabel>
           <Select
             value={bulkAction}
+            disabled={bulkSaving}
             onChange={(e) => setBulkAction(e.target.value as BulkAction)}
           >
             <option value="">Select an action…</option>
@@ -3044,6 +3444,7 @@ export default function TestCasesPage() {
             <FieldLabel>Target suite</FieldLabel>
             <Select
               value={bulkTargetSuiteId}
+              disabled={bulkSaving}
               onChange={(e) => setBulkTargetSuiteId(e.target.value)}
             >
               <option value="">Unassigned (no suite)</option>
@@ -3059,28 +3460,28 @@ export default function TestCasesPage() {
           <div className="mt-4 grid grid-cols-2 gap-3">
             <Field>
               <FieldLabel>Status</FieldLabel>
-              <Select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
+              <Select value={bulkStatus} disabled={bulkSaving} onChange={(e) => setBulkStatus(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
-                {TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                {EDITABLE_TESTCASE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </Field>
             <Field>
               <FieldLabel>Priority</FieldLabel>
-              <Select value={bulkPriority} onChange={(e) => setBulkPriority(e.target.value)}>
+              <Select value={bulkPriority} disabled={bulkSaving} onChange={(e) => setBulkPriority(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
               </Select>
             </Field>
             <Field>
               <FieldLabel>Automation Type</FieldLabel>
-              <Select value={bulkAutomationStatus} onChange={(e) => setBulkAutomationStatus(e.target.value)}>
+              <Select value={bulkAutomationStatus} disabled={bulkSaving} onChange={(e) => setBulkAutomationStatus(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_AUTOMATION_TYPES.map((a) => <option key={a} value={a}>{a}</option>)}
               </Select>
             </Field>
             <Field>
               <FieldLabel>Severity</FieldLabel>
-              <Select value={bulkSeverity} onChange={(e) => setBulkSeverity(e.target.value)}>
+              <Select value={bulkSeverity} disabled={bulkSaving} onChange={(e) => setBulkSeverity(e.target.value)}>
                 <option value={BULK_NO_CHANGE}>Leave unchanged</option>
                 {TESTCASE_SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
@@ -3090,6 +3491,7 @@ export default function TestCasesPage() {
             Only the fields you change are applied — anything left on &ldquo;Leave unchanged&rdquo; keeps its
             current value on every selected test case.
           </p>
+          {!bulkUpdateHasChanges && <p className="mt-2 text-xs text-[var(--muted)]">Choose at least one field to update.</p>}
           </>
         )}
 
@@ -3101,12 +3503,12 @@ export default function TestCasesPage() {
 
         {bulkAction === "delete" && (
           <p className="mt-4 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
-            This permanently deletes the selected test cases. This action cannot be undone.
+            Remove the selected test cases from the repository. Existing run results and test case version history are retained.
           </p>
         )}
 
         {bulkError && (
-          <p className="mt-3 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
+          <p role="alert" className="mt-3 rounded-lg border border-[var(--error)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--error-foreground)]">
             {bulkError}
           </p>
         )}
@@ -3118,7 +3520,7 @@ export default function TestCasesPage() {
           <Button
             variant={bulkAction === "delete" ? "destructive" : "primary"}
             onClick={() => void handleBulkActionConfirm()}
-            disabled={!bulkAction || bulkSaving}
+            disabled={!bulkAction || bulkSaving || selectedCaseIds.length === 0 || (bulkAction === "update" && !bulkUpdateHasChanges)}
           >
             {bulkSaving ? "Applying..." : "Confirm"}
           </Button>
@@ -3227,6 +3629,14 @@ export default function TestCasesPage() {
           );
         }}
       />
+
+      {approvalReview && <TestCaseApprovalReview
+        snapshot={approvalReview.snapshot}
+        busy={panelSaving}
+        error={approvalError}
+        onApprove={() => void submitApprovalReview()}
+        onClose={() => setApprovalReview(null)}
+      />}
 
       {importToast && (
         <div className="fixed bottom-5 right-5 z-[60] rounded-[var(--radius-control)] bg-[var(--toast-surface)] px-4 py-2.5 text-sm text-[var(--toast-foreground)] shadow-lg">

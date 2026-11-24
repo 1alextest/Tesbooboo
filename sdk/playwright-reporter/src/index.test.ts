@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { FullConfig, Suite } from "@playwright/test/reporter";
-import TesboReporter from "./index";
+import TesboReporter, { TesboClient } from "./index";
 import { ENV_BASE_URL, ENV_PROJECT_ID, ENV_TOKEN } from "./config";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { FullResult, TestCase, TestResult } from "@playwright/test/reporter";
+import { PROJECT, TOKEN, RUN, CASE, withIngest, runPlaywrightFixture } from "../test-support/reporter.cjs";
 
-const PROJECT = "41dba2a2-a60b-4917-8d63-9f8a86986703";
-const TOKEN = "tsbo_f89c09aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BASE = "https://api-app-stage.tesbo.io";
 
 /** Minimal stand-ins: every assertion below is reached before the suite or config is inspected. */
@@ -161,3 +164,245 @@ test("strict mode fails an untagged suite even when the config is complete", asy
     await assert.rejects(() => reporter.onBegin(fakeConfig, suite), /strict mode/);
   });
 });
+
+function linkedTest(): TestCase {
+  return { tags: [`@tesbo.testId("${CASE}")`], annotations: [], titlePath: () => ["close fixture"] } as unknown as TestCase;
+}
+
+async function runLifecycle(baseUrl: string, status: FullResult["status"] = "passed", extra: { retries?: number; unlinked?: boolean; evidence?: string } = {}) {
+  const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: extra.retries ?? 1, timeoutMs: 1_000, attachEvidence: extra.evidence ? "always" : "never" });
+  const tagged = linkedTest();
+  const unlinked = { tags: [], annotations: [], titlePath: () => ["unlinked fixture"] } as unknown as TestCase;
+  const suite = { allTests: () => extra.unlinked ? [tagged, unlinked] : [tagged] } as unknown as Suite;
+  return captureLogs(async () => {
+    await reporter.onBegin(fakeConfig, suite);
+    reporter.onTestEnd(tagged, {
+      status: "passed", duration: 1, retry: 0,
+      attachments: extra.evidence ? [{ name: "screenshot", path: extra.evidence, contentType: "image/png" }] : []
+    } as unknown as TestResult);
+    if (extra.unlinked) reporter.onTestEnd(unlinked, { status: "passed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
+    await reporter.onEnd({ status } as FullResult);
+  });
+}
+
+for (const outcome of ["denied", "unavailable", "disconnect", "timeout", "lost-ack", "invalid-json", "empty", "null", "array", "wrong-run", "missing-mismatch", "invalid-mismatch", "invalid-pair", "invalid-status", "invalid-already"] as const) {
+  test(`close ${outcome} is non-fatal and never claims confirmed closure`, async () => {
+    await withEnv({ [ENV_BASE_URL]: undefined, [ENV_PROJECT_ID]: undefined, [ENV_TOKEN]: undefined }, async () => {
+      await withIngest(outcome, async (baseUrl, calls, fixture) => {
+        const exitCode = process.exitCode;
+        const logs = await runLifecycle(baseUrl);
+        assert.match(logs, /reporting 1 linked test\(s\) to run/);
+        assert.equal(calls.filter((call) => call.url.endsWith("/close")).length, 1);
+        if (outcome === "lost-ack") assert.equal(fixture.closureApplied, true, "lost acknowledgement is not proof that the server stayed open");
+        assert.match(logs, /closure unconfirmed/);
+        assert.doesNotMatch(logs, /\[tesbo\] run .* (?:already )?closed \(/);
+        assert.doesNotMatch(logs, /run .* (?:is|remains|stayed|still) open|run .* not closed/);
+        assert.match(logs, /1 passed, 0 failed, 0 skipped/);
+        assert.match(logs, /1 request\(s\) to Tesbo failed/);
+        assert.equal(process.exitCode, exitCode);
+        assert.equal(logs.includes(TOKEN), false, "credentials must not be printed");
+      });
+    });
+  });
+}
+
+for (const endBeforeReady of [false, true]) {
+  test(`results delivered during asynchronous startup are retained before closure (earlyEnd=${endBeforeReady})`, async () => {
+    await withIngest("accepted", async (baseUrl, calls) => {
+      const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 0, timeoutMs: 1_000, attachEvidence: "never" });
+      const tagged = linkedTest(), suite = { allTests: () => [tagged] } as unknown as Suite;
+      const logs = await captureLogs(async () => {
+        // Playwright does not await onBegin. A fast test can finish while resolve/create is pending.
+        const beginning = reporter.onBegin(fakeConfig, suite);
+        reporter.onTestEnd(tagged, { status: "passed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
+        if (endBeforeReady) await Promise.all([beginning, reporter.onEnd({ status: "passed" } as FullResult)]);
+        else { await beginning; await reporter.onEnd({ status: "passed" } as FullResult); }
+      });
+      assert.deepEqual(calls.map((call) => `${call.method} ${call.url.split("/automation")[1]}`), [
+        "POST /cases/resolve", "POST /runs", `POST /runs/${RUN}/results`, `PATCH /runs/${RUN}/close`
+      ]);
+      assert.deepEqual(calls[calls.length - 1].body, { status: "completed", summary: { total: 1, passed: 1, failed: 0, skipped: 0 } });
+      assert.match(logs, /run .* closed \(completed\): 1 passed, 0 failed, 0 skipped/);
+      assert.doesNotMatch(logs, /closure unconfirmed|request\(s\) to Tesbo failed/);
+      assert.equal(logs.includes(TOKEN), false);
+    });
+  });
+}
+
+test("confirmed close retains success logging and drains results before sending the summary", async () => {
+  await withIngest("accepted", async (baseUrl, calls) => {
+    const logs = await runLifecycle(baseUrl);
+    assert.match(logs, /run .* closed \(completed\): 1 passed, 0 failed, 0 skipped/);
+    assert.doesNotMatch(logs, /closure unconfirmed/);
+    assert.deepEqual(calls.map((call) => `${call.method} ${call.url.split("/automation")[1]}`), [
+      "POST /cases/resolve", "POST /runs", `POST /runs/${RUN}/results`, `PATCH /runs/${RUN}/close`
+    ]);
+    assert.deepEqual(calls[calls.length - 1].body, { status: "completed", summary: { total: 1, passed: 1, failed: 0, skipped: 0 } });
+  });
+});
+
+test("a retried test contributes one final result to the close summary, not one per attempt", async () => {
+  await withIngest("accepted", async (baseUrl, calls) => {
+    const reporter = new TesboReporter({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 1, timeoutMs: 1_000, attachEvidence: "never" });
+    const tagged = linkedTest();
+    const suite = { allTests: () => [tagged] } as unknown as Suite;
+    const logs = await captureLogs(async () => {
+      await reporter.onBegin(fakeConfig, suite);
+      // Playwright reports each attempt; the ingest upserts on (run, case), so only the last stands.
+      reporter.onTestEnd(tagged, { status: "failed", duration: 1, retry: 0, attachments: [] } as unknown as TestResult);
+      reporter.onTestEnd(tagged, { status: "passed", duration: 1, retry: 1, attachments: [] } as unknown as TestResult);
+      await reporter.onEnd({ status: "passed" } as FullResult);
+    });
+    const results = calls.filter((call) => call.url.endsWith("/results"));
+    assert.equal(results.length, 2, "both attempts are still submitted, so the last upserts over the first");
+    assert.deepEqual(results.map((call) => (call.body as { retryCount: number }).retryCount), [0, 1]);
+    assert.deepEqual(calls[calls.length - 1].body, { status: "completed", summary: { total: 1, passed: 1, failed: 0, skipped: 0 } });
+    assert.match(logs, /run .* closed \(completed\): 1 passed, 0 failed, 0 skipped/);
+  });
+});
+
+for (const status of ["interrupted", "timedout"] as const) {
+  test(`${status} confirms incomplete closure when acknowledged`, async () => {
+    await withIngest("accepted", async (baseUrl, calls) => {
+      const logs = await runLifecycle(baseUrl, status);
+      assert.equal(calls[calls.length - 1].body.status, "incomplete");
+      assert.match(logs, /closed \(incomplete\)/);
+      assert.doesNotMatch(logs, /closure unconfirmed/);
+    });
+  });
+
+  test(`${status} still requests an incomplete close without changing suite status`, async () => {
+    await withIngest("denied", async (baseUrl, calls) => {
+      const logs = await runLifecycle(baseUrl, status);
+      assert.equal(calls[calls.length - 1].body.status, "incomplete");
+      assert.match(logs, /closure unconfirmed.*incomplete/);
+    });
+  });
+}
+
+test("an already-closed response reports the server's actual incomplete status, not the requested completed status", async () => {
+  await withIngest("already-incomplete", async (baseUrl) => {
+    const logs = await runLifecycle(baseUrl);
+    assert.match(logs, /already closed \(incomplete\)/);
+    assert.doesNotMatch(logs, /closed \(completed\)/);
+  });
+});
+
+test("a legacy minimal valid close acknowledgement remains accepted", async () => {
+  await withIngest("minimal", async (baseUrl) => {
+    assert.match(await runLifecycle(baseUrl), /run .* closed \(completed\)/);
+  });
+});
+
+test("an already-closed response without a status does not invent the requested status", async () => {
+  await withIngest("already-unknown", async (baseUrl) => {
+    const logs = await runLifecycle(baseUrl);
+    assert.match(logs, /already closed \(status not reported\)/);
+    assert.doesNotMatch(logs, /closed \(completed\)/);
+  });
+});
+
+for (const outcome of ["null-status", "already-null-status"] as const) {
+  test(`${outcome} accepts a historical nullable status without inventing completed`, async () => {
+    await withIngest(outcome, async (baseUrl) => {
+      const logs = await runLifecycle(baseUrl);
+      assert.match(logs, /closed \(status not reported\)/);
+      assert.equal(logs.includes("already closed"), outcome === "already-null-status");
+      assert.doesNotMatch(logs, /closed \(completed\)|closure unconfirmed|request\(s\) to Tesbo failed/);
+    });
+  });
+}
+
+test("a supplied server status is used even without the already-closed flag", async () => {
+  await withIngest("reported-incomplete", async (baseUrl) => {
+    const logs = await runLifecycle(baseUrl);
+    assert.match(logs, /closed \(incomplete\)/);
+    assert.doesNotMatch(logs, /closed \(completed\)/);
+  });
+});
+
+test("transient retry followed by an acknowledgement still reports confirmed success", async () => {
+  await withIngest("retry-then-accepted", async (baseUrl, calls) => {
+    const logs = await runLifecycle(baseUrl, "passed", { retries: 2 });
+    assert.equal(calls.filter((call) => call.url.endsWith("/close")).length, 2);
+    assert.match(logs, /run .* closed \(completed\)/);
+    assert.doesNotMatch(logs, /closure unconfirmed|request\(s\) to Tesbo failed/);
+  });
+});
+
+test("stored-count mismatch diagnostics remain visible after a confirmed close", async () => {
+  await withIngest("mismatch", async (baseUrl) => {
+    const logs = await runLifecycle(baseUrl);
+    assert.match(logs, /stored counts differ/);
+    assert.match(logs, /"reported":1,"stored":0/);
+  });
+});
+
+test("closure failure does not suppress unlinked, unknown-case or request-failure diagnostics", async () => {
+  await withIngest("unknown-result", async (baseUrl) => {
+    const logs = await runLifecycle(baseUrl, "passed", { unlinked: true });
+    assert.match(logs, /closure unconfirmed/);
+    assert.match(logs, /1 test\(s\) not linked/);
+    assert.match(logs, /1 result\(s\) had no matching test case/);
+    assert.match(logs, /2 request\(s\) to Tesbo failed/);
+  });
+});
+
+test("an unusable successful close acknowledgement is counted once without replay or response-body logging", async () => {
+  await withIngest("invalid-pair", async (baseUrl, calls) => {
+    const logs: string[] = [];
+    const client = new TesboClient({ baseUrl, projectId: PROJECT, token: TOKEN, retries: 3, timeoutMs: 1_000, log: (line) => logs.push(line) });
+    const closed = await client.closeRun(RUN, "completed", { total: 1 });
+    assert.equal(closed.ok, false);
+    assert.equal(client.failures, 1);
+    assert.equal(calls.filter((call) => call.url.endsWith("/close")).length, 1);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /invalid close acknowledgement/);
+    assert.doesNotMatch(logs[0], /reported|stored/);
+    assert.equal(logs[0].includes(TOKEN), false);
+  });
+});
+
+test("closure failure retains quota diagnostics and drains evidence before closing", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tesbo-reporter-evidence-"));
+  try {
+    const evidence = path.join(dir, "fixture.png");
+    await fs.writeFile(evidence, "fixture upload bytes; no browser capture");
+    await withIngest("denied", async (baseUrl, calls) => {
+      const logs = await runLifecycle(baseUrl, "passed", { evidence });
+      assert.deepEqual(calls.slice(-2).map((call) => call.url.split("/").pop()), ["evidence", "close"]);
+      assert.match(logs, /closure unconfirmed/);
+      assert.match(logs, /1 evidence file\(s\) were skipped: the workspace's storage quota is full/);
+      assert.match(logs, /1 request\(s\) to Tesbo failed/);
+    });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }); // Only this test's newly-created directory.
+  }
+});
+
+for (const outcome of ["denied", "null", "lost-ack"] as const) {
+  for (const failingTest of [false, true]) {
+    test(`a real Playwright ${failingTest ? "failing" : "passing"} suite keeps its own exit code for close ${outcome}`, async () => {
+      await withIngest(outcome, async (baseUrl, calls) => {
+        const dir = await fs.mkdtemp(path.join(os.tmpdir(), "tesbo-reporter-close-"));
+        try {
+          const result = await runPlaywrightFixture({
+            dir, failingTest,
+            reporter: path.resolve(__dirname, "../dist/index.js"),
+            playwrightCli: require.resolve("@playwright/test/cli"),
+            playwrightTest: require.resolve("@playwright/test"),
+            reporterOptions: { baseUrl, projectId: PROJECT, token: TOKEN, retries: 1, timeoutMs: 1_000, attachEvidence: "never" }
+          });
+          assert.equal(result.code, failingTest ? 1 : 0, result.output);
+          assert.equal(calls.filter((call) => call.url.endsWith("/close")).length, 1, result.output);
+          assert.match(result.output, /reporting 1 linked test\(s\) to run/);
+          assert.match(result.output, /closure unconfirmed/);
+          assert.doesNotMatch(result.output, /\[tesbo\] run .* closed \(/);
+          assert.equal(result.output.includes(TOKEN), false);
+        } finally {
+          await fs.rm(dir, { recursive: true, force: true }); // Only this test's newly-created directory.
+        }
+      });
+    });
+  }
+}

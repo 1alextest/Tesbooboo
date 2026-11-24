@@ -912,7 +912,7 @@ function ZyraBacklog({ steps }: { steps: ZyraBacklogStep[] }) {
   // No "N of M" here: how many steps a request takes depends on what it turns out to need (an
   // answer never generates; a retry adds steps), so any fixed denominator would be made up.
   const turnElapsed = zyraFormatDuration(now - steps[0].activatedAt, t);
-  let contextHeaderShown = false;
+  const firstContextIndex = steps.findIndex((step) => step.stage.startsWith("context:"));
 
   return (
     <div className="flex items-start gap-2" data-zyra-trace="running">
@@ -926,8 +926,7 @@ function ZyraBacklog({ steps }: { steps: ZyraBacklogStep[] }) {
         </div>
         <div className="flex flex-col">
           {steps.map((step, i) => {
-            const isFirstContext = step.stage.startsWith("context:") && !contextHeaderShown;
-            if (isFirstContext) contextHeaderShown = true;
+            const isFirstContext = i === firstContextIndex;
             return (
               <div key={zyraStepKey(step)} className="flex gap-2.5">
                 <div className="flex w-2.5 flex-none flex-col items-center">
@@ -1723,6 +1722,10 @@ export default function ZyraChatPage() {
               <Link href={`/projects/${projectId}/agents/tasks`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">
                 <IconClipboardCheck size={15} stroke={1.9} />
                 {t("top.taskBoard")}
+              </Link>
+              <Link href={`/projects/${projectId}/agents/zyra/changes`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">
+                <IconClipboardCheck size={15} stroke={1.9} />
+                Change review
               </Link>
               <Link href={`/projects/${projectId}/agents/zyra/settings`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--surface-secondary)]">
                 <IconSettings size={15} stroke={1.9} />

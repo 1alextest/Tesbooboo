@@ -1,8 +1,10 @@
-# Tesbo Test Manager DigitalOcean Deploy Guide
+# Tesbo Test Manager Deployment Guide
 
-This guide covers the first public release: the core test case management platform.
+This guide describes the deployment artifacts and environment settings in this repository.
+Confirm the actual deployment provider, service, connected repository and branch before using them
+for a release. The presence of a template does not establish how the live application is deployed.
 
-## Architecture
+## DigitalOcean templates
 
 | Component | Target | Port |
 |-----------|--------|------|
@@ -10,19 +12,33 @@ This guide covers the first public release: the core test case management platfo
 | Backend | Droplet with Nginx + Docker Compose | 443 -> Nginx -> 127.0.0.1:7000 |
 | PostgreSQL | Managed database or self-hosted PostgreSQL | 5432 |
 
-All images are stored in DigitalOcean Container Registry (DOCR).
+The DigitalOcean Compose templates reference images in DigitalOcean Container Registry (DOCR).
+These settings describe a possible target, not a verified live registry or installation.
 
-Each droplet runs Nginx as a reverse proxy with Let's Encrypt SSL certificates. Docker containers bind to localhost only. The deploy workflow handles Nginx and Certbot setup through `deploy/nginx/setup-ssl.sh`.
+The templates bind application containers to localhost behind Nginx. The repository includes
+`deploy/nginx/setup-ssl.sh` for Nginx and Certbot setup; an operator must supply and verify the
+deployment integration that invokes it.
 
-## Workflow
+## Available deployment artifacts
 
-Manual trigger:
+- Root `docker-compose.yml` builds the local/OSS stack from source and orders the backend after
+  its migration service. It is separate from the DigitalOcean registry-image templates.
+- `deploy/Tesbo-Frontend/docker-compose.yml` and `deploy/Tesbo-Backend/docker-compose.yml`
+  are DigitalOcean deployment templates.
+- `Jenkinsfile` and `Jenkinsfile.stage` are inherited pipeline definitions that reference
+  `QAbleHQ/Tesbo-Test-Manager-Private` and its branches. Their presence does not establish an
+  installed pipeline for `1alextest/Tesbooboo`; review their repository, branch and environment
+  bindings before considering them for a deployment.
 
-```text
-.github/workflows/deploy.yml
-```
+There is no `.github/workflows/deploy.yml` in this repository. The previously documented
+**Deploy Tesbo Test Manager to DigitalOcean** Actions trigger is unavailable. No deployment
+workflow is installed by this guide.
 
-## Required GitHub Secrets
+## DigitalOcean configuration
+
+A deployment integration for the DigitalOcean templates needs the following configuration.
+Store credentials in that integration's secret store; this repository does not provide the
+previously described Actions workflow to consume GitHub secrets.
 
 | Secret | Description |
 |--------|-------------|
@@ -102,16 +118,34 @@ To enable S3-compatible storage, set:
 
 Files are stored under a per-project key prefix (`knowledge-base/<projectId>/...`), and are never served as public/durable links — every download or preview request is checked against the requesting user's project membership and role first, and only then is a short-lived presigned URL issued (or, in local mode, the file is streamed directly). Switching `STORAGE_DRIVER` does not migrate files already stored under the previous driver.
 
-## Deploy Flow
+## Compose migrator runtime
 
-1. Add or update all GitHub secrets.
-2. Trigger **Deploy Tesbo Test Manager to DigitalOcean** from GitHub Actions.
-3. The workflow builds and pushes frontend and backend images with `sha` and `latest` tags.
-4. The workflow deploys each image to its droplet through SSH and Docker Compose.
+The backend production image intentionally removes npm and npx. Root Compose runs migrations
+with the installed Node runtime: `node dist/database/migrate.js`, the same compiled owner used
+by the package's `migrate` script. Backend startup still requires the migration service to
+complete successfully. A missing `DATABASE_URL` fails before a database connection is attempted;
+the migrator never defaults to a local database.
+
+The existing `container-security` CI job builds that image, checks npm/npx remain absent, and
+executes the actual Compose migrator command in a read-only container with networking disabled,
+blank database settings and no host mounts. It must reach the exact missing-database refusal.
+This checks runtime command compatibility; it does not run SQL migrations or prove successful
+deployment, database compatibility or rollback. The existing vulnerability scan follows it.
+
+## Release evidence
+
+Before deploying, identify the actual provider/service and its source branch, the exact commit
+and image being released, and the target database's migration ledger and recovery point. Run
+deployment and migration verification only in the explicitly selected environment. Passing
+repository CI alone does not establish the state of a live installation.
+
+The migrator commits each migration separately. A later failure rolls back that migration, not
+earlier committed migrations. An application-image or traffic rollback therefore does not by
+itself restore the database; compatibility and database recovery need their own evidence.
 
 ## Droplet Prep
 
-Run once per droplet:
+For a selected DigitalOcean droplet target, run once per droplet:
 
 ```bash
 curl -fsSL https://get.docker.com | sh
@@ -130,5 +164,21 @@ Point each domain to the corresponding droplet IP as a plain A record.
 
 ## Verification
 
+- Backend `/health` and `/api/health` report process health and build provenance. They do not query
+  the database or certify schema compatibility; verify migrations and database-dependent behavior
+  separately for the selected deployment.
 - Frontend: `https://app.example.com/`
-- Backend health: `https://api.example.com/health`
+- Backend health: `https://api.example.com/health` — `gitSha` must be the deployed commit, not `local`. The value is resolved from `RAILWAY_GIT_COMMIT_SHA` first (a Railway deployment triggered from GitHub; it describes the running deployment) and falls back to `GIT_SHA` (Jenkins/compose, or a `railway up` upload where the operator sets it), then `local`; see `Tesbo-Backend-Nest/src/build-provenance.ts`. A service-level `GIT_SHA` persists across Railway deploys, so it must never outrank the injected Railway value.
+- Railway deployments: the backend service redeploys from its connected GitHub branch whenever a service variable changes or someone presses Redeploy. A `railway up` upload is superseded by that next GitHub-triggered deployment, even though the upload may have been the newer code. Deploy from the connected branch when possible; when an upload is the only option, set `GIT_SHA` to the uploaded commit and do not change variables until the connected branch catches up.
+- MCP catalog and field contracts, from a fresh protocol session: use a private credential file and its separately approved sibling `tesbo-approved-origin` file. Follow the [verification skill's origin setup](../.claude/skills/mcp-production-verify/SKILL.md#local-approved-origin-security-precondition); never derive approval from the URL supplied to the probe. The wrapper passes the file path, and the checker reads the bearer only after origin and build checks.
+
+  ```bash
+  TESBO_MCP_URL="https://api.example.com/api/projects/<projectId>/mcp" \
+  TESBO_MCP_TOKEN_FILE="$HOME/.config/opencode/secrets/tesbo.token" \
+  EXPECTED_GIT_SHA="<full 40-character deployed commit>" \
+  scripts/verify-production-mcp.sh
+  ```
+
+  It refuses an unapproved origin, a missing or unidentified expected build, or a health/build mismatch before any authenticated request. Missing required tools or authoring fields fail verification. When proposal preview is exposed, the checked `stage_testcase_changes` create/update fields include `attachments`, `postconditions`, `estimatedDuration` and `sourceRefs`, with a required request key and update `expectedRevision`.
+
+  It also recomputes the catalog fingerprint from the tools and initialize instructions the server actually returned. Missing instructions, a missing/malformed reported fingerprint, or a mismatch fails verification; an unavailable comparison cannot produce `OK`. A mismatch means the observed catalog differs from the one the server claims. Tool count is informational: capabilities, not the number, are the requirement.

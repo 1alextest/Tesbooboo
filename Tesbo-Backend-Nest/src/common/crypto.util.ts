@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "crypto";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
@@ -54,4 +54,25 @@ export function decryptSecret(stored: string): string {
   const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+}
+
+/**
+ * Stable, domain-separated lookup for confidential OAuth adapter references.
+ * Reuses the mandatory secret-encryption key, but derives an independent HMAC
+ * subkey: low-entropy user codes and token IDs are not stored as clear text or
+ * unsalted SHA-256. Key rotation must migrate BOTH ciphertext and these indexes.
+ */
+let oauthReferenceKey: Buffer | null = null;
+export function oauthReferenceFingerprint(namespace: string, value: string): string {
+  if (!namespace || !/^[a-zA-Z0-9:_-]{1,128}$/.test(namespace) ||
+      typeof value !== "string" || !value || Buffer.byteLength(value, "utf8") > 8192) {
+    throw new Error("Invalid OAuth adapter reference");
+  }
+  if (!oauthReferenceKey) {
+    oauthReferenceKey = Buffer.from(hkdfSync("sha256", loadKey(),
+      Buffer.from("tesbo-oauth-adapter-index-v1"), Buffer.from("reference-fingerprint-v1"), 32));
+  }
+  return createHmac("sha256", oauthReferenceKey)
+    .update(namespace, "utf8").update("\0").update(value, "utf8")
+    .digest("hex");
 }

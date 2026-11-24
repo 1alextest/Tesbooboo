@@ -1,0 +1,110 @@
+{
+  "source": "965a87a13d2669354598f8d4b912f36fdb148867",
+  "build": "e49fab4df4043b621b7007e97d8646743f441b6b",
+  "run": 44667829454,
+  "archive_sha256": "606d02869014f699136eec46ef830bd630cc15df8527593d60660539b2b2bfd3",
+  "archive_bytes": 36776144,
+  "archive_entries": 247,
+  "model_stats": {
+    "total": 19,
+    "expected": 19,
+    "unexpected": 0,
+    "flaky": 0,
+    "skipped": 0,
+    "ok": true
+  },
+  "html_sha256": "d42deb0aeb53b4ef7493139fadab035b7c120c8db26d73b2990754c224e4b4aa",
+  "report_json_sha256": "31403f3f04cfaa2bd316a2aa298894c10d59840dde5b85305d4ce82b7ebce0f6",
+  "captures": [
+    {
+      "attachment": "model-run-outcome-unknown-after-reload",
+      "file": "53d423c5986e31774bb4433b864889ae478d5d63.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/53d423c5986e31774bb4433b864889ae478d5d63.png",
+      "sha256": "3c3e0183ed1c5ab69edf7940f840e521f9b75d4b46b158895f5e796fa493362e",
+      "width": 1280,
+      "height": 720,
+      "test_title": "a committed model run with a lost response stays blocked across reload until the reviewer identifies its native run",
+      "test_id": "d758f893fa8344f7766b-fdc72cff6e9d837958b9",
+      "test_location": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 74,
+        "column": 5
+      },
+      "outcome": "expected",
+      "status": "passed",
+      "retry": 0
+    },
+    {
+      "attachment": "model-run-reconciled-historical-revision-retained",
+      "file": "dc0d8553deb4247bcd68540600dc5dfd2afeea48.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/dc0d8553deb4247bcd68540600dc5dfd2afeea48.png",
+      "sha256": "29aeeb2a0e32468b64b12ab70f05a1af0ee4a43a9a47e98c988f60ce7fbe1bcd",
+      "width": 1280,
+      "height": 720,
+      "test_title": "a committed model run with a lost response stays blocked across reload until the reviewer identifies its native run",
+      "test_id": "d758f893fa8344f7766b-fdc72cff6e9d837958b9",
+      "test_location": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 74,
+        "column": 5
+      },
+      "outcome": "expected",
+      "status": "passed",
+      "retry": 0
+    },
+    {
+      "attachment": "model-coverage-unavailable-draft-retained",
+      "file": "bfaf892aa56d46a120287cfbac505288b0c40243.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/bfaf892aa56d46a120287cfbac505288b0c40243.png",
+      "sha256": "5a39668ae9b10fe1f8f6429bceb61bc73fa80b8a123180817f64b31b32484dba",
+      "width": 1280,
+      "height": 720,
+      "test_title": "coverage loading and denial preserve the run draft and selected cases until a successful retry, while real empty coverage stays empty",
+      "test_id": "d758f893fa8344f7766b-12e2b0712cda79aa7058",
+      "test_location": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 248,
+        "column": 5
+      },
+      "outcome": "expected",
+      "status": "passed",
+      "retry": 0
+    },
+    {
+      "attachment": "model-coverage-recovered-selection-retained",
+      "file": "9aa396a675da4c7e8b0fbbef5552f7b4b4741d69.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/9aa396a675da4c7e8b0fbbef5552f7b4b4741d69.png",
+      "sha256": "69078428c0f786467b54095d2a8d64e7415b190e0ff20628cf59a37e440e1c03",
+      "width": 1280,
+      "height": 720,
+      "test_title": "coverage loading and denial preserve the run draft and selected cases until a successful retry, while real empty coverage stays empty",
+      "test_id": "d758f893fa8344f7766b-12e2b0712cda79aa7058",
+      "test_location": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 248,
+        "column": 5
+      },
+      "outcome": "expected",
+      "status": "passed",
+      "retry": 0
+    },
+    {
+      "attachment": "model-original-occurrence-unavailable-after-native-readd",
+      "file": "0882b179c1c174070022da417f63190d5c280798.png",
+      "path": "/workspace/scratch/fb086055b433/tesbo-ci-evidence/965a87a1/home/runner/work/Tesbooboo/Tesbooboo/e2e/playwright-report-model-studio/data/0882b179c1c174070022da417f63190d5c280798.png",
+      "sha256": "05506d4470b585b4ccf2104700c641becd174f446192a3ff9fa0257eb1af6d69",
+      "width": 1280,
+      "height": 720,
+      "test_title": "a reviewer approves the revision, creates a draft case and starts a governed run",
+      "test_id": "d758f893fa8344f7766b-43a82063f363bf088190",
+      "test_location": {
+        "file": "ui/model-studio.spec.ts",
+        "line": 448,
+        "column": 5
+      },
+      "outcome": "expected",
+      "status": "passed",
+      "retry": 0
+    }
+  ]
+}

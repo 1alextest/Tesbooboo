@@ -67,6 +67,7 @@ type Internals = {
   resolveZyraActor: (userId: string) => Promise<string>;
   getProjectSuite: (projectId: string, suiteId: string) => Promise<Body | null>;
   resolveOrCreateSuiteByName: (projectId: string, name: string) => Promise<Body>;
+  proposedSuiteByName: (projectId: string, name: string) => Promise<Body>;
   logProjectActivity: (...args: unknown[]) => Promise<void>;
   recordZyraPendingReviewRequest: (...args: unknown[]) => Promise<void>;
 };
@@ -202,13 +203,14 @@ describe("applyZyraChatOperations — a batch's suite is looked up once, not onc
     jest.spyOn(internals(svc), "recordZyraPendingReviewRequest").mockResolvedValue(undefined);
     const log = jest.spyOn(internals(svc), "logProjectActivity").mockResolvedValue(undefined);
     // The staged drafts, as written to ai_generation_requests — where each one's suite is kept.
-    const stagedSuites = (): unknown[] => {
+    const stagedDrafts = (): Array<{ suiteId: unknown; suiteName?: string }> => {
       const staged = query.mock.calls
         .flatMap(([, params]) => params ?? [])
         .find((param) => typeof param === "string" && param.includes('"opType":"create"'));
-      return (JSON.parse(String(staged)) as Array<{ draft: { suiteId: unknown } }>).map((entry) => entry.draft.suiteId);
+      return (JSON.parse(String(staged)) as Array<{ draft: { suiteId: unknown; suiteName?: string } }>).map((entry) => entry.draft);
     };
-    return { svc, log, stagedSuites };
+    const stagedSuites = () => stagedDrafts().map(draft => draft.suiteId);
+    return { svc, query, log, stagedSuites, stagedDrafts };
   }
   const creates = (count: number, extra: Body = {}) =>
     Array.from({ length: count }, (_, i) => ({ type: "create", draft: { title: `Draft ${i + 1}`, stepsJson: "[]" }, ...extra }));
@@ -222,13 +224,17 @@ describe("applyZyraChatOperations — a batch's suite is looked up once, not onc
     expect(stagedSuites()).toEqual(Array(5).fill("suite-9"));
   });
 
-  it("one lookup for Zyra's own drafts suite; created once, reported and logged once", async () => {
-    const { svc, log, stagedSuites } = setup();
-    const resolve = jest.spyOn(internals(svc), "resolveOrCreateSuiteByName").mockResolvedValue({ id: "suite-z", name: "Zyra generated test cases", created: true });
+  it("one read for Zyra's missing drafts suite; every destination stays proposed until atomic human Save", async () => {
+    const { svc, query, log, stagedSuites, stagedDrafts } = setup();
+    const resolve = jest.spyOn(internals(svc), "proposedSuiteByName").mockResolvedValue({ id: null, name: "Zyra generated test cases", created: false });
+    const create = jest.spyOn(internals(svc), "resolveOrCreateSuiteByName");
     const applied = await internals(svc).applyZyraChatOperations("p1", "u1", "s1", creates(5));
     expect(resolve).toHaveBeenCalledTimes(1);
-    expect(stagedSuites()).toEqual(Array(5).fill("suite-z"));
-    expect(applied.activity.filter((a) => a.title === "Created suite")).toHaveLength(1);
-    expect(log.mock.calls.filter(([, , action]) => action === "zyra_suite_created")).toHaveLength(1);
+    expect(stagedSuites()).toEqual(Array(5).fill(null));
+    expect(stagedDrafts().map(draft => draft.suiteName)).toEqual(Array(5).fill("Zyra generated test cases"));
+    expect(create).not.toHaveBeenCalled();
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO (suites|testcases)/.test(sql))).toBe(false);
+    expect(applied.activity.filter((a) => a.title === "Created suite")).toHaveLength(0);
+    expect(log.mock.calls.filter(([, , action]) => action === "zyra_suite_created")).toHaveLength(0);
   });
 });

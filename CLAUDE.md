@@ -8,6 +8,36 @@ The compose defaults of `:1010`/`:1011` belong to the open-source stack, not thi
 
 ---
 
+## Engineering principles and scope → AGENTS.md
+
+[AGENTS.md](AGENTS.md) is the canonical owner of the shared engineering principles: reuse-first and
+capability discovery, upstream/downstream mapping, one authoritative owner per fact, truthful failures,
+authorization boundaries, boundary-level testing, delivery-versus-verification, right-sizing,
+findings-without-scope-creep, **decision discovery and authority for unresolved product decisions**,
+preventive lessons, dependency evaluation and application neutrality.
+It also requires recording capability opportunities noticed while building as enhancement candidates
+after checking the specs, current implementation and work record for an existing owner — never as
+implemented scope. Read it before design or implementation work.
+
+In particular, do not silently choose an intended behavior when the specification, existing behavior or
+competing requirements leave a consequential product decision unresolved. Investigate the evidence,
+state the interpretations and consequences, and surface the decision to the user or the authorized
+owner before implementing it; record the blocked decision rather than assuming an answer.
+
+Use the [evidence-grounded decision procedure](docs/agent-skills/evidence-grounded-decisions/SKILL.md)
+to apply AGENTS.md principles 17 and 13 across coding, UX/UI and assurance work. It provides
+independent-agent discovery, coordination handoffs and proportionate decision briefs; AGENTS.md
+remains the owner of the binding principles.
+
+The detailed scope classification (coupled / defect on path / adjacent / new initiative), the
+no-unsanctioned-pivot rule and the red-run rules are in
+[docs/agent-scope-discipline.md](docs/agent-scope-discipline.md).
+
+This file owns the repo-specific mandates that follow: the database rule, the Basecamp flow and the
+e2e coverage mandate. Do not duplicate the shared principles here.
+
+---
+
 ## MANDATORY: the database is always the `DATABASE_URL` in the repo-root `.env`
 
 **Never point anything at a local Postgres, for any reason.** This covers the backend, the migrator,

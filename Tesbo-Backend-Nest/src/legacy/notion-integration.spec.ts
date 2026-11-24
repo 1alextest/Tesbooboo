@@ -684,10 +684,10 @@ describe("Notion pages, snapshots and linking", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("zyraTicketFromKnowledgeSelection resolves a Notion mirror document to its page id", async () => {
+  it("zyraTicketsFromKnowledgeSelection resolves a Notion mirror document to its page id", async () => {
     const { db, calls } = makeDb([{ match: "FROM knowledge_documents d", rows: [{ provider: "notion", issue_key: PAGE_ID }] }]);
-    const out = await (makeLegacy(db) as any).zyraTicketFromKnowledgeSelection(PROJECT_ID, ["5f9c1f2e-6f3a-4a7e-8b21-0000000000aa"]);
-    expect(out.linked).toEqual({ provider: "notion", issueKey: PAGE_ID });
+    const out = await (makeLegacy(db) as any).zyraTicketsFromKnowledgeSelection(PROJECT_ID, ["5f9c1f2e-6f3a-4a7e-8b21-0000000000aa"]);
+    expect(out).toEqual([{ provider: "notion", issueKey: PAGE_ID }]);
     expect(calls[0].sql).toContain("LEFT JOIN notion_pages n");
     expect(calls[0].sql).toContain("'notion'");
   });
@@ -796,7 +796,9 @@ describe("test case writes carry the Notion link", () => {
     const insert = statements.find((s) => s.sql.includes("INSERT INTO testcases"))!;
     expect(insert.sql).toContain("notion_page_id, notion_url");
     expect(maxPlaceholder(insert.sql)).toBe(insert.params.length);
-    expect(insert.params.slice(-2)).toEqual([PAGE_ID, "https://www.notion.so/p"]);
+    // The authoring classification columns (technique, review_views) follow notion_url, so the
+    // Notion pair is no longer the tail. Assert the pair at its fixed position, not slice(-2).
+    expect(insert.params.slice(-4, -2)).toEqual([PAGE_ID, "https://www.notion.so/p"]);
   });
 
   it("update sets the link, and an explicit null or empty id clears both columns", async () => {
@@ -811,23 +813,33 @@ describe("test case writes carry the Notion link", () => {
       await svc.updateTestCaseWithClient(client, PROJECT_ID, "tc-1", CALLER_ID, body);
       const update = statements.find((s) => s.sql.includes("UPDATE testcases SET"))!;
       expect(maxPlaceholder(update.sql)).toBe(update.params.length);
-      expect(update.params.slice(-3)).toEqual([...link, clears]);
+      // Notion's existing $31..$33 slots stay fixed when unrelated presence flags are appended.
+      expect(update.sql).toContain("notion_page_id=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($31,notion_page_id) END");
+      expect(update.sql).toContain("notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END");
+      expect(update.params.slice(30, 33)).toEqual([...link, clears]);
+      expect(update.params[33]).toBeNull(); // $34: no external-id rename requested.
+      expect(update.params.slice(34, 37)).toEqual([false, false, null]); // Suite/owner omitted; no edit-revision guard requested.
+      // Authoring classification is appended after the pre-existing slots: presence flags and
+      // values for technique/reviewViews, both omitted here.
+      expect(update.params.slice(37)).toEqual([false, null, false, null]);
     }
   });
 
   it("duplicate copies the link", async () => {
     const svc = serviceWithStubs();
-    const { client, statements } = capturingClient();
+    // Both the initial access read and the locked-transaction reread see this source.
+    const source = { id: "tc-1", project_id: PROJECT_ID, title: "t", notion_page_id: PAGE_ID, notion_url: "u", deleted_at: null };
+    const { client, statements } = capturingClient(source);
     jest.spyOn(svc, "nextExternalId").mockResolvedValue("TC-2");
     (svc.db as any).transaction = async (fn: (c: unknown) => unknown) => fn(client);
-    (svc.db as any).query = jest.fn().mockResolvedValue({ rows: [{ id: "tc-1", project_id: PROJECT_ID, title: "t", notion_page_id: PAGE_ID, notion_url: "u", deleted_at: null }] });
+    (svc.db as any).query = jest.fn().mockResolvedValue({ rows: [source] });
     jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
     jest.spyOn(svc, "requireUser").mockReturnValue(CALLER_ID);
     jest.spyOn(svc, "requireProjectAccess").mockResolvedValue(undefined);
     jest.spyOn(svc.suitesCache, "invalidate").mockResolvedValue(undefined);
     jest.spyOn(svc.testcasesListCache, "invalidate").mockResolvedValue(undefined);
     svc.customFields.copyValues = jest.fn();
-    await svc.duplicateTestCase(CALLER_ID, "tc-1").catch(() => undefined);
+    await svc.duplicateTestCase("tc-1", CALLER_ID);
     const insert = statements.find((s) => s.sql.includes("INSERT INTO testcases"));
     expect(insert).toBeDefined();
     expect(maxPlaceholder(insert!.sql)).toBe(insert!.params.length);

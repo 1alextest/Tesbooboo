@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { exec, literal, scalar } from "../utils/psql";
 import {
@@ -107,7 +108,7 @@ test.describe("custom tags", () => {
   }
 
   async function createTestCase(data: Record<string, unknown> = {}, api: APIRequestContext = asOwner): Promise<any> {
-    const res = await api.post(testcasesUrl(), {
+    const res = await createTestcaseFixtureResponse(api, testcasesUrl(), {
       data: { title: `E2E Custom Tag Case ${Date.now()}${Math.floor(Math.random() * 1000)}`, ...data },
       failOnStatusCode: false,
     });
@@ -295,7 +296,7 @@ test.describe("custom tags", () => {
 
   test("a rename shows wherever the tag is used: the test case, a cached repository page, and Execution Report", async () => {
     const tag = await createTag({ name: tagName("Old") });
-    const testcase = await createTestCase({ customTagIds: [tag.id] });
+    const testcase = await createTestCase({ customTagIds: [tag.id], status: "Approved" });
     const run = await seedRun(asOwner, tenant!.mainProjectId, { name: `E2E Rename Run ${Date.now()}` });
     await addRunCases(asOwner, run.id, [testcase.id]);
     // Warm the cacheable unfiltered first page, so a stale cached name would be caught.
@@ -370,7 +371,9 @@ test.describe("custom tags", () => {
     expect(qa.status()).toBe(403);
     expect((await qa.json()).error).toContain("QA Engineers cannot manage custom tags");
     expect((await rename(tag.id, tagName("Guest"), asGuest)).status()).toBe(404);
-    expect([401, 403, 404]).toContain((await rename(tag.id, tagName("Anon"), anon)).status());
+    const anonymous = await rename(tag.id, tagName("Anon"), anon);
+    expect(anonymous.status()).toBe(400);
+    expect(await anonymous.json()).toEqual({ error: "Authentication required" });
     expect(storedName(tag.id)).toBe(afterManager);
   });
 
@@ -417,8 +420,8 @@ test.describe("custom tags", () => {
       createTag({ name: tagName("smoke") }),
       createTag({ name: tagName("regression") }),
     ]);
-    const tagged = await createTestCase({ customTagIds: [smoke.id, regression.id] });
-    const untagged = await createTestCase();
+    const tagged = await createTestCase({ customTagIds: [smoke.id, regression.id], status: "Approved" });
+    const untagged = await createTestCase({ status: "Approved" });
 
     const run = await seedRun(asOwner, tenant!.mainProjectId, { name: `E2E Custom Tags Run ${Date.now()}` });
     await addRunCases(asOwner, run.id, [tagged.id, untagged.id]);
@@ -552,8 +555,9 @@ test.describe("custom tags", () => {
   test("the tag-filtered list refuses a caller with no session or no project access", async () => {
     const smoke = await createTag({ name: tagName("smoke") });
     const anonRes = await anon.get(testcasesUrl(), { params: { customTagIds: smoke.id }, failOnStatusCode: false });
-    // Same allowance as "every route refuses a caller with no session" above: refused, whatever the code.
-    expect([401, 403]).toContain(anonRes.status());
+    // Legacy requireUser refuses the request before project data is read.
+    expect(anonRes.status()).toBe(400);
+    expect(await anonRes.json()).toEqual({ error: "Authentication required" });
     const guestRes = await asGuest.get(testcasesUrl(), { params: { customTagIds: smoke.id }, failOnStatusCode: false });
     expect(guestRes.status()).toBe(404);
   });

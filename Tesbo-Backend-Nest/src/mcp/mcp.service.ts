@@ -1,8 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from "@nestjs/common";
+import { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
+import { GraphChangeReviewDelivery } from "../behavior-graph/graph-change-review.delivery";
+import { BUILD_GIT_SHA } from "../build-provenance";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
-import type { ApiTokenContext } from "../common/request.types";
+import { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import { MCP_ACCESS_KEY, hasApprovedMcpToolPermission, onlyReducesMcpAccess, projectSettingsObject, readMcpAccess, validateMcpAccess, type McpClientGrant } from "./mcp-access";
+import type { ApiTokenContext, AuthenticatedRequest } from "../common/request.types";
+import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
+import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
+import { humanPublicationRequired, isDirectTestcasePublisher, proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
 import { buildMcpTools } from "./mcp.tools";
 import {
   MCP_AGENT_SLUG,
@@ -25,10 +33,12 @@ import {
  * Tesbo MCP — protocol engine.
  *
  * Handles a single JSON-RPC 2.0 request against the MCP surface (initialize / tools/list /
- * tools/call / ping) for a project-scoped API token. Two guarantees enforced here, before any
+ * tools/call / ping) for a project-scoped API token. Four guarantees enforced here, before any
  * tool handler runs, close the gaps left open by the auth foundation (88a2505):
  *   1. Project scope — the token's project must match the project on the request URL.
- *   2. Tool scope    — a write tool requires the token to carry the "write" scope.
+ *   2. Consent      — the project is enabled and the credential has a current named client grant.
+ *   3. Tool scope   — both the token and its client grant must permit the tool.
+ *   4. Writability  — write tools obey the existing project plan lock; reads/discovery do not.
  *
  * Writes are attributed to a dedicated "tesbo-mcp" agent actor (seeded in V65) so machine
  * activity is distinguishable from human and Zyra activity in audit history.
@@ -46,22 +56,28 @@ export class McpService {
    * free text on stage" report). Session ids embed this value — see isCurrentSession.
    *
    * A content hash rather than GIT_SHA: it changes exactly when the schemas do (a deploy that
-   * leaves MCP untouched does not force every client to reconnect), and it works where GIT_SHA is
-   * "local" — local dev, e2e, and prod, whose deploy does not pass GIT_SHA through today.
+   * leaves MCP untouched does not force every client to reconnect), and it works even when the
+   * build is unidentified ("local") — local dev, e2e, or a deploy exposing neither GIT_SHA nor
+   * RAILWAY_GIT_COMMIT_SHA.
    */
   private readonly toolsFingerprint = createHash("sha256")
     .update(JSON.stringify({ tools: this.listToolsPayload(), instructions: MCP_SERVER_INSTRUCTIONS }))
     .digest("hex")
     .slice(0, 16);
-  /** SemVer build metadata: which deploy (GIT_SHA) and which tool set (fingerprint) this is. */
-  readonly serverVersion = `${MCP_SERVER_VERSION}+${process.env.GIT_SHA || "local"}.${this.toolsFingerprint}`;
+  /** SemVer build metadata: which deploy (resolved build commit) and which tool set (fingerprint) this is. */
+  readonly serverVersion = `${MCP_SERVER_VERSION}+${BUILD_GIT_SHA}.${this.toolsFingerprint}`;
 
   // Resolved once and reused — the MCP agent's actor id never changes at runtime.
   private mcpActorIdPromise: Promise<string | null> | null = null;
 
   constructor(
     private readonly legacy: LegacyService,
-    private readonly db: DatabaseService
+    private readonly db: DatabaseService,
+    private readonly planLimits: PlanLimitsService,
+    @Optional() private readonly graphCapture?: ProjectSourceGraphCoordinator,
+    @Optional() private readonly graphNotificationDelivery?: GraphChangeReviewDelivery,
+    @Optional() private readonly modelPreview?: ModelStudioPreview,
+    @Optional() private readonly modelStudio?: ModelStudioRepository
   ) {}
 
   /** Actor id for the well-known "tesbo-mcp" agent (V65), used to attribute token-authed writes. */
@@ -84,14 +100,17 @@ export class McpService {
     return this.tools;
   }
 
-  /** A fresh session id bound to the current tool set. */
-  newSessionId(): string {
-    return `${this.toolsFingerprint}.${randomUUID()}`;
+  /** Bind the session to the exact catalog version returned by this initialize response. */
+  newSessionId(version = this.serverVersion): string {
+    const fingerprint = version.match(/\.([0-9a-f]{16})$/)?.[1];
+    if (!fingerprint) throw new Error("Cannot issue an MCP session without a valid catalog fingerprint");
+    return `${fingerprint}.${randomUUID()}`;
   }
 
   /** False for an id issued against a different tool set (or not issued by this server at all). */
-  isCurrentSession(sessionId: string): boolean {
-    return sessionId.startsWith(`${this.toolsFingerprint}.`);
+  isCurrentSession(sessionId: string, principal?: ApiTokenContext, grant?: McpClientGrant): boolean {
+    const fingerprint = principal && grant ? this.catalogFingerprint(this.visibleTools(principal, grant)) : this.toolsFingerprint;
+    return sessionId.startsWith(`${fingerprint}.`);
   }
 
   /** A JSON-RPC notification: no id, so no response is expected (Streamable HTTP answers 202). */
@@ -101,11 +120,19 @@ export class McpService {
   }
 
   private listToolsPayload() {
-    return this.tools.map((t) => ({
+    return this.tools.filter(t => !t.hiddenFromDiscovery && (!t.proposalPreviewOnly || proposalReviewPreviewEnabled())).map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema
     }));
+  }
+
+  private visibleTools(principal: ApiTokenContext, grant: McpClientGrant) {
+    return this.listToolsPayload().filter(tool => this.clientCanUseTool(principal, grant, tool.name));
+  }
+
+  private catalogFingerprint(tools: ReturnType<McpService["listToolsPayload"]>): string {
+    return createHash("sha256").update(JSON.stringify({ tools, instructions: MCP_SERVER_INSTRUCTIONS })).digest("hex").slice(0, 16);
   }
 
   /**
@@ -122,30 +149,141 @@ export class McpService {
     const id: JsonRpcId = req && (typeof req.id === "string" || typeof req.id === "number") ? req.id : null;
 
     try {
-      if (!req || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
-        throw new McpError(RpcCode.InvalidRequest, "Invalid JSON-RPC 2.0 request");
-      }
-
-      // Project scope: the token may only ever act inside its own project.
-      if (!principal.projectId) {
-        throw new McpError(RpcCode.ProjectScopeDenied, "API token is not scoped to a project");
-      }
-      if (principal.projectId !== urlProjectId) {
-        throw new McpError(RpcCode.ProjectScopeDenied, "API token is not scoped to this project");
-      }
-
-      const params = (req.params ?? {}) as Record<string, unknown>;
-      const result = await this.dispatch(req.method, params, principal);
-      return { jsonrpc: "2.0", id, result };
+      // Authorization runs for every request before its shape is considered: a credential's project
+      // consent, scope and grant are checked regardless of how well formed the body is, so a
+      // malformed request can never be used to reach dispatch without passing that check.
+      const { organizationId, grant } = await this.authorizeRequest(principal, urlProjectId);
+      const parsed = this.parseRequest(body);
+      const result = await this.dispatch(parsed.method, parsed.params, principal, organizationId, grant);
+      return { jsonrpc: "2.0", id: parsed.id, result };
     } catch (err) {
       return this.toErrorResponse(id, err);
     }
   }
 
+  /** Shape validation for a JSON-RPC 2.0 request; throws InvalidRequest rather than returning one. */
+  private parseRequest(body: unknown): { id: JsonRpcId; method: string; params: Record<string, unknown> } {
+    const req = body as Partial<JsonRpcRequest> | null;
+    if (!req || req.jsonrpc !== "2.0" || typeof req.method !== "string") {
+      throw new McpError(RpcCode.InvalidRequest, "Invalid JSON-RPC 2.0 request");
+    }
+    return {
+      id: typeof req.id === "string" || typeof req.id === "number" ? req.id : null,
+      method: req.method,
+      params: (req.params ?? {}) as Record<string, unknown>
+    };
+  }
+
+  /** Every transport path (including cached sessions and notifications) rechecks current consent. */
+  async authorizeRequest(principal: ApiTokenContext, urlProjectId: string): Promise<{ organizationId: string; grant: McpClientGrant }> {
+    if (!principal.projectId || principal.projectId !== urlProjectId || !principal.userId) {
+      throw new McpError(RpcCode.ProjectScopeDenied, "API token is not scoped to an accessible project");
+    }
+    let project: Record<string, any>;
+    try {
+      project = await this.legacy.requireProjectAccess(principal.userId, principal.projectId);
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException || error instanceof UnauthorizedException) {
+        throw new McpError(RpcCode.ProjectScopeDenied, "API token issuer no longer has access to this project");
+      }
+      throw error;
+    }
+    // Read the authoritative row each time, not a session snapshot or a cached project projection.
+    // Rechecking the credential also prevents a previously authenticated context surviving revocation.
+    const current = await this.db.query(
+      `SELECT p.settings, t.scopes FROM projects p
+       JOIN api_tokens t ON t.project_id = p.id AND t.id = $2 AND t.user_id = $3
+       WHERE p.id = $1 AND p.archived_at IS NULL`,
+      [principal.projectId, principal.tokenId, principal.userId]
+    );
+    const row = current.rows[0];
+    let access;
+    try { access = row ? readMcpAccess(row.settings) : null; } catch { access = null; }
+    const grant = access?.clients.find(client => client.tokenId === principal.tokenId.toLowerCase());
+    const currentScopes = typeof row?.scopes === "string" ? row.scopes.split(",").map((scope: string) => scope.trim()) : [];
+    if (!access?.enabled || !grant || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now() ||
+        !grant.scopes.length || grant.scopes.some(scope => !currentScopes.includes(scope))) {
+      throw new McpError(RpcCode.ProjectScopeDenied, "External MCP access requires an enabled project and a current approved client credential");
+    }
+    return { organizationId: project.organization_id, grant };
+  }
+
+  private clientCanUseTool(principal: ApiTokenContext, grant: McpClientGrant, name: string): boolean {
+    const tool = this.toolsByName.get(name);
+    return !!tool && hasApprovedMcpToolPermission(principal.scopes, grant, tool.requiredScope, name);
+  }
+
+  private async humanProjectManager(req: AuthenticatedRequest, projectId: string) {
+    if (!req.userId || req.apiToken) throw new ForbiddenException({ error: "An authenticated human session is required to manage external MCP access" });
+    const project = await this.legacy.requireProjectAccess(req.userId, projectId);
+    const role = this.legacy.normalizeRole(project.caller_role);
+    if (role !== "owner" && role !== "manager") throw new ForbiddenException({ error: "Only project owners and managers can manage external MCP access" });
+    return project;
+  }
+
+  async getAccessSettings(req: AuthenticatedRequest, projectId: string) {
+    await this.humanProjectManager(req, projectId);
+    const result = await this.db.query("SELECT settings FROM projects WHERE id = $1 AND archived_at IS NULL", [projectId]);
+    if (!result.rows[0]) throw new NotFoundException({ error: "Project not found" });
+    return readMcpAccess(result.rows[0].settings);
+  }
+
+  async updateAccessSettings(req: AuthenticatedRequest, projectId: string, body: unknown) {
+    const project = await this.humanProjectManager(req, projectId);
+    const input = validateMcpAccess(body, new Set(this.toolsByName.keys()));
+    return this.db.transaction(async client => {
+      // Lock the existing project setting and current memberships, including role changes/revocation.
+      const locked = await client.query(
+        `SELECT p.settings, pm.role AS caller_role FROM projects p
+         JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $2
+         JOIN organization_members om ON om.organization_id = p.organization_id AND om.user_id = $2
+         WHERE p.id = $1 AND p.organization_id = $3 AND p.archived_at IS NULL
+         FOR UPDATE OF p FOR SHARE OF pm, om`, [projectId, req.userId, project.organization_id]
+      );
+      const row = locked.rows[0];
+      if (!row || !["owner", "manager"].includes(this.legacy.normalizeRole(row.caller_role))) {
+        throw new ForbiddenException({ error: "Project management access changed; reload before trying again" });
+      }
+      const before = readMcpAccess(row.settings);
+      if (before.revision !== input.revision) throw new ConflictException({ error: "External MCP access changed; reload and review the current settings" });
+      if (!onlyReducesMcpAccess(before, input)) await this.planLimits.assertProjectWritable(project.organization_id, projectId);
+      if (input.clients.length) {
+        const tokens = await client.query(
+          "SELECT id, user_id, scopes FROM api_tokens WHERE project_id = $1 AND id = ANY($2::uuid[]) FOR SHARE",
+          [projectId, input.clients.map(grant => grant.tokenId)]
+        );
+        for (const grant of input.clients) {
+          const token = tokens.rows.find(token => token.id === grant.tokenId);
+          const scopes = typeof token?.scopes === "string" ? token.scopes.split(",").map((scope: string) => scope.trim()) : [];
+          const unchanged = before.clients.some(previous => JSON.stringify(previous) === JSON.stringify(grant));
+          // A revoked credential stays denied at request time. Retaining its historical label must
+          // not prevent an owner disabling access or revoking another client's grant.
+          if ((!token?.user_id || grant.scopes.some(scope => !scopes.includes(scope))) && !unchanged) {
+            throw new BadRequestException({ error: "Every client must use a current credential in this project and a subset of its scopes" });
+          }
+        }
+      }
+      const after = { ...input, revision: before.revision + 1 };
+      const settings = { ...projectSettingsObject(row.settings), [MCP_ACCESS_KEY]: after };
+      await client.query("UPDATE projects SET settings = $2::jsonb, updated_at = now() WHERE id = $1", [projectId, JSON.stringify(settings)]);
+      // The consent change and its attributable receipt commit together. Audit failure rolls back consent.
+      // entity_id is varchar while project_id is uuid: reusing one parameter for both makes
+      // Postgres fail with "inconsistent types deduced for parameter $1". Pass the project id twice.
+      await client.query(
+        `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff, organization_id)
+         VALUES ($1,$2,'project_mcp_access_updated','project',$5,'External AI & MCP Access',$3::jsonb,$4)`,
+        [projectId, req.userId, JSON.stringify({ before, after }), project.organization_id, projectId]
+      );
+      return after;
+    });
+  }
+
   private async dispatch(
     method: string,
     params: Record<string, unknown>,
-    principal: ApiTokenContext
+    principal: ApiTokenContext,
+    organizationId: string,
+    grant: McpClientGrant
   ): Promise<unknown> {
     switch (method) {
       case "initialize": {
@@ -159,7 +297,7 @@ export class McpService {
           // notifications/tools/list_changed on. Tool-set changes reach clients through session
           // expiry instead (see isCurrentSession / McpController).
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: MCP_SERVER_NAME, version: this.serverVersion },
+          serverInfo: { name: MCP_SERVER_NAME, version: `${MCP_SERVER_VERSION}+${BUILD_GIT_SHA}.${this.catalogFingerprint(this.visibleTools(principal, grant))}` },
           instructions: MCP_SERVER_INSTRUCTIONS
         };
       }
@@ -168,17 +306,17 @@ export class McpService {
         return {};
 
       case "tools/list":
-        return { tools: this.listToolsPayload() };
+        return { tools: this.visibleTools(principal, grant) };
 
       case "tools/call":
-        return this.callTool(params, principal);
+        return this.callTool(params, principal, organizationId, grant);
 
       default:
         throw new McpError(RpcCode.MethodNotFound, `Unknown method: ${method}`);
     }
   }
 
-  private async callTool(params: Record<string, unknown>, principal: ApiTokenContext): Promise<unknown> {
+  private async callTool(params: Record<string, unknown>, principal: ApiTokenContext, organizationId: string, grant: McpClientGrant): Promise<unknown> {
     const name = typeof params.name === "string" ? params.name : "";
     const tool = this.toolsByName.get(name);
     if (!tool) {
@@ -193,22 +331,52 @@ export class McpService {
       );
     }
 
+    if (!this.clientCanUseTool(principal, grant, name)) {
+      throw new McpError(RpcCode.ScopeDenied, "This credential's approved MCP client grant does not allow this tool");
+    }
+
     const rawArgs = params.arguments;
-    const args =
-      rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
-        ? (rawArgs as Record<string, unknown>)
-        : {};
+    const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+      ? rawArgs as Record<string, unknown> : {};
+    if (isDirectTestcasePublisher(name)) {
+      const refusal = humanPublicationRequired(principal.projectId as string);
+      throw new McpError(RpcCode.ToolExecutionError, refusal.error, refusal);
+    }
+    if (tool.proposalPreviewOnly && !proposalReviewPreviewEnabled()) {
+      throw new McpError(RpcCode.ToolExecutionError, "The unpublished proposal review preview is unavailable on this deployment", {
+        code: "PROPOSAL_REVIEW_PREVIEW_DISABLED", stagingAvailable: false
+      });
+    }
+
+    // Both transports reach this same boundary after project membership and token scope.
+    // Check once before actor resolution or any handler (including partial batches/clones).
+    if (tool.requiredScope === "write") {
+      try {
+        await this.planLimits.assertProjectWritable(organizationId, principal.projectId as string);
+      } catch (err) {
+        if (err instanceof ForbiddenException) {
+          throw new McpError(RpcCode.ToolExecutionError, this.extractMessage(err));
+        }
+        // An entitlement lookup failure is not a plan denial or a successful tool call.
+        throw err;
+      }
+    }
 
     // Only resolve/attach the agent actor for writes — reads never touch actor columns.
     const actorId = tool.requiredScope === "write" ? await this.resolveMcpActorId() : null;
 
     const ctx: McpToolContext = {
       projectId: principal.projectId as string,
+      tokenId: principal.tokenId,
       actorId,
       userId: principal.userId ?? null,
       scopes,
       legacy: this.legacy,
-      db: this.db
+      db: this.db,
+      graphCapture: this.graphCapture,
+      graphNotificationDelivery: this.graphNotificationDelivery,
+      modelPreview: this.modelPreview,
+      modelStudio: this.modelStudio
     };
 
     try {
@@ -239,7 +407,7 @@ export class McpService {
     return err instanceof Error ? err.message : String(err);
   }
 
-  private toErrorResponse(id: JsonRpcId, err: unknown): JsonRpcResponse {
+  toErrorResponse(id: JsonRpcId, err: unknown): JsonRpcResponse {
     if (err instanceof McpError) {
       return { jsonrpc: "2.0", id, error: { code: err.code, message: err.message, data: err.data } };
     }

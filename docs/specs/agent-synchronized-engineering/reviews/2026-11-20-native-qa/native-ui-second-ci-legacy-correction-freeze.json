@@ -1,0 +1,20 @@
+{
+  "frozenAt": "2026-11-20T09:04:27.507025+00:00",
+  "baseHead": "cab1c6928b32f6f7b74b30dbf75879ef127628be",
+  "scope": "Legacy cycles prefix and three execution selectors only; native block preserved including author-owned exact201 correction",
+  "files": {
+    "e2e/ui/cycles.spec.ts": "ac83a68659476a0be3ddf15bfe06cc2a25b89cf59dcd3a18065e53a306fc771b",
+    "e2e/ui/executions.spec.ts": "19c547d8fc3fe831b2f0fa29549606fe9e541da465ea4dc614981ea0455a5182"
+  },
+  "cyclesLegacyPrefixSha256": "b5ec9d3a811ca63f9ebcadc711f524c2d51961d551f5d85084be602bd7240228",
+  "cyclesNativeBlockSha256": "ed06b8ff95ec6da570f5a4bcd42785d405d55d7100f38d77e4f262c23ca3e59b",
+  "ownedPatchSha256": "1ed03a5f8b9de9e2c651431092b0545eb08eb280b0354ec54ac0d4407b7dc8ea",
+  "checks": {
+    "e2eTypescript": "passed",
+    "gitDiffCheck": "passed",
+    "selectedList": "260 tests in 9 files",
+    "suiteList": "3009 tests in 91 files",
+    "localApplicationRuntime": "not run"
+  },
+  "testCountChange": 0
+}

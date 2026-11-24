@@ -77,7 +77,7 @@ test.describe("readable URLs", () => {
 
   test("the sidebar keeps the readable project key when moving between sections", async ({ page }) => {
     await page.goto(`/projects/${projectKey}/bugs`);
-    await page.locator("aside").first().getByRole("link", { name: "Test Cases", exact: true }).click();
+    await page.locator("aside").first().getByRole("link", { name: "Test cases", exact: true }).click();
     await expectPath(page, new RegExp(`^/projects/${projectKey}/testcases$`));
     await expect(page.locator("aside a[href*='/projects/']").first()).toHaveAttribute("href", new RegExp(`^/projects/${projectKey}`));
   });
@@ -105,10 +105,10 @@ test.describe("readable URLs", () => {
 
   test("an unknown project key or bug ref shows a not-found message, not a blank page or a crash", async ({ page }) => {
     await page.goto(`/projects/NO-SUCH-PROJECT-KEY/bugs`);
-    await expect(page.getByRole("alert")).toContainText("Page not found");
+    await expect(page.getByRole("alert").filter({ has: page.getByRole("heading", { name: "Page not found", exact: true }) })).toContainText("Page not found");
 
     await page.goto(`/projects/${projectKey}/bugs/ZZZ-BUG-99999999`);
-    await expect(page.getByRole("alert")).toContainText("Page not found");
+    await expect(page.getByRole("alert").filter({ has: page.getByRole("heading", { name: "Page not found", exact: true }) })).toContainText("Page not found");
   });
 });
 
@@ -154,6 +154,50 @@ test.describe("project prefetch on a hard load", () => {
     await page.waitForLoadState("networkidle");
     expect(seen.project).toHaveLength(1);
     expect(seen.members).toHaveLength(1);
+  });
+
+  test("a late uuid resolver does not repeat project requests after their prefetched results are consumed", async ({ page }) => {
+    const seen = trackProjectRequests(page);
+    const isProjectResolver = (url: URL) =>
+      url.origin === new URL(apiBase()).origin &&
+      url.pathname === "/api/route-resolve" &&
+      url.search === `?project=${ctx.projectId}`;
+    let releaseResolver!: () => void;
+    const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
+    let intercepted = 0;
+
+    await page.route(isProjectResolver, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      intercepted += 1;
+      await resolverGate;
+      // Only control the ordering: the real resolver still authorizes and returns the project.
+      await route.continue();
+    });
+
+    try {
+      await page.goto(`/projects/${ctx.projectId}/bugs`);
+      // The authenticated project page renders only after ProjectDataProvider has consumed and
+      // completed both prefetches. Keep the resolver pending until that observable boundary.
+      await expect(page.getByRole("button", { name: "Report Bug" }).first()).toBeVisible();
+      expect(intercepted).toBe(1);
+      expect(new URL(page.url()).pathname).toBe(`/projects/${ctx.projectId}/bugs`);
+      expect(seen.project).toHaveLength(1);
+      expect(seen.members).toHaveLength(1);
+
+      const responsePromise = page.waitForResponse((response) =>
+        response.request().method() === "GET" && isProjectResolver(new URL(response.url()))
+      );
+      releaseResolver();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      expect(await response.json()).toMatchObject({ projectId: ctx.projectId, projectKey });
+      await expectPath(page, `/projects/${projectKey}/bugs`);
+      await page.waitForLoadState("networkidle");
+      expect(seen.project).toHaveLength(1);
+      expect(seen.members).toHaveLength(1);
+    } finally {
+      releaseResolver();
+    }
   });
 
   for (const [label, ref] of [
@@ -216,7 +260,7 @@ test.describe("project prefetch on a hard load", () => {
 
       // key: the lookup is refused, so the user sees not-found rather than anyone's project.
       await page.goto(`/projects/${projectKey}/bugs`);
-      await expect(page.getByRole("alert")).toContainText("Page not found");
+      await expect(page.getByRole("alert").filter({ has: page.getByRole("heading", { name: "Page not found", exact: true }) })).toContainText("Page not found");
 
       // Nothing the speculative requests asked for ever came back as data.
       expect(statuses.every((s) => s >= 400)).toBe(true);

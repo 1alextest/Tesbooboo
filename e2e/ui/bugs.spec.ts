@@ -278,6 +278,60 @@ test.describe("bug evidence validation", () => {
     const bug = await (await api.get(`/api/bugs/${matches[0].id}`)).json();
     expect(bug.attachments, "the retry must still deliver every staged file").toHaveLength(10);
   });
+
+  test("a lost create acknowledgement never automatically creates a second bug and keeps an honest error/draft", async ({ page }) => {
+    const title = `E2E Lost Create Ack ${uniqueSuffix()}`;
+    const pattern = `**/api/projects/${projectId}/bugs`;
+    const created: string[] = [];
+    let attempts = 0;
+    let committed!: () => void;
+    let rejected!: (error: unknown) => void;
+    const didCommit = new Promise<void>((resolve, reject) => { committed = resolve; rejected = reject; });
+    let release!: () => void;
+    const mayDrop = new Promise<void>((resolve) => { release = resolve; });
+    let dropped!: () => void;
+    const didDrop = new Promise<void>((resolve) => { dropped = resolve; });
+    await page.route(pattern, async (route) => {
+      if (route.request().method() !== "POST") { await route.continue(); return; }
+      attempts += 1;
+      try {
+        const response = await route.fetch({ maxRetries: 0 }); // Real server creation, never a fake 201.
+        expect(response.ok(), await response.text()).toBeTruthy();
+        created.push((await response.json()).id);
+        if (attempts === 1) {
+          committed();
+          await mayDrop;
+          await route.abort("failed"); // Lose only the response, after the real commit.
+          dropped();
+        } else await route.fulfill({ response });
+      } catch (error) {
+        rejected(error);
+        throw error;
+      }
+    });
+    const matching = async () => ((await (await api.get(`/api/projects/${projectId}/bugs`)).json()) as Array<{ id: string; title: string }>).filter((bug) => bug.title === title);
+    try {
+      await openReportModal(page, projectId);
+      await page.getByPlaceholder("Brief summary of the bug…").fill(title);
+      await page.getByRole("button", { name: "Report Bug", exact: true }).last().click();
+      await didCommit;
+      expect(await matching()).toHaveLength(1);
+      await expect(page.getByRole("button", { name: "Creating…", exact: true })).toBeVisible();
+      release();
+      await didDrop;
+      await expect(page.getByRole("button", { name: "Creating…", exact: true })).toHaveCount(0);
+      expect(await matching(), `one save dispatched ${attempts} create requests`).toHaveLength(1);
+      expect(attempts).toBe(1);
+      await expect(page.getByTestId("create-bug-error")).toContainText(/outcome unconfirmed/i);
+      await expect(page.getByTestId("create-bug-error")).toContainText(/check|refresh/i);
+      await expect(page.getByPlaceholder("Brief summary of the bug…")).toHaveValue(title);
+      await expect(page.getByRole("button", { name: "Report Bug", exact: true }).last()).toBeEnabled();
+    } finally {
+      release();
+      await page.unroute(pattern);
+      for (const id of created) await api.delete(`/api/bugs/${id}`, { failOnStatusCode: false });
+    }
+  });
 });
 
 /*

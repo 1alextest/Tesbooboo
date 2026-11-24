@@ -37,6 +37,16 @@ export class ProjectWriteLockGuard implements CanActivate {
     if (!match) return true;
 
     const [, projectId, rest] = match;
+    // MCP uses POST for reads/discovery too. Its shared dispatcher enforces writability
+    // per existing tool scope after authorization, on both MCP routes (not by HTTP method).
+    if (rest === "/mcp" || rest === "/mcp/") return true;
+    // Consent revocation remains possible when billing locks ordinary project writes. The shared
+    // MCP owner checks writability before any grant/enable/expiry expansion.
+    if (rest === "/mcp-access" || rest === "/mcp-access/") return true;
+    // This exact POST only validates an in-memory candidate. Its controller owns project
+    // membership before the opt-in flag/body; entering billing enforcement here would notify
+    // and write billing history before that authorization. Other KB mutations stay guarded.
+    if (req.method === "POST" && /^\/knowledge-base\/requirements\/preview\/?$/i.test(rest ?? "")) return true;
     // Archiving the project is the documented way out of the lock — never block it.
     if (req.method === "DELETE" && (!rest || rest === "/")) return true;
 

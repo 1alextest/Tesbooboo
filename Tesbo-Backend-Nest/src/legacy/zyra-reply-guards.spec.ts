@@ -18,6 +18,7 @@ import { SuitesCacheService } from "../cache/suites-cache.service";
 import { TestcasesListCacheService } from "../cache/testcases-list-cache.service";
 import { ProjectOverviewCacheService } from "../cache/project-overview-cache.service";
 import type Redis from "ioredis";
+import { runInZyraLanguage } from "./zyra-language-context";
 
 process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -109,6 +110,31 @@ describe("Zyra reply guards", () => {
   describe("an answer turn that claims work", () => {
     const answer = (reply: string) => ({ reply, actionType: "answer", operations: [] as { type: string }[] });
     const nothingApplied = { testcases: [] as unknown[], activity: [] as { title?: string }[] };
+
+    it.each([
+      ["en", "To view saved test cases, open Test cases."],
+      ["en", "You can find saved test cases in the repository."],
+      ["ru", "Чтобы посмотреть сохранённые тест-кейсы, откройте раздел «Тест-кейсы»."],
+      ["ru", "Сохранённые тест-кейсы можно найти в репозитории."],
+      // Russian sessions also check English prose when a provider answers in the other language.
+      ["ru", "To view saved test cases, open Test cases."],
+      ["ru", "You can find saved test cases in the repository."]
+    ] as const)("%s: does not label an informational reference as an unsaved mutation: %s", (language, reply) => {
+      expect(runInZyraLanguage(language, () => internals(svc).reconcileZyraReply(answer(reply), nothingApplied))).toBe(reply);
+    });
+
+    it.each([
+      ["en", "Saved 3 test cases to the repository."],
+      ["en", "To view saved test cases, open Test cases; I also created 3 test cases."],
+      ["en", "To view saved test cases, open Test cases. The 3 test cases were created."],
+      ["ru", "Сохранены 3 тест-кейса в репозитории."],
+      ["ru", "Чтобы посмотреть сохранённые тест-кейсы, откройте раздел «Тест-кейсы»; я также создал 3 тест-кейса."],
+      ["ru", "Сохранённые тест-кейсы можно найти в репозитории. Созданы 3 тест-кейса."]
+    ] as const)("%s: keeps the warning on an actual completion claim, including mixed guidance: %s", (language, reply) => {
+      const out = runInZyraLanguage(language, () => internals(svc).reconcileZyraReply(answer(reply), nothingApplied));
+      expect(out.startsWith(language === "en" ? "⚠️ **Sorry! Nothing was saved.**" : "⚠️ **Извините! Ничего не сохранено.**")).toBe(true);
+      expect(out).toContain(reply);
+    });
 
     it("corrects a claim that test cases were created", () => {
       const out = internals(svc).reconcileZyraReply(

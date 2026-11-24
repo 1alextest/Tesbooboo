@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { column, exec, literal, scalar } from "../utils/psql";
 import { purgeProject } from "../utils/seed";
 import {
@@ -11,6 +13,10 @@ import {
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { env } from "../utils/env";
 import { parseSseEvents } from "../utils/sse";
+import { filesFormWith } from "../utils/uploads";
+import { issueMcpTestToken } from "../utils/mcp-access";
+import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
+import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapture, type OtlpSpan } from "../utils/langfuse-capture";
 
 /*
  * Zyra — the AI agent surface: agent state, connection test, settings, chat sessions and messages,
@@ -61,6 +67,272 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test.afterEach(() => {
     if (tenant) purge(tenant);
+  });
+
+  // T-455: native Zyra change-review history is a scoped read of existing
+  // persisted graph observations, not a second case/test-run repository.
+  test("graph change history is project scoped and unconfigured capture fails closed", async () => {
+    const projectId = tenant!.mainProjectId;
+    const url = `/api/projects/${projectId}/agents/zyra/changes`;
+    const good = await asQa.get(url);
+    expect(good.ok()).toBeTruthy();
+    const body = await good.json();
+    expect(Array.isArray(body.entries)).toBe(true);
+    expect(body.entries.every((entry: { reviewReceipt?: { evidence?: { coverageAssertion: string } } }) =>
+      !entry.reviewReceipt || entry.reviewReceipt.evidence?.coverageAssertion === "none")).toBe(true);
+
+    const badLimit = await asQa.get(url + "?limit=0");
+    expect(badLimit.status()).toBe(409);
+    const badCursor = await asQa.get(url + "?beforeId=0%20OR%20TRUE");
+    expect(badCursor.status()).toBe(409);
+    // A query parser can produce arrays/objects despite a controller's
+    // string annotation. Refuse them before bigint/number coercion or SQL.
+    for (const query of ["beforeId[]=1", "beforeId[value]=1", "limit[]=25", "limit[value]=25"]) {
+      const malformed = await asQa.get(url + "?" + query);
+      expect(malformed.status(), `structured query ${query}: ${await malformed.text()}`).toBe(409);
+    }
+    const largestCursor = await asQa.get(url + "?beforeId=9223372036854775807&limit=1");
+    expect(largestCursor.status()).toBe(200);
+
+    const cross = await asQa.get(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes`);
+    expect([403, 404]).toContain(cross.status());
+    const unauthenticated = await anon.get(url);
+    expect([401, 403, 404]).toContain(unauthenticated.status());
+
+    // No approved source binding for this disposable tenant. A capture must
+    // fail instead of accepting caller-supplied checkout paths or manifests.
+    const forged = await asQa.post(url + "/capture", {
+      data: { repositoryRoot: "/untrusted", executionAssertion: "passed" }
+    });
+    expect(forged.status()).toBe(400);
+    const denied = await asQa.post(url + "/capture", { data: {} });
+    expect(denied.status()).toBe(409);
+    const links = await asQa.get(url + "/999999999/runs");
+    expect([403, 404]).toContain(links.status());
+    const forgedStatus = await asQa.post(url + "/999999999/runs/" +
+      "00000000-0000-4000-8000-000000000003/link", {
+      data: { testcaseIds: ["00000000-0000-4000-8000-000000000004"], executionStatus: "Passed" }
+    });
+    expect(forgedStatus.status()).toBe(400);
+    const foreignHistory = await asGuest.get(url + "/999999999/runs");
+    expect([403, 404]).toContain(foreignHistory.status());
+    const after = await asQa.get(url);
+    expect((await after.json()).entries).toEqual(body.entries);
+  });
+
+  test("source binding setup is owner-only and cannot accept unapproved roots or repositories", async () => {
+    const projectId = tenant!.mainProjectId;
+    const endpoint = `/api/projects/${projectId}/agents/zyra/changes/source-binding`;
+    const before = await asOwner.get(endpoint);
+    expect(before.status(), await before.text()).toBe(200);
+    expect(await before.json()).toEqual({ configured: false, binding: null });
+
+    for (const client of [asManager, asQa, asGuest, anon]) {
+      const read = await client.get(endpoint);
+      expect([401, 403, 404]).toContain(read.status());
+      const denied = await client.post(endpoint, { data: {
+        repositoryId: "org/repo", checkoutKey: "trusted",
+        refName: "development", selectionPrefixes: ["src"], enabled: true
+      } });
+      expect([401, 403, 404]).toContain(denied.status());
+    }
+
+    for (const invalid of [
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["src"], enabled: true },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["src"], enabled: true, root: "/tmp/untrusted" },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "../main",
+        selectionPrefixes: ["src"], enabled: true },
+      { repositoryId: "org/repo", checkoutKey: "unknown", refName: "development",
+        selectionPrefixes: ["../secrets"], enabled: true }
+    ]) {
+      const denied = await asOwner.post(endpoint, { data: invalid });
+      expect(denied.status(), await denied.text()).toBe(400);
+    }
+    const after = await asOwner.get(endpoint);
+    expect(after.status()).toBe(200);
+    expect(await after.json()).toEqual({ configured: false, binding: null });
+    expect(Number(scalar(`SELECT COUNT(*)::int FROM project_source_bindings
+      WHERE project_id=${literal(projectId)};`))).toBe(0);
+  });
+
+  // Stateless M1 preview lives under the existing project gateway. Synthetic
+  // caller text must never publish a model, mint an ID or mutate QA outcomes.
+  function modelPreviewDraft() {
+    return { schemaVersion: "tesbo-fsm-draft/1", semantics: "SEQUENTIAL_FSM", initialStateId: "draft",
+      states: [{ id: "draft", label: "Draft" }, { id: "approved", label: "Approved" }],
+      transitions: [{ id: "approve", from: "draft", to: "approved", action: "Approve", expectedObservation: "Approval recorded" }] };
+  }
+
+  function previewQaState(projectId: string): string {
+    return scalar(`SELECT json_build_object(
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'executions', (SELECT COUNT(*) FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        JOIN cycles c ON c.id=ci.cycle_id WHERE c.project_id=${literal(projectId)}),
+      'bugs', (SELECT COUNT(*) FROM bugs WHERE project_id=${literal(projectId)}),
+      'graph', (SELECT COUNT(*) FROM graph_capture_history WHERE project_id=${literal(projectId)}),
+      'links', (SELECT COUNT(*) FROM graph_review_run_case_links WHERE project_id=${literal(projectId)})
+    )::text;`);
+  }
+
+  test("model draft preview availability is a scoped read and creates no native records", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const before = previewQaState(projectId);
+    const good = await asQa.get(endpoint); expect(good.ok()).toBe(true);
+    expect(await good.json()).toEqual({ schemaVersion: "tesbo-fsm-preview-availability/1", enabled: true,
+      semantics: "SEQUENTIAL_FSM", maxStates: 32, maxTransitions: 64 });
+    for (const client of [anon, asGuest]) expect([401, 403, 404]).toContain((await client.get(endpoint)).status());
+    expect([403, 404]).toContain((await asQa.get(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`)).status());
+    const created = await asOwner.post(`/api/projects/${projectId}/apikeys`, { data: { name: `E2E preview availability ${Date.now()}`, scopes: ["read"] } });
+    expect(created.ok()).toBe(true); const token = await created.json();
+    try {
+      const read = await anon.get(endpoint, { headers: { Authorization: `Bearer ${token.token}` } });
+      expect(read.ok()).toBe(true); expect((await read.json()).enabled).toBe(true);
+      const denied = await anon.post(endpoint, { headers: { Authorization: `Bearer ${token.token}` }, data: modelPreviewDraft() });
+      expect(denied.status()).toBe(403);
+    } finally { await asOwner.delete(`/api/projects/${projectId}/apikeys/${token.id}`, { failOnStatusCode: false }); }
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview validates structure without publishing or generating paths", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const before = previewQaState(projectId);
+    const first = await asQa.post(endpoint, { data: modelPreviewDraft() });
+    expect(first.status(), await first.text()).toBe(200);
+    const body = await first.json();
+    expect(body).toMatchObject({ status: "DRAFT_PREVIEW", validation: "STRUCTURALLY_VALID", approval: "NOT_APPROVED",
+      sourceAuthority: "UNVERIFIED", runtimeEvidence: "NONE", modelId: null, modelRevisionId: null });
+    expect(body.capabilities).toEqual({ persistence: false, publication: false, activation: false, pathGeneration: false, targetExecution: false });
+    expect(body).not.toHaveProperty("coverage"); expect(body).not.toHaveProperty("paths");
+    expect(body.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(body.states.every((state: { reachable: boolean }) => state.reachable)).toBe(true);
+    const reordered = modelPreviewDraft(); reordered.states.reverse();
+    const replay = await asOwner.post(endpoint, { data: reordered });
+    expect(replay.status()).toBe(200); expect(await replay.json()).toEqual(body);
+    const unreachable = modelPreviewDraft(); unreachable.states.push({ id: "isolated", label: "Isolated" });
+    const diagnostic = await asManager.post(endpoint, { data: unreachable });
+    expect(diagnostic.status()).toBe(200);
+    expect((await diagnostic.json()).diagnostics).toContainEqual({ code: "UNREACHABLE_STATE", elementId: "isolated" });
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview refuses malformed, executable and unsupported candidate data", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const before = previewQaState(projectId);
+    for (const data of [
+      {}, [], { ...modelPreviewDraft(), approved: true }, { ...modelPreviewDraft(), modelId: "forged" },
+      { ...modelPreviewDraft(), states: [] }, { ...modelPreviewDraft(), initialStateId: "missing" },
+      { ...modelPreviewDraft(), variables: [] },
+      { ...modelPreviewDraft(), states: [...modelPreviewDraft().states, modelPreviewDraft().states[0]] },
+      { ...modelPreviewDraft(), transitions: [{ ...modelPreviewDraft().transitions[0], to: "missing" }] },
+      { ...modelPreviewDraft(), transitions: [{ ...modelPreviewDraft().transitions[0], expectedObservation: " " }] },
+      { ...modelPreviewDraft(), transitions: [{ ...modelPreviewDraft().transitions[0], guard: "process.exit()" }] },
+      { ...modelPreviewDraft(), states: Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, label: "State" })) },
+      { ...modelPreviewDraft(), transitions: Array.from({ length: 65 }, (_, i) => ({ ...modelPreviewDraft().transitions[0], id: `t${i}` })) }
+    ]) {
+      const rejected = await asQa.post(endpoint, { data });
+      expect(rejected.status(), await rejected.text()).toBe(400);
+      expect((await rejected.json()).code).toBe("INVALID_MODEL");
+    }
+    for (const semantics of ["EFSM", "CONCURRENT", "TEMPORAL", "EVENTUAL"]) {
+      const rejected = await asQa.post(endpoint, { data: { ...modelPreviewDraft(), semantics } });
+      expect(rejected.status(), await rejected.text()).toBe(422);
+      expect((await rejected.json()).code).toBe("UNSUPPORTED_SEMANTICS");
+    }
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview retains project, token-scope and revoked-member boundaries", async () => {
+    const projectId = tenant!.mainProjectId, endpoint = `/api/projects/${projectId}/agents/zyra/changes/model-preview`;
+    const data = modelPreviewDraft(), before = previewQaState(projectId);
+    for (const client of [anon, asGuest]) {
+      const denied = await client.post(endpoint, { data }); expect([401, 403, 404]).toContain(denied.status());
+    }
+    const foreign = await asQa.post(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`, { data });
+    expect([403, 404]).toContain(foreign.status());
+    const issued: Array<{ id: string; token: string }> = [];
+    try {
+      for (const scopes of [["read"], ["read", "write"]]) {
+        const create = await asOwner.post(`/api/projects/${projectId}/apikeys`, { data: { name: `E2E preview ${Date.now()}`, scopes } });
+        expect(create.ok()).toBe(true); const key = await create.json(); issued.push(key);
+        const response = await anon.post(endpoint, { data, headers: { Authorization: `Bearer ${key.token}` } });
+        expect(response.status()).toBe(scopes.includes("write") ? 200 : 403);
+        if (response.ok()) expect((await response.json()).approval).toBe("NOT_APPROVED");
+        const cross = await anon.post(`/api/projects/${tenant!.secondProjectId}/agents/zyra/changes/model-preview`, {
+          data, headers: { Authorization: `Bearer ${key.token}` }
+        });
+        expect([403, 404]).toContain(cross.status());
+      }
+      const removed = await asOwner.delete(`/api/projects/${projectId}/members/${tenant!.qa.userId}`);
+      expect(removed.ok()).toBe(true);
+      const denied = await asQa.post(endpoint, { data }); expect([403, 404]).toContain(denied.status());
+    } finally {
+      try {
+        const restored = await asOwner.post(`/api/projects/${projectId}/members`, { data: { userId: tenant!.qa.userId, role: "qa_engineer" }, failOnStatusCode: false });
+        expect(restored.ok()).toBe(true);
+      } finally {
+        for (const key of issued) await asOwner.delete(`/api/projects/${projectId}/apikeys/${key.id}`, { failOnStatusCode: false });
+      }
+    }
+    expect(previewQaState(projectId)).toBe(before);
+  });
+
+  test("model draft preview through MCP preserves native output, scopes and records", async () => {
+    const projectId = tenant!.mainProjectId;
+    const keys: Array<{ id: string; token: string }> = [];
+    const before = previewQaState(projectId);
+    async function rpc(token: string, method: string, params?: Record<string, unknown>, endpoint = "/api/mcp") {
+      const response = await anon.post(endpoint, { headers: { Authorization: `Bearer ${token}` },
+        data: { jsonrpc: "2.0", id: 1, method, params } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    }
+    try {
+      for (const scopes of [["read"], ["read", "write"]]) {
+        const created = await issueMcpTestToken(asOwner, `/api/projects/${projectId}/apikeys`, {
+          data: { name: `E2E native MCP preview ${Date.now()}`, scopes } });
+        expect(created.ok()).toBe(true); keys.push(await created.json());
+      }
+      const [read, write] = keys;
+      const readCatalog = await rpc(read.token, "tools/list");
+      expect(readCatalog.result.tools).toHaveLength(26);
+      expect(readCatalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("preview_behavior_model_draft");
+      // Credential-visible write tools; retired native publishers (including the suite creators)
+      // are hidden and refuse, so the catalog stays at the non-publisher count.
+      const listed = await rpc(write.token, "tools/list");
+      expect(listed.result.tools).toHaveLength(52);
+      expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_suite");
+      expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("update_suite");
+      expect(listed.result.tools.find((tool: { name: string }) => tool.name === "preview_behavior_model_draft").inputSchema.additionalProperties).toBe(false);
+      const params = { name: "preview_behavior_model_draft", arguments: { model: modelPreviewDraft() } };
+      expect((await rpc(read.token, "tools/call", params)).error.code).toBe(-32002);
+      const rest = await asQa.post(`/api/projects/${projectId}/agents/zyra/changes/model-preview`, { data: modelPreviewDraft() });
+      expect(rest.ok()).toBe(true); const expected = await rest.json();
+      for (const endpoint of ["/api/mcp", `/api/projects/${projectId}/mcp`]) {
+        const result = await rpc(write.token, "tools/call", params, endpoint);
+        expect(result.error).toBeUndefined();
+        expect(JSON.parse(result.result.content[0].text)).toEqual(expected);
+      }
+      for (const args of [{ model: modelPreviewDraft(), projectId: "forged" }, { model: { ...modelPreviewDraft(), approved: true } }]) {
+        const invalid = await rpc(write.token, "tools/call", { ...params, arguments: args });
+        expect(invalid.error.data).toEqual({ code: "INVALID_MODEL", httpStatus: 400 });
+      }
+      const unsupported = await rpc(write.token, "tools/call", { ...params,
+        arguments: { model: { ...modelPreviewDraft(), semantics: "CONCURRENT" } } });
+      expect(unsupported.error.data).toEqual({ code: "UNSUPPORTED_SEMANTICS", httpStatus: 422 });
+      const foreign = await rpc(write.token, "tools/call", params, `/api/projects/${tenant!.secondProjectId}/mcp`);
+      expect(foreign.error.code).toBe(-32001);
+      const revoked = await asOwner.delete(`/api/projects/${projectId}/apikeys/${write.id}`);
+      expect(revoked.ok()).toBe(true);
+      const denied = await anon.post("/api/mcp", { headers: { Authorization: `Bearer ${write.token}` },
+        data: { jsonrpc: "2.0", id: 1, method: "tools/call", params } });
+      expect([401, 403]).toContain(denied.status());
+      expect(previewQaState(projectId)).toBe(before);
+    } finally {
+      for (const key of keys) await asOwner.delete(`/api/projects/${projectId}/apikeys/${key.id}`, { failOnStatusCode: false });
+    }
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -146,10 +418,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
      * measures as zero drafts and every index is out of range.
      *
      * jira_issue_keys defaults to '[]' (its own column default) whenever fields.jiraIssueKey is
-     * omitted — every existing caller keeps behaving exactly as before. Passed, it's what
-     * processZyraSaveEntriesSequential/Batched's `existingLinked` lookup matches an already-saved
-     * test case's own jira_issue_key against, to exercise the "regenerating an already-linked case"
-     * path (severity/component "only fill if blank") rather than a brand-new create.
+     * omitted. Passing a key exercises source linkage without allowing a reviewed create to
+     * silently become an update to an existing linked case at Save time.
      */
     exec(
       "INSERT INTO ai_generation_requests (project_id, requested_by, provider, model, user_story, " +
@@ -824,7 +1094,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(res.status(), `reading a task — ${await res.text()}`).toBe(200);
     const task = await res.json();
     expect(task.id).toBe(taskId);
-    expect(task.taskStatus).toBe("awaiting_review");
+    expect(task.taskStatus).toBe("in_review");
     expect(JSON.stringify(task)).toContain("E2E draft 1");
     expect(task.generatedCount).toBe(3);
   });
@@ -844,7 +1114,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(stored.map((d: any) => d.title)).toEqual(["E2E draft 1", "E2E draft 3"]);
 
     const task = await (await asOwner.get(url(`/agents/zyra/tasks/${taskId}`))).json();
-    expect(task.generatedCount).toBe(2);
+    expect(task.generatedCount).toBe(3);
+    expect(task.drafts).toHaveLength(2);
+    expect((await res.json()).proposalRevision).toBe(task.proposalRevision);
   });
 
   test("ZYR-A-19 a draft index outside the list is refused rather than corrupting the payload", { tag: '@tesbo.testId("TES-TC-613")' }, async () => {
@@ -868,7 +1140,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/close`), { data: {}, failOnStatusCode: false });
     expect(res.status(), `closing a task — ${await res.text()}`).toBe(201);
     const status = scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
-    expect(status, "closing the task did not move it out of awaiting_review").not.toBe("awaiting_review");
+    expect(status, "closing the task did not resolve its review").toBe("done");
 
     const again = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/close`), { data: {}, failOnStatusCode: false });
     expect(again.status()).toBeLessThan(500);
@@ -876,8 +1148,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-21 feedback on a task is recorded against it", { tag: '@tesbo.testId("TES-TC-615")' }, async () => {
     // Explicitly 'in_review': zyraFeedback now guards on the task's current status (ZYR-A-34), and
-    // the suite's default seed status ("awaiting_review") is not one of the two statuses that
-    // guard accepts. Seeding the real status keeps this test on the "task legitimately can take
+    // the real review status keeps this test on the "task legitimately can take
     // feedback, but no AI key is configured" path its comment describes, rather than accidentally
     // exercising the new status guard instead.
     const taskId = seedTask({ status: "in_review" });
@@ -903,7 +1174,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         ["draft", () => asOwner.delete(url(`/agents/zyra/tasks/${bad}/drafts/0`), { failOnStatusCode: false })],
         [
           "save",
-          () => asOwner.post(url(`/agents/zyra/tasks/${bad}/save`), { data: { testcaseIds: [] }, failOnStatusCode: false }),
+          () => asOwner.post(url(`/agents/zyra/tasks/${bad}/save`), { data: { expectedProposalRevision: "a".repeat(64), selectedDraftIndexes: [] }, failOnStatusCode: false }),
         ],
       ] as Array<[string, () => Promise<APIResponse>]>) {
         const res = await attempt();
@@ -940,35 +1211,105 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(await other.text()).not.toContain(first);
   });
 
-  test("ZYR-A-24 saving a task's drafts records the save against the task", { tag: '@tesbo.testId("TES-TC-618")' }, async () => {
-    const taskId = seedTask();
-    // An empty selection is the boundary: nothing to save, so nothing should be recorded and
-    // nothing should break.
-    const empty = await asOwner.post(url(`/ai/generation-history/${taskId}/save`), {
-      data: { testcaseIds: [] },
-      failOnStatusCode: false,
-    });
-    expect(empty.status(), `an empty save answered ${empty.status()}: ${await empty.text()}`).toBeLessThan(500);
+  test("ZYR-A-24 the legacy Save route requires a real reviewed selection and cannot fabricate saved counters", { tag: '@tesbo.testId("TES-TC-618")' }, async () => {
+    const taskId = seedTask({ drafts: 2 });
+    const saveUrl = url(`/ai/generation-history/${taskId}/save`);
+    const before = scalar(`SELECT row_to_json(r)::text FROM ai_generation_requests r WHERE id=${literal(taskId)};`);
+    const fabricated = await asOwner.post(saveUrl, { data: { testcaseIds: ["11111111-1111-4111-8111-111111111111"] } });
+    expect(fabricated.status(), await fabricated.text()).toBe(400);
+    expect(scalar(`SELECT row_to_json(r)::text FROM ai_generation_requests r WHERE id=${literal(taskId)};`)).toBe(before);
+    const empty = await saveReviewedZyraTask(asOwner, saveUrl, { data: { selectedDraftIndexes: [] } });
+    expect(empty.status(), await empty.text()).toBe(201);
+    expect((await empty.json()).savedCount).toBe(0);
+    expect(scalar(`SELECT saved_count FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toBe("0");
+    const selected = await saveReviewedZyraTask(asOwner, saveUrl, { data: { selectedDraftIndexes: [0] } });
+    expect(selected.status(), await selected.text()).toBe(201);
+    const applied = await selected.json();
+    expect(applied.savedCount).toBe(1);
+    expect(applied.testcases[0]).toMatchObject({ title: "E2E draft 1", status: "Draft" });
+    expect(applied.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId, selectedDraftIndexes: [0] });
+    expect(scalar(`SELECT save_events::text FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toContain(applied.testcases[0].id);
+    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toBe("in_review");
+  });
 
-    const created = await asOwner.post(url("/testcases"), {
-      data: { title: `E2E saved from Zyra ${Date.now()}` },
-      failOnStatusCode: false,
-    });
-    expect(created.status()).toBe(201);
-    const testcaseId = (await created.json()).id;
-
+  test("ZYR-P07 external no-model staging stays unpublished until an exact human selection, with retry-safe receipts", async () => {
+    const projectId = tenant!.mainProjectId;
+    const stageUrl = url("/agents/zyra/tasks/proposals");
+    const requestKey = randomUUID();
+    const operations = [
+      { opType: "create", draft: { title: `Unselected external draft ${requestKey}` } },
+      { opType: "create", draft: { title: `Selected external draft ${requestKey}`, steps: [{ action: "Inspect", expectedResult: "Exact published content" }] } },
+    ];
+    const before = scalar(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM testcases t WHERE project_id=${literal(projectId)};`);
+    const issued = await asOwner.post(url("/apikeys"), { data: { name: `P07 producer ${requestKey}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json();
+    const headers = { Authorization: `Bearer ${token.token}` };
     try {
-      const res = await asOwner.post(url(`/ai/generation-history/${taskId}/save`), {
-        data: { testcaseIds: [testcaseId] },
-        failOnStatusCode: false,
-      });
-      expect(res.status(), `saving — ${await res.text()}`).toBeLessThan(500);
-      // The save event is what the UI reads to show "3 of 5 saved", so it has to be persisted.
-      const events = scalar(`SELECT coalesce(save_events::text, '') FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
-      expect(events).toContain(testcaseId);
+      const response = await anon.post(stageUrl, { headers, data: { requestKey, operations } });
+      expect(response.status(), await response.text()).toBe(201);
+      const staged = await response.json();
+      expect(staged).toMatchObject({ taskStatus: "in_review", proposalProvenance: { kind: "api_token", tokenId: token.id, issuerId: tenant!.owner.userId } });
+      expect(staged.proposalProvenance.actorId).not.toBe(tenant!.owner.userId);
+      expect(staged.proposalSnapshot.operations).toHaveLength(2);
+      expect(staged).not.toHaveProperty("testcaseId");
+      const repeat = await anon.post(stageUrl, { headers, data: { requestKey, operations } });
+      expect(repeat.status(), await repeat.text()).toBe(201);
+      expect((await repeat.json()).id).toBe(staged.id);
+      const changed = await anon.post(stageUrl, { headers, data: { requestKey, operations: [operations[0]] } });
+      expect(changed.status(), await changed.text()).toBe(409);
+      const saveUrl = url(`/agents/zyra/tasks/${staged.id}/save`);
+      const reviewed = await readZyraProposal(asOwner, saveUrl);
+      const data = { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [1] };
+      const machine = await anon.post(saveUrl, { headers, data });
+      expect(machine.status(), await machine.text()).toBe(403);
+      expect((await machine.json()).code).toBe("HUMAN_PUBLICATION_REQUIRED");
+      expect(scalar(`SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM testcases t WHERE project_id=${literal(projectId)};`)).toBe(before);
+      const applied = await asOwner.post(saveUrl, { data });
+      expect(applied.status(), await applied.text()).toBe(201);
+      const saved = await applied.json();
+      expect(saved).toMatchObject({ savedCount: 1, remaining: 1 });
+      expect(saved.testcases[0]).toMatchObject({ title: operations[1].draft.title, status: "Draft", createdBy: tenant!.owner.userId });
+      expect(saved.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId, provenance: { kind: "api_token", tokenId: token.id }, reviewedSnapshot: reviewed.proposalSnapshot });
+      const retry = await asOwner.post(saveUrl, { data });
+      expect(retry.status(), await retry.text()).toBe(201);
+      expect(await retry.json()).toMatchObject({ replayed: true, saveReceipt: { id: saved.saveReceipt.id } });
+      const pending = await readZyraProposal(asOwner, saveUrl);
+      expect(pending).toMatchObject({ taskStatus: "in_review", savedCount: 1, generatedCount: 2 });
+      expect(pending.proposalSnapshot.operations).toHaveLength(1);
+      expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)} AND title=${literal(operations[0].draft.title)};`)).toBe("0");
+      expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id=${literal(staged.id)} AND action='testcase_proposals_applied';`)).toBe("1");
     } finally {
-      await asOwner.delete(url(`/testcases/${testcaseId}`), { failOnStatusCode: false });
+      await asOwner.delete(url(`/apikeys/${token.id}`));
     }
+  });
+
+  test("ZYR-P07 changed draft returns a coherent review; the prior revision cannot publish or create an orphan suite", async () => {
+    const marker = randomUUID();
+    const response = await asOwner.post(url("/agents/zyra/tasks/proposals"), {
+      data: { requestKey: marker, operations: [{ opType: "create", draft: { title: `Original ${marker}`, steps: [{ action: "Retained action", expectedResult: "Retained expectation" }] } }] },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    const staged = await response.json(), saveUrl = url(`/agents/zyra/tasks/${staged.id}/save`);
+    const reviewed = await readZyraProposal(asOwner, saveUrl);
+    const edit = await asOwner.patch(url(`/agents/zyra/tasks/${staged.id}/drafts/0`), { data: { title: `Revised ${marker}` } });
+    expect(edit.status(), await edit.text()).toBe(200);
+    const edited = await edit.json();
+    expect(edited.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+    expect(edited.proposalRevision).not.toBe(reviewed.proposalRevision);
+    expect(edited.proposalSnapshot.operations[0].draft.title).toBe(`Revised ${marker}`);
+    expect(JSON.stringify(edited.proposalSnapshot.operations[0].draft.steps)).toContain("Retained action");
+    const suiteName = `Exact reviewed suite ${marker}`;
+    const stale = await asOwner.post(saveUrl, { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0], suiteName } });
+    expect(stale.status(), await stale.text()).toBe(409);
+    expect(scalar(`SELECT COUNT(*) FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)};`)).toBe("0");
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title IN (${literal(`Original ${marker}`)},${literal(`Revised ${marker}`)});`)).toBe("0");
+    const current = await asOwner.post(saveUrl, { data: { expectedProposalRevision: edited.proposalRevision, selectedDraftIndexes: [0], suiteName } });
+    expect(current.status(), await current.text()).toBe(201);
+    const applied = await current.json();
+    expect(applied.testcases[0]).toMatchObject({ title: `Revised ${marker}`, status: "Draft" });
+    expect(applied.saveReceipt.reviewedSnapshot).toEqual(edited.proposalSnapshot);
+    expect(scalar(`SELECT COUNT(*) FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)};`)).toBe("1");
   });
 
   // ─── MCP ──────────────────────────────────────────────────────────────────
@@ -1335,10 +1676,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     async () => {
       // Exercises POST .../tasks/:id/save (zyraSave/zyraSaveAttempt) and POST .../tasks/:id/close
       // (zyraCloseTask) for real — the actual product actions behind the Save and Close buttons —
-      // rather than seeding task_status = 'done' directly. Task-board batches resolve to 'done' on
-      // ANY save (see zyraSaveAttempt's own comment), partial or not, unlike a chat-staged batch.
+      // rather than seeding task_status = 'done' directly. A partial batch remains reviewable;
+      // an explicit human Close resolves the unselected remainder before the completed-task rate.
       const partialTaskId = seedTask({ drafts: 3, status: "in_review" });
-      const saveRes = await asOwner.post(url(`/agents/zyra/tasks/${partialTaskId}/save`), {
+      const saveRes = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${partialTaskId}/save`), {
         data: { selectedDraftIndexes: [0, 1] },
         failOnStatusCode: false,
       });
@@ -1350,8 +1691,11 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       try {
         expect(
           scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(partialTaskId)};`),
-          "a task-board batch must resolve to 'done' even on a partial save",
-        ).toBe("done");
+          "a partially selected task must retain its reviewable remainder",
+        ).toBe("in_review");
+        expect(scalar(`SELECT generated_count FROM ai_generation_requests WHERE id = ${literal(partialTaskId)};`)).toBe("3");
+        const closePartial = await asOwner.post(url(`/agents/zyra/tasks/${partialTaskId}/close`), { data: {} });
+        expect(closePartial.status(), await closePartial.text()).toBe(201);
 
         const closedTaskId = seedTask({ drafts: 2, status: "in_review" });
         const closeRes = await asOwner.post(url(`/agents/zyra/tasks/${closedTaskId}/close`), {
@@ -1625,7 +1969,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
      * the time this runs. It now refuses that status outright.
      */
     const taskId = seedTask({ status: "in_progress" });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -2080,7 +2424,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
   });
 
-  test("ZYR-A-51 saving a chat-staged create draft writes a real test case into its own suite, tagged and audited as zyra_chat", async () => {
+  test("ZYR-A-51 saving a chat-staged create preserves its suite and producer provenance in human publication evidence", async () => {
     const suite = await asOwner.post(url("/suites"), { data: { name: `E2E zyra chat suite ${Date.now()}` }, failOnStatusCode: false });
     expect(suite.status()).toBe(201);
     const suiteId = (await suite.json()).id;
@@ -2089,7 +2433,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       entries: [{ opType: "create", draft: { suiteId, title: draftTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P1", type: "Functional", status: "Draft" }, reason: "" }],
     });
 
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -2103,7 +2447,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const auditSource = scalar(
       `SELECT diff->>'source' FROM audit_logs WHERE action = 'zyra_created' AND entity_id = ${literal(testcaseId)} ORDER BY created_at DESC LIMIT 1;`,
     );
-    expect(auditSource, "a chat-saved case must be audited with source zyra_chat, same as chat's own direct writes").toBe("zyra_chat");
+    expect(auditSource, "the native publication owner records the human decision").toBe("testcase_proposal_review");
+    expect(body.saveReceipt).toMatchObject({ principalKind: "human_session", reviewerId: tenant!.owner.userId, provenance: { provider: "zyra_chat" } });
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
   });
 
@@ -2114,7 +2459,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       const { taskId } = seedChatReviewTask({
         entries: [{ opType: "update", testcaseId, externalId: "E2E-1", fields: { priority: "P0", title: "Updated via chat review" }, reason: "" }],
       });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving a chat-staged update — ${await res.text()}`).toBe(201);
       expect(scalar(`SELECT priority FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("P0");
       expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Updated via chat review");
@@ -2168,7 +2513,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       ],
     });
 
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -2206,7 +2551,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
           { opType: "update", testcaseId, externalId: "E2E-1", fields: { stepsJson: JSON.stringify(steps) }, reason: "" },
         ],
       });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), {
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
         data: { selectedDraftIndexes: [0] },
         failOnStatusCode: false,
       });
@@ -2229,7 +2574,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       const { taskId } = seedChatReviewTask({
         entries: [{ opType: "archive", testcaseId, externalId: "E2E-1", fields: { status: "Archived" }, reason: "" }],
       });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving a chat-staged archive — ${await res.text()}`).toBe(201);
       expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Archived");
     } finally {
@@ -2249,21 +2594,21 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         ],
       });
 
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving one of two staged drafts — ${await res.text()}`).toBe(201);
       const body = await res.json();
       expect(body.savedCount).toBe(1);
       expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(createTitle)};`)).toBe("1");
       expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(otherId)};`), "the unselected archive must not have run").not.toBe("Archived");
 
-      // The batch stays open — this is what distinguishes a chat-staged batch from a Task-board one.
+      // Every partially selected producer's batch stays open until its remainder is resolved.
       expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
       const remaining = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
       expect(remaining).toHaveLength(1);
       expect(remaining[0].opType).toBe("archive");
 
       // And the remaining draft is still fully actionable.
-      const secondSave = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const secondSave = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(secondSave.status(), `saving the remaining draft — ${await secondSave.text()}`).toBe(201);
       expect(scalar(`SELECT status FROM testcases WHERE id = ${literal(otherId)};`)).toBe("Archived");
       expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
@@ -2274,7 +2619,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-55 an explicitly empty selection saves nothing and leaves the batch in review", async () => {
     const { taskId } = seedChatReviewTask();
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [] }, failOnStatusCode: false });
     expect(res.status(), `an explicit empty selection — ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.savedCount, "an explicitly empty selection must not fall back to saving everything").toBe(0);
@@ -2282,16 +2627,21 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
   });
 
-  test("ZYR-A-56 omitting the selection entirely saves the whole batch, for back-compat", async () => {
+  test("ZYR-A-56 omitting the selection is refused without effects; an explicit reviewed selection applies the batch", async () => {
     const { taskId } = seedChatReviewTask({
       entries: [
         { opType: "create", draft: { suiteId: null, title: `E2E omit-selection A ${Date.now()}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
         { opType: "create", draft: { suiteId: null, title: `E2E omit-selection B ${Date.now()}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
       ],
     });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
-    expect(res.status(), `an omitted selection — ${await res.text()}`).toBe(201);
-    expect((await res.json()).savedCount).toBe(2);
+    const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}/save`));
+    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false });
+    expect(res.status(), `an omitted selection — ${await res.text()}`).toBe(400);
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
+    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
+    const selected = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0, 1] } });
+    expect(selected.status(), await selected.text()).toBe(201);
+    expect((await selected.json()).savedCount).toBe(2);
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
   });
 
@@ -2309,7 +2659,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       ],
     });
 
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0, 1] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0, 1] }, failOnStatusCode: false });
     expect(res.status(), `saving alongside a deleted target — ${await res.text()}`).toBe(409);
     const body = await res.json();
     expect(body.staleDraftIndexes).toEqual([1]);
@@ -2326,16 +2676,18 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       entries: [{ opType: "create", draft: { suiteId: null, title: createTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" }],
     });
 
+    const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}/save`));
+    const data = { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0] };
     const [a, b] = await Promise.all([
-      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false }),
-      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false }),
+      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data, failOnStatusCode: false }),
+      asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data, failOnStatusCode: false }),
     ]);
-    expect(a.status(), `first concurrent save — ${await a.text()}`).toBeLessThan(500);
-    expect(b.status(), `second concurrent save — ${await b.text()}`).toBeLessThan(500);
-    // One request wins the row lock and saves; the other, once it acquires the lock, sees a batch
-    // that has already moved on and is refused rather than saving a second time.
-    const winners = [a, b].filter((r) => r.status() === 201);
-    expect(winners.length, "exactly one of two concurrent saves should succeed").toBe(1);
+    expect(a.status(), `first concurrent save — ${await a.text()}`).toBe(201);
+    expect(b.status(), `second concurrent save — ${await b.text()}`).toBe(201);
+    const [first, repeated] = await Promise.all([a.json(), b.json()]);
+    expect(first.saveReceipt.id).toBe(repeated.saveReceipt.id);
+    expect([first.replayed, repeated.replayed].sort()).toEqual([false, true]);
+    expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id=${literal(taskId)} AND action='testcase_proposals_applied';`)).toBe("1");
     expect(
       scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(createTitle)};`),
       "a race between two saves created the same test case twice",
@@ -2347,7 +2699,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const off = await asOwner.patch(url("/agents/zyra/settings"), { data: { capabilities: { testcaseStorage: false } }, failOnStatusCode: false });
     expect(off.status()).toBeLessThan(300);
     try {
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving with storage disabled — ${await res.text()}`).toBe(403);
       expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
     } finally {
@@ -2407,14 +2759,14 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
    * "[Zyra] Severity and Component Are Missing in Generated Test Cases" — Zyra never asked the
    * model for these two fields, so every generated test case saved with both null regardless of
    * what the task-board draft carried. ZYR-A-71/72 cover the plain persistence path (a draft that
-   * already has the fields, and one that doesn't); ZYR-A-73/74 cover the "regenerating an
-   * already-linked test case" path, where an automatic redirect must never silently overwrite a
-   * human-set value — see processZyraSaveEntriesSequential/Batched's "only fill if blank" comment.
+   * already has the fields, and one that doesn't). ZYR-A-73/74 prove that a reviewed create remains
+   * a create even when its source ticket already has linked cases; only an explicit update may
+   * change those existing cases.
    */
   test("ZYR-A-71 a task-board draft's severity and component are persisted on save", async () => {
     const draftTitle = `E2E severity component ${Date.now()}`;
     const taskId = seedTask({ drafts: 1, draftOverrides: [{ title: draftTitle, severity: "High", component: "Auth" }] });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
     expect(res.status(), `saving the draft — ${await res.text()}`).toBe(201);
     expect(scalar(`SELECT severity FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("High");
     expect(scalar(`SELECT component FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("Auth");
@@ -2423,13 +2775,13 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-72 a task-board draft with no severity or component still saves — both stay null, not a failure", async () => {
     const draftTitle = `E2E no severity component ${Date.now()}`;
     const taskId = seedTask({ drafts: 1, draftOverrides: [{ title: draftTitle }] });
-    const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
     expect(res.status(), `saving the draft — ${await res.text()}`).toBe(201);
     expect(scalar(`SELECT severity FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("");
     expect(scalar(`SELECT component FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(draftTitle)};`)).toBe("");
   });
 
-  test("ZYR-A-73 regenerating an already-linked test case never overwrites its already-set severity/component with a fresh draft guess", async () => {
+  test("ZYR-A-73 a create sharing a source ticket preserves the original case and its human-set severity/component", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const created = await asOwner.post(url("/testcases"), {
       data: { title: "E2E already-linked case", priority: "P2", jiraIssueKey, severity: "Critical", component: "Payments" },
@@ -2440,11 +2792,13 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     try {
       const draftTitle = `E2E regenerated content ${Date.now()}`;
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ title: draftTitle, severity: "Low", component: "Billing" }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
-      // Content is genuinely regenerated (this is a real redirect-to-update, not a no-op)...
-      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe(draftTitle);
-      // ...but severity/component were already set by a human and must survive untouched.
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0]).toMatchObject({ title: draftTitle, severity: "Low", component: "Billing" });
+      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("E2E already-linked case");
+      // The original case's complete human-authored content remains unchanged.
       expect(scalar(`SELECT severity FROM testcases WHERE id = ${literal(testcaseId)};`), "an already-set severity must never be overwritten by a regenerated draft").toBe("Critical");
       expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(testcaseId)};`), "an already-set component must never be overwritten by a regenerated draft").toBe("Payments");
     } finally {
@@ -2452,7 +2806,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
   });
 
-  test("ZYR-A-74 regenerating an already-linked test case with no severity/component yet fills them in from the fresh draft", async () => {
+  test("ZYR-A-74 a reviewed create carries its own severity/component without filling unrelated linked case fields", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const created = await asOwner.post(url("/testcases"), {
       data: { title: "E2E blank severity component case", priority: "P2", jiraIssueKey },
@@ -2462,26 +2816,21 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const testcaseId = (await created.json()).id;
     try {
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ severity: "Medium", component: "Search" }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
-      expect(scalar(`SELECT severity FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Medium");
-      expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("Search");
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0]).toMatchObject({ severity: "Medium", component: "Search" });
+      expect(scalar(`SELECT severity FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("");
+      expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("");
     } finally {
       await asOwner.delete(url(`/testcases/${testcaseId}`), { failOnStatusCode: false });
     }
   });
 
-  /*
-   * Zyra regeneration silently wiped an already-linked case's existing citations. draft.sourceRefs
-   * was always written as a real (possibly empty) array, so updateTestCaseWithClient's
-   * `COALESCE($28::jsonb, source_refs)` always took the new value and never fell back to what the
-   * row already had — an ungrounded re-run (no citations resolved this turn) erased them outright.
-   * Same "only fill if blank" protection severity/component get in ZYR-A-73 above, now extended to
-   * source_refs. Invisible before the repository table's Context column existed (nothing rendered
-   * source_refs after creation); ZYR-A-89/90 pin both directions now that it's a real user-facing
-   * regression.
-   */
-  test("ZYR-A-89 regenerating an already-linked test case with no new citations never wipes its existing ones", async () => {
+  /* A create never retargets an existing ticket-linked case at Save. The reviewed new case's
+   * citations are applied exactly; the original case's citations remain its own reviewed history. */
+  test("ZYR-A-89 a reviewed create with no citations never wipes an existing linked case citations", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const existingCitation = { type: "testcase", id: `E2E-CITED-${Date.now()}`, title: "E2E previously cited case" };
     const created = await asOwner.post(url("/testcases"), {
@@ -2495,11 +2844,12 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       // draftOverrides omits sourceRefs entirely — the same shape a task-board draft (no chat
       // pipeline, no citations ever attached) always has.
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ title: draftTitle }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
-      // Content is genuinely regenerated (this is a real redirect-to-update, not a no-op)...
-      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe(draftTitle);
-      // ...but the citation this case already had must survive untouched.
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0].title).toBe(draftTitle);
+      expect(scalar(`SELECT title FROM testcases WHERE id = ${literal(testcaseId)};`)).toBe("E2E already-cited case");
       const after = await (await asOwner.get(url(`/testcases/${testcaseId}`))).json();
       expect(after.sourceRefs, "an ungrounded regeneration must never wipe citations the case already had").toEqual([existingCitation]);
     } finally {
@@ -2507,7 +2857,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     }
   });
 
-  test("ZYR-A-90 regenerating an already-linked test case with freshly resolved citations replaces the stale ones", async () => {
+  test("ZYR-A-90 a reviewed create uses its new citations while the source-linked original stays unchanged", async () => {
     const jiraIssueKey = `E2E-ZYRA-${Date.now()}`;
     const staleCitation = { type: "testcase", id: `E2E-STALE-${Date.now()}`, title: "E2E stale citation" };
     const created = await asOwner.post(url("/testcases"), {
@@ -2519,10 +2869,13 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     try {
       const freshCitation = { type: "bug", id: `E2E-FRESH-${Date.now()}`, title: "E2E fresh citation" };
       const taskId = seedTask({ drafts: 1, jiraIssueKey, draftOverrides: [{ sourceRefs: [freshCitation] }] });
-      const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+      const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
       expect(res.status(), `saving the regenerated draft — ${await res.text()}`).toBe(201);
+      const applied = await res.json();
+      expect(applied.testcases[0].id).not.toBe(testcaseId);
+      expect(applied.testcases[0].sourceRefs).toEqual([freshCitation]);
       const after = await (await asOwner.get(url(`/testcases/${testcaseId}`))).json();
-      expect(after.sourceRefs, "a regeneration that actually resolved citations must overwrite the stale ones, not just add to them").toEqual([freshCitation]);
+      expect(after.sourceRefs, "a reviewed create must never redirect into a different linked case").toEqual([staleCitation]);
     } finally {
       await asOwner.delete(url(`/testcases/${testcaseId}`), { failOnStatusCode: false });
     }
@@ -2616,7 +2969,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
    */
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E citations fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E citations fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -2886,9 +3239,12 @@ test.describe("zyra chat — citations (fake provider)", () => {
 
     await createFolderDoc("General note", generalMarker, "general");
     const approvedMemoryId = await createFolderDoc("Approved memory", approvedMemoryMarker, "ai_memory");
+    const memoryBeforeReview = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${approvedMemoryId}`);
+    expect(memoryBeforeReview.ok()).toBeTruthy();
+    const memoryRevision = (await memoryBeforeReview.json()).editRevision;
     const approveRes = await asOwner.patch(
       `/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${approvedMemoryId}/approve-ai-memory`,
-      { failOnStatusCode: false },
+      { data: { expectedRevision: memoryRevision }, failOnStatusCode: false },
     );
     expect(approveRes.status(), `approving the memory doc — ${await approveRes.text()}`).toBe(200);
     // Left in the default "draft" status deliberately — never approved (and never rejected either,
@@ -3066,9 +3422,9 @@ test.describe("zyra chat — citations (fake provider)", () => {
   // couldn't stop existing without a hard delete, and a hard-deleted suite would make the save's INSERT
   // fail loudly on the FK. Now the row still exists (just filtered out of every list), so the FK is
   // satisfied and the old code would have silently written a suite_id that looks deleted everywhere
-  // else. Per Yuvraj's resolution (Q11): fall back to unassigned rather than failing the batch, and
-  // note the fallback in the batch's own activity_log.
-  test("ZYR-A-68 a create draft's staged suite falls back to unassigned (not a failed save) if the suite is soft-deleted before Save", async () => {
+  // else. The exact review contract now rejects that stale decision and lets the human explicitly
+  // review the new state and choose an unassigned destination.
+  test("ZYR-A-68 deleting a staged suite invalidates the review; explicit unassigned publication remains available", async () => {
     await allocateFakeAiKey();
     const suiteName = `E2E Suite Deleted Before Save ${Date.now()}`;
     const suiteRes = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/suites`, {
@@ -3114,6 +3470,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
       `SELECT generated_payload->0->'draft'->>'suiteId' FROM ai_generation_requests WHERE id = ${literal(taskId)};`,
     );
     expect(stagedSuiteId, "the draft must have resolved the suite by name before this test deletes it").toBe(suiteId);
+    const reviewed = await readZyraProposal(asOwner, url(`/tasks/${taskId}/save`));
 
     // The suite is deleted (soft, per this fix) BETWEEN staging and Save — the exact window Q11 is
     // about. moveToDefault is the mode that matters here: it does not touch the testcases, only the
@@ -3124,8 +3481,11 @@ test.describe("zyra chat — citations (fake provider)", () => {
     });
     expect(deleteRes.ok(), `deleting the suite — ${await deleteRes.text()}`).toBeTruthy();
 
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
-    expect(saveRes.status(), `saving despite the deleted suite — ${await saveRes.text()}`).toBeLessThan(300);
+    const stale = await asOwner.post(url(`/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    expect(stale.status(), `the deleted suite changed the reviewed dependencies — ${await stale.text()}`).toBe(409);
+    expect(scalar(`SELECT saved_count FROM ai_generation_requests WHERE id=${literal(taskId)};`)).toBe("0");
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [0], suiteId: null }, failOnStatusCode: false });
+    expect(saveRes.status(), `the human explicitly chooses unassigned after reviewing again — ${await saveRes.text()}`).toBe(201);
     const saved = await saveRes.json();
     expect(saved.savedCount, "the batch must still save, not fail outright").toBe(1);
     expect(saved.testcases).toHaveLength(1);
@@ -3134,21 +3494,14 @@ test.describe("zyra chat — citations (fake provider)", () => {
     const persistedSuiteId = scalar(`SELECT suite_id FROM testcases WHERE id = ${literal(saved.testcases[0].id)};`);
     expect(persistedSuiteId, "the new test case must land unassigned, not pointing at the deleted suite").toBe("");
 
-    const activityLog = JSON.parse(scalar(`SELECT activity_log::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`)) as Array<{
-      title?: string;
-      detail?: string;
-    }>;
-    expect(
-      activityLog.some((entry) => /no longer available/i.test(entry.title || "")),
-      `the fallback must be noted on the batch's own activity log — got ${JSON.stringify(activityLog)}`,
-    ).toBe(true);
+    expect(saved.saveReceipt.applyParameters).toMatchObject({ suiteIdProvided: true, suiteId: null });
   });
 
   // Zyra context integrity, Phase 3/4 — resolveOrCreateSuiteByName (legacy.service.ts) is the
   // create_suite / move_to_suite resolver: before this fix it matched by name with no `deleted_at`
   // filter, so asking Zyra to (re-)create a suite whose name matches one that was just soft-deleted
   // would silently reattach to the dead row instead of creating a fresh, listable one.
-  test("ZYR-A-69 create_suite creates a fresh suite when the same name was used by a suite that is now soft-deleted", async () => {
+  test("ZYR-A-69 suite creation needs a human action and does not reuse a same-name soft-deleted suite", async () => {
     await allocateFakeAiKey();
     const suiteName = `E2E Suite Reuse By Name ${Date.now()}`;
 
@@ -3162,11 +3515,15 @@ test.describe("zyra chat — citations (fake provider)", () => {
       failOnStatusCode: false,
     });
     expect(turn1.status(), `first create_suite turn — ${await turn1.text()}`).toBeLessThan(300);
+    expect((await turn1.json()).message.content).toContain("Suite creation requires a human editing action");
+    expect(scalar(`SELECT id FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)} AND deleted_at IS NULL;`)).toBe("");
+    const firstCreated = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/suites`, { data: { name: suiteName } });
+    expect(firstCreated.status(), await firstCreated.text()).toBe(201);
 
     const firstSuiteId = scalar(
       `SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = ${literal(suiteName)} AND deleted_at IS NULL;`,
     );
-    expect(firstSuiteId, "the first turn must have created the suite").toBeTruthy();
+    expect(firstSuiteId, "the explicit human native action creates the suite").toBeTruthy();
 
     const del = await asOwner.delete(`/api/suites/${firstSuiteId}`, { params: { mode: "moveToDefault" }, failOnStatusCode: false });
     expect(del.ok(), `deleting the first suite — ${await del.text()}`).toBeTruthy();
@@ -3183,6 +3540,10 @@ test.describe("zyra chat — citations (fake provider)", () => {
       failOnStatusCode: false,
     });
     expect(turn2.status(), `second create_suite turn — ${await turn2.text()}`).toBeLessThan(300);
+    expect((await turn2.json()).message.content).toContain("Suite creation requires a human editing action");
+    expect(scalar(`SELECT id FROM suites WHERE project_id=${literal(tenant!.mainProjectId)} AND name=${literal(suiteName)} AND deleted_at IS NULL;`)).toBe("");
+    const secondCreated = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/suites`, { data: { name: suiteName } });
+    expect(secondCreated.status(), await secondCreated.text()).toBe(201);
 
     const activeMatches = column(
       `SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = ${literal(suiteName)} AND deleted_at IS NULL;`,
@@ -3298,7 +3659,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     );
     expect(taskId, "the create turn must have staged a review batch").toBeTruthy();
 
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
     expect(saveRes.status(), `saving — ${await saveRes.text()}`).toBeLessThan(300);
     const saved = await saveRes.json();
     expect(saved.testcases).toHaveLength(1);
@@ -3326,7 +3687,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     const taskId = scalar(
       `SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} AND task_status = 'in_review' ORDER BY created_at DESC LIMIT 1;`,
     );
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
     const saved = await saveRes.json();
     expect(
       scalar(`SELECT severity FROM testcases WHERE id = ${literal(saved.testcases[0].id)};`),
@@ -3354,7 +3715,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     const taskId = scalar(
       `SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} AND task_status = 'in_review' ORDER BY created_at DESC LIMIT 1;`,
     );
-    const saveRes = await asOwner.post(url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
+    const saveRes = await saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), { data: {}, failOnStatusCode: false });
     const saved = await saveRes.json();
     expect(saved.testcases).toHaveLength(2);
     expect(scalar(`SELECT component FROM testcases WHERE id = ${literal(saved.testcases[0].id)};`)).toBe("");
@@ -3502,7 +3863,7 @@ test.describe("zyra chat — citations (fake provider)", () => {
     expect(storedSteps(tc.id).map((s) => s.expectedResult)).toEqual(["test", "tes", "The previous photo is still shown"]);
 
     const reviewId = scalar(`SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`);
-    const saved = await asOwner.post(url(`/tasks/${reviewId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
+    const saved = await saveReviewedZyraTask(asOwner, url(`/tasks/${reviewId}/save`), { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false });
     expect(saved.status(), `saving the staged update — ${await saved.text()}`).toBe(201);
     expect(storedSteps(tc.id)).toEqual(improved.map(({ action, expectedResult }) => ({ action, expectedResult })));
   });
@@ -4123,7 +4484,7 @@ test.describe("zyra chat — progress streaming (fake provider)", () => {
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E progress fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl },
+      data: { name: `E2E progress fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -4366,7 +4727,7 @@ test.describe("zyra task-board generation — knowledge relevance (fake provider
         name: `E2E relevance fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`,
         provider: "e2e-fake-gateway",
         apiKey: "sk-e2e-fake",
-        baseUrl: ai.baseUrl,
+        baseUrl: ai.backendBaseUrl,
         defaultModel: "gpt-4o-mini",
       },
       failOnStatusCode: false,
@@ -4755,7 +5116,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
         name: `E2E autocomment fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`,
         provider: "e2e-fake-gateway",
         apiKey: "sk-e2e-fake",
-        baseUrl: ai.baseUrl,
+        baseUrl: ai.backendBaseUrl,
         defaultModel: "gpt-4o-mini",
       },
       failOnStatusCode: false,
@@ -4904,7 +5265,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
   }
 
   async function save(taskId: string, selectedDraftIndexes?: number[]): Promise<APIResponse> {
-    return asOwner.post(url(`/tasks/${taskId}/save`), {
+    return saveReviewedZyraTask(asOwner, url(`/tasks/${taskId}/save`), {
       data: selectedDraftIndexes ? { selectedDraftIndexes } : {},
       failOnStatusCode: false,
     });
@@ -5957,7 +6318,7 @@ test.describe("zyra chat — knowledge-base gate and background send (fake provi
   // observable these tests assert on. fake-ai-server keeps those calls off the chat reply queue.
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E kb-gate fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E kb-gate fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -6375,7 +6736,7 @@ test.describe("zyra — exact KB requirement grounding (fake provider)", () => {
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E exact-values fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E exact-values fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -6692,7 +7053,7 @@ test.describe("zyra chat — request trace and turn lifecycle (fake provider)", 
 
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E trace fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E trace fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -7290,7 +7651,7 @@ test.describe("zyra — writes in the language the user writes in (fake provider
   // job ever eats a queued reply — see the "zyra chat — citations" block's identical helper.
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E language fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl, defaultModel: "gpt-4o-mini" },
+      data: { name: `E2E language fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "e2e-fake-gateway", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -7646,4 +8007,517 @@ test.describe("zyra — writes in the language the user writes in (fake provider
     expect(res.status()).toBe(404);
     expect(sessionLanguage(sessionId), "a refused request writes nothing").toBe("en");
   });
+});
+
+/*
+ * The actual application routes, persistence and installed Langfuse exporter are exercised here;
+ * only the external model and Langfuse HTTP receiver are synthetic. The CI workflow runs this
+ * same selection after starting the disposable backend with tracing enabled, disabled and unset.
+ * Expected mode is an independent oracle: it does not read LANGFUSE_ENABLED to decide what passed.
+ * No test skips a missing receiver, empty trace or failed tenant setup. Running this selection
+ * outside its explicit isolated CI setup fails before this block allocates keys or fixture rows.
+ * Playwright's existing global setup runs earlier; this is not a whole-command no-write guard.
+ *
+ * This bounded slice does not prove real Langfuse ingestion/UI/costs, UI interactions, background
+ * plans or deployment behavior. Those remain separate §9 requirements in the observability plan.
+ */
+test.describe("zyra — product behavior and real tracing export in disposable CI", () => {
+  const SCRIPTED_REPLY = "The observation fixture allows exactly ten seats.";
+  // Repetitive dummy: exercises the real key mask without resembling a stored credential.
+  const SYNTHETIC_KEY = "sk-test-test-test-test-test";
+  const MODEL = "gpt-4o-mini";
+  const QUIET_WINDOW_MS = 1_250; // More than six explicitly configured 200 ms export intervals.
+  const TURN_BUDGET_MS = 15_000;
+  let expectedMode: "enabled" | "disabled" | "unset";
+  let capture: LangfuseCapture;
+  let tenantA: RbacTenant;
+  let tenantB: RbacTenant;
+  let ownerA: APIRequestContext;
+  let ownerB: APIRequestContext;
+  let anonymous: APIRequestContext;
+  let aiA: FakeAiServer;
+  let aiB: FakeAiServer;
+  let productOutcomes: unknown[] = [];
+
+  type StoredMessage = { id: string; role: string; content: string; status: string; actionType?: string; testcases?: unknown[] };
+  type Answer = { sessionId: string; user: StoredMessage; assistant: StoredMessage; elapsedMs: number; responseBody: unknown };
+
+  test.beforeAll(async () => {
+    const mode = process.env.E2E_LANGFUSE_EXPECTED_MODE;
+    if (mode !== "enabled" && mode !== "disabled" && mode !== "unset") {
+      throw new Error("ZYR-OBS requires E2E_LANGFUSE_EXPECTED_MODE=enabled|disabled|unset and the workflow's disposable backend startup");
+    }
+    expectedMode = mode;
+    const db = new URL(env.dbUrl || "missing://database");
+    const api = new URL(env.apiBaseUrl);
+    if (!env.ci || !["localhost", "127.0.0.1"].includes(db.hostname) || db.pathname !== "/tesbo_ci" ||
+        !["localhost", "127.0.0.1"].includes(api.hostname)) {
+      throw new Error("ZYR-OBS refuses any target except the existing isolated CI API and tesbo_ci database");
+    }
+    capture = await startLangfuseCapture(Number(process.env.E2E_LANGFUSE_CAPTURE_PORT));
+    const first = await provisionRbacTenant("zyra-observability-a");
+    const second = await provisionRbacTenant("zyra-observability-b");
+    if (!first || !second) throw new Error("ZYR-OBS tenant setup failed; no acceptance cases may be silently skipped");
+    tenantA = first;
+    tenantB = second;
+    [ownerA, ownerB, anonymous, aiA, aiB] = await Promise.all([
+      loginAs(tenantA.owner), loginAs(tenantB.owner), anonymousContext(), startFakeAiServer(), startFakeAiServer(),
+    ]);
+  });
+
+  function purge(tenant: RbacTenant): void {
+    const project = literal(tenant.mainProjectId);
+    exec(`DELETE FROM zyra_chat_messages WHERE project_id = ${project};`);
+    exec(`DELETE FROM zyra_chat_sessions WHERE project_id = ${project};`);
+    exec(`DELETE FROM project_ai_key_allocations WHERE project_id = ${project};`);
+    exec(`DELETE FROM workspace_ai_keys WHERE organization_id = ${literal(tenant.organizationId)};`);
+  }
+
+  test.beforeEach(() => {
+    purge(tenantA);
+    purge(tenantB);
+    aiA.reset();
+    aiB.reset();
+    capture.respondWith(200);
+    productOutcomes = [];
+  });
+
+  test.afterEach(async ({}, testInfo) => {
+    capture?.respondWith(200);
+    try {
+      if (tenantA) purge(tenantA);
+      if (tenantB) purge(tenantB);
+    } finally {
+      // Collector contract errors are failures even if a particular test's expected span arrived.
+      expect(capture?.errors ?? []).toEqual([]);
+    }
+    const outcomePath = testInfo.outputPath("observability-product-outcome.json");
+    const testId = testInfo.title.match(/^ZYR-OBS-\d{2}/)?.[0];
+    if (!testId) throw new Error("Missing observability acceptance ID");
+    // Exclude allocated identities and timings; those have explicit within-run assertions above.
+    // Sort outcomes because the concurrent scenarios deliberately have nondeterministic ordering.
+    const outcome = { testId, mode: expectedMode, status: testInfo.status, product: productOutcomes.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))) };
+    await writeFile(outcomePath, JSON.stringify(outcome, null, 2) + "\n");
+    await testInfo.attach("observability product outcome", { path: outcomePath, contentType: "application/json" });
+  });
+
+  test.afterAll(async () => {
+    await Promise.all([ownerA, ownerB, anonymous].filter(Boolean).map((context) => context.dispose()));
+    await Promise.all([aiA, aiB].filter(Boolean).map((server) => server.close()));
+    await capture?.close();
+  });
+
+  function endpoint(tenant: RbacTenant, suffix: string): string {
+    return `/api/projects/${tenant.mainProjectId}/agents/zyra${suffix}`;
+  }
+
+  async function allocate(tenant: RbacTenant, owner: APIRequestContext, ai: FakeAiServer): Promise<void> {
+    const created = await owner.post("/api/workspace/ai-keys", {
+      data: { name: `E2E observation ${randomUUID()}`, provider: "e2e-fake-gateway", apiKey: SYNTHETIC_KEY, baseUrl: ai.backendBaseUrl, defaultModel: MODEL },
+      failOnStatusCode: false,
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const allocated = await owner.post("/api/workspace/ai-keys/allocations", {
+      data: { projectId: tenant.mainProjectId, workspaceAiKeyId: (await created.json()).id },
+      failOnStatusCode: false,
+    });
+    expect(allocated.status(), await allocated.text()).toBe(201);
+  }
+
+  async function newSession(tenant: RbacTenant, owner: APIRequestContext): Promise<string> {
+    const response = await owner.post(endpoint(tenant, "/chat/sessions"), {
+      data: { title: `E2E observation ${randomUUID()}` }, failOnStatusCode: false,
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    return (await response.json()).id;
+  }
+
+  async function messages(tenant: RbacTenant, owner: APIRequestContext, sessionId: string): Promise<StoredMessage[]> {
+    const read = await owner.get(endpoint(tenant, `/chat/sessions/${sessionId}`), { failOnStatusCode: false });
+    expect(read.status(), await read.text()).toBe(200);
+    return (await read.json()).messages;
+  }
+
+  async function send(tenant: RbacTenant, owner: APIRequestContext, sessionId: string, prompt: string, turnId?: string): Promise<Answer> {
+    const started = performance.now();
+    const response = await owner.post(endpoint(tenant, `/chat/sessions/${sessionId}/messages`), {
+      data: { message: prompt, background: false, ...(turnId ? { turnId } : {}) }, failOnStatusCode: false,
+    });
+    const elapsedMs = performance.now() - started;
+    expect(response.status(), await response.text()).toBe(201);
+    const responseBody = await response.json();
+    const reply = responseBody.message as StoredMessage;
+    const stored = await messages(tenant, owner, sessionId);
+    expect(stored, "one accepted message must persist exactly one user row and one assistant row").toHaveLength(2);
+    const user = stored.find((row) => row.role === "user")!;
+    const assistant = stored.find((row) => row.role === "assistant")!;
+    expect(user).toMatchObject({ role: "user", content: prompt, status: "sent" });
+    expect(assistant).toMatchObject({ id: reply.id, role: "assistant", content: reply.content, status: "completed" });
+    // The canonical repository stays untouched by an answer, regardless of exporter behavior.
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant.mainProjectId)};`)).toBe("0");
+    expect(scalar(`SELECT COUNT(*) FROM ai_generation_requests WHERE project_id = ${literal(tenant.mainProjectId)};`)).toBe("0");
+    productOutcomes.push({
+      tenant: tenant === tenantA ? "A" : "B", responseStatus: response.status(),
+      user: { role: user.role, content: user.content, status: user.status },
+      assistant: { role: assistant.role, content: assistant.content, status: assistant.status, actionType: assistant.actionType, testcases: assistant.testcases },
+      messageCount: stored.length, testcaseCount: 0, generationRequestCount: 0,
+    });
+    return { sessionId, user, assistant, elapsedMs, responseBody };
+  }
+
+  function queueAnswer(ai: FakeAiServer, prompt: string, reply = SCRIPTED_REPLY): void {
+    ai.queueReplyMatching(prompt, { reply, reasoningSummary: "Answering the observation fixture.", action: "answer", actionType: "answer", operations: [], testcases: [] });
+  }
+
+  function spansFor(answer: Answer): OtlpSpan[] {
+    return capture.exports.flatMap((item) => item.spans).filter((span) => span.traceId === messageTraceId(answer.user.id));
+  }
+
+  async function assertObserved(answer: Answer, tenant: RbacTenant, routerError = false): Promise<OtlpSpan[]> {
+    if (expectedMode !== "enabled") {
+      await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+      expect(capture.exports, `${expectedMode} tracing must not publish any OTLP request`).toEqual([]);
+      return [];
+    }
+    await expect.poll(() => spansFor(answer).map((span) => span.name), {
+      message: "the real exporter did not deliver the persisted turn's root/router/reconciliation observations",
+      timeout: 10_000,
+      intervals: [100, 200, 500],
+    }).toEqual(expect.arrayContaining(["zyra.chat.turn", "jira-context", "knowledge-context", "existing-coverage", "router", "reply-reconciliation"]));
+    const spans = spansFor(answer);
+    // Retry responses may resend the same OTLP envelope, so identity is asserted per unique span.
+    const unique = [...new Map(spans.map((span) => [span.spanId, span])).values()];
+    const types: Record<string, string> = {
+      "zyra.chat.turn": "agent", "jira-context": "tool", "knowledge-context": "retriever",
+      "existing-coverage": "span", router: "generation", "reply-reconciliation": "guardrail",
+    };
+    for (const [name, type] of Object.entries(types)) {
+      const matches = unique.filter((span) => span.name === name);
+      expect(matches, `exactly one ${name} observation for one product turn`).toHaveLength(1);
+      const attrs = spanAttributes(matches[0]);
+      expect(attrs["langfuse.observation.type"]).toBe(type);
+      expect(attrs["session.id"]).toBe(answer.sessionId);
+      expect(attrs["user.id"]).toBe(tenant.owner.userId);
+    }
+    const root = unique.find((span) => span.name === "zyra.chat.turn")!;
+    expect(spanAttributes(root)["langfuse.observation.metadata.projectId"]).toBe(tenant.mainProjectId);
+    expect(root.parentSpanId).toBe("0000000000000001");
+    for (const childName of ["jira-context", "knowledge-context", "existing-coverage", "router"]) {
+      expect(unique.find((span) => span.name === childName)!.parentSpanId, `${childName} must attach to the actual root observation`).toBe(root.spanId);
+    }
+    // Reconciliation happens after the root ended; it is deliberately a same-trace sibling,
+    // attached to the synthetic parent rather than an invented child of an ended observation.
+    expect(unique.find((span) => span.name === "reply-reconciliation")!.parentSpanId).toBe("0000000000000001");
+    const router = unique.find((span) => span.name === "router")!;
+    const routerAttrs = spanAttributes(router);
+    expect(routerAttrs["langfuse.observation.model.name"]).toBe(MODEL);
+    if (routerError) {
+      expect(routerAttrs["langfuse.observation.level"]).toBe("ERROR");
+      expect(routerAttrs["langfuse.observation.status_message"]).toBe("Operation failed (details in masked output)");
+    } else {
+      expect(JSON.parse(String(routerAttrs["langfuse.observation.usage_details"]))).toEqual({ input: 1, output: 1 });
+    }
+    expect(unique.every((span) => /^[0-9a-f]{16}$/.test(span.spanId))).toBe(true);
+    return unique;
+  }
+
+  test("ZYR-OBS-01 scripted answer and persisted rows are identical with tracing enabled, disabled or unset", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const prompt = "Explain the observation fixture capacity.";
+    queueAnswer(aiA, prompt);
+    const answer = await send(tenantA, ownerA, sessionId, prompt);
+    expect(answer.assistant.content).toBe(SCRIPTED_REPLY);
+    expect(answer.assistant.testcases).toEqual([]);
+    expect(aiA.requests.filter((call) => JSON.stringify(call.messages).includes(prompt))).toHaveLength(1);
+    await assertObserved(answer, tenantA);
+  });
+
+  test("ZYR-OBS-02 real export masks synthetic prompt/reply secrets and excludes credentials from metadata/model/identity", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const inputSecret = "sk-ant-e2e-observation-input-12345";
+    const outputSecret = "sk-e2e-observation-output-12345";
+    const bearer = "e2e.synthetic.bearer.token.12345";
+    const prompt = `Explain the fixture marker ${inputSecret}.`;
+    const reply = `The fixture markers are ${outputSecret} and Bearer ${bearer}.`;
+    queueAnswer(aiA, prompt, reply);
+    const answer = await send(tenantA, ownerA, sessionId, prompt);
+    expect(answer.assistant.content, "instrumentation must not rewrite the product's reply").toBe(reply);
+    await assertObserved(answer, tenantA);
+    if (expectedMode === "enabled") {
+      // Check the complete outbound wire, including resource fields and orphan/wrong-trace spans.
+      // Filtering to the expected trace first could hide exactly the privacy defect being tested.
+      const raw = capture.exports.map((item) => item.raw).join("\n");
+      for (const secret of [inputSecret, outputSecret, bearer, SYNTHETIC_KEY]) expect(raw).not.toContain(secret);
+      expect(raw).toContain("[REDACTED_KEY]");
+      expect(raw).toContain("Bearer [REDACTED]");
+      for (const span of capture.exports.flatMap((item) => item.spans)) {
+        const unmaskedFields = Object.fromEntries(Object.entries(spanAttributes(span)).filter(([key]) =>
+          !key.endsWith(".input") && !key.endsWith(".output")));
+        const serialized = JSON.stringify(unmaskedFields);
+        for (const marker of ["sk-", "sk-ant-", "Bearer ", SYNTHETIC_KEY]) expect(serialized).not.toContain(marker);
+      }
+    }
+  });
+
+  test("ZYR-OBS-03 parallel sessions retain their own reply, trace and session identity", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const firstSession = await newSession(tenantA, ownerA);
+    const secondSession = await newSession(tenantA, ownerA);
+    const prompts = ["Explain first observation session.", "Explain second observation session."];
+    const replies = ["The first observation session has ten seats.", "The second observation session has eleven seats."];
+    prompts.forEach((prompt, index) => queueAnswer(aiA, prompt, replies[index]));
+    aiA.delayNextReplyMs(300);
+    const answers = await Promise.all([
+      send(tenantA, ownerA, firstSession, prompts[0]), send(tenantA, ownerA, secondSession, prompts[1]),
+    ]);
+    expect(answers.map((answer) => answer.assistant.content)).toEqual(replies);
+    expect(messageTraceId(answers[0].user.id)).not.toBe(messageTraceId(answers[1].user.id));
+    await Promise.all(answers.map((answer) => assertObserved(answer, tenantA)));
+  });
+
+  test("ZYR-OBS-04 parallel tenants retain separate project/user/session observations and transcript access", async () => {
+    await Promise.all([allocate(tenantA, ownerA, aiA), allocate(tenantB, ownerB, aiB)]);
+    const firstSession = await newSession(tenantA, ownerA);
+    const secondSession = await newSession(tenantB, ownerB);
+    const promptA = "Explain workspace A observation marker.";
+    const promptB = "Explain workspace B observation marker.";
+    queueAnswer(aiA, promptA, "Workspace A has ten seats.");
+    queueAnswer(aiB, promptB, "Workspace B has eleven seats.");
+    const [answerA, answerB] = await Promise.all([
+      send(tenantA, ownerA, firstSession, promptA), send(tenantB, ownerB, secondSession, promptB),
+    ]);
+    expect(answerA.assistant.content).toBe("Workspace A has ten seats.");
+    expect(answerB.assistant.content).toBe("Workspace B has eleven seats.");
+    const [spansA, spansB] = await Promise.all([assertObserved(answerA, tenantA), assertObserved(answerB, tenantB)]);
+    expect(JSON.stringify(spansA)).not.toContain(tenantB.mainProjectId);
+    expect(JSON.stringify(spansA)).not.toContain(promptB);
+    expect(JSON.stringify(spansB)).not.toContain(tenantA.mainProjectId);
+    expect(JSON.stringify(spansB)).not.toContain(promptA);
+    const forbidden = await ownerB.get(endpoint(tenantA, `/chat/sessions/${firstSession}`), { failOnStatusCode: false });
+    expect(forbidden.status(), await forbidden.text()).toBe(404);
+  });
+
+  test("ZYR-OBS-05 unauthenticated and cross-tenant sends are refused without provider calls, stored messages or observations", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const url = endpoint(tenantA, `/chat/sessions/${sessionId}/messages`);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    const beforeExports = capture.exports.length;
+    const unauthenticated = await anonymous.post(url, { data: { message: "Explain the anonymous fixture." }, failOnStatusCode: false });
+    // The existing requireUser contract is 400; §9's old 401 wording did not match this route.
+    expect(unauthenticated.status(), await unauthenticated.text()).toBe(400);
+    expect(await unauthenticated.json()).toMatchObject({ error: "Authentication required" });
+    const crossTenant = await ownerB.post(url, { data: { message: "Explain the other tenant fixture." }, failOnStatusCode: false });
+    expect(crossTenant.status(), await crossTenant.text()).toBe(404);
+    expect(await messages(tenantA, ownerA, sessionId)).toEqual([]);
+    expect(aiA.requests).toEqual([]);
+    productOutcomes.push({ unauthenticatedStatus: unauthenticated.status(), unauthenticatedBody: await unauthenticated.json(), crossTenantStatus: crossTenant.status(), storedMessages: [], providerCalls: 0 });
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    expect(capture.exports.length, "a refusal must emit nothing, including orphan or wrongly attributed spans").toBe(beforeExports);
+    expect(capture.exports.flatMap((item) => item.spans).filter((span) => spanAttributes(span)["session.id"] === sessionId)).toEqual([]);
+  });
+
+  test("ZYR-OBS-06 blank messages retain the validation response without provider work or persisted messages", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    const beforeExports = capture.exports.length;
+    for (const message of ["", "   ", "\n\t"]) {
+      const response = await ownerA.post(endpoint(tenantA, `/chat/sessions/${sessionId}/messages`), { data: { message }, failOnStatusCode: false });
+      expect(response.status(), await response.text()).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "message is required" });
+      productOutcomes.push({ input: message, responseStatus: response.status(), body: await response.json() });
+    }
+    expect(await messages(tenantA, ownerA, sessionId)).toEqual([]);
+    expect(aiA.requests).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+    expect(capture.exports.length, "a validation refusal must emit nothing, including orphan or wrongly attributed spans").toBe(beforeExports);
+    expect(capture.exports.flatMap((item) => item.spans).filter((span) => spanAttributes(span)["session.id"] === sessionId)).toEqual([]);
+  });
+
+  test("ZYR-OBS-07 provider failure stays private in replies, progress, persistence and error observations", async () => {
+    await allocate(tenantA, ownerA, aiA);
+    const sessionId = await newSession(tenantA, ownerA);
+    const privateMarkers = ["sk-e2e-observation-provider-error-12345", "synthetic-private-request-context", "synthetic-private-url-token", "synthetic-private-embedding-context", "synthetic-private-transcription-context", "synthetic-private-malformed-vector-context"];
+    const safeReason = "AI provider is temporarily unavailable (HTTP 500). Try again shortly.";
+    // The chat-only allocation deliberately cannot embed. Add a native workspace
+    // OpenAI key so the real RAG resolver must execute its workspace fallback tier.
+    const embeddingKeyResponse = await ownerA.post("/api/workspace/ai-keys", {
+      data: { name: `E2E observation embedding ${randomUUID()}`, provider: "openai", apiKey: SYNTHETIC_KEY, baseUrl: aiA.backendBaseUrl, defaultModel: MODEL },
+      failOnStatusCode: false,
+    });
+    expect(embeddingKeyResponse.status(), await embeddingKeyResponse.text()).toBe(201);
+    const embeddingKeyId = (await embeddingKeyResponse.json()).id as string;
+    aiA.failNextWith(500, privateMarkers[3], "embedding");
+    aiA.failNextWith(500, `Synthetic provider failure ${privateMarkers[0]} request=${privateMarkers[1]} https://gateway.invalid/?token=${privateMarkers[2]}`);
+    // Attach while the provider is still pending: the existing progress registry
+    // deliberately drops completed turns rather than retaining a second message store.
+    aiA.delayNextReplyMs(1_500);
+    const turnId = randomUUID();
+    const pending = send(tenantA, ownerA, sessionId, "Explain the failing observation fixture.", turnId);
+    await expect.poll(() => aiA.requests.length).toBe(1);
+    const stream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${sessionId}/turns/${turnId}/events`), { failOnStatusCode: false });
+    expect(stream.status(), await stream.text()).toBe(200);
+    const progress = parseSseEvents(await stream.text()) as Array<Record<string, unknown>>;
+    const answer = await pending;
+    expect(aiA.embeddingRequests.filter((request) => request.input.includes("Explain the failing observation fixture.")), "the canary must reach the actual live RAG embedding endpoint").toHaveLength(1);
+    expect(answer.assistant.content).toContain(safeReason);
+    expect(answer.assistant.content).toContain("no test cases were generated or changed");
+    expect(answer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
+      expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: safeReason }) }),
+    ]) } });
+    // Catch blocks update the current step with "*"; the recorder and frontend
+    // resolve it to the latest stage, which must still be routing for this failure.
+    const failureIndex = progress.findIndex((event) => event.kind === "update" && event.stage === "*");
+    expect(failureIndex).toBeGreaterThan(-1);
+    expect(progress[failureIndex]).toMatchObject({ kind: "update", stage: "*", meta: { status: "failed", reason: safeReason } });
+    expect(progress.slice(0, failureIndex).filter((event) => event.kind === "stage").at(-1)).toMatchObject({ stage: "routing" });
+    const completionIndex = progress.findIndex((event) => event.kind === "complete");
+    expect(completionIndex).toBeGreaterThan(failureIndex);
+    expect(completionIndex).toBe(progress.length - 1);
+    const activity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
+      (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(sessionId)}) entry;`) || "[]");
+    expect(activity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: safeReason, stage: "routing" } });
+    const kbEndpoint = `/api/projects/${tenantA.mainProjectId}/knowledge-base`;
+    let folderId: string | undefined;
+    let fileId: string | undefined;
+    try {
+      // The upload starts the real async transcription owner. CI uses disposable
+      // local storage; only the external transcription endpoint is synthetic.
+      const allocated = await ownerA.post("/api/workspace/ai-keys/allocations", {
+        data: { projectId: tenantA.mainProjectId, workspaceAiKeyId: embeddingKeyId }, failOnStatusCode: false,
+      });
+      expect(allocated.status(), await allocated.text()).toBe(201);
+      const folder = await ownerA.post(`${kbEndpoint}/folders`, { data: { name: `E2E audio ${randomUUID()}` }, failOnStatusCode: false });
+      expect(folder.status(), await folder.text()).toBe(201);
+      folderId = (await folder.json()).id as string;
+      aiA.failNextWith(500, privateMarkers[4], "transcription");
+      // One silent PCM sample in a valid mono WAV container.
+      const wav = Buffer.from("524946462600000057415645666d74201000000001000100401f0000803e00000200100064617461020000000000", "hex");
+      const uploaded = await ownerA.post(`${kbEndpoint}/files/upload`, {
+        multipart: filesFormWith({ folderId }, [{ name: "observation.wav", mimeType: "audio/wav", body: wav }]), failOnStatusCode: false,
+      });
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+      fileId = (await uploaded.json()).list[0].id as string;
+      let file: Record<string, unknown> = {};
+      await expect.poll(async () => {
+        const read = await ownerA.get(`${kbEndpoint}/files/${fileId}`, { failOnStatusCode: false });
+        expect(read.status(), await read.text()).toBe(200);
+        file = await read.json();
+        return file.extractionStatus;
+      }, { timeout: 10_000, message: "the real transcription must settle its failed extraction" }).toBe("failed");
+      expect(file.extractedText).toBeNull();
+      expect(aiA.transcriptionRequests).toHaveLength(1);
+      expect(aiA.transcriptionRequests[0].contentType).toMatch(/^multipart\/form-data;\s*boundary=/i);
+      expect(aiA.transcriptionRequests[0].body).toContain('name="file"');
+      expect(aiA.transcriptionRequests[0].body).toContain("whisper-1");
+      const productSurfaces = JSON.stringify({ response: answer.responseBody, messages: await messages(tenantA, ownerA, sessionId), activity, progress, transcription: file });
+      for (const marker of privateMarkers) expect(productSurfaces).not.toContain(marker);
+      expect(aiA.requests).toHaveLength(1);
+      productOutcomes.push({ embeddingRequestCount: 1, transcriptionRequestCount: 1, transcriptionStatus: file.extractionStatus, transcript: file.extractedText });
+      const spans = await assertObserved(answer, tenantA, true);
+      if (expectedMode === "enabled") {
+        const embedding = spans.find((span) => span.name === "kb-query-embedding");
+        expect(embedding, "the actual query embedding must produce its own error observation").toBeDefined();
+        expect(spanAttributes(embedding!)["langfuse.observation.level"]).toBe("ERROR");
+        expect(String(spanAttributes(embedding!)["langfuse.observation.output"])).toContain(safeReason);
+        const transcriptionSpans = () => capture.exports.flatMap((item) => item.spans).filter((span) => span.name === "knowledge.transcription" && spanAttributes(span)["langfuse.observation.metadata.fileId"] === fileId);
+        await expect.poll(() => transcriptionSpans().length, { timeout: 10_000 }).toBeGreaterThan(0);
+        expect(spanAttributes(transcriptionSpans()[0])["langfuse.observation.level"]).toBe("ERROR");
+        expect(String(spanAttributes(transcriptionSpans()[0])["langfuse.observation.output"])).toContain("OpenAI is temporarily unavailable (HTTP 500)");
+        const wire = capture.exports.map((item) => item.raw).join("\n");
+        // Keep the full OTLP wire in memory, including on an assertion failure.
+        for (const marker of privateMarkers) expect(wire.includes(marker), `private provider marker reached OTLP: ${marker}`).toBe(false);
+        const router = spans.find((span) => span.name === "router")!;
+        expect(String(spanAttributes(router)["langfuse.observation.output"])).toContain(safeReason);
+      }
+    } finally {
+      if (fileId) {
+        const removed = await ownerA.delete(`${kbEndpoint}/files/${fileId}`, { failOnStatusCode: false });
+        expect(removed.status(), await removed.text()).toBe(200);
+      }
+      if (folderId) {
+        const removed = await ownerA.delete(`${kbEndpoint}/folders/${folderId}`, { failOnStatusCode: false });
+        expect(removed.status(), await removed.text()).toBe(200);
+      }
+    }
+
+    // A second isolated turn keeps the HTTP-error proof above and also exercises a
+    // valid JSON response whose vector cells violate the provider's numeric contract.
+    const malformedSessionId = await newSession(tenantA, ownerA);
+    const malformedPrompt = "Explain the malformed embedding observation fixture.";
+    const malformedReason = "AI provider returned invalid embedding data. Try again or check the embedding model.";
+    const malformedChatReason = "OpenAI is temporarily unavailable (HTTP 500). Try again shortly.";
+    aiA.queueEmbeddingReply({ data: [{ index: 0, embedding: [privateMarkers[5]] }] });
+    aiA.failNextWith(500, privateMarkers[0]);
+    aiA.delayNextReplyMs(1_500);
+    const malformedTurnId = randomUUID();
+    const malformedPending = send(tenantA, ownerA, malformedSessionId, malformedPrompt, malformedTurnId);
+    await expect.poll(() => aiA.requests.length).toBe(2);
+    const malformedStream = await ownerA.get(endpoint(tenantA, `/chat/sessions/${malformedSessionId}/turns/${malformedTurnId}/events`), { failOnStatusCode: false });
+    expect(malformedStream.status(), await malformedStream.text()).toBe(200);
+    const malformedProgress = parseSseEvents(await malformedStream.text()) as Array<Record<string, unknown>>;
+    const malformedAnswer = await malformedPending;
+    expect(aiA.embeddingRequests).toHaveLength(2);
+    expect(aiA.embeddingRequests.filter((request) => request.input.includes(malformedPrompt)), "the malformed vector must reach the actual second query embedding").toHaveLength(1);
+    expect(aiA.requests.filter((request) => JSON.stringify(request.messages).includes(malformedPrompt))).toHaveLength(1);
+    expect(malformedAnswer.assistant.content).toContain(malformedChatReason);
+    expect(malformedAnswer.assistant.content).toContain("no test cases were generated or changed");
+    expect(malformedAnswer.user).toMatchObject({ trace: { steps: expect.arrayContaining([
+      expect.objectContaining({ stage: "routing", status: "failed", meta: expect.objectContaining({ reason: malformedChatReason }) }),
+    ]) } });
+    const malformedFailureIndex = malformedProgress.findIndex((event) => event.kind === "update" && event.stage === "*");
+    expect(malformedFailureIndex).toBeGreaterThan(-1);
+    expect(malformedProgress[malformedFailureIndex]).toMatchObject({ kind: "update", stage: "*", meta: { status: "failed", reason: malformedChatReason } });
+    expect(malformedProgress.slice(0, malformedFailureIndex).filter((event) => event.kind === "stage").at(-1)).toMatchObject({ stage: "routing" });
+    const malformedCompletionIndex = malformedProgress.findIndex((event) => event.kind === "complete");
+    expect(malformedCompletionIndex).toBeGreaterThan(malformedFailureIndex);
+    expect(malformedCompletionIndex).toBe(malformedProgress.length - 1);
+    const malformedActivity = JSON.parse(scalar(`SELECT COALESCE(json_agg(row_to_json(entry)), '[]'::json)::text FROM
+      (SELECT action, diff FROM audit_logs WHERE project_id = ${literal(tenantA.mainProjectId)} AND entity_id = ${literal(malformedSessionId)}) entry;`) || "[]");
+    expect(malformedActivity).toContainEqual({ action: "zyra_chat_ai_failed", diff: { message: malformedChatReason, stage: "routing" } });
+    const malformedSurfaces = JSON.stringify({ response: malformedAnswer.responseBody, messages: await messages(tenantA, ownerA, malformedSessionId), activity: malformedActivity, progress: malformedProgress });
+    for (const marker of privateMarkers) expect(malformedSurfaces).not.toContain(marker);
+    productOutcomes.push({ malformedEmbeddingRequestCount: 1 });
+    const malformedSpans = await assertObserved(malformedAnswer, tenantA, true);
+    if (expectedMode === "enabled") {
+      const embeddings = malformedSpans.filter((span) => span.name === "kb-query-embedding");
+      expect(embeddings, "the malformed vector must be an error in its own turn's embedding observation").toHaveLength(1);
+      const attributes = spanAttributes(embeddings[0]);
+      expect(attributes["langfuse.observation.level"]).toBe("ERROR");
+      expect(JSON.parse(String(attributes["langfuse.observation.output"]))).toEqual({ error: malformedReason });
+      expect(JSON.parse(String(attributes["langfuse.observation.input"]))).toMatchObject({ inputCount: 1, sample: malformedPrompt });
+      const wire = capture.exports.map((item) => item.raw).join("\n");
+      for (const marker of privateMarkers) expect(wire.includes(marker), `private provider marker reached OTLP: ${marker}`).toBe(false);
+    }
+  });
+
+  for (const status of [401, 500] as const) {
+    test(`ZYR-OBS-${status === 401 ? "08" : "09"} exporter ${status} leaves answers usable and does not duplicate product writes`, async () => {
+      await allocate(tenantA, ownerA, aiA);
+      capture.respondWith(status);
+      try {
+        for (let index = 0; index < 2; index += 1) {
+          const sessionId = await newSession(tenantA, ownerA);
+          const prompt = `Explain observation failure ${status}, request ${index}.`;
+          queueAnswer(aiA, prompt);
+          const answer = await send(tenantA, ownerA, sessionId, prompt);
+          expect(answer.assistant.content).toBe(SCRIPTED_REPLY);
+          expect(answer.elapsedMs, "observability failure must not consume the 15-second synthetic-turn budget").toBeLessThan(TURN_BUDGET_MS);
+          await assertObserved(answer, tenantA);
+          if (expectedMode === "enabled") {
+            expect(capture.exports.some((item) => item.responseStatus === status && item.spans.some((span) => span.traceId === messageTraceId(answer.user.id)))).toBe(true);
+          }
+          // The second request starts after the first real export failure was observed.
+        }
+        const health = await anonymous.get("/health", { failOnStatusCode: false });
+        expect(health.status(), await health.text()).toBe(200);
+        expect(aiA.requests).toHaveLength(2);
+      } finally {
+        capture.respondWith(200);
+      }
+    });
+  }
 });

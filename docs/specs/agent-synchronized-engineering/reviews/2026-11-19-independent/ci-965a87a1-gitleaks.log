@@ -1,0 +1,180 @@
+﻿2026-11-20T03:27:46.1151204Z Current runner version: '2.338.2'
+2026-11-20T03:27:46.1170142Z ##[group]Runner Image Provisioner
+2026-11-20T03:27:46.1171099Z Hosted Compute Agent
+2026-11-20T03:27:46.1171534Z Version: 20261111.635
+2026-11-20T03:27:46.1171997Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed
+2026-11-20T03:27:46.1172561Z Build Date: 2026-11-11T01:49:01Z
+2026-11-20T03:27:46.1173045Z Worker ID: {f464b784-ee56-4ed4-af74-bb951999fa30}
+2026-11-20T03:27:46.1173557Z Region: us-west-2
+2026-11-20T03:27:46.1173962Z Cloud: AWS
+2026-11-20T03:27:46.1174349Z ##[endgroup]
+2026-11-20T03:27:46.1175444Z ##[group]Operating System
+2026-11-20T03:27:46.1175889Z Ubuntu
+2026-11-20T03:27:46.1176247Z 24.04.5
+2026-11-20T03:27:46.1176624Z LTS
+2026-11-20T03:27:46.1177011Z ##[endgroup]
+2026-11-20T03:27:46.1177414Z ##[group]Runner Image
+2026-11-20T03:27:46.1177828Z Image: ubuntu-24.04
+2026-11-20T03:27:46.1178206Z Version: 20261116.133.1
+2026-11-20T03:27:46.1179146Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261116.133/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-20T03:27:46.1180252Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261116.133
+2026-11-20T03:27:46.1181164Z ##[endgroup]
+2026-11-20T03:27:46.1181976Z ##[group]GITHUB_TOKEN Permissions
+2026-11-20T03:27:46.1183575Z Contents: read
+2026-11-20T03:27:46.1183957Z Metadata: read
+2026-11-20T03:27:46.1184396Z ##[endgroup]
+2026-11-20T03:27:46.1185924Z Secret source: Actions
+2026-11-20T03:27:46.1186590Z Cache mode: write
+2026-11-20T03:27:46.1187078Z Prepare workflow directory
+2026-11-20T03:27:46.1416205Z Prepare all required actions
+2026-11-20T03:27:46.1453046Z Getting action download info
+2026-11-20T03:27:46.5183622Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-20T03:27:48.7397759Z Complete job name: current-tree-secrets
+2026-11-20T03:27:48.8150236Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-11-20T03:27:48.8152010Z with:
+2026-11-20T03:27:48.8152906Z   persist-credentials: false
+2026-11-20T03:27:48.8153845Z   repository: 1alextest/Tesbooboo
+2026-11-20T03:27:48.8160526Z   token: ***
+2026-11-20T03:27:48.8161524Z   ssh-strict: true
+2026-11-20T03:27:48.8162301Z   ssh-user: git
+2026-11-20T03:27:48.8163091Z   clean: true
+2026-11-20T03:27:48.8163886Z   sparse-checkout-cone-mode: true
+2026-11-20T03:27:48.8164812Z   fetch-depth: 1
+2026-11-20T03:27:48.8165603Z   fetch-tags: false
+2026-11-20T03:27:48.8166398Z   show-progress: true
+2026-11-20T03:27:48.8167294Z   lfs: false
+2026-11-20T03:27:48.8168136Z   submodules: false
+2026-11-20T03:27:48.8168989Z   set-safe-directory: true
+2026-11-20T03:27:48.8169925Z   allow-unsafe-pr-checkout: false
+2026-11-20T03:27:48.8171197Z ##[endgroup]
+2026-11-20T03:27:51.1891475Z Syncing repository: 1alextest/Tesbooboo
+2026-11-20T03:27:51.1892968Z ##[group]Getting Git version info
+2026-11-20T03:27:51.1893384Z Working directory is '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:51.1893964Z [command]/usr/bin/git version
+2026-11-20T03:27:51.5776982Z git version 2.56.1
+2026-11-20T03:27:51.5799011Z ##[endgroup]
+2026-11-20T03:27:51.5805320Z Temporarily overriding HOME='/home/runner/work/_temp/653f6ce8-e10e-409d-9ffb-ef9383b12851' before making global git config changes
+2026-11-20T03:27:51.5806285Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:27:51.5810055Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:51.6191593Z Deleting the contents of '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:51.6194497Z ##[group]Initializing the repository
+2026-11-20T03:27:51.6198295Z [command]/usr/bin/git init /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:51.6675904Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-20T03:27:51.6676589Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-20T03:27:51.6677066Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-20T03:27:51.6677819Z hint: call:
+2026-11-20T03:27:51.6678086Z hint:
+2026-11-20T03:27:51.6678410Z hint: 	git config --global init.defaultBranch <name>
+2026-11-20T03:27:51.6678725Z hint:
+2026-11-20T03:27:51.6679022Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-20T03:27:51.6679432Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-20T03:27:51.6679773Z hint:
+2026-11-20T03:27:51.6679990Z hint: 	git branch -m <name>
+2026-11-20T03:27:51.6680236Z hint:
+2026-11-20T03:27:51.6680554Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-20T03:27:51.6688599Z Initialized empty Git repository in /home/runner/work/Tesbooboo/Tesbooboo/.git/
+2026-11-20T03:27:51.6696934Z [command]/usr/bin/git remote add origin https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:51.6743178Z ##[endgroup]
+2026-11-20T03:27:51.6743769Z ##[group]Disabling automatic garbage collection
+2026-11-20T03:27:51.6746724Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-20T03:27:51.6769778Z ##[endgroup]
+2026-11-20T03:27:51.6770388Z ##[group]Setting up auth
+2026-11-20T03:27:51.6775339Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:51.6805094Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:52.0832257Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:52.0848538Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:52.0998607Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:52.1021716Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:52.1175201Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-20T03:27:52.1197026Z ##[endgroup]
+2026-11-20T03:27:52.1197793Z ##[group]Fetching the repository
+2026-11-20T03:27:52.1209705Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e49fab4df4043b621b7007e97d8646743f441b6b:refs/remotes/pull/167/merge
+2026-11-20T03:27:52.8717546Z From https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:52.8718231Z  * [new ref]         e49fab4df4043b621b7007e97d8646743f441b6b -> pull/167/merge
+2026-11-20T03:27:52.8721614Z ##[endgroup]
+2026-11-20T03:27:52.8722242Z ##[group]Determining the checkout info
+2026-11-20T03:27:52.8742071Z ##[endgroup]
+2026-11-20T03:27:52.8742928Z [command]/usr/bin/git sparse-checkout disable
+2026-11-20T03:27:52.8802027Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-20T03:27:52.8813150Z ##[group]Checking out the ref
+2026-11-20T03:27:52.8816569Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/167/merge
+2026-11-20T03:27:52.9904782Z Note: switching to 'refs/remotes/pull/167/merge'.
+2026-11-20T03:27:52.9905168Z
+2026-11-20T03:27:52.9905380Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-11-20T03:27:52.9906078Z changes and commit them, and you can discard any commits you make in this
+2026-11-20T03:27:52.9906547Z state without impacting any branches by switching back to a branch.
+2026-11-20T03:27:52.9906830Z
+2026-11-20T03:27:52.9907056Z If you want to create a new branch to retain commits you create, you may
+2026-11-20T03:27:52.9907495Z do so (now or later) by using -c with the switch command. Example:
+2026-11-20T03:27:52.9907746Z
+2026-11-20T03:27:52.9907906Z   git switch -c <new-branch-name>
+2026-11-20T03:27:52.9908101Z
+2026-11-20T03:27:52.9908209Z Or undo this operation with:
+2026-11-20T03:27:52.9908633Z
+2026-11-20T03:27:52.9908749Z   git switch -
+2026-11-20T03:27:52.9908941Z
+2026-11-20T03:27:52.9909178Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-11-20T03:27:52.9909549Z
+2026-11-20T03:27:52.9909893Z HEAD is now at e49fab4 Merge 965a87a13d2669354598f8d4b912f36fdb148867 into 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:52.9953960Z ##[endgroup]
+2026-11-20T03:27:52.9956177Z [command]/usr/bin/git log -1 --format=%H
+2026-11-20T03:27:52.9975719Z e49fab4df4043b621b7007e97d8646743f441b6b
+2026-11-20T03:27:52.9983292Z ##[group]Removing auth
+2026-11-20T03:27:52.9986197Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:53.0009271Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:53.0159795Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:53.0182228Z http.https://github.com/.extraheader
+2026-11-20T03:27:53.0186984Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-20T03:27:53.0211184Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:53.0356838Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:53.0378685Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:53.0520246Z ##[endgroup]
+2026-11-20T03:27:53.0686839Z ##[group]Run docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --redact --exit-code 1
+2026-11-20T03:27:53.0687670Z [36;1mdocker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:latest dir /repo --redact --exit-code 1[0m
+2026-11-20T03:27:53.4074711Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:53.4075198Z ##[endgroup]
+2026-11-20T03:27:55.5880075Z Unable to find image 'ghcr.io/gitleaks/gitleaks:latest' locally
+2026-11-20T03:27:56.1260070Z latest: Pulling from gitleaks/gitleaks
+2026-11-20T03:27:56.2946584Z d49a2dee86fb: Pulling fs layer
+2026-11-20T03:27:56.2947290Z d92b655ae8e2: Pulling fs layer
+2026-11-20T03:27:56.2947590Z 61fdfd7c0175: Pulling fs layer
+2026-11-20T03:27:56.2948042Z a43ab0c74cc4: Pulling fs layer
+2026-11-20T03:27:56.2948318Z a43ab0c74cc4: Waiting
+2026-11-20T03:27:56.5273312Z d49a2dee86fb: Verifying Checksum
+2026-11-20T03:27:56.5273978Z d49a2dee86fb: Download complete
+2026-11-20T03:27:56.5427401Z d92b655ae8e2: Verifying Checksum
+2026-11-20T03:27:56.5428075Z d92b655ae8e2: Download complete
+2026-11-20T03:27:56.6293167Z d49a2dee86fb: Pull complete
+2026-11-20T03:27:56.6718839Z 61fdfd7c0175: Verifying Checksum
+2026-11-20T03:27:56.6719247Z 61fdfd7c0175: Download complete
+2026-11-20T03:27:56.7075184Z a43ab0c74cc4: Verifying Checksum
+2026-11-20T03:27:56.7075555Z a43ab0c74cc4: Download complete
+2026-11-20T03:27:56.7411260Z d92b655ae8e2: Pull complete
+2026-11-20T03:27:56.8314975Z 61fdfd7c0175: Pull complete
+2026-11-20T03:27:56.8362605Z a43ab0c74cc4: Pull complete
+2026-11-20T03:27:56.8390876Z Digest: sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+2026-11-20T03:27:56.8401719Z Status: Downloaded newer image for ghcr.io/gitleaks/gitleaks:latest
+2026-11-20T03:27:57.5917281Z
+2026-11-20T03:27:57.5918067Z     ○
+2026-11-20T03:27:57.5918484Z     │╲
+2026-11-20T03:27:57.5918708Z     │ ○
+2026-11-20T03:27:57.5918998Z     ○ ░
+2026-11-20T03:27:57.5919268Z     ░    gitleaks
+2026-11-20T03:27:57.5919399Z
+2026-11-20T03:28:05.0576722Z [90m3:28AM[0m [32mINF[0m [1mscanned ~18952866 bytes (18.95 MB) in 7.44s[0m
+2026-11-20T03:28:05.0577664Z [90m3:28AM[0m [33mWRN[0m [1mleaks found: 5[0m
+2026-11-20T03:28:05.1167369Z ##[error]Process completed with exit code 1.
+2026-11-20T03:28:05.1279484Z Post job cleanup.
+2026-11-20T03:28:05.1912197Z [command]/usr/bin/git version
+2026-11-20T03:28:05.1941581Z git version 2.56.1
+2026-11-20T03:28:05.1966281Z Temporarily overriding HOME='/home/runner/work/_temp/ad470e89-cda9-4008-9996-94cc88f013c2' before making global git config changes
+2026-11-20T03:28:05.1967382Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:28:05.1970217Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:28:05.1997074Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:28:05.2019669Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:28:05.2197365Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:28:05.2220984Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:28:05.2374059Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:28:05.2443530Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:28:05.2704450Z Cleaning up orphan processes
+2026-11-20T03:28:05.2967336Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

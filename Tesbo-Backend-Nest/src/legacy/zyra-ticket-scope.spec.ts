@@ -19,6 +19,8 @@ import { SuitesCacheService } from "../cache/suites-cache.service";
 import { TestcasesListCacheService } from "../cache/testcases-list-cache.service";
 import { ProjectOverviewCacheService } from "../cache/project-overview-cache.service";
 import type Redis from "ioredis";
+import * as aiTrace from "../observability/ai-trace";
+import type { ZyraLiveBatch } from "./zyra-draft-stream";
 
 process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
@@ -75,13 +77,20 @@ type Internals = {
   continueZyraChatPlanInLanguage: (projectId: string, userId: string | null, sessionId: string, planId: string) => Promise<void>;
   zyraDecisionForChoice: (turn: Body, answer: { options: Options; choice: { id: string; label: string; message?: string } }, onStage?: unknown) => Promise<Decision>;
   buildZyraChatDecision: (...args: unknown[]) => Promise<Decision>;
-  zyraProjectCapabilities: (projectId: string) => Promise<{ knowledgeBase: boolean }>;
+  zyraProjectCapabilities: (projectId: string) => Promise<{ knowledgeBase: boolean; generation?: boolean }>;
   zyraSessionLanguage: (projectId: string, sessionId: string) => Promise<string>;
   startZyraChatPlan: (params: Body) => Promise<Decision>;
   generateZyraChatTestcasesWithAi: (params: Body) => Promise<Decision>;
   planZyraChatScenarios: (params: Body) => Promise<string[]>;
   existingTestcaseSnapshot: (...args: unknown[]) => Promise<unknown[]>;
   postZyraPlanMessage: (...args: unknown[]) => Promise<void>;
+  zyraAiAllocation: (projectId: string) => Promise<Body>;
+  generateZyraPlanPiece: (params: Body) => Promise<Body>;
+  createZyraLiveBatch: (params: Body) => ZyraLiveBatch;
+  applyStorageGateToGenerated: (decision: Body, capabilities: Body) => Body;
+  applyZyraChatOperations: (...args: unknown[]) => Promise<Body>;
+  extractAiErrorMessage: (error: unknown) => string;
+  notifyUsers: (...args: unknown[]) => Promise<void>;
 };
 
 const internals = (svc: LegacyService) => svc as unknown as Internals;
@@ -495,6 +504,109 @@ describe("a ticket-scoped plan never just stops", () => {
     expect(reply).toMatch(/Finished working through the tickets/);
     expect(reply).toMatch(/1 of 2 ticket\(s\) got test cases/);
     expect(reply).toMatch(/QAB-2 — no new scenarios/);
+  });
+});
+
+describe("background batch observation classification", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function setup(outcome: "success" | "failure", traceSeed?: string) {
+    let activePlan: Body | null = {
+      planId: "plan-1", status: "running", remainingScenarios: ["Synthetic scenario"],
+      batchSize: 1, doneCount: 0, totalCount: 1, ...(traceSeed ? { traceSeed } : {})
+    };
+    const query = jest.fn((sql: string) => Promise.resolve({ rows: sql.includes("SELECT active_plan, language") ? [{ active_plan: activePlan, language: "en" }] : [] })) as unknown as Query;
+    const transaction = jest.fn(async (fn: (client: { query: jest.Mock }) => Promise<unknown>) => fn({
+      query: jest.fn((sql: string, values: unknown[] = []) => {
+        if (sql.includes("SELECT active_plan") && sql.includes("FOR UPDATE")) return Promise.resolve({ rows: [{ active_plan: activePlan }] });
+        if (sql.includes("SET active_plan = NULL")) activePlan = null;
+        else if (sql.includes("SET active_plan = $2::jsonb")) activePlan = JSON.parse(String(values[1]));
+        return Promise.resolve({ rows: [] });
+      })
+    }));
+    const svc = makeLegacy(query, { transaction } as unknown as Partial<DatabaseService>);
+    const methods = internals(svc);
+    jest.spyOn(methods, "zyraAiAllocation").mockResolvedValue({ key: { provider: "anthropic", default_model: "claude-haiku-4-5" } });
+    jest.spyOn(methods, "zyraProjectCapabilities").mockResolvedValue({ knowledgeBase: false, generation: true });
+    jest.spyOn(methods, "createZyraLiveBatch").mockReturnValue({
+      total: 0, stage: async () => null, track: () => undefined, idle: async () => undefined,
+      reviewRequestId: () => null, takeActivity: () => [], stagedScenarios: () => [], stagedCount: () => 0
+    });
+    const decision = {
+      reply: "Synthetic draft", operations: [{ type: "create", draft: { title: "Synthetic draft" } }],
+      testcases: [{ title: "Synthetic draft", action: "proposed-create" }], draftScenarios: [1]
+    };
+    let failure: unknown;
+    const generate = jest.spyOn(methods, "generateZyraPlanPiece");
+    if (outcome === "success") generate.mockResolvedValue(decision);
+    else {
+      jest.spyOn(global, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: { message: "synthetic provider failure sk-synthetic-batch-private" } }), { status: 500 }));
+      const provider = svc as unknown as { zyraChatWithAnthropic: (key: Body, model: string, system: string, user: string) => Promise<Body> };
+      generate.mockImplementation(async () => {
+        try {
+          await provider.zyraChatWithAnthropic({ provider: "anthropic", api_key: "synthetic-only" }, "claude-haiku-4-5", "Generate", "User");
+        } catch (error) {
+          failure = error;
+          throw error;
+        }
+        throw new Error("The synthetic provider should have rejected the request.");
+      });
+    }
+    const gate = jest.spyOn(methods, "applyStorageGateToGenerated").mockImplementation((value) => value);
+    const apply = jest.spyOn(methods, "applyZyraChatOperations").mockResolvedValue({ testcases: decision.testcases, activity: [], reviewRequestId: "review-1" });
+    const posted = jest.spyOn(methods, "postZyraPlanMessage").mockResolvedValue(undefined);
+    const extracted = jest.spyOn(methods, "extractAiErrorMessage");
+    const notify = jest.spyOn(methods, "notifyUsers").mockResolvedValue(undefined);
+    return {
+      run: () => methods.continueZyraChatPlanInLanguage("p1", "u1", "s1", "plan-1"),
+      getActivePlan: () => activePlan, decision, get failure() { return failure; }, gate, apply, posted, extracted, notify
+    };
+  }
+
+  it.each(["success", "failure"] as const)("records the actual batch as one tool on %s while preserving product handling", async (outcome) => {
+    const generations = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const tools = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);
+    const batch = setup(outcome, "originating-turn-seed");
+    await expect(batch.run()).resolves.toBeUndefined();
+    if (outcome === "success") {
+      expect(batch.gate.mock.calls[0][0]).toBe(batch.decision);
+      expect(batch.apply).toHaveBeenCalledWith("p1", "u1", "s1", batch.decision.operations, { live: undefined });
+      expect(batch.posted.mock.calls[0][5]).toBe(batch.decision.testcases);
+      expect(batch.getActivePlan()).toBeNull();
+      expect(batch.notify).not.toHaveBeenCalled();
+    } else {
+      expect(batch.extracted).toHaveBeenCalledWith(batch.failure);
+      expect(batch.apply).not.toHaveBeenCalled();
+      expect(batch.getActivePlan()).toMatchObject({ status: "paused", doneCount: 0, remainingScenarios: ["Synthetic scenario"], traceSeed: "originating-turn-seed" });
+      // Provider-controlled errors must not enter persisted plan messages.
+      expect(String(batch.posted.mock.calls[0][4])).toContain("temporarily unavailable (HTTP 500)");
+      expect(String(batch.posted.mock.calls[0][4])).not.toContain("synthetic provider failure");
+      expect(String(batch.posted.mock.calls[0][4])).toContain("Pausing here");
+      expect(batch.notify).toHaveBeenCalledTimes(1);
+    }
+    expect(tools).toHaveBeenCalledTimes(1);
+    expect(generations.mock.calls.filter(([data]) => data.name === "zyra.plan.generate_batch")).toEqual([]);
+    expect(tools.mock.calls[0][0]).toEqual({
+      traceSeed: "originating-turn-seed", name: "zyra.plan.generate_batch",
+      input: { planId: "plan-1", sessionId: "s1", scenarios: ["Synthetic scenario"], batchSize: 1, doneCount: 0, totalCount: 1 },
+      ...(outcome === "success" ? { output: { draftedCount: 1 } } : { errorMessage: expect.stringContaining("temporarily unavailable (HTTP 500)") }),
+      metadata: { projectId: "p1", sessionId: "s1", planId: "plan-1" }
+    });
+    expect(JSON.stringify(tools.mock.calls)).not.toContain("synthetic provider failure");
+    expect(JSON.stringify(tools.mock.calls)).not.toContain("sk-synthetic-batch-private");
+    for (const key of ["model", "provider", "usage"]) expect(tools.mock.calls[0][0]).not.toHaveProperty(key);
+  });
+
+  it("keeps old plans without an originating turn in distinct fallback traces", async () => {
+    jest.spyOn(Date, "now").mockReturnValue(123456);
+    const generations = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    const tools = jest.spyOn(aiTrace, "recordStandaloneTool").mockResolvedValue(undefined);
+    await Promise.all([setup("success").run(), setup("success").run()]);
+    expect(generations.mock.calls.filter(([data]) => data.name === "zyra.plan.generate_batch")).toEqual([]);
+    expect(tools).toHaveBeenCalledTimes(2);
+    const seeds = tools.mock.calls.map(([data]) => data.traceSeed);
+    expect(seeds.every((seed) => seed.startsWith("zyra:plan-batch:plan-1:0:"))).toBe(true);
+    expect(new Set(seeds).size).toBe(2);
   });
 });
 

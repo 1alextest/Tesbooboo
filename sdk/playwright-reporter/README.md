@@ -121,8 +121,11 @@ alternative is a result silently attached to the wrong case.
 2. **As each test finishes**, its result is posted with duration, retry count and, on failure,
    Playwright's error message. Submission is non-blocking: it never sits between two tests.
 3. **On failure**, screenshots, video and the trace are attached as evidence.
-4. **At the end**, the run is closed with a summary, and Tesbo reconciles it against what it actually
-   stored — any disagreement is printed, which is the only place a dropped result is visible.
+4. **At the end**, pending submissions are drained and closure is requested with a summary. Tesbo
+   reconciles it against what it actually stored; any acknowledged disagreement is printed.
+   The reporter says `closed` only after a valid acknowledgement for that run. It reports the
+   server's final status when supplied, including `already closed` and `status not reported` for
+   historical closes without a recorded status. Older minimal acknowledgements remain supported.
 
 ## What you have to add
 
@@ -184,10 +187,15 @@ Card §7, and the rule this package is built around: **a Tesbo outage must never
 
 Every call to Tesbo resolves rather than throwing. Failures are retried with backoff, then logged and
 counted, and the end-of-run summary says how many requests were lost. The reporter never touches the
-process exit code — your suite's pass/fail is Playwright's decision alone.
+process exit code — your suite's pass/fail is Playwright's decision alone. A failed, timed-out, lost
+or unusable close acknowledgement says **`closure unconfirmed`**, with the requested status and local
+counts. This does not mean the run stayed open: the server may have closed it before its response
+was lost. Check the run in Tesbo before relying on its final state. Existing transient retries stay
+unchanged; an unusable successful acknowledgement is counted/logged without replaying the close.
 
-The only exception is `strict: true`, which fails deliberately at collection time because the project
-asked it to.
+Startup validation is unchanged: partial/invalid configuration fails at collection time;
+`requireConfig: true` also rejects an unconfigured reporter, and `strict: true` rejects suite-linking
+problems. Those are separate from non-fatal mid-run ingest failures.
 
 ## Storage quota
 
@@ -201,4 +209,20 @@ were skipped.
 npm install
 npm run build
 npm test        # compiles, then runs the unit tests
+npm run test:package-consumer
 ```
+
+The package-consumer smoke requires the production build above; missing `dist` entrypoints or bins
+fail rather than being rebuilt or skipped. It creates a real `npm pack` tarball and installs it in a
+fresh temporary consumer **outside the repository**, then checks package-name CommonJS/native ESM
+imports, strict TypeScript declarations, both CLI aliases (`--help`/`--version`), and a browser-free
+Playwright test that resolves a case, opens a run, submits a result and confirms closure against the
+same loopback ingestion fixture as the lifecycle unit tests.
+Three isolated negative fixtures also prove missing runtime, declaration and bin artifacts fail.
+
+Only the public npm registry is used, for exact test-tooling versions from this SDK's lockfile.
+Installation uses `--ignore-scripts --no-audit --no-fund`, empty npm auth/config files, no browser
+download, and bounded subprocess timeouts. It needs no Tesbo credentials, database or deployed stack.
+The smoke removes only its own temporary directory. Node 20/22 and Windows/Linux are supported;
+on Windows it validates each npm `.cmd` alias and runs its exact installed JS target with Node
+instead of enabling a shell.

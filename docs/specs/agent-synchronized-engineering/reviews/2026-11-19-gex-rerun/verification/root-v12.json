@@ -1,0 +1,558 @@
+{
+  "verifier": "Tesbo documentation structural binding v3; concurrent 1.4.34 baseline",
+  "input_manifest_sha256": "1bed59303febbe5c26468bf4483c590c0c1303107d083ee3d8982a89d63f0135",
+  "input_revision": "1.4.35-candidate-v12",
+  "checks": [
+    {
+      "check": "exact_manifest_members",
+      "passed": true,
+      "detail": {
+        "expected": 14,
+        "actual": 14
+      }
+    },
+    {
+      "check": "exact_eight_canonical_files",
+      "passed": true,
+      "detail": [
+        "00_README.md",
+        "01_PRODUCT_REQUIREMENTS.md",
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "03_TECHNICAL_DESIGN.md",
+        "04_MCP_API_CONTRACTS.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+        "06_IMPLEMENTATION_AGENT_BRIEF.md",
+        "07_UI_DESIGN_TASKS.md"
+      ]
+    },
+    {
+      "check": "frozen_bytes:canonical/00_README.md",
+      "passed": true,
+      "detail": {
+        "bytes": 154612,
+        "sha256": "500b703a3e2791be237632eecb2646a0c7a251146a6c1531bcbad9be34d52bd3"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": {
+        "bytes": 215764,
+        "sha256": "1c2182d720c09b7ab8c8e161cf8a777f599546da048ac97dc49836cb3488a2f3"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": {
+        "bytes": 135605,
+        "sha256": "b512972d594babfb7ffbd7aeec97419719dbeef2439c8ec22ae5dcf14a230360"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": {
+        "bytes": 368798,
+        "sha256": "bab813ee81d4f3db34b8be189c6a4aafd6d46360c96d6604badcee3ec7166aa1"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": {
+        "bytes": 174721,
+        "sha256": "0b7c4d03f90e47b42d4a91dabbd1d9b93bc5e1ed856c4505ef583a4db6ba1119"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": {
+        "bytes": 354830,
+        "sha256": "be277e3b79d7ebc4748114bde84c8876b9b571c44d89e40ad60592c3eb989e6d"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": {
+        "bytes": 119830,
+        "sha256": "7a46f9aacf94982e59adbbf28aea59c328b5291cfacc2bfd60b77666fde1cebf"
+      }
+    },
+    {
+      "check": "frozen_bytes:canonical/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": {
+        "bytes": 123387,
+        "sha256": "084600d923760f31415db503ba1d02b8ad8cdad4d343e28c32b127417cf8ac21"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/AGENT_RULE_TEMPLATE.md",
+      "passed": true,
+      "detail": {
+        "bytes": 28886,
+        "sha256": "412d7f176c220e89006c298f1f7f0ddacab063a2d0b9b19891227766f68b2aa8"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/README.md",
+      "passed": true,
+      "detail": {
+        "bytes": 40331,
+        "sha256": "f4fad6b4c986183fcf2130b847ddfd2c18878541a99c88de3dbe7ac7d2b8b54a"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/design.md",
+      "passed": true,
+      "detail": {
+        "bytes": 151541,
+        "sha256": "436d8568776d9f253ca076ff7f913dfdb109e9720e26af9f56f2aa38bcf5a5a3"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/implementation-plan.md",
+      "passed": true,
+      "detail": {
+        "bytes": 122671,
+        "sha256": "941e11017e27ba9dc47fbf0d907de1de7701942c7b79efa122eb5687ec04b58a"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/requirements.md",
+      "passed": true,
+      "detail": {
+        "bytes": 92031,
+        "sha256": "e91cf6d3ef03d3a939a3657a81df12002ffe7aec8bb2ea8dd0d1a79b95c0ac60"
+      }
+    },
+    {
+      "check": "frozen_bytes:views/skills-governance.md",
+      "passed": true,
+      "detail": {
+        "bytes": 69740,
+        "sha256": "c35dd045510b1ce2ee51557cb2cd653dc6f2d9a4b7e9482bcae7150ea878ec6a"
+      }
+    },
+    {
+      "check": "baseline_archive_identity",
+      "passed": true,
+      "detail": "ac55077842806781223c83c64869b2f55a992155ec12bb9ae4689459961f11f9"
+    },
+    {
+      "check": "baseline_eight_members",
+      "passed": true,
+      "detail": [
+        "00_README.md",
+        "01_PRODUCT_REQUIREMENTS.md",
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "03_TECHNICAL_DESIGN.md",
+        "04_MCP_API_CONTRACTS.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+        "06_IMPLEMENTATION_AGENT_BRIEF.md",
+        "07_UI_DESIGN_TASKS.md"
+      ]
+    },
+    {
+      "check": "historical_body_preserved:00_README.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:00_README.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:00_README.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:00_README.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "historical_body_preserved:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Only the exact current revision header substitution is permitted before the appended amendment; full incoming 1.4.34 body retained."
+    },
+    {
+      "check": "historical_identifiers_retained:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": {
+        "removed": []
+      }
+    },
+    {
+      "check": "amendment_present:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "## Revision 1.4.35"
+    },
+    {
+      "check": "no_unresolved_placeholder:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Appended amendment only; no inference about prose adequacy."
+    },
+    {
+      "check": "scenario_identifier_set:ASE-E2E",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 15,
+        "expected": 15,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      }
+    },
+    {
+      "check": "scenario_identifier_set:ASE-FLOW",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 54,
+        "expected": 54,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54
+        ]
+      }
+    },
+    {
+      "check": "scenario_identifier_set:SK-E2E",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 40,
+        "expected": 40,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ]
+      }
+    },
+    {
+      "check": "scenario_identifier_set:ASE-INT",
+      "passed": true,
+      "detail": {
+        "unique_definition_rows": 16,
+        "expected": 16,
+        "ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ]
+      }
+    },
+    {
+      "check": "scenario_count",
+      "passed": true,
+      "detail": {
+        "ASE-E2E": 15,
+        "ASE-FLOW": 54,
+        "SK-E2E": 40,
+        "ASE-INT": 16
+      }
+    },
+    {
+      "check": "supplementary_proof_set:GEX-AC",
+      "passed": true,
+      "detail": {
+        "current_unique_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "expected": 8,
+        "note": "Historical superseded GA summaries are not counted twice; no execution inferred."
+      }
+    },
+    {
+      "check": "supplementary_proof_set:GA-AC",
+      "passed": true,
+      "detail": {
+        "current_unique_ids": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "expected": 5,
+        "note": "Historical superseded GA summaries are not counted twice; no execution inferred."
+      }
+    },
+    {
+      "check": "source_commit_accessible",
+      "passed": true,
+      "detail": {
+        "sha": "6897f989b055a955280f810c7daace86f74057fa",
+        "git_exit": 0
+      }
+    }
+  ],
+  "passed": true,
+  "limits": [
+    "No semantic requirement-to-design-to-test completeness certification.",
+    "No application runtime, authentic UI, deployed source, human authority or efficacy proof.",
+    "No inference that an installed skill or source implementation satisfies a proposed contract."
+  ]
+}

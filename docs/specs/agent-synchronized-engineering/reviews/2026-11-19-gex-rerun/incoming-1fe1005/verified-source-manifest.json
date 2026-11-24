@@ -1,0 +1,24 @@
+{
+  "commit": "1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea",
+  "source_review_pin": "6897f989b055a955280f810c7daace86f74057fa",
+  "files": [
+    {
+      "path": "design.md",
+      "sha": "8a35b4632f2f8c4475d039f0c04483b7403429eb",
+      "bytes": 131426,
+      "sha256": "d6f0ce0a5659b300ae12f2140749cac03df33c90dd29538daed55adf4a420c35"
+    },
+    {
+      "path": "implementation-plan.md",
+      "sha": "c0ca54a379e6a58266a09b2aebcb26ec8b99330e",
+      "bytes": 110849,
+      "sha256": "484ab297226a703d5294351e37ae3e4b6150d43ccadf573a42bfb367f1b51132"
+    },
+    {
+      "path": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "sha": "8536f639e6225566ce533b85827073dc4cfe330c",
+      "bytes": 867797,
+      "sha256": "c3d5f00dbce0ce2c97914708b1c32a854d3035da35c19845959b38c4c87a6721"
+    }
+  ]
+}

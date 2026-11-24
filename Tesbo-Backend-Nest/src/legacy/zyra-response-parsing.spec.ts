@@ -54,6 +54,11 @@ function makeLegacy(): LegacyService {
 type Internals = {
   parseModelJson: (raw: string, salvageFields?: string[]) => Record<string, unknown> | null;
   sanitizeZyraReply: (raw: unknown, fallback: string) => string;
+  normalizeZyraChatDecision: (raw: Record<string, unknown>, message: string, existing: unknown[], intent: "suite") => {
+    actionType: string; operations: Array<Record<string, unknown>>;
+  };
+  resolveZyraMoveTargets: (projectId: string, sessionId: string, operation: Record<string, unknown>, suiteId: string | null) =>
+    Promise<{ targets: Array<{ id: string }>; requestedCount: number | null }>;
   reconcileZyraReply: (
     decision: { reply: string; actionType: string; operations: { type: string }[]; __salvaged?: boolean },
     applied: { testcases: unknown[]; activity: { title?: string; detail?: string }[] }
@@ -69,6 +74,86 @@ describe("Zyra model-response parsing", () => {
 
   beforeEach(() => {
     svc = makeLegacy();
+  });
+
+  describe("single-case suite-move normalization", () => {
+    const suiteId = "00000000-0000-4000-8000-000000000001";
+    const testcaseId = "00000000-0000-4000-8000-000000000002";
+    const normalize = (service: LegacyService, operation: Record<string, unknown>) => internals(service).normalizeZyraChatDecision({
+      reply: "Moved the requested test case.", actionType: "suite", operations: [{ type: "move_to_suite", ...operation }], testcases: []
+    }, "Move this test case to the suite", [], "suite");
+
+    it.each([
+      { testcaseId }, { externalId: "PRO-TC-1" },
+      { testcaseIds: [testcaseId] }, { externalIds: ["PRO-TC-1"] },
+      { allExisting: true }, { fromLastPlan: true }
+    ])("retains an existing-writer selector %j", (selector) => {
+      const result = normalize(svc, { suiteId, ...selector });
+      expect(result.actionType).toBe("suite");
+      expect(result.operations).toHaveLength(1);
+      expect(result.operations[0]).toMatchObject({ type: "move_to_suite", suiteId, ...selector });
+    });
+
+    it.each([
+      {}, { suiteId }, { suiteId, testcaseId: "" }, { suiteId, externalId: "   " },
+      { suiteId, testcaseIds: [] }, { suiteId, externalIds: [] },
+      { testcaseId }, { externalId: "PRO-TC-1" }
+    ])("still rejects a missing destination or empty selector: %j", (operation) => {
+      expect(normalize(svc, operation).operations).toEqual([]);
+    });
+  });
+
+  describe("move-target identity accounting", () => {
+    const first = { id: "00000000-0000-4000-8000-00000000abcd", external_id: "PRO-TC-1" };
+    const second = { id: "00000000-0000-4000-8000-00000000bcde", external_id: "PRO-TC-2" };
+    const missing = "00000000-0000-4000-8000-00000000cdef";
+
+    it.each([
+      ["scalar aliases", { testcaseId: first.id, externalId: first.external_id }, [first], 1],
+      ["repeated list aliases", { testcaseIds: [first.id, first.id], externalIds: [first.external_id, first.external_id] }, [first], 1],
+      ["aliases plus a genuinely missing case", { testcaseId: first.id, externalIds: [first.external_id, "PRO-TC-MISSING"] }, [first], 2],
+      ["two distinct matched cases", { testcaseId: first.id, externalId: second.external_id }, [first, second], 2],
+      ["repeated external selector", { externalIds: [first.external_id, first.external_id] }, [first], 1],
+      ["uppercase UUID alias", { testcaseId: first.id.toUpperCase(), externalId: first.external_id }, [first], 1],
+      ["duplicate UUID spellings for one missing target", { testcaseIds: [missing, missing.toUpperCase()] }, [], 1],
+      ["two distinct missing selectors", { testcaseId: missing, externalId: "PRO-TC-MISSING" }, [], 2]
+    ] as const)("counts actual identities and unique unresolved selectors: %s", async (_label, operation, rows, requestedCount) => {
+      const query = (svc as unknown as { db: { query: jest.Mock } }).db.query;
+      query.mockResolvedValueOnce({ rows: [...rows] });
+      const result = await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { type: "move_to_suite", ...operation }, "suite-1");
+      expect(result.targets).toEqual(rows.map((row) => ({ id: row.id })));
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(query.mock.calls[0][0]).toContain("project_id = $1");
+      expect(query.mock.calls[0][1][0]).toBe("project-1");
+      expect(result.requestedCount).toBe(requestedCount);
+    });
+
+    it("keeps the shared named-archive lookup's alias count consistent without changing its target set", async () => {
+      (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValueOnce({ rows: [first] });
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", {
+        type: "archive", testcaseIds: [first.id], externalIds: [first.external_id]
+      }, null)).toEqual({ targets: [{ id: first.id }], requestedCount: 1 });
+    });
+
+    it("keeps a set-wide request's count unknown rather than inferring a named-target count", async () => {
+      (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValueOnce({ rows: [first, second] });
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { allExisting: true }, "suite-1"))
+        .toEqual({ targets: [{ id: first.id }, { id: second.id }], requestedCount: null });
+    });
+
+    it("keeps a prior-plan request's count unknown", async () => {
+      const query = (svc as unknown as { db: { query: jest.Mock } }).db.query;
+      query.mockResolvedValueOnce({ rows: [{ last_completed_plan: { testcaseIds: [first.id] } }] });
+      query.mockResolvedValueOnce({ rows: [first] });
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { fromLastPlan: true }, "suite-1"))
+        .toEqual({ targets: [{ id: first.id }], requestedCount: null });
+    });
+
+    it("does not query or invent targets for a malformed scalar UUID", async () => {
+      expect(await internals(svc).resolveZyraMoveTargets("project-1", "session-1", { testcaseId: "not-a-uuid" }, "suite-1"))
+        .toEqual({ targets: [], requestedCount: null });
+      expect((svc as unknown as { db: { query: jest.Mock } }).db.query).not.toHaveBeenCalled();
+    });
   });
 
   describe("parseModelJson", () => {
@@ -241,14 +326,14 @@ describe("Zyra model-response parsing", () => {
         { reply: "Created 3 test cases and saved them to the repository.", actionType: "create", operations: creates(3) },
         { testcases: stagedRows(3), activity: [] }
       );
-      expect(out).toContain("Sorry! Nothing was saved");
+      expect(out).toContain("The proposed changes have not been applied");
+      expect(out).toContain("select the changes you want, and Save them in the review panel");
       expect(out).toContain("Created 3 test cases and saved them to the repository.");
       expect(out).toContain("staged for your review");
     });
 
-    // The banner must not fire on rows that really were written immediately (move_to_suite), even
-    // though the reply text uses the same "saved"/"moved" language — proposedCount is 0 there because
-    // nothing about a move is staged, so the claim is true.
+    // A genuine applied-row result must not receive the unpublished-proposal correction. This is
+    // a formatter positive control, not an assertion that current chat moves bypass human review.
     it("does not correct a reply whose completion claim is actually true", () => {
       const out = internals(svc).reconcileZyraReply(
         { reply: "Moved 3 test cases into the Login suite.", actionType: "suite", operations: [{ type: "move_to_suite" }] },

@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -11,8 +12,8 @@ async function makeExecutionFixture(request: import("@playwright/test").APIReque
     })
   ).json();
   const testcase = await (
-    await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-      data: { title: `E2E Execution Test Case ${Date.now()}` },
+    await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
+      data: { title: `E2E Execution Test Case ${Date.now()}`, status: "Approved" },
     })
   ).json();
   await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
@@ -31,6 +32,34 @@ async function cleanupExecutionFixture(
 }
 
 test.describe("test execution updates", () => {
+  test("a wrong run URL rejects without changing either execution, and a body run cannot override it", async ({ request }) => {
+    const actual = await makeExecutionFixture(request);
+    const other = await makeExecutionFixture(request);
+    const persisted = async () => Promise.all([actual, other].map(async (fixture) => {
+      const response = await request.get(`/api/cycles/${fixture.cycle.id}/executions`);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      return response.json();
+    }));
+    try {
+      for (const cycleId of [other.cycle.id, "00000000-0000-4000-8000-000000000001", "not-a-run-id"]) {
+        const before = await persisted();
+        const response = await request.patch(`/api/cycles/${cycleId}/executions/${actual.execution.id}`, {
+          data: { status: "Blocked", actualResult: "Must not persist", cycleId: actual.cycle.id }
+        });
+        expect(response.status(), await response.text()).toBe(404);
+        expect(await persisted()).toEqual(before);
+      }
+      const accepted = await request.patch(`/api/cycles/${actual.cycle.id}/executions/${actual.execution.id}`, { data: { status: "Passed" } });
+      expect(accepted.ok(), await accepted.text()).toBeTruthy();
+      const [saved, untouched] = await persisted();
+      expect(saved[0]).toMatchObject({ id: actual.execution.id, status: "Passed" });
+      expect(untouched[0]).toEqual(other.execution);
+    } finally {
+      await cleanupExecutionFixture(request, actual);
+      await cleanupExecutionFixture(request, other);
+    }
+  });
+
   test("adding a test case to a cycle auto-creates an Untested execution with no executedAt", { tag: '@tesbo.testId("TES-TC-191")' }, async ({
     request,
   }) => {
@@ -388,9 +417,10 @@ test.describe("run history survives a deleted test case", () => {
   async function fullFieldTestCase(request: import("@playwright/test").APIRequestContext) {
     const steps = [{ stepNumber: 1, action: "Open the page", expectedResult: "Page loads" }];
     return (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+      await createTestcaseFixtureResponse(request, `/api/projects/${ctx.projectId}/testcases`, {
         data: {
           title: `E2E Deleted TC Snapshot ${Date.now()}`,
+          status: "Approved",
           description: "Full description",
           preconditions: "Some precondition",
           postconditions: "Some postcondition",

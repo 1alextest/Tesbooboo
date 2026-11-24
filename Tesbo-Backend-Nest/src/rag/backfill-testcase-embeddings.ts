@@ -4,6 +4,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
+import { tracedEmbeddingCall } from "../observability/embedding-trace";
+import { startLangfuse, stopLangfuse } from "../observability/langfuse";
 import { embedTexts, resolveEmbeddingAllocation } from "./rag-ai-allocation";
 import { RAG_EMBEDDING_DIMENSION } from "./rag.constants";
 import { buildTestcaseEmbeddingText } from "./testcase-embedding-text";
@@ -110,6 +112,9 @@ async function main() {
   const client = await pool.connect();
   try {
     if (args.execute) {
+      // The standalone CLI does not run Nest's bootstrap lifecycle. Dry runs
+      // must remain free of provider/observability requests.
+      await startLangfuse();
       // Only the real-write path takes the lock — two dry runs reading the same rows is harmless,
       // but two EXECUTE runs racing over the same pending rows is not something to allow silently.
       await client.query("SELECT pg_advisory_lock($1)", [BACKFILL_LOCK_KEY]);
@@ -185,8 +190,24 @@ async function main() {
         const embeddableIndexes = texts.reduce<number[]>((acc, text, i) => (text ? [...acc, i] : acc), []);
         if (embeddableIndexes.length) {
           apiCalls++;
+          const batchRowIds = embeddableIndexes.map((i) => rowsRes.rows[i].id);
+          // Same choke point the live create/update hook uses (rag-embedding.processor.ts), just
+          // opened from a deterministic seed: this script has no chat turn, and its batches are
+          // stable (ORDER BY id, already-embedded rows drop out), so a rerun rejoins the same trace.
+          const traceSeed = `embed-backfill-testcase:${projectId}:${batchRowIds.join(",")}`;
           try {
-            const vectors = await embedTexts(allocation, embeddableIndexes.map((i) => texts[i]));
+            const vectors = await tracedEmbeddingCall(
+              {
+                traceSeed,
+                name: "testcase-embedding-backfill",
+                projectId,
+                provider: allocation.provider,
+                model: allocation.model,
+                inputCount: embeddableIndexes.length,
+                inputSample: texts[embeddableIndexes[0]]
+              },
+              () => embedTexts(allocation, embeddableIndexes.map((i) => texts[i]))
+            );
             await client.query("BEGIN");
             try {
               for (let k = 0; k < embeddableIndexes.length; k++) {
@@ -194,7 +215,7 @@ async function main() {
                 const vector = vectors[k];
                 const text = texts[embeddableIndexes[k]];
                 if (!vector || vector.length !== RAG_EMBEDDING_DIMENSION) {
-                  await client.query("UPDATE testcases SET embedding_status = 'failed', updated_at = now() WHERE id = $1", [row.id]);
+                  await client.query("UPDATE testcases SET embedding_status = 'failed' WHERE id = $1", [row.id]);
                   failed++;
                   continue;
                 }
@@ -208,7 +229,7 @@ async function main() {
                   [row.project_id, row.id, contentHash, allocation.model, `[${vector.join(",")}]`]
                 );
                 await client.query(
-                  "UPDATE testcases SET embedding_status = 'ready', embedding_content_hash = $2, updated_at = now() WHERE id = $1",
+                  "UPDATE testcases SET embedding_status = 'ready', embedding_content_hash = $2 WHERE id = $1",
                   [row.id, contentHash]
                 );
                 embedded++;
@@ -222,7 +243,7 @@ async function main() {
             const message = err instanceof Error ? err.message : String(err);
             console.warn(`    batch embeddings call failed for project ${projectId}: ${message}`);
             await client.query(
-              `UPDATE testcases SET embedding_status = 'failed', updated_at = now()
+              `UPDATE testcases SET embedding_status = 'failed'
                WHERE id = ANY($1::uuid[])`,
               [embeddableIndexes.map((i) => rowsRes.rows[i].id)]
             );
@@ -232,7 +253,7 @@ async function main() {
 
         const unembeddable = rowsRes.rows.filter((_, i) => !embeddableIndexes.includes(i));
         for (const row of unembeddable) {
-          await client.query("UPDATE testcases SET embedding_status = 'unsupported', updated_at = now() WHERE id = $1", [row.id]);
+          await client.query("UPDATE testcases SET embedding_status = 'unsupported' WHERE id = $1", [row.id]);
         }
 
         processed += rowsRes.rows.length;
@@ -253,6 +274,7 @@ async function main() {
   } finally {
     if (args.execute) {
       await client.query("SELECT pg_advisory_unlock($1)", [BACKFILL_LOCK_KEY]).catch(() => undefined);
+      await stopLangfuse();
     }
     client.release();
     await pool.end();

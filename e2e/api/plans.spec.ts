@@ -1,10 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { dbControlAvailable, literal, scalar } from "../utils/psql";
 import { softDeleteExecutions } from "../utils/screens-tenant";
+import { createApprovedTestcase } from "../utils/testcase-approval";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
+
+async function attachApprovedCases(request: APIRequestContext, cycleId: string, testcaseIds: string[]) {
+  const response = await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds } });
+  expect(response.status(), await response.text()).toBe(201);
+  expect(await response.json()).toEqual({ requested: testcaseIds.length, added: testcaseIds.length, skipped: 0 });
+}
 
 test.describe("test plan CRUD", () => {
   test("supports the create -> read -> update -> list -> delete lifecycle", { tag: '@tesbo.testId("TES-TC-388")' }, async ({ request }) => {
@@ -142,11 +149,9 @@ test.describe("test plan CRUD", () => {
         data: { name: `E2E Plan Progress ${Date.now()}` },
       })
     ).json();
-    const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Plan Progress Test Case ${Date.now()}` },
-      })
-    ).json();
+    const testcase = await createApprovedTestcase(request, ctx.projectId, {
+      title: `E2E Plan Progress Test Case ${Date.now()}`,
+    });
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, {
         data: { name: `E2E Plan Progress Cycle ${Date.now()}`, planId: plan.id },
@@ -154,7 +159,7 @@ test.describe("test plan CRUD", () => {
     ).json();
 
     try {
-      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+      await attachApprovedCases(request, cycle.id, [testcase.id]);
       const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
       await request.patch(`/api/cycles/${cycle.id}/executions/${executions[0].id}`, {
         data: { status: "Passed" },
@@ -273,11 +278,9 @@ test.describe("plan roll-ups exclude soft-deleted runs (hard-delete remediation 
         data: { name: `E2E Plan Soft-Deleted Run ${Date.now()}` },
       })
     ).json();
-    const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Plan Soft-Deleted Run Case ${Date.now()}` },
-      })
-    ).json();
+    const testcase = await createApprovedTestcase(request, ctx.projectId, {
+      title: `E2E Plan Soft-Deleted Run Case ${Date.now()}`,
+    });
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, {
         data: { name: `E2E Plan Soft-Deleted Run Cycle ${Date.now()}`, planId: plan.id },
@@ -289,7 +292,7 @@ test.describe("plan roll-ups exclude soft-deleted runs (hard-delete remediation 
     };
 
     try {
-      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+      await attachApprovedCases(request, cycle.id, [testcase.id]);
       const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
       await request.patch(`/api/cycles/${cycle.id}/executions/${executions[0].id}`, { data: { status: "Passed" } });
 
@@ -388,21 +391,15 @@ test.describe("test plan progress roll-up", () => {
 
     try {
       for (const [i, c] of cases.entries()) {
-        const testcase = await (
-          await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-            data: { title: `E2E Plan Rollup Case ${i + 1} ${stamp}` },
-          })
-        ).json();
+        const testcase = await createApprovedTestcase(request, ctx.projectId, {
+          title: `E2E Plan Rollup Case ${i + 1} ${stamp}`,
+        });
         c.id = testcase.id;
       }
       const inA = cases.slice(0, 3);
       const inB = cases.slice(3);
-      await request.post(`/api/cycles/${runA.id}/testcases`, {
-        data: { testcaseIds: inA.map((c) => c.id) },
-      });
-      await request.post(`/api/cycles/${runB.id}/testcases`, {
-        data: { testcaseIds: inB.map((c) => c.id) },
-      });
+      await attachApprovedCases(request, runA.id, inA.map((c) => c.id!));
+      await attachApprovedCases(request, runB.id, inB.map((c) => c.id!));
 
       for (const [cycleId, group] of [
         [runA.id, inA],
@@ -490,11 +487,9 @@ test.describe("test plan progress roll-up", () => {
         data: { name: `E2E Plan Empty Run ${stamp}` },
       })
     ).json();
-    const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Plan Empty Run Case ${stamp}` },
-      })
-    ).json();
+    const testcase = await createApprovedTestcase(request, ctx.projectId, {
+      title: `E2E Plan Empty Run Case ${stamp}`,
+    });
     const populated = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, {
         data: { name: `E2E Plan Empty Run Populated ${stamp}`, planId: plan.id },
@@ -507,9 +502,7 @@ test.describe("test plan progress roll-up", () => {
     ).json();
 
     try {
-      await request.post(`/api/cycles/${populated.id}/testcases`, {
-        data: { testcaseIds: [testcase.id] },
-      });
+      await attachApprovedCases(request, populated.id, [testcase.id]);
       const executions = await (await request.get(`/api/cycles/${populated.id}/executions`)).json();
       await request.patch(`/api/cycles/${populated.id}/executions/${executions[0].id}`, {
         data: { status: "Passed" },
@@ -603,16 +596,12 @@ test.describe("test plan progress roll-up", () => {
     try {
       for (let i = 0; i < 2; i++) {
         testcases.push(
-          await (
-            await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-              data: { title: `E2E Plan Live Rows Case ${i + 1} ${stamp}` },
-            })
-          ).json(),
+          await createApprovedTestcase(request, ctx.projectId, {
+            title: `E2E Plan Live Rows Case ${i + 1} ${stamp}`,
+          }) as { id: string },
         );
       }
-      await request.post(`/api/cycles/${cycle.id}/testcases`, {
-        data: { testcaseIds: testcases.map((t) => t.id) },
-      });
+      await attachApprovedCases(request, cycle.id, testcases.map((t) => t.id));
       const executions: { id: string; testcaseId: string }[] = await (
         await request.get(`/api/cycles/${cycle.id}/executions`)
       ).json();
@@ -662,11 +651,9 @@ test.describe("test plan progress roll-up", () => {
         data: { name: `E2E Plan Unlink ${stamp}` },
       })
     ).json();
-    const testcase = await (
-      await request.post(`/api/projects/${ctx.projectId}/testcases`, {
-        data: { title: `E2E Plan Unlink Case ${stamp}` },
-      })
-    ).json();
+    const testcase = await createApprovedTestcase(request, ctx.projectId, {
+      title: `E2E Plan Unlink Case ${stamp}`,
+    });
     const cycle = await (
       await request.post(`/api/projects/${ctx.projectId}/cycles`, {
         data: { name: `E2E Plan Unlink Run ${stamp}` },
@@ -674,7 +661,7 @@ test.describe("test plan progress roll-up", () => {
     ).json();
 
     try {
-      await request.post(`/api/cycles/${cycle.id}/testcases`, { data: { testcaseIds: [testcase.id] } });
+      await attachApprovedCases(request, cycle.id, [testcase.id]);
       const executions = await (await request.get(`/api/cycles/${cycle.id}/executions`)).json();
       await request.patch(`/api/cycles/${cycle.id}/executions/${executions[0].id}`, {
         data: { status: "Failed" },

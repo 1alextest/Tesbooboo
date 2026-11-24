@@ -1,0 +1,92 @@
+# Tesbo repository agent entrypoint
+
+Work only in `1alextest/Tesbooboo`; `development` is the integration branch and `main` is release-only. Use a feature branch and a draft PR into `development`; do not merge, deploy or weaken CI without the owner's explicit authority. Each PR explains Purpose, Impact, reuse/source evidence, tests actually run, limitations and rollback.
+
+**Agent PR authorship:** After the trusted GitHub App publisher has been installed on the protected default branch and its real signed-PR pilot accepted, agent-authored changes use the exact candidate-to-bot handoff in [docs/agent-bot-pr-handoff.md](docs/agent-bot-pr-handoff.md). The separate App authors and pushes the draft PR; the owner remains its eligible human reviewer. Neither App nor agent may approve, merge, waive assurance or change branch rules. **Before verified activation**, keep the existing feature-branch/draft-PR path and report the bot handoff as unavailable; do not fake bot identity.
+
+## Rule ownership
+
+- **This file owns the engineering principles below.** They are binding.
+- **[CLAUDE.md](CLAUDE.md) owns the repo-specific operational mandates**: the shared database rule, the Basecamp bug-fix flow and the e2e coverage mandate. Read it as well.
+- **Detailed procedures stay in their linked documents.** Update the owner document; do not restate or fork a rule here.
+
+## Engineering principles — canonical
+
+1. **Discover → reuse → extend → compose → create only when justified.** Search the actual implementation, existing decisions, active PRs and relevant external producers before proposing architecture. For each capability record: *required capability | existing owner | current maturity | reuse/extend/compose/extract/new | evidence*. Prefer reuse, then extension, then composition, then extraction of a genuinely shared core. Create a new primitive only when those cannot satisfy the requirement coherently, and explain the missing invariant, ownership and integration points. UNVERIFIED ≠ ABSENT; similar appearance ≠ semantic equivalence; copy-paste or an unused import ≠ reuse. While building, keep a record of capability opportunities the work exposes — a step users work around, a repeated manual bridge, a fact kept only outside the product — but only after searching the specifications, current implementation, UI/REST/MCP surfaces and the work record for an existing owner. Report them as enhancement candidates using the same record shape with *existing owner or NONE*, never as implemented scope; implementing one needs explicit approval.
+
+2. **Map upstream and downstream before changing a feature.** Trace `actor/input → UI/API/MCP → authentication/authorization → validation → domain service → persistence → events/jobs → cache/index/projection → UI/notifications/reports/exports/external consumers`. Name who owns each material fact, which entry points can change it, who depends on it, its tenant/project/object/lifecycle scope, and the failure, retry, freshness and historical implications. Find the writer before trusting a stored field. Scale the map to the size of the change.
+
+3. **One authoritative owner per fact or business rule.** UI, API, MCP, jobs and integrations call the shared owner; they do not reimplement its policy. Read models and caches are allowed, but document their source, freshness, invalidation and recovery. Keep intended configuration, observed events, derived results and human approvals distinguishable.
+
+4. **Build on prior decisions and verified current state.** Search existing requirements, decisions, issues and relevant PRs first. State whether the change follows, extends or conflicts with an existing decision. Do not silently supersede approved behavior; existing code is not proof that it complies. Treat memory, summaries and old reports as leads, not sources.
+
+5. **Sweep the defect mechanism and affected consumers.** For a confirmed defect, search backward for other instances of the same mechanism and forward for side effects the fix introduces. Identify affected routes, workers, UI surfaces, MCP tools and integrations; add discriminating regression coverage; fix at the shared owner where possible. Discovering a sibling does not authorize an unrelated rewrite.
+
+6. **Preserve behavior, identity and user work.** Establish why existing behavior exists and who depends on it. For redesigns, account for every action, information and state as kept / relocated / replaced / deliberately removed with approval. Preserve canonical IDs, relationships, history and unsaved work unless their change is explicitly approved. A wording change must not silently change options, permissions or behavior.
+
+7. **Make failures and uncertain outcomes truthful.** Never turn a failed lookup into "nothing exists," partial data into a complete result, a timed-out write into definite failure, a queued operation into delivery, or an expected refusal into an infrastructure fault. Define transaction boundaries, idempotency, concurrency handling and recovery; never blindly retry a non-idempotent operation after an uncertain response.
+
+8. **Preserve authorization and action boundaries.** State the target and whether the operation is read-only or mutating before acting. Show proposed changes and the preservation boundary before consequential shared-record, schema, configuration or structural changes, and stop on material scope changes. Enforce actual tenant/project/object permissions at every entrance. A new tool does not grant permission and a project token does not become a workspace-admin token. Use authorized isolated fixtures; never use real customer records as disposable tests or expose credentials in logs, prompts or evidence.
+
+9. **Test at the boundary where the claim can fail.** Add a regression that distinguishes broken from correct behavior and demonstrate failure before the fix where feasible. Select unit, contract, real-database, integration, API, MCP and browser coverage as applicable. A mock cannot prove real queries, persistence or transaction guarantees; a rendered button cannot prove its action completes. Test both refusals without forbidden effects and legitimate use. Never obtain green CI by skipping assertions, weakening guards or reshaping fixtures around the defect. See [CLAUDE.md](CLAUDE.md) and [docs/e2e-coverage-waves.md](docs/e2e-coverage-waves.md).
+
+10. **Separate implementation, delivery and verification.** Distinguish specified → implemented → merged → deployed → discoverable/reachable → permitted → prepared → verified. Bind evidence to the exact commit, running build, environment and scope. An older passing commit does not certify a newer head; a source declaration is not runtime behavior; a tool count is not a field contract; a linked case or historical pass does not prove a new change was tested. For discovery or cache problems, compare fresh protocol responses with the registered client catalog.
+
+11. **Finish usable outcomes, not disconnected artifacts.** Trace backward from the user's required outcome and forward from the actual starting conditions. Every output must be usable by its next consumer: a created project needs a secure access handoff, a notification needs an authorized recipient and a real destination, an advertised field must persist and be independently retrievable, and a generated path needs concrete prerequisites and executable assertions before it is called runnable. Report verified / partial / blocked / deferred / not run, and name the missing link, owner and next action. Do not declare a feature complete because one layer passes.
+
+12. **Right-size work and avoid duplicate ownership.** Deliver coherent outcomes, not a chain of tiny PRs that each leave the workflow unusable. Split for genuine dependencies, rollout sequencing, distinct ownership or required review gates, not to generate activity. Keep commits focused and changes reviewable; check for existing work before starting a duplicate. This is not permission for an unbounded mega-PR.
+
+13. **Surface useful findings without silently expanding scope.** For each material omission, challenged assumption, downstream consequence or alternative, state: what was noticed → why it matters → evidence/uncertainty → recommended check or decision. Separate confirmed defects, hypotheses and enhancement proposals. Record unresolved items in the existing work record; reporting a finding does not authorize implementing it, and "no new finding" is a valid outcome. The scope classification (coupled / defect on path / adjacent / new initiative), the no-unsanctioned-pivot rule and the red-run rules live in [docs/agent-scope-discipline.md](docs/agent-scope-discipline.md).
+
+14. **Turn confirmed lessons into preventive mechanisms.** After a material miss, correction or false alarm, identify why the process failed: missing rule, ambiguous rule, rule not reached, rule not applied, or result not checked. Refine the existing canonical guidance rather than appending another checklist. Prefer a targeted regression, contract check, static guard or integration test. Documentation alone is not proof; do not promote a project-specific policy into a universal default without approval.
+
+15. **Evaluate dependencies before adopting or replacing them.** Check actual versions, contract compatibility, maintenance, licensing, security advisories, data handling and operational fit against authoritative documentation and known limitations. Reproduce dependency failures with a small isolated example before proposing a fork or parallel subsystem. Do not destabilize a shared dependency for one consumer without assessing every affected consumer.
+
+16. **Keep the product understandable and the core application-neutral.** Use existing design patterns, vocabulary and components where they fit; verify real interactions, readable information, accessibility and applicable loading/error/recovery states. Keep developer diagnostics out of user-facing explanations. A reusable capability takes its actors, rules, lifecycle and expected outcomes from the target application: do not hard-code Nesberry, DMIS or one illustrative workflow into Tesbo's core. Validate abstractions against meaningfully different cases, legitimate alternatives and insufficient-evidence situations.
+
+17. **Discover unresolved decisions before implementing them.** Agents must actively discover consequential uncertainties, contradictions, missing decisions and unexamined assumptions arising from their work — including those the user never raised — and decide whether each needs clarification, independent resolution, or authorized human judgment. Discovery must not wait for the user to ask. Hunt for: a specification that looks complete but hides an assumption; existing behavior that works technically but produces an undesirable outcome; two individually reasonable requirements that contradict together; a change with downstream consequences nobody anticipated; multiple valid implementations with different business outcomes; and team consensus that is missing a perspective. For each, investigate the available evidence, state the plausible interpretations and their consequences, and classify it as clarify-with-the-user, resolve-independently-from-evidence, or requires-authorized-human-judgment. Do not commit to a consequential interpretation without the authority that decision belongs to. Surface an unresolved product decision explicitly and leave the affected work blocked or partial; never silently assume the intended behavior. A recorded, unresolved decision with the missing authority named is a valid outcome. This is the decision-discovery counterpart to the finding record in principle 13: a finding is reported, but a missing decision is not implemented until someone with the right authority makes it.
+
+## Canonical design and session context
+
+Read the current canonical package before related work: [00_README.md](docs/qa-orchestration/00_README.md) and the seven companion files through [07_UI_DESIGN_TASKS.md](docs/qa-orchestration/07_UI_DESIGN_TASKS.md), published together under `docs/qa-orchestration/`. The [source manifest](docs/qa-orchestration/source-manifest.json) binds the exact owner-supplied v1.4.45 archive and all eight original files. The package remains **NOT FROZEN**; repository publication does not extend earlier review scopes or establish implementation, acceptance or deployment. Retain each original file's own historical revision headers. The single `Tesbo_Existing_Application_Baseline_v1.0.md` remains the owner's external living work record; read it when available and report missing access rather than inventing a substitute. The older `origin/docs/qa-specs-product-direction-20261028` branch contains only two older canonical files and is historical, not the current package source. Follow [06_IMPLEMENTATION_AGENT_BRIEF.md](docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md) and its session product-distillation contract. The separate PR extension under `docs/qa-orchestration/extensions/` retains its own scope and EXT-* IDs; its mention does not assert that the extension is present on this branch. Preserve existing `CLAUDE.md` and module-specific instructions; resolve material conflicts explicitly.
+
+## Coding changes and native Tesbo QA records
+
+When implementing a feature, defect fix or meaningful behavior change, do **both** parts of the
+engineering work: write and execute the relevant repository unit/integration/E2E tests, **and**
+assess the matching native Tesbo Requirements, Test Cases, Manuals, Policies, Tasks/Bugs and
+Files/Evidence. Assess Skills governance and record a justified `unchanged`, `not_applicable`
+or `blocked` outcome for domains that do not require a change. This is one connected
+change history, not seven obligatory new records. See the existing
+[ASER agent authoring contract](docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md)
+and [R-ASE-06](docs/specs/agent-synchronized-engineering/requirements.md)
+for proposed native candidate/review semantics; do not treat unapproved Skills or
+unfrozen specifications as executable authority.
+
+For persistent Tesbo self-testing records, discover and reuse the existing
+**TESBOPROJECT** and its native requirements, cases, suites and regression history;
+do not create a competing long-lived testing project or infer a project ID from prose.
+Destructive automated CI fixtures must instead remain in the suite's explicitly
+isolated disposable tenants and must **never** run against TESBOPROJECT. With an
+actually authorized, current MCP connection, search for
+existing native cases before staging appropriate new/updated cases using the permitted
+proposal tools and exact revision guards. Record the requirement/criterion link, test
+preconditions, actions and observable expected results, source/CI revision and
+review-task identity. Machine proposals are **unpublished** until a permitted human
+applies them; approval, Run admission and actually executed evidence remain distinct.
+
+If MCP project consent, effective Skills assignment, writer capability or access is
+missing, do not bypass it by direct REST/DB writes, invent an official Test Case ID,
+or claim an agent's code tests are native Test Run results. Report the specific
+`Tesbo sync not performed` gap and retain a reviewable PR handoff for the existing
+native records. A CI-green source commit is not a Tesbo-approved or executed case.
+
+## Session product distillation
+
+Capture meaningful friction, corrections, workarounds, missing capabilities and successful reusable practices with exact source/permission/version references. At milestones/handoff, classify observations, inspect existing functionality/specs/candidates, and update the same Product Discovery Register. Link repeated observations rather than duplicating features. Propose testable amendments with alternatives, impact and uncertainties. Preserve historical decisions and allow a truthful no-new-discovery outcome. Retrospective review uses only authorized accessible sources and records coverage gaps and processed revisions.
+
+Automatic drafting is not approval. Principles, approved specifications, official cases/results/bugs, baseline/mask changes, test retirement, implementation and deployment keep their separate human/authorized gates. Agent agreement is not evidence. Reuse existing services and components; do not create a second authoritative case, evidence, session, knowledge, approval or PR store.
+
+## Product destination
+
+The five directions are bounded autonomous exploration, governed telemetry-driven suite optimization, synthetic fixtures and optional authorized environments, correlated visual/functional/measured-performance evidence, and explainable pre-merge risk/testing. Follow FR-106–110 and T-448–453; do not interpret them as an order to implement everything now. A fixture is not execution evidence, a screenshot is not measured latency, and unvalidated model confidence is not a defect probability. Scope, budgets, provenance, cancellation/cleanup and exact revisions are mandatory.

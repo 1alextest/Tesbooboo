@@ -1,0 +1,13 @@
+ts-jest[config] (WARN)
+    The "ts-jest" config option "isolatedModules" is deprecated and will be removed in v30.0.0. Please use "isolatedModules: true" in /workspace/scratch/fb086055b433/tesbo-review-3ebda243/Tesbo-Backend-Nest/tsconfig.json instead, see https://www.typescriptlang.org/tsconfig/#isolatedModules
+
+PASS ../../assurance-working/qa-delta-contract-probes.spec.ts
+  ✓ canonical Bug association preserves an open manual execution outcome (32 ms)
+  ✓ canonical Bug association preserves an open automation execution outcome (1 ms)
+  ✓ accepted model mapping cannot silently use a later case revision (2 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       3 passed, 3 total
+Snapshots:   0 total
+Time:        5.196 s
+Ran all test suites within paths "/workspace/scratch/fb086055b433/assurance-working/qa-delta-contract-probes.spec.ts".

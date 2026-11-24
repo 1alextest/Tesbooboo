@@ -50,13 +50,25 @@ describe("ApiTokenService", () => {
       expect(result.scopes).toEqual(["read", "write"]);
     });
 
-    it("defaults to read+write when no valid scopes supplied", async () => {
-      const { db, query } = makeDb([
-        { id: "t", name: "n", scopes: "read,write", token_hash: "a".repeat(64), last_used_at: null, created_at: "now" }
-      ]);
-      const svc = new ApiTokenService(db);
-      await svc.issueToken("u", "p", "n", "bogus,delete");
-      expect(query.mock.calls[0][1][4]).toBe("read,write");
+    it("defaults omitted scopes to read only", async () => {
+      const { db, query } = makeDb([{ id: "t", name: "n", scopes: "read", token_hash: "a".repeat(64), last_used_at: null, created_at: "now" }]);
+      await new ApiTokenService(db).issueToken("u", "p", "n");
+      expect(query.mock.calls[0][1][4]).toBe("read");
+    });
+
+    it.each([[], "", "bogus,delete", "read,admin", ["read", "superuser"], [10], {}, "read,"])(
+      "rejects invalid scope selection %p before writing",
+      async (scopesInput) => {
+        const { db, query } = makeDb();
+        await expect(new ApiTokenService(db).issueToken("u", "p", "n", scopesInput)).rejects.toMatchObject({ status: 400 });
+        expect(query).not.toHaveBeenCalled();
+      }
+    );
+
+    it("deduplicates normalized valid scopes", async () => {
+      const { db, query } = makeDb([{ id: "t", name: "n", scopes: "write,read", token_hash: "b".repeat(64), last_used_at: null, created_at: "now" }]);
+      await new ApiTokenService(db).issueToken("u", "p", "n", [" Write ", "READ", "read"]);
+      expect(query.mock.calls[0][1][4]).toBe("write,read");
     });
   });
 

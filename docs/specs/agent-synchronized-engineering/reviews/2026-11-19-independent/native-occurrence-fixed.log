@@ -1,0 +1,44 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> tesbo-backend-nest@0.1.0 test
+> jest --runInBand --runTestsByPath src/behavior-graph/model-studio-runs.spec.ts --json --outputFile=/workspace/scratch/fb086055b433/assurance-working/native-occurrence-fixed-results.json
+
+PASS src/behavior-graph/model-studio-runs.spec.ts (10.885 s)
+  governed model/native writer composition
+    ✓ SEC-NATIVE-02 rechecks current authority after a blocked approval owner resumes (9 ms)
+    ✓ SEC-NATIVE-02 rechecks current authority after a blocked candidate owner resumes (2 ms)
+    ✓ SEC-NATIVE-02 keeps an authorized exact human approval available (3 ms)
+    ✓ propagates manifest failure through the shared transaction without a compensating delete (2 ms)
+    ✓ keeps native ownership and records the refreshed reviewed case in a successful manifest (3 ms)
+    ✓ refuses missing native occurrence identity inside the dispatch transaction (1 ms)
+    ✓ refuses ambiguous native occurrence identity inside the dispatch transaction
+    ✓ refuses missing snapshot native occurrence identity inside the dispatch transaction (1 ms)
+    ✓ refuses a missing active basis before native writes (1 ms)
+    ✓ refuses a missing current basis before native writes (1 ms)
+    ✓ refuses a missing approved basis before native writes (1 ms)
+    ✓ refuses a recorded mapping whose case changed even after the current case was approved again (1 ms)
+    ✓ retains the exact current explicit mapping basis in a native run manifest (34 ms)
+    ✓ rejects a stale case revision at link creation without inserting a mapping (4 ms)
+    ✓ refuses to silently reuse an older mapping when a caller supplies a new case revision (7 ms)
+    ✓ does not publish candidate effects when its mapping fails, then publishes after a successful commit (6 ms)
+    ✓ refuses untrusted model approval and native materialization before any effect: undefined (1 ms)
+    ✓ refuses untrusted model approval and native materialization before any effect: {"kind":"api_token"}
+  governed model results retain their dispatched native occurrence
+    ✓ continues to attribute the original exact occurrence and excludes later native additions (2 ms)
+    ✓ never attributes a re-added case to the original manifest (1 ms)
+    ✓ never attributes a different execution to the original manifest
+    ✓ never attributes a different reviewed snapshot to the original manifest (1 ms)
+    ✓ never attributes a unrelated case to the original manifest
+    ✓ keeps the original dispatch count when its occurrence is removed (1 ms)
+    ✓ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: undefined (1 ms)
+    ✓ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {}
+    ✓ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {"cycleItemId":"00000000-0000-4000-8000-000000000007","executionId":"00000000-0000-4000-8000-000000000008"} (1 ms)
+    ✓ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {"cycleItemId":"00000000-0000-4000-8000-000000000007","executionId":"not-an-occurrence","snapshotApprovalRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    ✓ does not count an ambiguously duplicated occurrence twice (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       29 passed, 29 total
+Snapshots:   0 total
+Time:        11.271 s, estimated 13 s
+Ran all test suites within paths "src/behavior-graph/model-studio-runs.spec.ts".
+Test results written to: ../../assurance-working/native-occurrence-fixed-results.json

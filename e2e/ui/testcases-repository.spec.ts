@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { literal, scalar } from "../utils/psql";
 import {
@@ -86,24 +87,36 @@ test.describe("test case repository (UI)", () => {
    */
   async function purgeCases(): Promise<void> {
     const listed = await api.get(`/api/projects/${tenant!.mainProjectId}/testcases`, {
-      params: { limit: 200, offset: 0 },
+      params: { limit: 200, offset: 0, includeArchived: "true" },
       failOnStatusCode: false,
     });
-    if (listed.ok()) {
-      const ids = (await listed.json()).map((tc: { id: string }) => tc.id);
-      if (ids.length) {
-        await api.post(`/api/projects/${tenant!.mainProjectId}/testcases/bulk-delete`, {
-          data: { testcaseIds: ids },
-          failOnStatusCode: false,
-        });
-      }
+    expect(listed.ok(), await listed.text()).toBeTruthy();
+    const ids = (await listed.json()).map((tc: { id: string }) => tc.id);
+    if (ids.length) {
+      const deleted = await api.post(`/api/projects/${tenant!.mainProjectId}/testcases/bulk-delete`, {
+        data: { testcaseIds: ids },
+        failOnStatusCode: false,
+      });
+      expect(deleted.ok(), await deleted.text()).toBeTruthy();
     }
+    const afterCases = await api.get(`/api/projects/${tenant!.mainProjectId}/testcases`, {
+      params: { limit: 200, offset: 0, includeArchived: "true" },
+    });
+    expect(afterCases.ok(), await afterCases.text()).toBeTruthy();
+    expect(afterCases.headers()["x-total-count"]).toBe("0");
+    expect(await afterCases.json()).toEqual([]);
     const suites = await api.get(`/api/projects/${tenant!.mainProjectId}/suites`, { failOnStatusCode: false });
-    if (suites.ok()) {
-      for (const suite of await suites.json()) {
-        await api.delete(`/api/projects/${tenant!.mainProjectId}/suites/${suite.id}`, { failOnStatusCode: false });
-      }
+    expect(suites.ok(), await suites.text()).toBeTruthy();
+    const remaining: { id: string; parentId: string | null }[] = await suites.json();
+    // The public suite delete includes descendants, so deleting roots avoids issuing another
+    // request for a child that its parent's successful deletion already removed.
+    for (const suite of remaining.filter((item) => !item.parentId)) {
+      const deleted = await api.delete(`/api/suites/${suite.id}`, { failOnStatusCode: false });
+      expect(deleted.ok(), await deleted.text()).toBeTruthy();
     }
+    const after = await api.get(`/api/projects/${tenant!.mainProjectId}/suites`);
+    expect(after.ok(), await after.text()).toBeTruthy();
+    expect(await after.json()).toEqual([]);
   }
 
   function stamp(label: string): string {
@@ -119,7 +132,7 @@ test.describe("test case repository (UI)", () => {
   }
 
   async function seedCase(title: string, extra: Record<string, unknown> = {}): Promise<string> {
-    const res = await api.post(`/api/projects/${tenant!.mainProjectId}/testcases`, {
+    const res = await createTestcaseFixtureResponse(api, `/api/projects/${tenant!.mainProjectId}/testcases`, {
       data: { title, ...extra },
     });
     expect(res.ok(), `seeding case ${title} — ${await res.text()}`).toBeTruthy();
@@ -173,17 +186,33 @@ test.describe("test case repository (UI)", () => {
     return page.getByRole("button", { name: title });
   }
 
+  function suiteButton(page: Page, name: string): Locator {
+    return page.getByRole("button", { name, exact: true });
+  }
+
+  function suiteCount(page: Page, name: string): Locator {
+    return suiteButton(page, name).locator("xpath=following-sibling::span[1]");
+  }
+
+  function bulkModal(page: Page): Locator {
+    return page.getByRole("heading", { name: "Bulk actions", exact: true }).locator("..");
+  }
+
+  function bulkField(page: Page, label: string): Locator {
+    return bulkModal(page).getByText(label, { exact: true }).locator("..").getByRole("combobox");
+  }
+
   /** Selects rows by ticking their checkboxes, then runs a bulk action to completion. */
   async function bulkDelete(page: Page, titles: string[]): Promise<void> {
     for (const title of titles) {
       const tableRow = page.getByRole("row").filter({ hasText: title });
       await tableRow.getByRole("checkbox").first().check();
     }
-    await expect(page.getByText(`${titles.length} selected`)).toBeVisible();
+    await expect(page.getByText(`${titles.length} selected`, { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Bulk actions" }).click();
-    await page.getByRole("combobox").filter({ hasText: /Select an action/ }).selectOption("delete");
-    await expect(page.getByText(/permanently deletes the selected test cases/)).toBeVisible();
-    await page.getByRole("button", { name: "Confirm" }).click();
+    await bulkField(page, "Action").selectOption("delete");
+    await expect(bulkModal(page)).toContainText("Remove the selected test cases from the repository. Existing run results and test case version history are retained.");
+    await bulkModal(page).getByRole("button", { name: "Confirm", exact: true }).click();
   }
 
   // ─── The counters after a delete ───────────────────────────────────────────
@@ -248,19 +277,18 @@ test.describe("test case repository (UI)", () => {
     for (const title of titles) await seedCase(title, { suiteId, status: "Approved" });
 
     const page = await openRepository(browser);
-    const suiteRow = page.getByRole("button", { name: new RegExp(suiteName) });
-    await expect(suiteRow).toContainText("3");
+    await expect(suiteCount(page, suiteName)).toHaveText("3");
 
     await bulkDelete(page, [titles[0], titles[1]]);
 
     // The tree is rendered from a separate fetch to the table's, which is exactly how the two came
     // to disagree in the report.
-    await expect
-      .poll(async () => (await suiteRow.textContent())?.includes("1"), {
-        message: "the suite's own count follows the delete",
-      })
-      .toBe(true);
-    await expect(page.getByText("All test cases").locator("..")).toContainText("1");
+    await expect(suiteCount(page, suiteName), "the suite's own count follows the delete").toHaveText("1");
+    await expect(page.getByText("All test cases", { exact: true }).locator("xpath=following-sibling::span[1]")).toHaveText("1");
+    await expect(pagination(page)).toContainText("1 result");
+    expect(storedCaseCount()).toBe(1);
+    for (const gone of titles.slice(0, 2)) await expect(row(page, gone)).toHaveCount(0);
+    await expect(row(page, titles[2])).toBeVisible();
   });
 
   test("TCR-05 the search box offers a control to clear it", { tag: '@tesbo.testId("TES-TC-1076")' }, async ({ browser }) => {
@@ -546,7 +574,7 @@ test.describe("test case repository (UI)", () => {
    * COALESCEs an omitted one). TCR-12 fails against the old modal: the untouched fields come back
    * rewritten.
    */
-  test("TCR-12 a bulk edit changes only the field that was set, leaving the others alone", { tag: '@tesbo.testId("TES-TC-1083")' }, async ({
+  test("TCR-12 a bulk edit sends only the chosen field and invalidates the earlier approval", { tag: '@tesbo.testId("TES-TC-1083")' }, async ({
     browser,
   }) => {
     const title = stamp("BulkScoped");
@@ -557,16 +585,15 @@ test.describe("test case repository (UI)", () => {
     await expect(row(page, title)).toBeVisible();
 
     await page.getByRole("row").filter({ hasText: title }).getByRole("checkbox").first().check();
-    await expect(page.getByText("1 selected")).toBeVisible();
+    await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Bulk actions" }).click();
-    await page.getByRole("combobox").filter({ hasText: /Select an action/ }).selectOption("update");
+    await bulkField(page, "Action").selectOption("update");
 
     // Every field starts on "Leave unchanged" — the old modal pre-selected real values here, which is
     // what made an accidental overwrite the default behaviour rather than an opt-in.
-    const selects = page.getByRole("combobox");
-    const statusSelect = selects.nth(1);
-    const prioritySelect = selects.nth(2);
-    const automationSelect = selects.nth(3);
+    const statusSelect = bulkField(page, "Status");
+    const prioritySelect = bulkField(page, "Priority");
+    const automationSelect = bulkField(page, "Automation Type");
     for (const [field, select] of [
       ["Status", statusSelect],
       ["Priority", prioritySelect],
@@ -580,12 +607,18 @@ test.describe("test case repository (UI)", () => {
 
     // Change Priority only, which is exactly what the reporter wanted to do.
     await prioritySelect.selectOption("P1");
-    await page.getByRole("button", { name: "Confirm" }).click();
+    const submitted = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith(`/api/projects/${tenant!.mainProjectId}/testcases/bulk-update`));
+    await bulkModal(page).getByRole("button", { name: "Confirm", exact: true }).click();
+    const fields = (await submitted).postDataJSON();
+    expect(fields.priority).toBe("P1");
+    expect(fields).not.toHaveProperty("status");
+    expect(fields).not.toHaveProperty("automationStatus");
 
     // Priority moved...
     await expect(page.getByRole("row").filter({ hasText: title })).toContainText("P1");
 
-    // ...and nothing else did. Asserted against the API, not the row, so a stale render cannot pass it.
+    // The content change invalidates its old approval. Other content remains intact; the request
+    // above proves that the modal did not silently write the unselected fields.
     const listed = await api.get(`/api/projects/${tenant!.mainProjectId}/testcases`, {
       params: { search: title, limit: 10 },
       failOnStatusCode: false,
@@ -594,7 +627,8 @@ test.describe("test case repository (UI)", () => {
     const updated = (await listed.json())[0];
     expect(updated, "the case vanished from the list").toBeTruthy();
     expect(updated.priority, "the field that was chosen should have changed").toBe("P1");
-    expect(updated.status, "Status was overwritten by a bulk edit that never touched it").toBe("Approved");
+    expect(updated.status, "Changed reviewed content must require a fresh approval").toBe("In Review");
+    expect(updated.approvalCurrent).toBe(false);
     expect(
       updated.automationStatus,
       "Automation Type was overwritten by a bulk edit that never touched it",
@@ -611,12 +645,19 @@ test.describe("test case repository (UI)", () => {
     const page = await openRepository(browser);
     await page.getByRole("row").filter({ hasText: title }).getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Bulk actions" }).click();
-    await page.getByRole("combobox").filter({ hasText: /Select an action/ }).selectOption("update");
+    await bulkField(page, "Action").selectOption("update");
 
-    const selects = page.getByRole("combobox");
-    await selects.nth(1).selectOption("Deprecated");
-    await selects.nth(2).selectOption("P2");
-    await page.getByRole("button", { name: "Confirm" }).click();
+    await bulkField(page, "Status").selectOption("Deprecated");
+    await bulkField(page, "Priority").selectOption("P2");
+    await expect(bulkModal(page)).toContainText("1 test case selected");
+    const applied = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/projects/${tenant!.mainProjectId}/testcases/bulk-update`));
+    await bulkModal(page).getByRole("button", { name: "Confirm", exact: true }).click();
+    const response = await applied;
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const fields = response.request().postDataJSON();
+    expect(fields.status).toBe("Deprecated");
+    expect(fields.priority).toBe("P2");
+    expect(fields).not.toHaveProperty("automationStatus");
 
     const listed = await api.get(`/api/projects/${tenant!.mainProjectId}/testcases`, {
       params: { search: title, limit: 10, includeArchived: "true" },
@@ -656,8 +697,8 @@ test.describe("test case repository (UI)", () => {
 
     // The parent's own sidebar badge already rolls up its child's cases — this is the number the
     // report's screenshot showed as "86" while the list beneath it read "No test cases found".
-    const parentRow = page.getByRole("button", { name: new RegExp(parentName) });
-    await expect(parentRow, "the parent's sidebar badge must include its child's cases").toContainText("2");
+    const parentRow = suiteButton(page, parentName);
+    await expect(suiteCount(page, parentName), "the parent's sidebar badge must include its child's cases").toHaveText("2");
 
     // Selecting the PARENT — not the child — is the exact reported repro.
     await parentRow.click();
@@ -669,7 +710,7 @@ test.describe("test case repository (UI)", () => {
     // The child, selected directly, still shows exactly its own cases — the already-working path
     // this fix must not disturb.
     await page.getByTestId(`suite-expand-${parentId}`).click();
-    const childRow = page.getByRole("button", { name: new RegExp(childName) });
+    const childRow = suiteButton(page, childName);
     await childRow.click();
     for (const title of titles) await expect(row(page, title)).toBeVisible();
     await expect(pagination(page)).toContainText("2 results");
@@ -687,7 +728,7 @@ test.describe("test case repository (UI)", () => {
     await seedCase(title, { suiteId: childId });
 
     const page = await openRepository(browser);
-    await page.getByRole("button", { name: new RegExp(parentName) }).click();
+    await suiteButton(page, parentName).click();
 
     await expect(row(page, title), "the parent showed no cases though its child has one").toBeVisible();
     await expect(pagination(page)).toContainText("1 result");
@@ -710,26 +751,26 @@ test.describe("test case repository (UI)", () => {
     for (const title of titles) await seedCase(title, { suiteId: childId });
 
     const page = await openRepository(browser);
-    await page.getByRole("button", { name: new RegExp(parentName) }).click();
+    await suiteButton(page, parentName).click();
     for (const title of titles) await expect(row(page, title)).toBeVisible();
 
     // Select just one row by hand, so "Select all N matching" (which only appears while the
     // selection is smaller than the total) has something to expand.
     await page.getByRole("row").filter({ hasText: titles[0] }).getByRole("checkbox").first().check();
-    await expect(page.getByText("1 selected")).toBeVisible();
+    await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
 
     const selectAllLink = page.getByTestId("select-all-matching");
     await expect(selectAllLink, "the link should offer to reach all 3 matching cases").toContainText("3");
     await selectAllLink.click();
     await expect(
-      page.getByText("3 selected"),
+      page.getByText("3 selected", { exact: true }),
       "selecting all matching must reach the child's cases, not silently select none",
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Bulk actions" }).click();
-    await page.getByRole("combobox").filter({ hasText: /Select an action/ }).selectOption("delete");
-    await expect(page.getByText(/permanently deletes the selected test cases/)).toBeVisible();
-    await page.getByRole("button", { name: "Confirm" }).click();
+    await bulkField(page, "Action").selectOption("delete");
+    await expect(bulkModal(page)).toContainText("Remove the selected test cases from the repository. Existing run results and test case version history are retained.");
+    await bulkModal(page).getByRole("button", { name: "Confirm", exact: true }).click();
 
     for (const title of titles) await expect(row(page, title)).toHaveCount(0);
     await expect.poll(() => storedCaseCount(), { message: "all 3 must actually be deleted, not just deselected" }).toBe(0);
@@ -759,7 +800,7 @@ test.describe("test case repository (UI)", () => {
 
     // The tree widget only ever renders 2 levels, so the root is the only way to reach this case at
     // all — exactly what the parent-suite rollup fix made newly reachable.
-    await page.getByRole("button", { name: new RegExp(rootName) }).click();
+    await suiteButton(page, rootName).click();
     await expect(row(page, title), "the root should show its grandchild's case").toBeVisible();
 
     // Suite is hidden by default (RepositoryTestCaseTable's DEFAULT_VISIBLE) — show it.
@@ -801,15 +842,15 @@ test.describe("test case repository (UI)", () => {
 
     // Before selecting a suite, the export links carry no suiteId — the "All test cases" export is
     // unchanged.
-    await page.getByRole("button", { name: "Export" }).click();
+    await page.getByRole("button", { name: "Export", exact: true }).click();
     const unfilteredCsvHref = await page.getByRole("link", { name: "Export as CSV" }).getAttribute("href");
     expect(unfilteredCsvHref, "the whole-project export must not carry a suiteId").not.toContain("suiteId=");
     await page.keyboard.press("Escape");
 
-    await page.getByRole("button", { name: new RegExp(suiteName) }).click();
+    await suiteButton(page, suiteName).click();
     await expect(row(page, inSuite)).toBeVisible();
 
-    await page.getByRole("button", { name: "Export" }).click();
+    await page.getByRole("button", { name: "Export", exact: true }).click();
     const csvHref = await page.getByRole("link", { name: "Export as CSV" }).getAttribute("href");
     expect(
       csvHref,
@@ -836,7 +877,7 @@ test.describe("test case repository (UI)", () => {
 
     await page.getByRole("button", { name: "Sort by Test case title" }).click();
 
-    await page.getByRole("button", { name: "Export" }).click();
+    await page.getByRole("button", { name: "Export", exact: true }).click();
     const csvHref = await page.getByRole("link", { name: "Export as CSV" }).getAttribute("href");
     expect(csvHref, "the export link must carry the table's active sort column").toContain("sortBy=title");
     expect(csvHref, "…and its direction").toContain("sortDir=asc");
@@ -870,13 +911,13 @@ test.describe("test case repository (UI)", () => {
       const page = await openRepository(browser);
 
       // Filter down to the suite first, so there is an ambient filter for the selection to override.
-      await page.getByRole("button", { name: new RegExp(suiteName) }).click();
+      await suiteButton(page, suiteName).click();
       await expect(row(page, selectedTitle)).toBeVisible();
 
       await page.getByRole("row").filter({ hasText: selectedTitle }).getByRole("checkbox").first().check();
-      await expect(page.getByText("1 selected")).toBeVisible();
+      await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
 
-      await page.getByRole("button", { name: "Export" }).click();
+      await page.getByRole("button", { name: "Export", exact: true }).click();
       const csvHref = await page.getByRole("link", { name: /^Export as CSV/ }).getAttribute("href");
       expect(csvHref, "the export link must carry the checked row's id").toContain(`ids=${selectedId}`);
       expect(
@@ -891,7 +932,7 @@ test.describe("test case repository (UI)", () => {
       // Clearing the selection reverts Export to the ambient suite filter again.
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Clear selection" }).click();
-      await page.getByRole("button", { name: "Export" }).click();
+      await page.getByRole("button", { name: "Export", exact: true }).click();
       const clearedHref = await page.getByRole("link", { name: "Export as CSV" }).getAttribute("href");
       expect(clearedHref).toContain(`suiteId=${suiteId}`);
       expect(clearedHref).not.toContain("ids=");

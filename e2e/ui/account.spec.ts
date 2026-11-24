@@ -1,5 +1,5 @@
 import { expect, request, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { waitForPasswordResetLinkInLogs, backendLogsAvailable } from "../utils/backend-logs";
+import { emailOutboxAvailable, waitForPasswordResetLinkEmail } from "../utils/email-outbox";
 import { env, testAddress } from "../utils/env";
 import {
   FIXTURE_PASSWORD,
@@ -36,16 +36,22 @@ import {
  * run — would authenticate with a password that no longer exists. The suite also restores
  * FIXTURE_PASSWORD in afterEach so `loginAs()` keeps working for anything that reuses this tenant.
  *
- * The reset link is read out of the backend log, not a mailbox: outside production the backend runs
- * EMAIL_DELIVERY_MODE=log and prints "PASSWORD RESET for <email>: <url>" (EmailService
- * sendPasswordReset keeps that format parseable precisely for this). No real mail is sent.
+ * The reset link is read out of the backend's test-only email outbox, not a mailbox: outside
+ * production the backend runs EMAIL_DELIVERY_MODE=log and records each message instead of sending
+ * it, and the e2e stack sets EMAIL_OUTBOX_ENABLED=1 so GET /api/test/email-outbox can return it. No
+ * real mail is sent, and no credential appears in the log.
  *
  * Locator notes: `Field`/`FieldLabel` DO set htmlFor on this screen, so ids are used directly
  * (#current-password, #new-password, #confirm-new-password).
  */
 
-/** Distinct from FIXTURE_PASSWORD, and satisfies validatePasswordValue (upper, lower, digit, 8+). */
-const NEW_PASSWORD = "E2E-Account-Next-7k2!";
+/**
+ * Distinct from FIXTURE_PASSWORD, and within the whole policy: upper, lower and a digit, and at
+ * most 16 characters. The length matters — the reset inputs carry maxLength=16, so a longer value
+ * is silently truncated by the browser while the test would then try to log in with the untruncated
+ * string.
+ */
+const NEW_PASSWORD = "New-Account-7k2!";
 
 test.describe("account screen and password reset (UI)", () => {
   let tenant: RbacTenant | null = null;
@@ -80,6 +86,9 @@ test.describe("account screen and password reset (UI)", () => {
    * hash format is the password service's business, and a hand-written row would drift from it.
    */
   async function restoreFixturePassword(): Promise<void> {
+    // Validation-only tests never change the password, and the change endpoint refuses a
+    // same-value change, so a confirmed fixture login is already the restored state.
+    if (await passwordWorks(FIXTURE_PASSWORD)) return;
     for (const candidate of [NEW_PASSWORD, FIXTURE_PASSWORD]) {
       const ctx = await requestContextFor(candidate);
       if (!ctx) continue;
@@ -90,6 +99,7 @@ test.describe("account screen and password reset (UI)", () => {
       await ctx.dispose();
       if (res.ok() || res.status() === 204) return;
     }
+    throw new Error("Could not restore the account fixture password through the native password-change endpoint");
   }
 
   /** A logged-in API context for the owner at a given password, or null if that password is wrong. */
@@ -277,7 +287,7 @@ test.describe("account screen and password reset (UI)", () => {
   });
 
   test("ACU-07 a reset link sets a new password and signs the user in with it", { tag: '@tesbo.testId("TES-TC-992")' }, async ({ browser }) => {
-    test.skip(!backendLogsAvailable(), "reads the reset link out of the backend container log");
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const page = await anonymousPage(browser);
 
     await page.goto("/forgot-password");
@@ -285,8 +295,8 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /Send reset link/i }).click();
     await expect(page.getByText("Check your email")).toBeVisible();
 
-    const resetUrl = await waitForPasswordResetLinkInLogs(tenant!.owner.email);
-    expect(resetUrl, "the backend should have printed a reset link").toBeTruthy();
+    const resetUrl = await waitForPasswordResetLinkEmail(tenant!.owner.email);
+    expect(resetUrl, "the backend should have recorded a reset link").toBeTruthy();
 
     await page.goto(new URL(resetUrl!).pathname);
     await expect(page.getByText("Set a new password")).toBeVisible();
@@ -300,7 +310,7 @@ test.describe("account screen and password reset (UI)", () => {
   });
 
   test("ACU-08 a reset link cannot be used twice", { tag: '@tesbo.testId("TES-TC-993")' }, async ({ browser }) => {
-    test.skip(!backendLogsAvailable(), "reads the reset link out of the backend container log");
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const page = await anonymousPage(browser);
 
     await page.goto("/forgot-password");
@@ -308,7 +318,7 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /Send reset link/i }).click();
     await expect(page.getByText("Check your email")).toBeVisible();
 
-    const resetUrl = await waitForPasswordResetLinkInLogs(tenant!.owner.email);
+    const resetUrl = await waitForPasswordResetLinkEmail(tenant!.owner.email);
     expect(resetUrl).toBeTruthy();
     const resetPath = new URL(resetUrl!).pathname;
 
@@ -337,7 +347,7 @@ test.describe("account screen and password reset (UI)", () => {
   });
 
   test("ACU-10 the reset form enforces the same password rules as the account screen", { tag: '@tesbo.testId("TES-TC-995")' }, async ({ browser }) => {
-    test.skip(!backendLogsAvailable(), "reads the reset link out of the backend container log");
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const page = await anonymousPage(browser);
 
     await page.goto("/forgot-password");
@@ -345,7 +355,7 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /Send reset link/i }).click();
     await expect(page.getByText("Check your email")).toBeVisible();
 
-    const resetUrl = await waitForPasswordResetLinkInLogs(tenant!.owner.email);
+    const resetUrl = await waitForPasswordResetLinkEmail(tenant!.owner.email);
     expect(resetUrl).toBeTruthy();
     await page.goto(new URL(resetUrl!).pathname);
 
@@ -355,15 +365,17 @@ test.describe("account screen and password reset (UI)", () => {
     await page.getByRole("button", { name: /^Reset password$/i }).click();
     await expect(page.getByText("Password must be at least 8 characters", { exact: true })).toBeVisible();
 
-    // Long enough but no uppercase and no digit.
+    // Long enough but no uppercase and no digit. Scoped to the alert: the field hint under the
+    // input also mentions "uppercase", and an unscoped text locator matches both (strict mode).
     await page.locator("#password").fill("alllowercase");
     await page.locator("#confirmPassword").fill("alllowercase");
     await page.getByRole("button", { name: /^Reset password$/i }).click();
-    await expect(page.getByText(/uppercase|number/i)).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: /uppercase|number/i })).toBeVisible();
 
-    // Mismatched confirmation.
+    // Mismatched confirmation. Same length as NEW_PASSWORD on purpose: the inputs cap at 16
+    // characters, so a longer suffix would be truncated to an exact match and no error would show.
     await page.locator("#password").fill(NEW_PASSWORD);
-    await page.locator("#confirmPassword").fill(`${NEW_PASSWORD}-different`);
+    await page.locator("#confirmPassword").fill("New-Account-7k3!");
     await page.getByRole("button", { name: /^Reset password$/i }).click();
     await expect(page.getByText(/do not match|don't match/i)).toBeVisible();
 

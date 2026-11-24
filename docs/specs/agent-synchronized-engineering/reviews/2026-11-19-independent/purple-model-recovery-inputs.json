@@ -1,0 +1,28 @@
+{
+  "6d921151498e2a52b244ade4efd19efd7ecbf71b": {
+    "Tesbo-Frontend/app/(app)/layout.tsx": "0509e5d7549c7d2eb3bbe85174a2e1502c009619bae8b7b7966a4173abb4e47b",
+    "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx": "b5326195083ab099872eced1a63e140237fbdca186d08987f2a31a639ff608b1",
+    "Tesbo-Frontend/components/model-studio/model-run-intent.ts": "bec1eb70ccf2b07a6aca16b86073d2512b6faf75bf9de4ab969b719816a786ed",
+    "e2e/ui/model-studio.spec.ts": "0342d6444b9479f30ac0bacb602213859402e057d32ec1a10346147b0fa589c4",
+    "e2e/playwright.config.ts": "7b34962dc4e37bbeff46deb241a9adfef21289e8ae182a2117d31b14e7b17d03"
+  },
+  "965a87a13d2669354598f8d4b912f36fdb148867": {
+    "Tesbo-Frontend/app/(app)/layout.tsx": "0509e5d7549c7d2eb3bbe85174a2e1502c009619bae8b7b7966a4173abb4e47b",
+    "Tesbo-Frontend/app/(app)/projects/[id]/model-studio/page.tsx": "6097f407a914d2b11852d618bb7c1337bb657867b5fc2bca7faa985839dcbe4d",
+    "Tesbo-Frontend/components/model-studio/model-run-intent.ts": "bec1eb70ccf2b07a6aca16b86073d2512b6faf75bf9de4ab969b719816a786ed",
+    "e2e/ui/model-studio.spec.ts": "ed7adcb73f69f4005699d300c0421aabea859ecb2339a2ce9588c76658cd6666",
+    "e2e/playwright.config.ts": "7b34962dc4e37bbeff46deb241a9adfef21289e8ae182a2117d31b14e7b17d03"
+  },
+  "method": {
+    ".claude/agents/purple-team.md": "9cd28ab82a771de754432b0e40a0e6319da54e6f2ba4c63fd2c2e3580792aeae",
+    ".kiro/steering/teams/review-orchestration.md": "023a64168c5160a761b91e7496b8a35b89246baf7eda0ab62bac17a7fa44771e",
+    "docs/reviews/NESBERRY-PURPLE-TEAM-DESIGN-ASSURANCE.md": "4b5cf3379fe058f0826a360556759ae7a6b7bd9f4051e9d79d519cc383f7bc73",
+    "docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524",
+    "docs/policies/governance/POL-GOVERNANCE-MOCKUP-WHOLE-PAGE-JOURNEY/v001.md": "bf778904da7ee598324d60486cedbf49211df4091bd3c04955504e09ad0479d4",
+    "docs/policies/governance/POL-GOVERNANCE-ASSURANCE-EVIDENCE/v001.md": "a6176c0c75342dfa6cbf66cf64e00b9a2940a47655f343e255b96f4fa58c5d52"
+  },
+  "prior_receipt_sha256": "5788d5554931fce22b46559dbd76f9c482bfd3952a9f787d700568eff2c35520",
+  "capture_index_sha256": "bb5d7a9b6ee31896ebdcd3fb2579c029026b40b5aa05926f6fb25e819994fec6",
+  "recovery_test_prefix_sha256": "957cc0827e098416d0135d488110607f6c714984efa109db4b0855a7c05db555",
+  "source_and_merge_tree": "e733ff65d25d7c2e8934b2f9b2f87665a1efb1af"
+}

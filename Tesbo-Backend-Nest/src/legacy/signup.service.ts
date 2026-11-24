@@ -13,7 +13,10 @@ import { DatabaseService } from "../database/database.service";
 import { WelcomeEmailService } from "../welcome-email/welcome-email.service";
 import { InvitationRow, LegacyService } from "./legacy.service";
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Bounded quantifiers: the classic `[^\s@]+@[^\s@]+\.[^\s@]+` backtracks polynomially on a long
+// input with no "@", and the input here is a caller-supplied address. The limits mirror the 255-char
+// cap enforced alongside it.
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/;
 const EMAIL_MAX_LENGTH = 255;
 
 interface PendingSignupRow {

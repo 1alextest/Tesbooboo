@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -135,7 +136,19 @@ type DocumentTemplate = {
   description: string;
   documentType: string;
   content: DocNode | null;
+  governedMetadata?: Record<string, unknown>;
 };
+
+const GOVERNED_DEFAULT_METADATA = (subtype: "manual" | "policy") => ({
+  schemaVersion: "tesbo-governed-document/1",
+  audience: "internal",
+  subtype,
+  confidentiality: "internal",
+  distribution: "internal",
+  sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+  effectivity: { from: null, to: null },
+  enforcementRefs: [] as string[],
+});
 
 const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
   {
@@ -209,6 +222,34 @@ const DOCUMENT_TEMPLATES: DocumentTemplate[] = [
       heading(2, "Sample Users"), paragraph(),
       heading(2, "Input Data"), paragraph(),
       heading(2, "Boundary Values"), paragraph()
+    ),
+  },
+  {
+    key: "user_manual",
+    label: "User Manual",
+    description: "Governed audience-specific guidance; review and approval are separate.",
+    documentType: "user_manual",
+    governedMetadata: GOVERNED_DEFAULT_METADATA("manual"),
+    content: doc(
+      heading(1, "User Manual"),
+      heading(2, "Purpose"), paragraph(),
+      heading(2, "Audience"), paragraph(),
+      heading(2, "Instructions"), paragraph(),
+      heading(2, "Support"), paragraph()
+    ),
+  },
+  {
+    key: "policy",
+    label: "Policy",
+    description: "Governed policy or standard with source authority and effectivity.",
+    documentType: "policy",
+    governedMetadata: GOVERNED_DEFAULT_METADATA("policy"),
+    content: doc(
+      heading(1, "Policy"),
+      heading(2, "Purpose"), paragraph(),
+      heading(2, "Scope"), paragraph(),
+      heading(2, "Requirements"), paragraph(),
+      heading(2, "Exceptions"), paragraph()
     ),
   },
 ];
@@ -1191,7 +1232,7 @@ function KnowledgeBasePageInner() {
     }
     return window.confirm(
       hasContents
-        ? `Deleting "${label}" will also move all its contents to trash. Continue?`
+        ? `Deleting "${label}" will also delete its contents: folders and documents go to trash, uploaded files are permanently removed. Continue?`
         : `Delete "${label}"? It will be moved to trash.`,
     );
   }
@@ -1262,6 +1303,7 @@ function KnowledgeBasePageInner() {
         folderId: selectedFolderId,
         title,
         documentType: template.documentType,
+        ...(template.governedMetadata ? { governedMetadata: template.governedMetadata } : {}),
         ...body,
       });
       if (template.key === "blank") {
@@ -1318,7 +1360,10 @@ function KnowledgeBasePageInner() {
     const confirmed =
       item.type === "folder"
         ? await confirmFolderDelete(item.id, label)
-        : window.confirm(`Delete "${label}"? It will be moved to trash.`);
+        : item.type === "file"
+          ? // File bytes are purged from storage on delete; this item cannot appear restorable.
+            window.confirm(`Delete "${label}"? The file is permanently removed and cannot be restored.`)
+          : window.confirm(`Delete "${label}"? It will be moved to trash.`);
     if (!confirmed) return;
     setError(null);
     try {
@@ -1459,6 +1504,13 @@ function KnowledgeBasePageInner() {
           </div>
           {summary && (
             <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              <Link
+                href={`/projects/${projectId}/knowledge-base/trash`}
+                className="flex items-center gap-1.5 rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-[12px] text-[var(--muted)] transition-colors hover:bg-[var(--surface-secondary)] hover:text-[var(--foreground)]"
+              >
+                <IconTrash size={14} stroke={1.75} />
+                Trash
+              </Link>
               <div className="rounded-[7px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-1.5 text-center">
                 <div className="text-[16px] font-semibold leading-tight tracking-tight text-[var(--foreground)]">{summary.total}</div>
                 <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--muted-soft)]">Total</div>

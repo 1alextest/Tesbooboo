@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   Body,
+  ForbiddenException,
+  ServiceUnavailableException,
   Controller,
   Delete,
   Get,
+  HttpCode,
   MessageEvent,
-  NotImplementedException,
   Param,
   Patch,
   Post,
@@ -23,6 +25,8 @@ import ExcelJS from "exceljs";
 import { filter, interval, map, merge, Observable, of } from "rxjs";
 import { AuthenticatedRequest } from "../common/request.types";
 import { LegacyService } from "./legacy.service";
+import { NativeRequirementPreviewError, previewNativeRequirement } from "./native-requirement-preview";
+import { PlanRunWrite } from "./plan-run-write-lock.guard";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { CustomFieldDefinitionDto, normalizeTestcaseHeader, RESERVED_TESTCASE_HEADERS } from "../custom-fields/custom-fields.types";
 import { ZyraProgressService } from "./zyra-progress.service";
@@ -503,6 +507,31 @@ export class LegacyController {
     return this.legacy.revokeApiKey(req.userId, id, keyId);
   }
 
+  @Get("/api/projects/:projectId/testcase-views")
+  listSavedViews(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listSavedViews(req.userId, projectId);
+  }
+
+  @Post("/api/projects/:projectId/testcase-views")
+  createSavedView(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.createSavedView(req.userId, projectId, body);
+  }
+
+  @Patch("/api/projects/:projectId/testcase-views/:viewId")
+  updateSavedView(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("viewId") viewId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.legacy.updateSavedView(req.userId, projectId, viewId, body);
+  }
+
+  @Delete("/api/projects/:projectId/testcase-views/:viewId")
+  deleteSavedView(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("viewId") viewId: string) {
+    return this.legacy.deleteSavedView(req.userId, projectId, viewId);
+  }
+
   @Get("/api/projects/:projectId/suites")
   listSuites(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
     return this.legacy.listSuitesForUser(req.userId, projectId);
@@ -510,12 +539,12 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/suites")
   createSuite(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createSuiteForUser(req.userId, projectId, body);
+    return this.legacy.createSuiteForUser(req.userId, projectId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/suites/:suiteId")
   updateSuite(@Req() req: AuthenticatedRequest, @Param("suiteId") suiteId: string, @Body() body: Record<string, any>) {
-    return this.legacy.updateSuite(req.userId, suiteId, body);
+    return this.legacy.updateSuite(req.userId, suiteId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Delete("/api/suites/:suiteId")
@@ -574,6 +603,28 @@ export class LegacyController {
     return this.legacy.updateTestCaseForUser(req.userId, projectId, testcaseId, body);
   }
 
+  @Post("/api/projects/:projectId/testcases/:testcaseId/approve")
+  @HttpCode(200)
+  approveTestCase(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("testcaseId") testcaseId: string,
+    @Body() body: Record<string, any>
+  ) {
+    return this.legacy.approveTestCaseForUser(req.userId, projectId, testcaseId, body, {
+      kind: req.apiToken ? "api_token" : "human_session"
+    });
+  }
+
+  @Get("/api/projects/:projectId/testcases/:testcaseId/approvals")
+  listTestCaseApprovals(
+    @Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string,
+    @Param("testcaseId") testcaseId: string
+  ) {
+    return this.legacy.listTestCaseApprovalsForUser(req.userId, projectId, testcaseId);
+  }
+
   @Delete("/api/projects/:projectId/testcases/:testcaseId")
   deleteTestCase(
     @Req() req: AuthenticatedRequest,
@@ -628,11 +679,13 @@ export class LegacyController {
   }
 
   @Patch("/api/plans/:planId")
+  @PlanRunWrite("plan")
   updatePlan(@Req() req: AuthenticatedRequest, @Param("planId") planId: string, @Body() body: Record<string, any>) {
     return this.legacy.updatePlan(req.userId, planId, body);
   }
 
   @Delete("/api/plans/:planId")
+  @PlanRunWrite("plan")
   deletePlan(@Req() req: AuthenticatedRequest, @Param("planId") planId: string) {
     return this.legacy.deletePlan(req.userId, planId);
   }
@@ -643,11 +696,13 @@ export class LegacyController {
   }
 
   @Post("/api/plans/:planId/items")
+  @PlanRunWrite("plan")
   addPlanItem(@Req() req: AuthenticatedRequest, @Param("planId") planId: string, @Body() body: Record<string, any>) {
     return this.legacy.addPlanItem(req.userId, planId, body);
   }
 
   @Delete("/api/plans/:planId/items/:itemId")
+  @PlanRunWrite("planItem")
   removePlanItem(
     @Req() req: AuthenticatedRequest,
     @Param("planId") planId: string,
@@ -683,7 +738,7 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/cycles/from-cases")
   createCycleFromCases(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createCycleForUser(req.userId, projectId, body);
+    return this.legacy.createCycleFromCasesForUser(req.userId, projectId, body);
   }
 
   @Get("/api/cycles/:cycleId")
@@ -691,17 +746,47 @@ export class LegacyController {
     return this.legacy.getCycle(cycleId, req.userId);
   }
 
+  @Get("/api/cycles/:cycleId/retests/preview")
+  previewRetest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Query("executionIds") executionIds?: string) {
+    return this.legacy.previewNativeRetest(cycleId, req.userId, typeof executionIds === "string" ? executionIds.split(",") : []);
+  }
+
+  @Get("/api/cycles/:cycleId/retests/requests/:requestKey")
+  readRetestRequest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Param("requestKey") requestKey: string) {
+    return this.legacy.readNativeRetestRequest(cycleId, req.userId, requestKey, { kind:req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/cycles/:cycleId/retests/requests/:requestKey/cancel")
+  @PlanRunWrite("retestRecovery")
+  cancelRetestRequest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Param("requestKey") requestKey: string, @Body() body: Record<string,any>) {
+    return this.legacy.cancelNativeRetestRequest(cycleId,req.userId,requestKey,body,{kind:req.apiToken ? "api_token" : "human_session"});
+  }
+
+  @Get("/api/cycles/:cycleId/retests")
+  listRetests(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string) {
+    return this.legacy.listNativeRetests(cycleId, req.userId);
+  }
+
+  @Post("/api/cycles/:cycleId/retests")
+  @PlanRunWrite("retest")
+  createRetest(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
+    return this.legacy.createNativeRetest(cycleId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Patch("/api/cycles/:cycleId")
+  @PlanRunWrite("cycle")
   updateCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.updateCycle(cycleId, req.userId, body);
   }
 
   @Delete("/api/cycles/:cycleId")
+  @PlanRunWrite("cycle")
   deleteCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string) {
     return this.legacy.deleteCycle(cycleId, req.userId);
   }
 
   @Post("/api/cycles/:cycleId/testcases")
+  @PlanRunWrite("cycle")
   addCycleCases(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.addCycleTestCases(cycleId, req.userId, body);
   }
@@ -709,11 +794,13 @@ export class LegacyController {
   // Mirrors /api/projects/:projectId/testcases/bulk-delete: POST (not DELETE) so the id list
   // travels in a body, which no proxy strips the way it can from a DELETE.
   @Post("/api/cycles/:cycleId/testcases/bulk-delete")
+  @PlanRunWrite("cycle")
   removeCycleCases(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.removeCycleTestCases(cycleId, req.userId, body);
   }
 
   @Delete("/api/cycles/:cycleId/testcases/:testcaseId")
+  @PlanRunWrite("cycle")
   removeCycleCase(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Param("testcaseId") testcaseId: string) {
     return this.legacy.removeCycleTestCase(cycleId, req.userId, testcaseId);
   }
@@ -724,11 +811,18 @@ export class LegacyController {
   }
 
   @Patch("/api/cycles/:cycleId/executions/:executionId")
-  updateExecution(@Req() req: AuthenticatedRequest, @Param("executionId") executionId: string, @Body() body: Record<string, any>) {
-    return this.legacy.updateExecution(executionId, req.userId, body);
+  @PlanRunWrite("execution")
+  updateExecution(
+    @Req() req: AuthenticatedRequest,
+    @Param("executionId") executionId: string,
+    @Body() body: Record<string, any>,
+    @Param("cycleId") cycleId: string
+  ) {
+    return this.legacy.updateExecution(executionId, req.userId, body, { expectedCycleId: cycleId });
   }
 
   @Post("/api/cycles/:cycleId/executions/:executionId/attachments")
+  @PlanRunWrite("execution")
   @UseInterceptors(FilesInterceptor("files", 10, { limits: { fileSize: LegacyService.KB_MAX_UPLOAD_SIZE } }))
   uploadExecutionAttachments(
     @Req() req: AuthenticatedRequest,
@@ -825,81 +919,28 @@ export class LegacyController {
   }
 
   @Post("/api/cycles/:cycleId/executions/bulk-assign")
+  @PlanRunWrite("cycle")
   bulkAssign(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.bulkAssignExecutions(cycleId, req.userId, body);
   }
 
   @Post("/api/cycles/:cycleId/executions/bulk-status")
+  @PlanRunWrite("cycle")
   bulkStatus(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.bulkUpdateExecutionStatus(cycleId, req.userId, body);
   }
 
   /** Owner-or-manager: applies a run's and its results' past state from another tool onto this run. See importRunHistory. */
   @Post("/api/cycles/:cycleId/history-import")
+  @PlanRunWrite("historyImport")
   importRunHistory(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.importRunHistory(req.userId, cycleId, body);
   }
 
   @Post("/api/cycles/:cycleId/share")
+  @PlanRunWrite("sharing")
   shareCycle(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string, @Body() body: Record<string, any>) {
     return this.legacy.shareCycle(cycleId, req.userId, body);
-  }
-
-  /*
-   * Scheduled runs are NOT IMPLEMENTED. There is no schedules table and no runner; these four routes
-   * were stubs that answered 2xx — createSchedule handed back `{ id: "local-schedule", ...body }`
-   * without storing anything, and the list, update and delete routes did nothing at all. A schedule
-   * the user created, was told about, and can never see again is worse than a feature that says it
-   * isn't there.
-   *
-   * Implementing it is a feature (a cron parser, a scheduler, a runner), not a bug fix, so it is left
-   * out and recorded in docs/e2e-coverage-waves.md — see the red EXO-A-07/08/10 in
-   * e2e/api/execution-ops.spec.ts. What is fixed here is the part that is unambiguous: they no longer
-   * answer a caller with no session or no access to the project, and creating one no longer claims
-   * success. 501 is the honest status for "the route exists, the feature does not".
-   */
-  @Get("/api/projects/:projectId/cycles/schedules")
-  async schedules(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
-    await this.legacy.requireProjectAccess(req.userId, projectId);
-    return [];
-  }
-
-  // Nothing is persisted yet (see the comment above), but a one-time schedule's runAt is still
-  // validated up front: a caller bypassing the UI's own datetime-local `min` and submit-time check
-  // must not be able to submit a past or malformed instant just because the route 501s regardless —
-  // the rule has to hold at the API, not only in the form that happens to enforce it today.
-  private validateScheduleRunAt(body: Record<string, any>): void {
-    if (body?.scheduleType !== "one_time") return;
-    const raw = body?.runAt;
-    if (typeof raw !== "string" || !raw || Number.isNaN(Date.parse(raw))) {
-      throw new BadRequestException({ error: "Run At must be a valid date and time" });
-    }
-    if (Date.parse(raw) <= Date.now()) {
-      throw new BadRequestException({ error: "Date and time must be in future" });
-    }
-  }
-
-  @Post("/api/projects/:projectId/cycles/schedules")
-  async createSchedule(
-    @Req() req: AuthenticatedRequest,
-    @Param("projectId") projectId: string,
-    @Body() body: Record<string, any>
-  ) {
-    await this.legacy.requireProjectAccess(req.userId, projectId);
-    this.validateScheduleRunAt(body);
-    throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
-  }
-
-  @Patch("/api/cycles/schedules/:scheduleId")
-  async updateSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") scheduleId: string) {
-    await this.legacy.requireSession(req.userId);
-    throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
-  }
-
-  @Delete("/api/cycles/schedules/:scheduleId")
-  async deleteSchedule(@Req() req: AuthenticatedRequest, @Param("scheduleId") scheduleId: string) {
-    await this.legacy.requireSession(req.userId);
-    throw new NotImplementedException({ error: "Scheduled runs are not available yet" });
   }
 
   @Get("/api/public/shared-runs/:token")
@@ -1179,13 +1220,11 @@ export class LegacyController {
     return this.legacy.projectDashboardSummary(req.userId, projectId);
   }
 
-  // Still a stub returning zeros, but no longer one that answers a caller who has no business
-  // knowing whether this run exists — an unauthorized caller now gets the same 404 as for a run
-  // that isn't there. (That it fabricates a zeroed summary at all is a separate, open problem.)
+  // Same status buckets the project overview uses, scoped to one run. Access is resolved inside
+  // the service, so an absent/foreign run is the same 404 as everywhere else.
   @Get("/api/cycles/:cycleId/report/summary")
   async cycleSummary(@Req() req: AuthenticatedRequest, @Param("cycleId") cycleId: string) {
-    await this.legacy.requireCycleAccessForUser(req.userId, cycleId);
-    return { total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 };
+    return this.legacy.cycleReportSummaryForUser(req.userId, cycleId);
   }
 
   @Get("/api/projects/:projectId/reports/execution")
@@ -1440,7 +1479,7 @@ export class LegacyController {
     @Param("requestId") requestId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.aiSave(projectId, req.userId, requestId, body);
+    return this.legacy.aiSave(projectId, req.userId, requestId, body, {kind:req.apiToken ? "api_token" : "human_session"});
   }
 
   @Get("/api/projects/:projectId/agents/zyra")
@@ -1642,6 +1681,126 @@ export class LegacyController {
     return this.legacy.aiGenerate(projectId, req.userId, body);
   }
 
+  @Post("/api/projects/:projectId/agents/zyra/tasks/proposals")
+  stageTestcaseChanges(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.stageTestcaseChanges(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId, transport: "rest"
+    });
+  }
+
+  @Get("/api/projects/:projectId/agents/zyra/tasks/proposals")
+  listTestcaseProposals(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listTestcaseProposals(projectId, req.userId, query);
+  }
+
+  // Work Package A Slice 1 — staging only, in the existing review task owner.
+  @Post("/api/projects/:projectId/requirements/proposals")
+  stageRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.stageRequirementChangeBundle(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId, transport: "rest"
+    });
+  }
+
+  @Get("/api/projects/:projectId/requirements/proposals")
+  listRequirementProposals(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.listRequirementProposals(projectId, req.userId, query);
+  }
+
+  @Get("/api/projects/:projectId/requirements/proposals/:taskId")
+  getRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
+    return this.legacy.requirementProposalTask(projectId, req.userId, taskId);
+  }
+
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/reject")
+  rejectRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/withdraw")
+  withdrawRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.withdrawRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  // Work Package A Slice 2 — protected apply, exact-version approval and evidence readback.
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/apply")
+  applyRequirementProposal(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.applyRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/requirements/:documentId/approve")
+  approveRequirementVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveRequirementVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Get("/api/projects/:projectId/requirements/:documentId/coverage")
+  requirementCoverage(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
+    return this.legacy.requirementCoverage(projectId, req.userId, documentId);
+  }
+
+  // Work Package B first slice — exact-version human decisions for governed manuals/policies.
+  @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/governed-approval")
+  approveGovernedKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveGovernedKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/governed-rejection")
+  rejectGovernedKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectGovernedKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/requirements/:documentId/links/:linkId/reapply")
+  reapplyRequirementCaseLink(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Param("linkId") linkId: string, @Body() body: Record<string, any>) {
+    return this.legacy.reapplyRequirementCaseLink(projectId, req.userId, documentId, linkId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  // Governed Skills: agents may create candidates; only a human session can approve or assign.
+  @Post("/api/projects/:projectId/skills")
+  createSkillCandidate(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.createSkillCandidate(projectId, req.userId, body, {
+      kind: req.apiToken ? "api_token" : "human_session", tokenId: req.apiToken?.tokenId
+    });
+  }
+
+  @Get("/api/projects/:projectId/skills")
+  listSkills(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listSkills(projectId, req.userId);
+  }
+
+  @Get("/api/projects/:projectId/skill-assignments")
+  listSkillAssignments(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listSkillAssignments(projectId, req.userId);
+  }
+
+  @Get("/api/projects/:projectId/skills/effective")
+  effectiveSkills(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
+    return this.legacy.effectiveSkills(projectId, req.userId, query);
+  }
+
+  @Patch("/api/projects/:projectId/skills/:documentId/approve")
+  approveSkillVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveSkillVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/skill-assignments")
+  assignSkill(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.assignSkill(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Post("/api/projects/:projectId/skill-assignment-batches")
+  assignSkillBatch(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
+    return this.legacy.assignSkillBatch(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Get("/api/projects/:projectId/skill-assignment-batches/:requestKey")
+  skillAssignmentBatch(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("requestKey") requestKey: string) {
+    return this.legacy.skillAssignmentBatch(projectId, req.userId, requestKey, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
+  @Patch("/api/projects/:projectId/skill-assignments/:assignmentId/deactivate")
+  deactivateSkillAssignment(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("assignmentId") assignmentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.deactivateSkillAssignment(projectId, req.userId, assignmentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId")
   getZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
     return this.legacy.zyraTask(projectId, req.userId, taskId);
@@ -1654,7 +1813,7 @@ export class LegacyController {
     @Param("taskId") taskId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.zyraFeedback(projectId, req.userId, taskId, body);
+    return this.legacy.zyraFeedback(projectId, req.userId, taskId, body, {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Delete("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")
@@ -1664,7 +1823,7 @@ export class LegacyController {
     @Param("taskId") taskId: string,
     @Param("draftIndex") draftIndex: string
   ) {
-    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex));
+    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex), {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Patch("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")
@@ -1675,17 +1834,17 @@ export class LegacyController {
     @Param("draftIndex") draftIndex: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.zyraEditDraft(projectId, req.userId, taskId, Number(draftIndex), body);
+    return this.legacy.zyraEditDraft(projectId, req.userId, taskId, Number(draftIndex), body, {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/close")
   closeZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
-    return this.legacy.zyraCloseTask(projectId, req.userId, taskId);
+    return this.legacy.zyraCloseTask(projectId, req.userId, taskId, {kind:req.apiToken ? "api_token" : "human_session"});
   }
 
   @Post("/api/projects/:projectId/agents/zyra/tasks/:taskId/save")
   saveZyraTask(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
-    return this.legacy.zyraSave(projectId, req.userId, taskId, body);
+    return this.legacy.zyraSave(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId/ticket-comments")
@@ -1723,6 +1882,11 @@ export class LegacyController {
     return this.legacy.knowledgeBaseSummary(projectId, req.userId);
   }
 
+  @Get("/api/projects/:projectId/knowledge-base/trash")
+  getKnowledgeTrash(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.legacy.listKnowledgeTrash(projectId, req.userId);
+  }
+
   @Get("/api/projects/:projectId/knowledge-base/folders/:folderId/export")
   async exportKnowledgeFolder(
     @Req() req: AuthenticatedRequest,
@@ -1758,12 +1922,12 @@ export class LegacyController {
     @Param("folderId") folderId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.moveKnowledgeFolder(projectId, req.userId, folderId, body);
+    return this.legacy.moveKnowledgeFolder(projectId, req.userId, folderId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/folders/:folderId/restore")
   restoreKnowledgeFolder(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("folderId") folderId: string) {
-    return this.legacy.restoreKnowledgeFolder(projectId, req.userId, folderId);
+    return this.legacy.restoreKnowledgeFolder(projectId, req.userId, folderId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/folders/:folderId")
@@ -1778,12 +1942,37 @@ export class LegacyController {
 
   @Delete("/api/projects/:projectId/knowledge-base/folders/:folderId")
   deleteKnowledgeFolder(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("folderId") folderId: string) {
-    return this.legacy.deleteKnowledgeFolder(projectId, req.userId, folderId);
+    return this.legacy.deleteKnowledgeFolder(projectId, req.userId, folderId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/knowledge-base/search")
   searchKnowledgeBase(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Query() query: Record<string, any>) {
     return this.legacy.searchKnowledgeBase(projectId, req.userId, query);
+  }
+
+  /**
+   * Native requirement candidate inspection only. Authorized KB project access
+   * is checked before preview feature availability or request validation.
+   * No document/version/case/link/evidence writer or Skill publication is called.
+   */
+  @Post("/api/projects/:projectId/knowledge-base/requirements/preview")
+  @HttpCode(200)
+  async previewNativeRequirementCandidate(
+    @Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: unknown
+  ) {
+    if (!req.userId) throw new ForbiddenException({ error: "Project membership required" });
+    await this.legacy.requireProjectAccess(req.userId, projectId);
+    if (process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED !== "1") {
+      throw new ServiceUnavailableException({ error: "REQUIREMENT_PREVIEW_DISABLED" });
+    }
+    try {
+      return previewNativeRequirement(body);
+    } catch (error) {
+      if (error instanceof NativeRequirementPreviewError) {
+        throw new BadRequestException({ error: error.code });
+      }
+      throw error;
+    }
   }
 
   @Get("/api/projects/:projectId/knowledge-base/documents")
@@ -1793,12 +1982,22 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/knowledge-base/documents")
   createKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createKnowledgeDocument(projectId, req.userId, body);
+    return this.legacy.createKnowledgeDocument(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/knowledge-base/documents/:documentId/versions")
   listKnowledgeDocumentVersions(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
     return this.legacy.listKnowledgeDocumentVersions(projectId, req.userId, documentId);
+  }
+
+  @Get("/api/projects/:projectId/knowledge-base/documents/:documentId/versions/:versionId")
+  getKnowledgeDocumentVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Param("versionId") versionId: string) {
+    return this.legacy.getKnowledgeDocumentVersion(projectId, req.userId, documentId, versionId);
+  }
+
+  @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/submissions")
+  submitKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.submitKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/restore-version")
@@ -1808,17 +2007,17 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.restoreKnowledgeDocumentVersion(projectId, req.userId, documentId, body);
+    return this.legacy.restoreKnowledgeDocumentVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/approve-ai-memory")
-  approveAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.approveAiMemory(projectId, req.userId, documentId);
+  approveAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.approveAiMemory(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/reject-ai-memory")
-  rejectAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.rejectAiMemory(projectId, req.userId, documentId);
+  rejectAiMemory(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
+    return this.legacy.rejectAiMemory(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   // ── Document comments ──
@@ -1877,17 +2076,17 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.moveKnowledgeDocument(projectId, req.userId, documentId, body);
+    return this.legacy.moveKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId/restore")
   restoreKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.restoreKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.restoreKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Post("/api/projects/:projectId/knowledge-base/documents/:documentId/duplicate")
   duplicateKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.duplicateKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/documents/:documentId")
@@ -1897,7 +2096,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.updateKnowledgeDocument(projectId, req.userId, documentId, body);
+    return this.legacy.updateKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   // Zyra AI Memory's only write path for people: correct or remove one entry (owner/manager only).
@@ -1924,7 +2123,7 @@ export class LegacyController {
 
   @Delete("/api/projects/:projectId/knowledge-base/documents/:documentId")
   deleteKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string) {
-    return this.legacy.deleteKnowledgeDocument(projectId, req.userId, documentId);
+    return this.legacy.deleteKnowledgeDocument(projectId, req.userId, documentId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Post("/api/projects/:projectId/knowledge-base/files/upload")
@@ -2241,8 +2440,19 @@ export class LegacyController {
   // anywhere in this codebase, so both routes were honest stubs (empty list, always-404 read) rather
   // than faking success — see LegacyService.notifyProjectMembers' own comment for the full history.
   @Get("/api/notifications")
-  async notifications(@Req() req: AuthenticatedRequest) {
-    return this.legacy.notificationsForUser(req.userId);
+  async notifications(
+    @Req() req: AuthenticatedRequest,
+    @Query("limit") limit?: unknown,
+    @Query("beforeId") beforeId?: unknown
+  ) {
+    return this.legacy.notificationsForUser(req.userId, { limit, beforeId });
+  }
+
+  // The badge counts every unread row, not only those in the first page. Keeping it a separate
+  // route means a focus refresh never has to re-fetch (or clobber) an expanded list.
+  @Get("/api/notifications/unread-count")
+  async unreadNotificationCount(@Req() req: AuthenticatedRequest) {
+    return this.legacy.unreadNotificationCount(req.userId);
   }
 
   // Declared before the `:id/read` route below; the two never overlap (this one is a single fixed

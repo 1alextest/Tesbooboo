@@ -62,9 +62,10 @@ export function prefetchProjectForPath(pathname: string): void {
   // extra params, miss this entry, and make their own call. The project chain below still gains.
   // A uuid needs no lookup (RouteParamsProvider renders it immediately), so start the project
   // requests right away instead of behind the resolve.
-  if (UUID_RE.test(ref)) {
-    put(projectKey(ref), getProject(ref));
-    put(membersKey(ref), listProjectMembers(ref));
+  const immediateProjectId = UUID_RE.test(ref) ? ref : null;
+  if (immediateProjectId) {
+    put(projectKey(immediateProjectId), getProject(immediateProjectId));
+    put(membersKey(immediateProjectId), listProjectMembers(immediateProjectId));
   }
 
   const resolve = api<ResolvedProject>(`/api/route-resolve?${new URLSearchParams({ project: ref }).toString()}`);
@@ -72,6 +73,9 @@ export function prefetchProjectForPath(pathname: string): void {
 
   void resolve
     .then(({ projectId }) => {
+      // This invocation already started these reads. Their take-once entries may have been
+      // consumed while the resolver was pending; that is not a reason to start them again.
+      if (immediateProjectId && immediateProjectId.toLowerCase() === projectId.toLowerCase()) return;
       if (store.has(projectKey(projectId))) return;
       put(projectKey(projectId), getProject(projectId));
       put(membersKey(projectId), listProjectMembers(projectId));

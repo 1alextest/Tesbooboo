@@ -1,0 +1,226 @@
+﻿2026-11-20T03:27:25.2846502Z Current runner version: '2.338.2'
+2026-11-20T03:27:25.2872477Z ##[group]Runner Image Provisioner
+2026-11-20T03:27:25.2873418Z Hosted Compute Agent
+2026-11-20T03:27:25.2874068Z Version: 20261103.629
+2026-11-20T03:27:25.2875106Z Commit: 15dbd9ccb5dbf34fae002b6ed1a2670f52df37bc
+2026-11-20T03:27:25.2876074Z Build Date: 2026-11-03T17:26:59Z
+2026-11-20T03:27:25.2876793Z Worker ID: {fc3e3f7d-9446-4a38-9b23-2e4717333c1f}
+2026-11-20T03:27:25.2877652Z Region: eastus
+2026-11-20T03:27:25.2878269Z Cloud: Azure
+2026-11-20T03:27:25.2878820Z ##[endgroup]
+2026-11-20T03:27:25.2880886Z ##[group]Operating System
+2026-11-20T03:27:25.2881573Z Ubuntu
+2026-11-20T03:27:25.2882102Z 24.04.5
+2026-11-20T03:27:25.2882733Z LTS
+2026-11-20T03:27:25.2883258Z ##[endgroup]
+2026-11-20T03:27:25.2883955Z ##[group]Runner Image
+2026-11-20T03:27:25.2884588Z Image: ubuntu-24.04
+2026-11-20T03:27:25.2885592Z Version: 20261111.370.1
+2026-11-20T03:27:25.2887129Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261111.370/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-20T03:27:25.2888806Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261111.370
+2026-11-20T03:27:25.2889807Z ##[endgroup]
+2026-11-20T03:27:25.2890933Z ##[group]GITHUB_TOKEN Permissions
+2026-11-20T03:27:25.2893134Z Contents: read
+2026-11-20T03:27:25.2893756Z Metadata: read
+2026-11-20T03:27:25.2894477Z ##[endgroup]
+2026-11-20T03:27:25.2897071Z Secret source: Actions
+2026-11-20T03:27:25.2898193Z Cache mode: write
+2026-11-20T03:27:25.2899182Z Prepare workflow directory
+2026-11-20T03:27:25.3299097Z Prepare all required actions
+2026-11-20T03:27:25.3346746Z Getting action download info
+2026-11-20T03:27:25.5657734Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-20T03:27:25.6920998Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-11-20T03:27:25.8936915Z Complete job name: api-mcp-contracts
+2026-11-20T03:27:25.9990450Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-11-20T03:27:25.9991542Z with:
+2026-11-20T03:27:25.9992019Z   persist-credentials: false
+2026-11-20T03:27:25.9992578Z   repository: 1alextest/Tesbooboo
+2026-11-20T03:27:25.9996659Z   token: ***
+2026-11-20T03:27:25.9997111Z   ssh-strict: true
+2026-11-20T03:27:25.9997572Z   ssh-user: git
+2026-11-20T03:27:25.9998015Z   clean: true
+2026-11-20T03:27:25.9998478Z   sparse-checkout-cone-mode: true
+2026-11-20T03:27:25.9999009Z   fetch-depth: 1
+2026-11-20T03:27:25.9999463Z   fetch-tags: false
+2026-11-20T03:27:26.0000030Z   show-progress: true
+2026-11-20T03:27:26.0000501Z   lfs: false
+2026-11-20T03:27:26.0000937Z   submodules: false
+2026-11-20T03:27:26.0001404Z   set-safe-directory: true
+2026-11-20T03:27:26.0001939Z   allow-unsafe-pr-checkout: false
+2026-11-20T03:27:26.0002797Z ##[endgroup]
+2026-11-20T03:27:26.2699889Z Syncing repository: 1alextest/Tesbooboo
+2026-11-20T03:27:26.2702882Z ##[group]Getting Git version info
+2026-11-20T03:27:26.2704187Z Working directory is '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:26.2706282Z [command]/usr/bin/git version
+2026-11-20T03:27:26.2827324Z git version 2.56.1
+2026-11-20T03:27:26.2852105Z ##[endgroup]
+2026-11-20T03:27:26.2870210Z Temporarily overriding HOME='/home/runner/work/_temp/f9ff9ca0-91d6-48de-a4dd-4031e34d82c4' before making global git config changes
+2026-11-20T03:27:26.2876550Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:27:26.2879458Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:26.2941738Z Deleting the contents of '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:26.2948154Z ##[group]Initializing the repository
+2026-11-20T03:27:26.2953684Z [command]/usr/bin/git init /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:26.3089771Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-20T03:27:26.3092353Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-20T03:27:26.3095066Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-20T03:27:26.3097299Z hint: call:
+2026-11-20T03:27:26.3098364Z hint:
+2026-11-20T03:27:26.3099521Z hint: 	git config --global init.defaultBranch <name>
+2026-11-20T03:27:26.3106061Z hint:
+2026-11-20T03:27:26.3107585Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-20T03:27:26.3109828Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-20T03:27:26.3111543Z hint:
+2026-11-20T03:27:26.3112477Z hint: 	git branch -m <name>
+2026-11-20T03:27:26.3113579Z hint:
+2026-11-20T03:27:26.3115258Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-20T03:27:26.3117500Z Initialized empty Git repository in /home/runner/work/Tesbooboo/Tesbooboo/.git/
+2026-11-20T03:27:26.3123357Z [command]/usr/bin/git remote add origin https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:26.3194178Z ##[endgroup]
+2026-11-20T03:27:26.3196005Z ##[group]Disabling automatic garbage collection
+2026-11-20T03:27:26.3207368Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-20T03:27:26.3255936Z ##[endgroup]
+2026-11-20T03:27:26.3257592Z ##[group]Setting up auth
+2026-11-20T03:27:26.3279746Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:26.3341433Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:26.3828185Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:26.3874477Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:26.4123903Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:26.4170407Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:26.4412043Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-20T03:27:26.4461545Z ##[endgroup]
+2026-11-20T03:27:26.4462499Z ##[group]Fetching the repository
+2026-11-20T03:27:26.4474907Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e49fab4df4043b621b7007e97d8646743f441b6b:refs/remotes/pull/167/merge
+2026-11-20T03:27:27.5252944Z From https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:27.5256338Z  * [new ref]         e49fab4df4043b621b7007e97d8646743f441b6b -> pull/167/merge
+2026-11-20T03:27:27.5261543Z ##[endgroup]
+2026-11-20T03:27:27.5262882Z ##[group]Determining the checkout info
+2026-11-20T03:27:27.5265249Z ##[endgroup]
+2026-11-20T03:27:27.5266105Z [command]/usr/bin/git sparse-checkout disable
+2026-11-20T03:27:27.5332507Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-20T03:27:27.5373225Z ##[group]Checking out the ref
+2026-11-20T03:27:27.5374588Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/167/merge
+2026-11-20T03:27:27.6825612Z Note: switching to 'refs/remotes/pull/167/merge'.
+2026-11-20T03:27:27.6826589Z
+2026-11-20T03:27:27.6827354Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-11-20T03:27:27.6829358Z changes and commit them, and you can discard any commits you make in this
+2026-11-20T03:27:27.6832228Z state without impacting any branches by switching back to a branch.
+2026-11-20T03:27:27.6833886Z
+2026-11-20T03:27:27.6835170Z If you want to create a new branch to retain commits you create, you may
+2026-11-20T03:27:27.6837657Z do so (now or later) by using -c with the switch command. Example:
+2026-11-20T03:27:27.6839861Z
+2026-11-20T03:27:27.6840509Z   git switch -c <new-branch-name>
+2026-11-20T03:27:27.6841588Z
+2026-11-20T03:27:27.6842363Z Or undo this operation with:
+2026-11-20T03:27:27.6843165Z
+2026-11-20T03:27:27.6843688Z   git switch -
+2026-11-20T03:27:27.6844330Z
+2026-11-20T03:27:27.6845855Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-11-20T03:27:27.6847407Z
+2026-11-20T03:27:27.6848939Z HEAD is now at e49fab4 Merge 965a87a13d2669354598f8d4b912f36fdb148867 into 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:27.6854071Z ##[endgroup]
+2026-11-20T03:27:27.6903779Z [command]/usr/bin/git log -1 --format=%H
+2026-11-20T03:27:27.6938229Z e49fab4df4043b621b7007e97d8646743f441b6b
+2026-11-20T03:27:27.6950116Z ##[group]Removing auth
+2026-11-20T03:27:27.6954475Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:27.6998135Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:27.7237582Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:27.7273087Z http.https://github.com/.extraheader
+2026-11-20T03:27:27.7282174Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-20T03:27:27.7330254Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:27.7570750Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:27.7613693Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:27.7853308Z ##[endgroup]
+2026-11-20T03:27:27.8333091Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-11-20T03:27:27.8335029Z with:
+2026-11-20T03:27:27.8335912Z   node-version: 22
+2026-11-20T03:27:27.8336849Z   cache: npm
+2026-11-20T03:27:27.8338093Z   cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+2026-11-20T03:27:27.8339653Z   always-auth: false
+2026-11-20T03:27:27.8340650Z   check-latest: false
+2026-11-20T03:27:27.8351000Z   token: ***
+2026-11-20T03:27:27.8351904Z ##[endgroup]
+2026-11-20T03:27:27.9889910Z Found in cache @ /opt/hostedtoolcache/node/22.23.4/x64
+2026-11-20T03:27:27.9893137Z (node:2411) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:27:27.9896814Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:27:27.9899242Z ##[group]Environment details
+2026-11-20T03:27:28.4215563Z node: v22.23.4
+2026-11-20T03:27:28.4215849Z npm: 10.9.9
+2026-11-20T03:27:28.4216129Z yarn: 1.22.22
+2026-11-20T03:27:28.4217132Z ##[endgroup]
+2026-11-20T03:27:28.4237593Z [command]/opt/hostedtoolcache/node/22.23.4/x64/bin/npm config get cache
+2026-11-20T03:27:28.6369399Z /home/runner/.npm
+2026-11-20T03:27:28.7274148Z Cache hit for: node-cache-Linux-x64-npm-cb737a3df8991584f50914d87903aa9bae87ae61e6216c8b2e4642a6d5a35e8f
+2026-11-20T03:27:28.7388477Z (node:2411) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-20T03:27:29.4523625Z Received 112797852 of 112797852 (100.0%), 155.5 MBs/sec
+2026-11-20T03:27:29.4524374Z Cache Size: ~108 MB (112797852 B)
+2026-11-20T03:27:29.4549706Z [command]/usr/bin/tar -xf /home/runner/work/_temp/3d4495ef-5666-4c73-ae8e-753886a922e0/cache.tzst -P -C /home/runner/work/Tesbooboo/Tesbooboo --use-compress-program unzstd
+2026-11-20T03:27:29.8808367Z Cache restored successfully
+2026-11-20T03:27:29.8860261Z Cache restored from key: node-cache-Linux-x64-npm-cb737a3df8991584f50914d87903aa9bae87ae61e6216c8b2e4642a6d5a35e8f
+2026-11-20T03:27:29.9173521Z ##[group]Run npm ci --ignore-scripts
+2026-11-20T03:27:29.9173923Z [36;1mnpm ci --ignore-scripts[0m
+2026-11-20T03:27:29.9205872Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:29.9206158Z ##[endgroup]
+2026-11-20T03:27:34.6519572Z npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+2026-11-20T03:27:34.7397367Z npm warn deprecated rimraf@2.7.1: Rimraf versions prior to v4 are no longer supported
+2026-11-20T03:27:34.7779788Z npm warn deprecated lodash.isequal@4.5.0: This package is deprecated. Use require('node:util').isDeepStrictEqual instead.
+2026-11-20T03:27:34.9240557Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:27:34.9253548Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:27:34.9258557Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:27:34.9262814Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:27:34.9267578Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:27:34.9291022Z npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:27:35.7021688Z npm warn deprecated fstream@1.0.12: This package is no longer supported.
+2026-11-20T03:27:36.9201289Z npm warn deprecated uuid@8.3.2: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
+2026-11-20T03:27:37.2139052Z npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+2026-11-20T03:28:18.0328015Z
+2026-11-20T03:28:18.0331879Z added 1109 packages, and audited 1110 packages in 48s
+2026-11-20T03:28:18.0332406Z
+2026-11-20T03:28:18.0332752Z 160 packages are looking for funding
+2026-11-20T03:28:18.0333312Z   run `npm fund` for details
+2026-11-20T03:28:18.2466050Z
+2026-11-20T03:28:18.2466966Z 31 vulnerabilities (2 low, 29 moderate)
+2026-11-20T03:28:18.2467370Z
+2026-11-20T03:28:18.2467741Z To address issues that do not require attention, run:
+2026-11-20T03:28:18.2468291Z   npm audit fix
+2026-11-20T03:28:18.2468501Z
+2026-11-20T03:28:18.2468862Z To address all issues (including breaking changes), run:
+2026-11-20T03:28:18.2469438Z   npm audit fix --force
+2026-11-20T03:28:18.2469684Z
+2026-11-20T03:28:18.2469901Z Run `npm audit` for details.
+2026-11-20T03:28:18.3799250Z ##[group]Run npm test -- --runTestsByPath src/auth/api-token-rest.integration.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token.service.spec.ts src/mcp/mcp.service.spec.ts src/mcp/mcp-publication.spec.ts src/review-board/review-board.http.integration.spec.ts
+2026-11-20T03:28:18.3801236Z [36;1mnpm test -- --runTestsByPath src/auth/api-token-rest.integration.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token.service.spec.ts src/mcp/mcp.service.spec.ts src/mcp/mcp-publication.spec.ts src/review-board/review-board.http.integration.spec.ts[0m
+2026-11-20T03:28:18.3823186Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:28:18.3823470Z ##[endgroup]
+2026-11-20T03:28:18.4955414Z
+2026-11-20T03:28:18.4956204Z > tesbo-backend-nest@0.1.0 test
+2026-11-20T03:28:18.4958424Z > jest --runInBand --runTestsByPath src/auth/api-token-rest.integration.spec.ts src/auth/api-token-rest.guard.spec.ts src/auth/api-token.service.spec.ts src/mcp/mcp.service.spec.ts src/mcp/mcp-publication.spec.ts src/review-board/review-board.http.integration.spec.ts
+2026-11-20T03:28:18.4959846Z
+2026-11-20T03:28:32.2025967Z PASS src/mcp/mcp.service.spec.ts (13.092 s)
+2026-11-20T03:28:35.0826739Z PASS src/auth/api-token-rest.integration.spec.ts
+2026-11-20T03:28:37.3374886Z PASS src/mcp/mcp-publication.spec.ts
+2026-11-20T03:28:38.2577287Z PASS src/auth/api-token-rest.guard.spec.ts
+2026-11-20T03:28:38.7113688Z PASS src/auth/api-token.service.spec.ts
+2026-11-20T03:28:38.7127155Z
+2026-11-20T03:28:38.7135234Z Test Suites: 1 skipped, 5 passed, 5 of 6 total
+2026-11-20T03:28:38.7135941Z Tests:       8 skipped, 326 passed, 334 total
+2026-11-20T03:28:38.7136390Z Snapshots:   0 total
+2026-11-20T03:28:38.7136659Z Time:        19.835 s
+2026-11-20T03:28:38.7139103Z Ran all test suites within paths "src/auth/api-token-rest.integration.spec.ts", "src/auth/api-token-rest.guard.spec.ts", "src/auth/api-token.service.spec.ts", "src/mcp/mcp.service.spec.ts", "src/mcp/mcp-publication.spec.ts", "src/review-board/review-board.http.integration.spec.ts".
+2026-11-20T03:28:39.0187959Z Post job cleanup.
+2026-11-20T03:28:39.1502123Z (node:2517) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:28:39.1503719Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:28:39.1506816Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-cb737a3df8991584f50914d87903aa9bae87ae61e6216c8b2e4642a6d5a35e8f, not saving cache.
+2026-11-20T03:28:39.1673260Z Post job cleanup.
+2026-11-20T03:28:39.2585701Z [command]/usr/bin/git version
+2026-11-20T03:28:39.2615324Z git version 2.56.1
+2026-11-20T03:28:39.2652901Z Temporarily overriding HOME='/home/runner/work/_temp/f6f70b85-d888-4596-a5b4-8f9362062824' before making global git config changes
+2026-11-20T03:28:39.2654465Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:28:39.2659256Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:28:39.2700339Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:28:39.2739788Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:28:39.3002895Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:28:39.3049963Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:28:39.3476176Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:28:39.3529338Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:28:39.3976177Z Cleaning up orphan processes
+2026-11-20T03:28:39.4429123Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

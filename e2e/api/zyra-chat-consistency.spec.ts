@@ -1,6 +1,16 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { exec, literal, scalar } from "../utils/psql";
+import { env } from "../utils/env";
+import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
+import { verifyZyraSuiteTurn, withSuiteInsertFailure, type SuiteFeedbackState } from "../utils/zyra-suite-feedback";
+import { ANSWER_MODES, answerRepositorySnapshotSql, seedAnswerRepository, verifyZyraAnswerTurn, type AnswerRepositoryState } from "../utils/zyra-answer-feedback";
+import { MOVE_MODES, seedMoveRepository, settleMoveFixtures, verifyZyraMoveTurn, withMoveUpdateFailure } from "../utils/zyra-move-feedback";
+import { SINGLE_MOVE_SELECTORS, verifyZyraSingleMove } from "../utils/zyra-single-move";
+import { ALIAS_MOVE_MODES, verifyZyraAliasMove } from "../utils/zyra-alias-move";
+import { MISSING_SUITE_MODES, seedMissingSuiteRepository, verifyZyraMissingSuite } from "../utils/zyra-missing-suite";
+import { MOVE_TRACE_COUNTS, seedMoveTraceRepository, verifyZyraMoveTraceCount } from "../utils/zyra-move-trace-count";
+import { OVERLAPPING_MOVE_MODES, seedOverlappingMoveRepository, verifyZyraOverlappingMoveTrace } from "../utils/zyra-overlapping-move-trace";
 import {
   loginAs,
   provisionRbacTenant,
@@ -283,7 +293,7 @@ test.describe("zyra chat ↔ repository consistency", () => {
 
     // Once actually saved, the repository (not this stale message snapshot) is what the review
     // panel re-fetches from — that live re-fetch is exercised in e2e/ui/zyra.spec.ts ZYU-67.
-    const saved = await asOwner.post(
+    const saved = await saveReviewedZyraTask(asOwner,
       `/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${reviewRequestId}/save`,
       { data: { selectedDraftIndexes: [0] }, failOnStatusCode: false },
     );
@@ -514,7 +524,7 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
   /** Points this tenant's project at the fake provider — same routes api/zyra.spec.ts uses. */
   async function allocateFakeAiKey(): Promise<void> {
     const keyRes = await asOwner.post("/api/workspace/ai-keys", {
-      data: { name: `E2E ZCC fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.baseUrl },
+      data: { name: `E2E ZCC fake ai ${Date.now()}${Math.floor(Math.random() * 1000)}`, provider: "openai", apiKey: "sk-e2e-fake", baseUrl: ai.backendBaseUrl },
       failOnStatusCode: false,
     });
     expect(keyRes.status(), `creating the fake-provider AI key — ${await keyRes.text()}`).toBe(201);
@@ -549,6 +559,118 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     if (!row) return null;
     const [taskStatus, generatedCount, payloadLength] = row.split("|");
     return { taskStatus, generatedCount: Number(generatedCount), payloadLength: Number(payloadLength) };
+  }
+
+  for (const language of ["en", "ru"] as const) {
+    for (const mode of ["failed", "partial", "created", "reused"] as const) {
+      test(`Zyra suite reconciliation ${language}: ${mode}`, async () => {
+        await allocateFakeAiKey();
+        const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+        const label = `E2E ${language} ${mode} ${Date.now()}`;
+        const faultName = `${label} failed suite`;
+        const names = mode === "failed" ? [faultName] : mode === "partial" ? [`${label} kept suite`, faultName] : [`${label} suite`];
+        if (mode === "reused") {
+          const seeded = await asOwner.post(`${base}/suites`, { data: { name: names[0] } });
+          expect(seeded.status(), await seeded.text()).toBe(201);
+        }
+        const project = literal(tenant!.mainProjectId);
+        const state = async () => JSON.parse(scalar(`SELECT jsonb_build_object(
+          'suites',COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM suites s WHERE s.project_id=${project}),'[]'::jsonb),
+          'cases',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY t.id) FROM testcases t WHERE t.project_id=${project}),'[]'::jsonb),
+          'reviews',COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM ai_generation_requests r WHERE r.project_id=${project}),'[]'::jsonb),
+          'audit',COALESCE((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.created_at,a.id) FROM audit_logs a
+            WHERE a.project_id=${project} AND a.action='zyra_suite_created'),'[]'::jsonb))::text;`)) as SuiteFeedbackState;
+        const run = () => verifyZyraSuiteTurn({ request: asOwner, ai, base, language, mode, names, state, ownerId: tenant!.owner.userId });
+        if (mode === "failed" || mode === "partial") {
+          await withSuiteInsertFailure(tenant!.mainProjectId, faultName, async (sql) => { exec(sql); }, run);
+        } else await run();
+      });
+    }
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of ANSWER_MODES) {
+    test(`Zyra answer reconciliation ${language}: ${mode}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      await seedAnswerRepository(asOwner, base, state);
+      await allocateFakeAiKey();
+      await verifyZyraAnswerTurn({ request: asOwner, ai, base, language, mode, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of MOVE_MODES) {
+    test(`Zyra move reconciliation ${language}: ${mode}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMoveRepository(asOwner, base, `${language}-${mode}`);
+      await settleMoveFixtures([fixture], state);
+      await allocateFakeAiKey();
+      const run = () => verifyZyraMoveTurn({ request: asOwner, ai, base, language, mode, fixture, state, ownerId: tenant!.owner.userId });
+      if (mode === "failed" || mode === "partial") await withMoveUpdateFailure(tenant!.mainProjectId, fixture.secondId, async (statement) => { exec(statement); }, run);
+      else await run();
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const selector of SINGLE_MOVE_SELECTORS) {
+    test(`Zyra single-case move ${language}: ${selector}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMoveRepository(asOwner, base, `${language}-${selector}`);
+      await settleMoveFixtures([fixture], state); await allocateFakeAiKey();
+      await verifyZyraSingleMove({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, selector, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of ALIAS_MOVE_MODES) {
+    test(`Zyra move aliases ${language}: ${mode}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMoveRepository(asOwner, base, `${language}-${mode}`);
+      await settleMoveFixtures([fixture], state); await allocateFakeAiKey();
+      await verifyZyraAliasMove({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of MISSING_SUITE_MODES) {
+    test(`Zyra unavailable destination ${language}: ${mode}`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMissingSuiteRepository(asOwner, base, `${language}-${mode}`);
+      if (mode === "deleted") {
+        const deleted = await asOwner.delete(`/api/suites/${fixture.destinationId}`); expect(deleted.ok(), await deleted.text()).toBeTruthy();
+      }
+      await settleMoveFixtures([fixture, { ...fixture, firstId: fixture.blockedId }], state); await allocateFakeAiKey();
+      await verifyZyraMissingSuite({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const count of MOVE_TRACE_COUNTS) {
+    test(`Zyra move trace ${language}: ${count} persisted targets`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedMoveTraceRepository(asOwner, base, `${language}-${count}`, count);
+      await settleMoveFixtures(fixture.allIds.map((id) => ({ ...fixture, firstId: id, secondId: id })), state);
+      await allocateFakeAiKey();
+      await verifyZyraMoveTraceCount({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, count, fixture, state });
+    });
+  }
+
+  for (const language of ["en", "ru"] as const) for (const mode of OVERLAPPING_MOVE_MODES) {
+    test(`Zyra ordered move trace ${language}: ${mode} 26-case writes`, async () => {
+      const base = `${env.apiBaseUrl}/api/projects/${tenant!.mainProjectId}`;
+      const sql = answerRepositorySnapshotSql.replace(/\$1\b/g, literal(tenant!.mainProjectId));
+      const state = async () => JSON.parse(scalar(`SELECT row_to_json(snapshot)::text FROM (${sql}) snapshot;`)) as AnswerRepositoryState;
+      const fixture = await seedOverlappingMoveRepository(asOwner, base, `${language}-${mode}`, mode);
+      await settleMoveFixtures([fixture.first, fixture.last].flatMap((group) => group.allIds.map((id) => ({ ...group, firstId: id, secondId: id }))), state);
+      await allocateFakeAiKey();
+      await verifyZyraOverlappingMoveTrace({ request: asOwner, ai, base, ownerId: tenant!.owner.userId, language, mode, fixture, state });
+    });
   }
 
   const GAP_OFFER_REPLY =
@@ -703,10 +825,8 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
    * testcaseId/externalId: routing said 1 operation, staging said 0, and the reply claimed a staged
    * archive that never existed. A set-wide archive is now resolved against the repository.
    *
-   * And, by product decision, a CONFIRMED archive (the user's message really is a confirmation —
-   * zyraIsArchiveConfirmation) is applied in that same turn through zyraSave, not left waiting in the
-   * review panel. ZCC-B-20/21 originally asserted "staged until Save"; they were changed on purpose
-   * when that decision was made. An archive on a hedged or non-confirming message is still only staged.
+   * Every archive, including a conversational confirmation, now stays staged until the human
+   * reviews the exact selected revisions and saves them. The same native Save applies that decision.
    */
   async function createCase(title: string, projectId = tenant!.mainProjectId): Promise<{ id: string; externalId: string }> {
     const res = await asOwner.post(`/api/projects/${projectId}/testcases`, { data: { title }, failOnStatusCode: false });
@@ -733,7 +853,7 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
   const ARCHIVE_ALL_OFFER =
     "Before I proceed — this would archive all of this project's test cases. Are you sure? Reply 'yes' to confirm, or 'no' to cancel.";
 
-  test("ZCC-B-20 a confirmed 'delete all' archives every active case of this project in that turn, and says so", async () => {
+  test("ZCC-B-20 a confirmed 'delete all' stages exactly this project's active cases and waits for exact human Save", async () => {
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E ZCC archive all");
     const cases = [await createCase(`E2E ZCC all A ${Date.now()}`), await createCase(`E2E ZCC all B ${Date.now()}`), await createCase(`E2E ZCC all C ${Date.now()}`)];
@@ -758,31 +878,38 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
       const turn = await sendMessage(sessionId, "yes");
       expect(turn.status, JSON.stringify(turn.body)).toBeLessThan(300);
 
-      for (const c of cases) expect(statusOf(c.id), "a confirmed archive is applied in the same turn").toBe("Archived");
+      for (const c of cases) expect(statusOf(c.id), "conversational confirmation does not publish an archive").not.toBe("Archived");
       expect(statusOf(alreadyArchived.id)).toBe("Archived");
       expect(statusOf(otherProject.id), "another project's case is never touched").not.toBe("Archived");
 
-      // Committed through zyraSave: the batch records exactly this project's active cases and is done.
+      // The review records exactly this project's active cases without archiving any of them yet.
       const review = latestReview(sessionId);
       expect(review!.payload.map((entry) => entry.testcaseId).sort(), "every active case of this project, and only those").toEqual(cases.map((c) => c.id).sort());
-      expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(review!.id)};`)).toBe("done");
+      expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(review!.id)};`)).toBe("in_review");
 
       const assistant = await lastAssistant(sessionId);
       const content = String(assistant.content || "");
       expect(content).not.toContain("did not produce any test case operations");
-      expect(content, "the reply states what actually happened").toContain(`Archived ${cases.length} test cases`);
-      expect(assistant.reviewRequestId, "nothing is left for the review panel").toBeFalsy();
+      expect(content, "the reply states what actually happened").toContain("review");
+      expect(content).not.toContain(`Archived ${cases.length} test cases`);
+      expect(assistant.reviewRequestId, "the review panel owns the exact decision").toBe(review!.id);
       const rows = assistant.testcases as Array<{ action?: string; id?: string }>;
       expect(rows).toHaveLength(cases.length);
-      expect(rows.every((row) => row.action === "archived" && !!row.id)).toBe(true);
+      expect(rows.every((row) => row.action === "proposed-archive" && !!row.id)).toBe(true);
       const activity = (assistant.activity as Array<{ title?: string }>) ?? [];
-      expect(activity.some((entry) => entry.title === "Archived testcases")).toBe(true);
+      expect(activity.some((entry) => entry.title === "Drafted archive for review")).toBe(true);
+      const applied = await saveReviewedZyraTask(asOwner, url(`/tasks/${review!.id}/save`), { data: { selectedDraftIndexes: cases.map((_, index) => index) } });
+      expect(applied.status(), await applied.text()).toBe(201);
+      expect((await applied.json()).savedCount).toBe(cases.length);
+      for (const c of cases) expect(statusOf(c.id)).toBe("Archived");
+      expect(statusOf(otherProject.id)).not.toBe("Archived");
+      expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(review!.id)};`)).toBe("done");
     } finally {
       await asOwner.delete(`/api/projects/${tenant!.secondProjectId}/testcases/${otherProject.id}`, { failOnStatusCode: false });
     }
   });
 
-  test("ZCC-B-21 a confirmed archive naming several cases archives only those, and names the ones that don't exist", async () => {
+  test("ZCC-B-21 a confirmed archive stages only named cases, reports missing targets, and applies a human-selected subset", async () => {
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E ZCC archive named set");
     const [a, b, untouched] = [await createCase(`E2E ZCC set A ${Date.now()}`), await createCase(`E2E ZCC set B ${Date.now()}`), await createCase(`E2E ZCC set C ${Date.now()}`)];
@@ -797,17 +924,26 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     });
     expect((await sendMessage(sessionId, "yes, archive those three")).status).toBeLessThan(300);
 
-    expect(statusOf(a.id)).toBe("Archived");
-    expect(statusOf(b.id)).toBe("Archived");
+    expect(statusOf(a.id)).not.toBe("Archived");
+    expect(statusOf(b.id)).not.toBe("Archived");
     expect(statusOf(untouched.id), "a case that wasn't named is untouched").not.toBe("Archived");
     const activity = ((await lastAssistant(sessionId)).activity as Array<{ title?: string; detail?: string }>) ?? [];
     expect(
       activity.some((entry) => entry.title === "Could not archive testcases" && /1 of the named/.test(String(entry.detail || ""))),
       `the missing id must be reported — got ${JSON.stringify(activity)}`,
     ).toBe(true);
+    const review = latestReview(sessionId)!;
+    const selected = review.payload.findIndex((entry) => entry.testcaseId === a.id);
+    expect(selected).toBeGreaterThanOrEqual(0);
+    const applied = await saveReviewedZyraTask(asOwner, url(`/tasks/${review.id}/save`), { data: { selectedDraftIndexes: [selected] } });
+    expect(applied.status(), await applied.text()).toBe(201);
+    expect(statusOf(a.id)).toBe("Archived");
+    expect(statusOf(b.id)).not.toBe("Archived");
+    expect(statusOf(untouched.id)).not.toBe("Archived");
+    expect((await applied.json()).remaining).toBe(1);
   });
 
-  test("ZCC-B-24 a single named case confirmed with 'yes' is archived in that turn", async () => {
+  test("ZCC-B-24 a single named case confirmed with 'yes' still requires exact human review and Save", async () => {
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E ZCC archive one");
     const [target, other] = [await createCase(`E2E ZCC one target ${Date.now()}`), await createCase(`E2E ZCC one other ${Date.now()}`)];
@@ -833,9 +969,15 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     });
     expect((await sendMessage(sessionId, "yes")).status).toBeLessThan(300);
 
+    expect(statusOf(target.id)).not.toBe("Archived");
+    expect(statusOf(other.id)).not.toBe("Archived");
+    const assistant = await lastAssistant(sessionId);
+    expect(assistant.reviewRequestId).toBeTruthy();
+    expect(String(assistant.content || "")).not.toContain("Archived 1 test case");
+    const applied = await saveReviewedZyraTask(asOwner, url(`/tasks/${String(assistant.reviewRequestId)}/save`), { data: { selectedDraftIndexes: [0] } });
+    expect(applied.status(), await applied.text()).toBe(201);
     expect(statusOf(target.id)).toBe("Archived");
     expect(statusOf(other.id)).not.toBe("Archived");
-    expect(String((await lastAssistant(sessionId)).content || "")).toContain("Archived 1 test case");
   });
 
   test("ZCC-B-25 an archive on a hedged reply ('yes but keep …') is only staged for review — nothing changes", async () => {
@@ -843,8 +985,8 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     const sessionId = await newSession("E2E ZCC archive hedged");
     const [a, b] = [await createCase(`E2E ZCC hedged A ${Date.now()}`), await createCase(`E2E ZCC hedged B ${Date.now()}`)];
 
-    // Even if the model emits an archive on a hedged message, the server's own check refuses to
-    // apply it immediately: it falls back to the review panel, where nothing changes until Save.
+    // All proposed archives stay in the review panel, including a model's overbroad interpretation
+    // of this hedged message; nothing changes until the human selects exact operations and saves.
     ai.queueReply({
       reply: "Archiving everything as requested.",
       reasoningSummary: "Archiving all.",
@@ -908,8 +1050,8 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
    * `move_to_suite ... fromLastPlan=true` — the system prompt's own documented way to handle "save
    * them to <suite>" right after a generation — always resolved to zero targets. These two tests pin
    * both halves of the fix: re-pointing a still-PENDING batch's suite (patches the draft directly,
-   * never auto-saves it), and moving an ALREADY-SAVED batch for real (using the id zyraSaveAttempt
-   * now records at the moment it first becomes real).
+   * never auto-saves it), and proposing an ALREADY-SAVED batch's movement against the real ids
+   * recorded by its earlier human Save. Both paths require the exact human selected decision.
    */
   test("ZCC-B-04 'save them to <suite>' right after a generation re-points the still-pending draft, never auto-saving it", async () => {
     await allocateFakeAiKey();
@@ -956,12 +1098,12 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     // Still nothing written to testcases — re-pointing a pending draft's suite must never auto-save it.
     expect(liveCaseCount(), "fromLastPlan against a pending batch must only patch the draft, never save it").toBe(before);
 
-    const suiteId = scalar(`SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Checkout';`);
-    expect(suiteId, "move_to_suite auto-creates the named suite even for a pending-draft match").toBeTruthy();
+    expect(scalar(`SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Checkout';`), "a proposed destination has no native suite side effect before Save").toBe("");
 
     const payload = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(reviewRow)};`));
     expect(payload).toHaveLength(1);
-    expect(payload[0].draft.suiteId, "the pending draft itself must be repointed at the new suite").toBe(suiteId);
+    expect(payload[0].draft.suiteId).toBeNull();
+    expect(payload[0].draft.suiteName, "the pending draft records the exact proposed destination").toBe("Checkout");
 
     const session = await asOwner.get(url(`/chat/sessions/${sessionId}`), { failOnStatusCode: false });
     const messages = (await session.json()).messages as Array<Record<string, unknown>>;
@@ -978,7 +1120,7 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
 
     // Prove the whole point of patching rather than ignoring: Save now actually lands the row in
     // the suite the follow-up message asked for, with no suiteId passed in the save call itself.
-    const saveRes = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/ai/generation-history/${reviewRow}/save`, {
+    const saveRes = await saveReviewedZyraTask(asOwner, `/api/projects/${tenant!.mainProjectId}/ai/generation-history/${reviewRow}/save`, {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
@@ -986,11 +1128,13 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     const saveBody = await saveRes.json();
     expect(saveBody.savedCount).toBe(1);
     expect(liveCaseCount()).toBe(before + 1);
+    const suiteId = scalar(`SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Checkout';`);
+    expect(suiteId).toBeTruthy();
     const savedSuiteId = scalar(`SELECT suite_id::text FROM testcases WHERE id = ${literal(String(saveBody.testcases[0].id))};`);
     expect(savedSuiteId, "the saved row must land in the suite the pending draft was repointed to").toBe(suiteId);
   });
 
-  test("ZCC-B-05 'move them to <suite>' after the batch was already saved does a real move, using the id recorded at save time", async () => {
+  test("ZCC-B-05 moving an already-saved batch stages its recorded real ids, then an exact human Save moves them", async () => {
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E ZCC fake ai fromLastPlan saved");
     const before = liveCaseCount();
@@ -1011,13 +1155,14 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     expect(turn1.status, JSON.stringify(turn1.body)).toBeLessThan(300);
 
     const reviewRow = scalar(`SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`);
-    const saveRes = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/ai/generation-history/${reviewRow}/save`, {
+    const saveRes = await saveReviewedZyraTask(asOwner, `/api/projects/${tenant!.mainProjectId}/ai/generation-history/${reviewRow}/save`, {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
     expect(saveRes.status(), `saving — ${await saveRes.text()}`).toBeLessThan(300);
     expect(liveCaseCount()).toBe(before + 1);
     const savedId = String((await saveRes.json()).testcases[0].id);
+    const beforeMove = scalar(`SELECT row_to_json(t)::text FROM testcases t WHERE id=${literal(savedId)};`);
 
     // zyraSaveAttempt is where a create's id first becomes real — this is what the fix records into
     // last_completed_plan, and what fromLastPlan needs to find on the next turn.
@@ -1038,15 +1183,23 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     const turn2 = await sendMessage(sessionId, "move that to the Payments suite");
     expect(turn2.status, JSON.stringify(turn2.body)).toBeLessThan(300);
 
-    const suiteId = scalar(`SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Payments';`);
-    const movedSuiteId = scalar(`SELECT suite_id::text FROM testcases WHERE id = ${literal(savedId)};`);
-    expect(movedSuiteId, "a real move against an already-saved batch must actually update the row").toBe(suiteId);
+    expect(scalar(`SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Payments';`)).toBe("");
+    expect(scalar(`SELECT row_to_json(t)::text FROM testcases t WHERE id=${literal(savedId)};`), "chat movement remains unpublished").toBe(beforeMove);
 
     const session = await asOwner.get(url(`/chat/sessions/${sessionId}`), { failOnStatusCode: false });
     const messages = (await session.json()).messages as Array<Record<string, unknown>>;
     const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")!;
-    expect(String(lastAssistant.content || "")).toContain("Moved to suites (actual)");
-    expect(String(lastAssistant.content || "")).toContain("Payments: 1");
+    expect(String(lastAssistant.content || "")).not.toContain("Moved to suites (actual)");
+    expect(lastAssistant.reviewRequestId).toBeTruthy();
+    const moveUrl = url(`/tasks/${String(lastAssistant.reviewRequestId)}/save`);
+    const reviewed = await readZyraProposal(asOwner, moveUrl);
+    expect(reviewed.proposalSnapshot.operations).toEqual([expect.objectContaining({ opType: "update", testcaseId: savedId, fields: { suiteName: "Payments" } })]);
+    const applied = await asOwner.post(moveUrl, { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0] } });
+    expect(applied.status(), await applied.text()).toBe(201);
+    const suiteId = scalar(`SELECT id FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Payments';`);
+    expect(suiteId).toBeTruthy();
+    expect(scalar(`SELECT suite_id::text FROM testcases WHERE id = ${literal(savedId)};`)).toBe(suiteId);
+    expect((await applied.json()).saveReceipt.selectedOperations).toEqual([expect.objectContaining({ opType: "update", testcaseId: savedId })]);
   });
 
   /*
@@ -1462,7 +1615,7 @@ test.describe("zyra chat — confirmation retry (fake provider)", () => {
     expect(liveCaseCount(), "staging must not write testcases").toBe(before);
 
     const reviewRow = scalar(`SELECT id FROM ai_generation_requests WHERE chat_session_id = ${literal(sessionId)} ORDER BY created_at DESC LIMIT 1;`);
-    const saveRes = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/ai/generation-history/${reviewRow}/save`, {
+    const saveRes = await saveReviewedZyraTask(asOwner, `/api/projects/${tenant!.mainProjectId}/ai/generation-history/${reviewRow}/save`, {
       data: { selectedDraftIndexes: Array.from({ length: 40 }, (_, i) => i) },
       failOnStatusCode: false,
       timeout: 180_000,

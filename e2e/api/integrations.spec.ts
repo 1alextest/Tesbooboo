@@ -994,14 +994,16 @@ test.describe("integrations — Jira and Linear", () => {
       data: { title: "Memory doc", folderId: rootFolderId, documentType: "ai_memory", contentText: "Remembered fact." },
       failOnStatusCode: false,
     });
-    const docId = (await created.json()).id;
+    const document = await created.json();
+    const docId = document.id;
 
-    const approve = await asOwner.patch(url(`/knowledge-base/documents/${docId}/approve-ai-memory`), { failOnStatusCode: false });
+    const approve = await asOwner.patch(url(`/knowledge-base/documents/${docId}/approve-ai-memory`), { data: { expectedRevision: document.editRevision }, failOnStatusCode: false });
     expect(approve.status(), `approve answered ${approve.status()}: ${await approve.text()}`).toBe(200);
 
     const res = await asOwner.get(url(`/knowledge-base/documents/${docId}/history`), { failOnStatusCode: false });
     const body = await res.json();
-    expect(body.events.some((e: any) => e.changedSummary === "Marked as Approved.")).toBe(true);
+    // Reviews now name the immutable version they decided, instead of a mutable status-only row.
+    expect(body.events.some((e: any) => /^Approved exact version \d+\.$/.test(e.changedSummary))).toBe(true);
   });
 
   test("INT-A-30d a Linear mirror's timeline round-trips through the same endpoint, provider-agnostic end to end", { tag: '@tesbo.testId("TES-TC-2055")' }, async () => {
