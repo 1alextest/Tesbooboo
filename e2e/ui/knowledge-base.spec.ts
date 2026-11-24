@@ -2912,6 +2912,66 @@ test.describe("knowledge base (UI)", () => {
       .toContain("retained-draft");
   });
 
+  for (const failureMode of ["before-commit", "after-commit"] as const) {
+    test(`KBU-73 governed Submit retries exact saved revision after ${failureMode} failure without duplicating the save`, async ({ browser }) => {
+      const created = await api.post(kbUrl("/documents"), {
+        data: {
+          title: stamp("Governed uncertain submit"), folderId: rootFolderId, documentType: "user_manual",
+          contentText: "Original body", contentHtml: "<p>Original body</p>",
+          governedMetadata: {
+            schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual",
+            confidentiality: "internal", distribution: "internal",
+            sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+            effectivity: { from: null, to: null }, enforcementRefs: [],
+          },
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      const documentId = (await created.json()).id;
+      const page = await openDocument(browser, documentId);
+      await page.locator(".ProseMirror").first().click();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(" submission-retry");
+
+      let patchCount = 0;
+      await page.route(`**/knowledge-base/documents/${documentId}`, async (route) => {
+        if (route.request().method() === "PATCH") patchCount++;
+        await route.continue();
+      });
+      let firstSubmit = true;
+      await page.route(`**/knowledge-base/documents/${documentId}/submissions`, async (route) => {
+        if (firstSubmit && route.request().method() === "POST") {
+          firstSubmit = false;
+          if (failureMode === "after-commit") {
+            const response = await route.fetch();
+            expect(response.status()).toBe(201);
+          }
+          await route.fulfill({
+            status: 503, contentType: "application/json",
+            body: JSON.stringify({ error: "E2E simulated Submit response failure" }),
+          });
+          return;
+        }
+        await route.continue();
+      });
+
+      await page.getByTestId("governed-submit").click();
+      await expect(page.getByTestId("governed-document-panel")).toContainText("E2E simulated Submit response failure");
+      await expect(page.locator(".ProseMirror").first()).toContainText("submission-retry");
+      const patchesAfterFailure = patchCount;
+      expect(patchesAfterFailure).toBeGreaterThan(0);
+      await page.getByTestId("governed-submit").click();
+      await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+      expect(patchCount).toBe(patchesAfterFailure); // Retry must not write a new edit revision.
+      const versions = (await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).list as
+        Array<{ snapshotKind: string; id: string }>;
+      const submissions = versions.filter((version) => version.snapshotKind === "submitted");
+      expect(submissions).toHaveLength(1);
+      expect((await (await api.get(kbUrl(`/documents/${documentId}/versions/${submissions[0].id}`))).json()).contentText)
+        .toContain("submission-retry");
+    });
+  }
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
