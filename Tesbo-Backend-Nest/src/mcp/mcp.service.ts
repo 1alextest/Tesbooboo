@@ -369,9 +369,9 @@ export class McpService {
       const settings = { ...projectSettingsObject(row.settings), [MCP_ACCESS_KEY]: after };
       await client.query("UPDATE projects SET settings = $2::jsonb, updated_at = now() WHERE id = $1", [projectId, JSON.stringify(settings)]);
       // Project-owner updates invalidate old OAuth families in the same
-      // transaction. A later identical client approval cannot revive them.
+      // transaction. A later identical client approval cannot revive their tombstoned identities.
       await client.query(
-        "DELETE FROM mcp_oauth_grant_approval_bindings WHERE project_id=$1 AND approval_revision<>$2",
+        "UPDATE mcp_oauth_grant_approval_bindings SET revoked_at=now() WHERE project_id=$1 AND approval_revision<>$2 AND revoked_at IS NULL",
         [projectId, after.revision]
       );
       // The consent change and its attributable receipt commit together. Audit failure rolls back consent.
