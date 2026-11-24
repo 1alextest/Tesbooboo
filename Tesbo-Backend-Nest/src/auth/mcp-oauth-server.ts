@@ -250,7 +250,7 @@ export class McpOAuthServer {
    * Even on success, the MCP domain owner rechecks project membership and the
    * named client grant before dispatch. Never elevate to req.userId/cookie.
    */
-  async verifyAccessToken(raw: string): Promise<OAuthMachineContext | null> {
+  async verifyAccessToken(raw: string | null): Promise<OAuthMachineContext | null> {
     if (!this.provider || !this.policy || typeof raw !== "string" || !raw || raw.length > 8192) return null;
     try {
       const token = await this.provider.AccessToken.find(raw);
