@@ -915,9 +915,9 @@ type Body=Record<string,any>;
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
       let requirementId="";
       let caseId="";
-      let v2TaskId="";
+      const taskIds:string[]=[];
       try{
-        const staged=await stageBundle(ops());
+        const staged=await stageBundle(ops());taskIds.push(staged.id);
         const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
         requirementId=applied.receipt.requirement.documentId;
         caseId=applied.receipt.testcase.id;
@@ -943,7 +943,7 @@ type Body=Record<string,any>;
             expectedRevision:await revision(requirementId),title:v2Title,description:"Newer requirement content",
             criteria:[{key:"AC-1",text:"Newer obligation"}]}]
         },{kind:"api_token",tokenId:token,transport:"rest"} as never);
-        v2TaskId=stagedV2.id;
+        taskIds.push(stagedV2.id);
         const appliedV2=await service().applyRequirementProposal(project,user,stagedV2.id,{expectedProposalRevision:stagedV2.proposalRevision},human);
         const approvedV2=await service().approveRequirementVersion(project,user,requirementId,{versionId:appliedV2.receipt.requirement.versionId},human);
 
@@ -967,9 +967,54 @@ type Body=Record<string,any>;
         expect(await bundleWrites(stagedV2.id)).toEqual(preserved);
         expect((await admin.query("SELECT id,state,requirement_version_id FROM requirement_case_links WHERE id=$1",[lostLink])).rows[0])
           .toMatchObject({id:lostLink,state:"active",requirement_version_id:lostVersion});
+        // A fresh, explicitly selected scope restores the intentional rebind without duplicating
+        // the testcase or conferring authority on an unselected neighboring group.
+        const neighboring=(await admin.query(
+          `INSERT INTO requirement_case_links
+             (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+           VALUES ($1,$2,$3,ARRAY['AC-2']::text[],$4,$5,$6,'active',$7,$7,now()) RETURNING *`,
+          [project,requirementId,lostVersion,caseId,caseAfter.edit_revision,caseAfter.approval_revision,user])).rows[0];
+        const selection={linkId:lostLink,requirementVersionId:lostVersion,testcaseId:caseId,
+          testcaseRevision:caseAfter.edit_revision,testcaseApprovalRevision:caseAfter.approval_revision,criterionKeys:original.criterionKeys};
+        const revisionOperation={opType:"requirement_revision",operationId:randomUUID(),documentId:requirementId,
+          expectedRevision:await revision(requirementId),title:`Explicit rebind ${randomUUID()}`,
+          criteria:[{key:"AC-1",text:"Reviewed updated obligation"},{key:"AC-2",text:"Neighbor remains distinct"}],carryForwardLinks:[selection]};
+        // Malformed/foreign/duplicate selections cannot publish a task.
+        for(const carryForwardLinks of [[{...selection,originatingLinkSkill:{assignmentId:randomUUID()}}],
+          [selection,selection],[{...selection,linkId:randomUUID()}],[{...selection,criterionKeys:["AC-2"]}]]){
+          const beforeInvalid=await bundleWrites(stagedV2.id);
+          await expect(stageBundle([{...revisionOperation,carryForwardLinks}])).rejects.toMatchObject({status:expect.any(Number)});
+          expect(await bundleWrites(stagedV2.id)).toEqual(beforeInvalid);
+        }
+        const v3=await stageBundle([revisionOperation]);taskIds.push(v3.id);
+        expect(v3.skillContext.assignments.map((a:Body)=>a.target.operation).sort()).toEqual(["requirement_case_link","requirement_revision"]);
+        expect(v3.requirementBundle[0].carryForwardLinks[0]).toMatchObject({...selection,originatingApprovedVersionId:lostVersion,
+          originatingLinkSkill:{skillVersionId:skills.requirement.versionId}});
+        const beforeApplyCases=(await nativeCases()).rows;
+        const v3Applied=await service().applyRequirementProposal(project,user,v3.id,{expectedProposalRevision:v3.proposalRevision},human);
+        expect(v3Applied.receipt.testcase).toBeNull();
+        const v3Approved=await service().approveRequirementVersion(project,user,requirementId,{versionId:v3Applied.receipt.requirement.versionId},human);
+        const approvedMetadata=(await admin.query("SELECT snapshot_metadata FROM knowledge_document_versions WHERE id=$1",[v3Approved.approvedVersionId])).rows[0].snapshot_metadata;
+        expect(approvedMetadata.carryForwardLinks).toEqual(v3.requirementBundle[0].carryForwardLinks);
+        expect((await nativeCases()).rows).toEqual(beforeApplyCases);
+        const request={expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision,
+          expectedRequirementVersionId:v3Approved.approvedVersionId};
+        const unselected=await bundleWrites(v3.id);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,String(neighboring.id),request,human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_LINK_REVIEW_REQUIRED"}});
+        expect(await bundleWrites(v3.id)).toEqual(unselected);
+        const rebound=await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,request,human);
+        expect(rebound).toMatchObject({replayed:false,link:{requirementVersionId:v3Approved.approvedVersionId,testcaseId:caseId,criterionKeys:selection.criterionKeys}});
+        const reboundState=await bundleWrites(v3.id);
+        expect(await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,request,human))
+          .toEqual({...rebound,replayed:true});
+        expect(await bundleWrites(v3.id)).toEqual(reboundState);
+        expect((await admin.query("SELECT * FROM requirement_case_links WHERE id=$1",[neighboring.id])).rows[0]).toEqual(neighboring);
+        expect((await nativeCases()).rows).toEqual(beforeApplyCases);
       }finally{
-        if(v2TaskId) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[v2TaskId]);
         if(requirementId) await cleanupRequirement(requirementId);
+        for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[id,project]);
+        if(caseId) await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
         await cleanupSkills(skillIds);
       }
     });
