@@ -209,7 +209,8 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
       } else {
         setError(err instanceof Error ? err.message : "The decision could not be recorded.");
       }
-      await load();
+      // Keep the error visible; load() clears it. The panel's own state still shows the exact
+      // version, and a refresh is an explicit user action rather than silently hiding the refusal.
     } finally {
       if (mounted.current) setBusy(false);
     }

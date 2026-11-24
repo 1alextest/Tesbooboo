@@ -364,11 +364,10 @@ export default function KnowledgeDocumentPage() {
   async function commitGovernedDecision(decision: "approved" | "rejected", versionId: string, reason?: string) {
     const writer = writerRef.current;
     if (!writer) throw new Error("Reload this document before reviewing it.");
-    const hadPendingDraft = Boolean(saveTimer.current);
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-      pendingAutosave.current = null;
+    // A decision binds the exact submitted revision. Do not silently drop an unsaved editor draft:
+    // make the reviewer save/discard it (which re-drafts and requires a refreshed submission) first.
+    if (saveTimer.current || pendingAutosave.current) {
+      throw new Error("Save or discard the current editor draft before approving or rejecting this submitted version.");
     }
     const updated = await writer.restore(() => decision === "approved"
       ? approveGovernedKnowledgeDocument(projectId, documentId, versionId)
@@ -376,7 +375,7 @@ export default function KnowledgeDocumentPage() {
     if (isMountedRef.current && writerRef.current === writer) {
       setDoc(updated);
       setTitle(updated.title);
-      setSaveStatus(hadPendingDraft ? "unsaved" : "saved");
+      setSaveStatus("saved");
       setError(null);
     }
     return updated;

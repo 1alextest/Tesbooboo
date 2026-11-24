@@ -1922,12 +1922,12 @@ export class LegacyController {
     @Param("folderId") folderId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.moveKnowledgeFolder(projectId, req.userId, folderId, body);
+    return this.legacy.moveKnowledgeFolder(projectId, req.userId, folderId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/folders/:folderId/restore")
   restoreKnowledgeFolder(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("folderId") folderId: string) {
-    return this.legacy.restoreKnowledgeFolder(projectId, req.userId, folderId);
+    return this.legacy.restoreKnowledgeFolder(projectId, req.userId, folderId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Patch("/api/projects/:projectId/knowledge-base/folders/:folderId")
@@ -1942,7 +1942,7 @@ export class LegacyController {
 
   @Delete("/api/projects/:projectId/knowledge-base/folders/:folderId")
   deleteKnowledgeFolder(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("folderId") folderId: string) {
-    return this.legacy.deleteKnowledgeFolder(projectId, req.userId, folderId);
+    return this.legacy.deleteKnowledgeFolder(projectId, req.userId, folderId, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/knowledge-base/search")

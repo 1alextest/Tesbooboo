@@ -589,7 +589,7 @@ describe("McpService", () => {
       expect((legacy as any).moveKnowledgeFolder).toHaveBeenCalledWith("proj-1", "user-7", "folder-1", {
         folderId: "folder-1",
         parentFolderId: "folder-2"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects move_knowledge_folder without parentFolderId", async () => {

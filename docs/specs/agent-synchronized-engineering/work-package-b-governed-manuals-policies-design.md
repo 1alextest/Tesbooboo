@@ -156,9 +156,11 @@ distinct from the Playwright CI result.
 
 ### 3.5 Mutation permission matrix
 
-All governed mutation paths use the shared `assertAgentMayTouchGoverned` owner and the existing KB role rules.
-The agent restriction is re-checked against the **locked** document inside the write transaction, so a document
-that becomes governed while a token operation waits is refused before any write, folder change or version snapshot.
+All governed mutation paths use the shared `assertAgentMayTouchGoverned` owner (and its folder-subtree counterpart)
+and the existing KB role rules. The agent restriction is re-checked against the **locked** document inside the write
+transaction, so a document that becomes governed while a token operation waits is refused before any write, folder
+change or version snapshot. Folder delete/restore/move are refused for a token when the subtree contains a governed
+document, because the cascade would archive, unarchive or relocate it.
 
 | Operation | Human session | API/MCP token | Notes |
 | --- | --- | --- | --- |
@@ -284,9 +286,11 @@ policy. An approved document does not become Zyra-visible merely because it is a
     `user_manual`/`policy`, supply `governedMetadata`, update/submit a governed document, duplicate one, move it,
     restore one of its versions, archive it or unarchive it. The REST controller and MCP handlers pass the token
     principal; the service enforces it across those paths, re-checking the locked document type for operations that
-    wait on a row lock. Agents may still read/list governed documents and their metadata, and none of them can set
-    `status` or approve. This is a containment rule for the first slice, not a complete MCP schema; a future
-    governed-authoring contract would need an explicit human-review design.
+    wait on a row lock. Folder delete/restore/move are refused for a token when their subtree contains a governed
+    document, since the cascade would archive, unarchive or relocate it. Agents may still read/list governed
+    documents and their metadata, and none of them can set `status` or approve. This is a containment rule for the
+    first slice, not a complete MCP schema; a future governed-authoring contract would need an explicit human-review
+    design.
 14. **Submit binds the current editor state (implemented).** Save metadata, Submit and decisions run through the
     document write queue. Submit cancels a pending debounce and writes the current title/body + metadata in one
     operation, then submits that returned revision. A failed save or stale revision leaves the draft in the editor,
@@ -322,7 +326,9 @@ second decision snapshot, flips `status` and rewrites `reviewed_version_id`; the
 
 **Current evidence:** every governed row is created `embedding_status='unsupported'`; the boot sweep and embedding
 processor exclude `user_manual`/`policy`; `knowledgeDocumentAiContextSql` excludes them from both the non-memory and
-the approved-memory branches; the task-composer picker filters them. No approved governed content reaches the model.
+the approved-memory branches; the task-composer picker filters them. No governed content is *automatically* admitted to
+Zyra context/RAG. A read-scope MCP token can still explicitly fetch a governed document through
+`get_knowledge_document`; closing that explicit-read path is part of the exposure decision, not a claim of this slice.
 
 **Options and consequences:**
 

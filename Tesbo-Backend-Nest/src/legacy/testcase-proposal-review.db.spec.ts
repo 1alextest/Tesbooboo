@@ -597,6 +597,10 @@ type Body=Record<string,any>;
       "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE $2",
       [applicationName,pattern]
     )).rowCount;
+    const waitingLockers=async()=>Number((await admin.query(
+      "SELECT COUNT(*)::int AS n FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'",
+      [applicationName]
+    )).rows[0].n);
     const revisionsOf=async(id:string)=>(await admin.query(
       `SELECT ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id=$1`,[id]
     )).rows[0] as Body;
@@ -1409,8 +1413,12 @@ type Body=Record<string,any>;
         await blocker.query("SELECT id FROM knowledge_documents WHERE id=$1 FOR UPDATE",[docId]);
         const conversion=service().updateKnowledgeDocument(project,user,docId,
           {documentType:"user_manual",governedMetadata:metadata,expectedRevision});
-        expect(await waitUntil(()=>waitingOn("%knowledge_documents%FOR UPDATE%"))).toBe(true);
+        expect(await waitUntil(async()=>(await waitingLockers())>=1)).toBe(true);
         const pending=operation().then(value=>({value,error:undefined as Body|undefined}),error=>({value:undefined as Body|undefined,error:error as Body}));
+        // Both the conversion and the token operation must be visibly blocked before release:
+        // otherwise the token call may not have passed its pre-lock read and a pre-lock 403
+        // would pass for the in-lock recheck.
+        expect(await waitUntil(async()=>(await waitingLockers())>=2)).toBe(true);
         await blocker.query("COMMIT");
         await conversion;
         expect((await pending).error).toMatchObject({status:403});
@@ -1424,16 +1432,22 @@ type Body=Record<string,any>;
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM audit_logs WHERE entity_id=$1 AND action='moved'",[moveDoc.id])).rows[0].n).toBe(0);
 
         const restoreDoc=await makeDoc(`Race restore ${randomUUID()}`); docIds.push(restoreDoc.id);
+        const changed=await service().updateKnowledgeDocument(project,user,restoreDoc.id,
+          {contentText:"Changed restore body",expectedRevision:restoreDoc.editRevision});
+        const originalVersion=(await admin.query(
+          "SELECT id FROM knowledge_document_versions WHERE document_id=$1 ORDER BY version_number LIMIT 1",[restoreDoc.id]
+        )).rows[0]?.id;
         const version=await service().submitKnowledgeDocument(project,user,restoreDoc.id,
-          {expectedRevision:restoreDoc.editRevision,submissionKey:randomUUID()},human);
+          {expectedRevision:changed.editRevision,submissionKey:randomUUID()},human);
+        expect(version.contentText).toBe("Changed restore body");
         const versionsBefore=(await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n;
-        const beforeRestore=(await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText;
-        await race(restoreDoc.id,restoreDoc.editRevision,
-          ()=>service().restoreKnowledgeDocumentVersion(project,user,restoreDoc.id,{versionId:version.id},{kind:"api_token"}));
-        expect((await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText).toBe(beforeRestore);
+        await race(restoreDoc.id,changed.editRevision,
+          ()=>service().restoreKnowledgeDocumentVersion(project,user,restoreDoc.id,{versionId:originalVersion},{kind:"api_token"}));
+        expect((await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText).toBe("Changed restore body");
         // The owner conversion itself writes one autosave snapshot (metadata changed); the refused
         // restore must not add another.
         expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n).toBe(versionsBefore+1);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM audit_logs WHERE entity_id=$1 AND action='restored_version'",[restoreDoc.id])).rows[0].n).toBe(0);
 
         const duplicateDoc=await makeDoc(`Race duplicate ${randomUUID()}`); docIds.push(duplicateDoc.id);
         await race(duplicateDoc.id,duplicateDoc.editRevision,

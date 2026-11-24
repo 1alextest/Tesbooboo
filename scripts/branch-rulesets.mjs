@@ -12,7 +12,7 @@ export const REPO='1alextest/Tesbooboo';
 // PR #232 adds reviewed testcase cache protocol and metadata-consumer coverage inside
 // the existing smoke job; its source pin changes without changing required contexts.
 // PR #233 extends the same KB smoke selection with the governed manual API/UI journeys;
-// PR #250 expands KBU-70..72 to KBU-70..73 for ambiguous submission retry;
+// PR #250 extends the governed KB selection with KBU-71..73 (policy, save-failure and ambiguous retry);
 // no job names, required contexts, triggers or producer identities change.
 // no required context is added or removed.
 // A workflow edit (including a same-name job edit) requires source review and pin reconciliation.

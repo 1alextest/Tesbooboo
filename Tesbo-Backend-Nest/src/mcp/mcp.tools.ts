@@ -1894,7 +1894,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const folderId = requireString(args, "folderId");
         requireString(args, "parentFolderId");
-        return ctx.legacy.moveKnowledgeFolder(ctx.projectId, ctx.userId, folderId, args);
+        return ctx.legacy.moveKnowledgeFolder(ctx.projectId, ctx.userId, folderId, args, { kind: "api_token" });
       }
     }
   ];

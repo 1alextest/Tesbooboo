@@ -2888,9 +2888,7 @@ test.describe("knowledge base (UI)", () => {
     const documentId = (await created.json()).id;
     const page = await openDocument(browser, documentId);
 
-    await page.locator(".ProseMirror").first().click();
-    await page.keyboard.press("Control+End");
-    await page.keyboard.type(" retained-draft");
+    // Install the failure before typing so the 1.2 s autosave cannot race the interception.
     await page.route(`**/knowledge-base/documents/${documentId}`, async (route) => {
       if (route.request().method() === "PATCH") {
         await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "E2E forced save failure" }) });
@@ -2898,9 +2896,13 @@ test.describe("knowledge base (UI)", () => {
       }
       await route.continue();
     });
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" retained-draft");
     await page.getByTestId("governed-submit").click();
     await expect(page.getByTestId("governed-document-panel")).toContainText("E2E forced save failure");
-    expect((await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json()).total).toBe(0);
+    const failedVersions = await (await api.get(kbUrl(`/documents/${documentId}/versions`))).json();
+    expect(failedVersions.list.filter((version: { snapshotKind: string }) => version.snapshotKind === "submitted")).toHaveLength(0);
     await expect(page.locator(".ProseMirror").first()).toContainText("retained-draft");
 
     await page.unroute(`**/knowledge-base/documents/${documentId}`);

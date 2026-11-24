@@ -11750,7 +11750,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async moveKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string, body: Body) {
+  async moveKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const folder = await this.kbFolder(projectId, folderId);
@@ -11770,6 +11771,7 @@ export class LegacyService implements OnModuleInit {
         if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be moved" });
         const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
         this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+        await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
         const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [targetParentId, projectId]);
         if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
         const invalid = await client.query(
@@ -11939,7 +11941,8 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
-  async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
+  async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const folder = await this.kbFolder(projectId, folderId);
@@ -11954,6 +11957,7 @@ export class LegacyService implements OnModuleInit {
       if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be deleted" });
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
       const documents = await client.query<{ id: string }>(
         `${LegacyService.DESCENDANTS_CTE} SELECT id FROM knowledge_documents
          WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants) AND is_deleted=false AND title <> $3`,
@@ -11982,7 +11986,8 @@ export class LegacyService implements OnModuleInit {
     return { success: true };
   }
 
-  async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
+  async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const role = await this.kbProjectRole(uid, projectId);
@@ -12008,6 +12013,7 @@ export class LegacyService implements OnModuleInit {
       if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
       if (existing.rows[0].deletion_reason === "integration_disconnect") {
         const providerName = PROVIDER_FOLDER_NAMES[existing.rows[0].source_provider || ""];
         const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
@@ -12568,6 +12574,21 @@ export class LegacyService implements OnModuleInit {
       });
     } catch (err) {
       this.logger.error(`Knowledge base notification failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async assertAgentMayTouchGovernedFolder(client: PoolClient, projectId: string, folderId: string,
+    principal: { kind: "human_session" | "api_token" } | undefined) {
+    if (principal?.kind !== "api_token") return;
+    const governed = await client.query(
+      `${LegacyService.DESCENDANTS_CTE}
+       SELECT 1 FROM knowledge_documents
+        WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants)
+          AND document_type IN ('user_manual','policy') LIMIT 1`,
+      [[folderId], projectId]
+    );
+    if (governed.rows[0]) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
     }
   }
 
