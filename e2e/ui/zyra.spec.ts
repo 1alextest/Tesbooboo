@@ -1706,8 +1706,12 @@ test.describe("zyra / agents (UI)", () => {
       },
     });
     const { dialog } = await openCreateModal(browser);
-    await expect(dialog.getByRole("combobox")).not.toContainText(title);
-    await expect(dialog.getByRole("combobox")).not.toContainText("Governed body must not reach task context");
+    // The select is only rendered once at least one eligible document exists; either way neither
+    // the governed title nor its body may appear in the composer.
+    await expect(dialog).not.toContainText(title);
+    await expect(dialog).not.toContainText("Governed body must not reach task context");
+    const select = dialog.getByRole("combobox");
+    if (await select.count()) await expect(select).not.toContainText(title);
   });
 
   test("ZYU-52 a Knowledge Base document with no Acceptance Criteria section leaves the field empty and puts everything in Context", async ({
