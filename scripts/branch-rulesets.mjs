@@ -50,8 +50,12 @@ const PUBLISHER_SOURCES=[
  {path:'scripts/assurance-pr-gate.mjs',sha:'e96deb68c4db8274252170c27f766861ac32ad7b'},
  {path:'scripts/publish-assurance-status.mjs',sha:'856d664b0f6165ae6ffbfc75394866bd9c2379cf'}
 ];
-// Candidate mandatory producers, verified against live analysis identities before activation.
-export const SCANNER_TOOLS=Object.freeze(['CodeQL','DevSkim']);
+// Native tool names are case-sensitive. The devskim Actions job has a different display name.
+const scannerProducers = [
+ {tool:'CodeQL', analysisKey:'.github/workflows/security-analysis.yml:codeql', category:'/language:javascript-typescript'},
+ {tool:'devskim', analysisKey:'.github/workflows/devskim.yml:lint', category:'.github/workflows/devskim.yml:lint'},
+];
+export const SCANNER_TOOLS=Object.freeze(scannerProducers.map(producer=>producer.tool));
 const SCANNER_SOURCE={path:'.github/workflows/devskim.yml',sha:'20a5a970c27cd6f93c84021feeab0f776f51bac4'};
 const usesPublisher=phase=>phase==='assurance'||phase==='findings';
 export const required=phase=>phase==='foundation'?CHECKS:usesPublisher(phase)?[...CHECKS,'specification-assurance']:(()=>{throw Error('Invalid phase')})();
@@ -64,6 +68,10 @@ function scannerEntries(rule){
    !['none','errors','errors_and_warnings','all'].includes(t.alerts_threshold)||
    !['none','critical','high_or_higher','medium_or_higher','all'].includes(t.security_alerts_threshold))||
    new Set(tools.map(t=>t.tool)).size!==tools.length)throw Error('Malformed or duplicate code scanning tools');
+ for(const {tool} of tools){
+  if(SCANNER_TOOLS.some(name=>name!==tool&&name.toLowerCase()===tool.toLowerCase()))
+   throw Error('Review existing scanner tool casing before activation: '+tool);
+ }
  return tools;
 }
 export function exact(rule,branch){
@@ -166,20 +174,25 @@ function requireSources(source,expected,label){
 }
 async function scannerAvailability(source,token){
  const records=[];
- for(const tool of SCANNER_TOOLS){
+ for(const {tool,analysisKey,category} of scannerProducers){
   const ref='refs/heads/'+source.branch;
-  const query=new URLSearchParams({ref,tool_name:tool,per_page:'100',page:'1'});
+   const query=new URLSearchParams({ref,tool_name:tool,sort:'created',direction:'desc',per_page:'100',page:'1'});
   const rows=await api('/code-scanning/analyses?'+query,token);
-  // Require the newest native record for this tool and target ref to match the
-  // actual branch head. A prior successful result cannot mask a newer failure.
-  const latest=Array.isArray(rows)&&rows[0];
-  if(!latest||latest.ref!==ref||latest.commit_sha!==source.sha||
+   // Other identified jobs may use this tool. Stop at the first result whose
+   // producer is unknown or is the reviewed job, so an older pass cannot mask it.
+   const latest=Array.isArray(rows)&&rows.find(row=>
+     row?.ref!==ref||row.tool?.name!==tool||typeof row.analysis_key!=='string'||
+     !row.analysis_key.trim()||row.analysis_key===analysisKey);
+   // SARIF uploaders can terminate the category with its run-id separator.
+   if(!latest||latest.analysis_key!==analysisKey||
+     (latest.category!==category&&latest.category!==category+'/')||
+     latest.ref!==ref||latest.commit_sha!==source.sha||
     latest.tool?.name!==tool||latest.error!==''||latest.warning!==''||
     !Number.isSafeInteger(latest.id)||latest.id<=0||
     !Number.isSafeInteger(latest.rules_count)||latest.rules_count<=0||
     !Number.isSafeInteger(latest.results_count)||latest.results_count<0)
    throw Error('Current successful scanner analysis unavailable: '+source.branch+' '+tool);
-  records.push({branch:source.branch,tool,analysisId:latest.id,commit:source.sha});
+   records.push({branch:source.branch,tool,analysisKey,category:latest.category,analysisId:latest.id,commit:source.sha});
  }
  return records;
 }

@@ -115,8 +115,11 @@ function githubFixture() {
       const tool = parsed.searchParams.get('tool_name');
       assert.ok(SCANNER_TOOLS.includes(tool));
       if (state.scanDenied === branch) return reply({}, 403);
+      const producer = tool === 'CodeQL'
+        ? { analysis_key: '.github/workflows/security-analysis.yml:codeql', category: '/language:javascript-typescript' }
+        : { analysis_key: '.github/workflows/devskim.yml:lint', category: '.github/workflows/devskim.yml:lint/' };
       const record = {ref, commit_sha: state.refs[branch], tool:{name:tool}, error:'', warning:'',
-        id: tool==='CodeQL'?101:102, rules_count:20, results_count:0};
+        ...producer, id: tool==='CodeQL'?101:102, rules_count:20, results_count:0};
       return reply(state.scanMutation?.(record, branch, tool) ?? [record]);
     }
     // The old implementation checks only this mutable development presence. Keep the response
@@ -305,6 +308,45 @@ test('unavailable, stale, failed, skipped or wrong-producer scans prevent all ru
 test('newer failing scan cannot be masked by an older successful result',async()=>{
   const state=githubFixture();state.scanMutation=r=>[{...r,error:'new failure'},r];
   await refused(state,/Current successful scanner analysis unavailable/,['--apply','--findings']);
+});
+test('native rule names match GitHub Advanced Security producer names', () => {
+  assert.deepEqual(SCANNER_TOOLS, ['CodeQL', 'devskim']);
+});
+test('an existing case variant requires reconciliation before adding a native scanner rule', () => {
+  const original = f();
+  original.rules.push({type:'code_scanning', parameters:{code_scanning_tools:[
+    {tool:'DevSkim', alerts_threshold:'all', security_alerts_threshold:'all'},
+  ]}});
+  assert.throws(() => patch(original, 'development', 'findings'), /scanner tool casing/);
+});
+test('missing or mismatched workflow, job or analysis category prevents every write', async () => {
+  for (const tool of ['CodeQL', 'devskim']) {
+    for (const invalid of [{ analysis_key: null }, { analysis_key: '.github/workflows/other.yml:lint' },
+      { analysis_key: '.github/workflows/devskim.yml:other' }, { category: null }, { category: 'other' }]) {
+      const state = githubFixture();
+      state.scanMutation = (record, branch, name) => [name === tool ? { ...record, ...invalid } : record];
+      await refused(state, /Current successful scanner analysis unavailable/, ['--apply', '--findings']);
+    }
+  }
+});
+test('an independent same-tool workflow can coexist with the required current producer', async () => {
+  const state = githubFixture();
+  state.scanMutation = record => [
+    { ...record, analysis_key: '.github/workflows/additional.yml:check', category: 'additional', id: record.id + 500 },
+    record,
+  ];
+  const result = await command(state, ['--apply', '--findings']);
+  assert.equal(result.error, undefined);
+  assert.equal(state.puts.length, 2);
+  const receipt = JSON.parse(result.output[0]).installation.scannerAvailability;
+  assert.deepEqual(receipt.map(row => row.analysisId), [101, 102, 101, 102]);
+});
+test('unidentified or reconfigured newer result cannot be skipped in favor of an older pass', async () => {
+  for (const changed of [{ analysis_key: '' }, { category: 'changed' }]) {
+    const state = githubFixture();
+    state.scanMutation = record => [{ ...record, ...changed }, record];
+    await refused(state, /Current successful scanner analysis unavailable/, ['--apply', '--findings']);
+  }
 });
 test('scanner evidence change during preflight refuses activation',async()=>{
   const state=githubFixture();let count=0;
