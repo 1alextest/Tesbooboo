@@ -277,8 +277,15 @@ export default function KnowledgeDocumentPage() {
   const refreshDocument = useCallback(async () => {
     const data = await getKnowledgeDocument(projectId, documentId);
     setDoc(data);
-    setTitle(data.title);
     setBreadcrumb(data.breadcrumb);
+    if (latestTitle.current === data.title) {
+      setTitle(data.title);
+      lastValidTitle.current = data.title;
+    } else {
+      // A title edit happened after the server snapshot this read returned; keep the visible
+      // draft rather than replacing it with the older persisted title.
+      setSaveStatus("unsaved");
+    }
   }, [projectId, documentId]);
 
   /**
