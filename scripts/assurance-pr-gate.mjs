@@ -68,7 +68,9 @@ export function requiresAssurance(file) {
   return names.some(name => typeof name === 'string' && (
     name.startsWith('docs/specs/agent-synchronized-engineering/') ||
     name.startsWith('docs/agent-skills/') ||
-    [POLICY_PATH, 'AGENTS.md', 'docs/ci-quality.md', 'scripts/assurance-pr-gate.mjs',
+    name.startsWith('.agents/skills/') ||
+    name.startsWith('.claude/skills/') ||
+    [POLICY_PATH, 'AGENTS.md', 'CLAUDE.md', 'skills-lock.json', 'docs/ci-quality.md', 'scripts/assurance-pr-gate.mjs',
       'scripts/assurance-pr-gate.test.mjs', 'scripts/assurance-test-fixtures.mjs',
       'scripts/publish-assurance-status.mjs', 'scripts/publish-assurance-status.test.mjs',
       '.github/workflows/assurance-pr-gate.yml', '.github/workflows/ci-hygiene.yml'].includes(name)
