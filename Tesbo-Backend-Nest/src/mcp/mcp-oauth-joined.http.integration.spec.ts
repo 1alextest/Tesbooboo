@@ -40,6 +40,14 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
   const resolveSession = jest.fn();
   const authenticateApiToken = jest.fn();
   const query = jest.fn();
+  const currentGrantRows = (sql: string) => ({
+    rows: sql.includes("mcp_oauth_grant_approval_bindings")
+      ? consentSaved ? [{
+        project_id: P, account_id: "tesbo-human", client_id: CLIENT,
+        resource: RESOURCE, approval_revision: 7, settings: ownerGrant()
+      }] : []
+      : [{ settings: ownerGrant() }]
+  });
   const ownerGrant = () => ({
     externalMcpAccess: {
       enabled, revision: 7,
@@ -83,8 +91,12 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
       }),
       listTestCases
     };
-    query.mockImplementation(async () => ({ rows: [{ settings: ownerGrant() }] }));
+    query.mockImplementation(async (sql: string) => currentGrantRows(sql));
     const oauth = new McpOAuthServer({ query } as unknown as DatabaseService);
+    // This joined HTTP fixture has a synthetic issuer, not a disposable DB.
+    // Real binding writes and owner-update invalidation are exercised separately.
+    jest.spyOn(oauth, "bindIssuedGrant").mockResolvedValue(undefined);
+    jest.spyOn(oauth, "discardUnboundGrant").mockResolvedValue(undefined);
     const provider = {
       interactionDetails: jest.fn().mockResolvedValue({
         prompt: { name: "consent" },
@@ -136,7 +148,7 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
   beforeEach(() => {
     enabled = true; clientApproved = true; consentSaved = false; memberActive = true;
     jest.clearAllMocks();
-    query.mockImplementation(async () => ({ rows: [{ settings: ownerGrant() }] }));
+    query.mockImplementation(async (sql: string) => currentGrantRows(sql));
     resolveSession.mockImplementation(async value => value === SESSION ? "tesbo-human" : null);
     authenticateApiToken.mockResolvedValue(null);
     listTestCases.mockResolvedValue([{ id: "case-1", title: "Existing regression" }]);
