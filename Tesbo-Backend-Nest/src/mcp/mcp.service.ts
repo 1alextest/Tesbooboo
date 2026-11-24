@@ -6,8 +6,8 @@ import { BUILD_GIT_SHA } from "../build-provenance";
 import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
-import { MCP_ACCESS_KEY, hasApprovedMcpToolPermission, onlyReducesMcpAccess, projectSettingsObject, readMcpAccess, validateMcpAccess, type McpClientGrant } from "./mcp-access";
-import type { ApiTokenContext, AuthenticatedRequest } from "../common/request.types";
+import { MCP_ACCESS_KEY, hasApprovedMcpToolPermission, isOAuthMcpGrant, onlyReducesMcpAccess, projectSettingsObject, readMcpAccess, validateMcpAccess, type ApiMcpClientGrant, type McpClientGrant, type OAuthMcpClientGrant } from "./mcp-access";
+import type { ApiTokenContext, AuthenticatedRequest, OAuthMachineContext } from "../common/request.types";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
 import { humanPublicationRequired, isDirectTestcasePublisher, proposalReviewPreviewEnabled } from "../common/testcase-publication.policy";
@@ -43,6 +43,18 @@ import {
  * Writes are attributed to a dedicated "tesbo-mcp" agent actor (seeded in V65) so machine
  * activity is distinguishable from human and Zyra activity in audit history.
  */
+/**
+ * Only a verified credential resolver may supply this runtime identity.
+ * OAuth is not connected to HTTP yet and can only enter through isolated tests.
+ * Absence of tokenId is intentional; never synthesize API-token provenance.
+ */
+type McpRuntimePrincipal = {
+  projectId: string | null;
+  userId: string | null;
+  scopes: string[];
+  tokenId?: string;
+};
+
 @Injectable()
 export class McpService {
   private readonly logger = new Logger(McpService.name);
@@ -127,7 +139,7 @@ export class McpService {
     }));
   }
 
-  private visibleTools(principal: ApiTokenContext, grant: McpClientGrant) {
+  private visibleTools(principal: McpRuntimePrincipal, grant: McpClientGrant) {
     return this.listToolsPayload().filter(tool => this.clientCanUseTool(principal, grant, tool.name));
   }
 
@@ -199,7 +211,7 @@ export class McpService {
     const row = current.rows[0];
     let access;
     try { access = row ? readMcpAccess(row.settings) : null; } catch { access = null; }
-    const grant = access?.clients.find(client => client.tokenId === principal.tokenId.toLowerCase());
+    const grant = access?.clients.find(client => !isOAuthMcpGrant(client) && client.tokenId === principal.tokenId.toLowerCase());
     const currentScopes = typeof row?.scopes === "string" ? row.scopes.split(",").map((scope: string) => scope.trim()) : [];
     if (!access?.enabled || !grant || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now() ||
         !grant.scopes.length || grant.scopes.some(scope => !currentScopes.includes(scope))) {
@@ -208,13 +220,87 @@ export class McpService {
     return { organizationId: project.organization_id, grant };
   }
 
-  private clientCanUseTool(principal: ApiTokenContext, grant: McpClientGrant, name: string): boolean {
+  /**
+   * The future resource-server verifier may call this ONLY with a validated,
+   * resource-bound opaque OAuth principal. This method reuses Tesbo's project
+   * access and revisioned owner-grant policy; it is not token verification or
+   * browser-session consent. No HTTP path currently calls this function.
+   *
+   * All OAuth operations in this slice are restricted to read and cannot
+   * stage, mutate, approve or publish anything.
+   */
+  async authorizeVerifiedOAuthReadOnly(
+    principal: OAuthMachineContext,
+    urlProjectId: string,
+    expectedIssuer: string,
+    expectedResource: string
+  ): Promise<{ organizationId: string; grant: OAuthMcpClientGrant }> {
+    if (principal.kind !== "oauth_access" || !principal.userId || !principal.subject ||
+        !principal.grantId || !principal.clientId ||
+        principal.projectId !== urlProjectId || principal.resource !== expectedResource ||
+        principal.issuer !== expectedIssuer || principal.scopes.length !== 1 ||
+        principal.scopes[0] !== "mcp:read") {
+      throw new McpError(RpcCode.ProjectScopeDenied, "OAuth principal is not read-scoped to this exact MCP resource");
+    }
+    let project: Record<string, any>;
+    try {
+      project = await this.legacy.requireProjectAccess(principal.userId, urlProjectId);
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof ForbiddenException || error instanceof UnauthorizedException) {
+        throw new McpError(RpcCode.ProjectScopeDenied, "OAuth user no longer has access to this project");
+      }
+      throw error;
+    }
+    const current = await this.db.query(
+      "SELECT settings FROM projects WHERE id=$1 AND archived_at IS NULL", [urlProjectId]
+    );
+    let access;
+    try { access = current.rows[0] ? readMcpAccess(current.rows[0].settings) : null; }
+    catch { access = null; }
+    const grant = access?.clients.find(g => isOAuthMcpGrant(g) && g.oauthClientId === principal.clientId);
+    if (!grant || !isOAuthMcpGrant(grant) || !access?.enabled || grant.scopes.length !== 1 ||
+        grant.scopes[0] !== "read" || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now()) {
+      throw new McpError(RpcCode.ProjectScopeDenied,
+        "OAuth read access requires current project owner approval and a valid named client grant");
+    }
+    return { organizationId: project.organization_id, grant };
+  }
+
+  /**
+   * Reuses the existing tool catalog/dispatcher for a future VERIFIED OAuth
+   * resource principal. OAuth is not accepted by McpController yet: this is
+   * deliberately unreachable over HTTP until the vetted AS and consent flow
+   * produce an independently validated subject, audience and active grant.
+   */
+  async handleVerifiedOAuthReadOnlyRequest(
+    body: unknown,
+    principal: OAuthMachineContext,
+    projectId: string,
+    expectedIssuer: string,
+    expectedResource: string
+  ): Promise<JsonRpcResponse> {
+    const input = body as Partial<JsonRpcRequest> | null;
+    const id: JsonRpcId = input && (typeof input.id === "string" || typeof input.id === "number") ? input.id : null;
+    try {
+      const { organizationId, grant } = await this.authorizeVerifiedOAuthReadOnly(
+        principal, projectId, expectedIssuer, expectedResource
+      );
+      const parsed = this.parseRequest(body);
+      const normalized: McpRuntimePrincipal = { userId: principal.userId, projectId, scopes: ["read"] };
+      return { jsonrpc: "2.0", id: parsed.id,
+        result: await this.dispatch(parsed.method, parsed.params, normalized, organizationId, grant) };
+    } catch (error) {
+      return this.toErrorResponse(id, error);
+    }
+  }
+
+  private clientCanUseTool(principal: McpRuntimePrincipal, grant: McpClientGrant, name: string): boolean {
     const tool = this.toolsByName.get(name);
     return !!tool && hasApprovedMcpToolPermission(principal.scopes, grant, tool.requiredScope, name);
   }
 
   private async humanProjectManager(req: AuthenticatedRequest, projectId: string) {
-    if (!req.userId || req.apiToken) throw new ForbiddenException({ error: "An authenticated human session is required to manage external MCP access" });
+    if (!req.userId || req.apiToken || req.oauthAccess) throw new ForbiddenException({ error: "An authenticated human session is required to manage external MCP access" });
     const project = await this.legacy.requireProjectAccess(req.userId, projectId);
     const role = this.legacy.normalizeRole(project.caller_role);
     if (role !== "owner" && role !== "manager") throw new ForbiddenException({ error: "Only project owners and managers can manage external MCP access" });
@@ -250,9 +336,10 @@ export class McpService {
       if (input.clients.length) {
         const tokens = await client.query(
           "SELECT id, user_id, scopes FROM api_tokens WHERE project_id = $1 AND id = ANY($2::uuid[]) FOR SHARE",
-          [projectId, input.clients.map(grant => grant.tokenId)]
+          [projectId, input.clients.filter((grant): grant is ApiMcpClientGrant => !isOAuthMcpGrant(grant)).map(grant => grant.tokenId)]
         );
         for (const grant of input.clients) {
+          if (isOAuthMcpGrant(grant)) continue; // Owner-managed read-only client grants are not API tokens.
           const token = tokens.rows.find(token => token.id === grant.tokenId);
           const scopes = typeof token?.scopes === "string" ? token.scopes.split(",").map((scope: string) => scope.trim()) : [];
           const unchanged = before.clients.some(previous => JSON.stringify(previous) === JSON.stringify(grant));
@@ -281,7 +368,7 @@ export class McpService {
   private async dispatch(
     method: string,
     params: Record<string, unknown>,
-    principal: ApiTokenContext,
+    principal: McpRuntimePrincipal,
     organizationId: string,
     grant: McpClientGrant
   ): Promise<unknown> {
@@ -316,7 +403,7 @@ export class McpService {
     }
   }
 
-  private async callTool(params: Record<string, unknown>, principal: ApiTokenContext, organizationId: string, grant: McpClientGrant): Promise<unknown> {
+  private async callTool(params: Record<string, unknown>, principal: McpRuntimePrincipal, organizationId: string, grant: McpClientGrant): Promise<unknown> {
     const name = typeof params.name === "string" ? params.name : "";
     const tool = this.toolsByName.get(name);
     if (!tool) {
