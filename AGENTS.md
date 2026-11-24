@@ -9,6 +9,7 @@ Work only in `1alextest/Tesbooboo`; `development` is the integration branch and 
 - **This file owns the engineering principles below.** They are binding.
 - **[CLAUDE.md](CLAUDE.md) owns the repo-specific operational mandates**: the shared database rule, the Basecamp bug-fix flow and the e2e coverage mandate. Read it as well.
 - **Detailed procedures stay in their linked documents.** Update the owner document; do not restate or fork a rule here.
+- **Security engineering and security-bot triage:** use the candidate [Living Security Engineering Skill](docs/agent-skills/living-security-engineering/SKILL.md) for principle distillation, contextual rules, tests and feedback. It cannot override the canonical principles, independently approve a Skill, or bypass human/security gates.
 
 ## Engineering principles — canonical
 
