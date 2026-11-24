@@ -37,7 +37,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     };
     const grant = {
       accountId: "tesbo-member", clientId: CLIENT,
-      getResourceScope: jest.fn((resource: string) =>
+      getResourceScope: jest.fn((resource: string): string =>
         resource === RESOURCE ? "mcp:read" : "")
     };
     const findAccess = jest.fn(async () => token);
