@@ -1980,7 +1980,7 @@ export function buildMcpTools(): McpTool[] {
     },
     {
       name: "stage_requirement_change_bundle", requiredScope: "write",
-      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, a Draft testcase candidate and a link intent between them — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The native owner resolves and pins the effective Skill context for the bundle's operations. Unassigned or conflicting contexts can be staged but block application. Applying the exact reviewed revision is a separate authorized human action that revalidates the pinned Skill context; staging does not approve or assign Skills. Returns a task and proposal revision, never official IDs.",
+      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, optional Draft testcase/link intent, and explicit selections of existing links to carry forward — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The native owner validates selected link and current approved case revisions and resolves and pins the effective Skill context. Existing links are never carried implicitly; an explicit selection still requires human review and approval. Unassigned or conflicting contexts can be staged but block application. Applying the exact reviewed revision is a separate authorized human action that revalidates the pinned Skill context; staging does not approve or assign Skills. Returns a task and proposal revision, never official IDs.",
       inputSchema: { type: "object", additionalProperties: false, required: ["requestKey", "operations"], properties: {
         requestKey: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string", maxLength: 512 },
         operations: { type: "array", minItems: 1, maxItems: 3, items: { oneOf: [
@@ -1991,6 +1991,12 @@ export function buildMcpTools(): McpTool[] {
             criteria: { type: "array", minItems: 1, maxItems: 50, items: { type: "object", additionalProperties: false,
               required: ["key", "text"], properties: { key: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$" },
                 text: { type: "string", minLength: 1, maxLength: 4000 }, normative: { type: "boolean" } } } },
+            carryForwardLinks: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+              required: ["linkId", "requirementVersionId", "testcaseId", "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"],
+              properties: { linkId: { type: "string", format: "uuid" }, requirementVersionId: { type: "string", format: "uuid" },
+                testcaseId: { type: "string", format: "uuid" }, testcaseRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                testcaseApprovalRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                criterionKeys: { type: "array", minItems: 1, maxItems: 50, uniqueItems: true, items: { type: "string" } } } } },
             reason: { type: "string", maxLength: 4000 }
           } },
           { type: "object", additionalProperties: false, required: ["opType", "operationId", "draft"], properties: {
@@ -2009,6 +2015,25 @@ export function buildMcpTools(): McpTool[] {
         const requestKey = requireString(args, "requestKey");
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
+        }
+        // The MCP dispatcher advertises nested additionalProperties:false but does not
+        // enforce that schema. Reject caller-provided review/Skill metadata at this boundary;
+        // the native proposal owner still independently verifies link identity and authority.
+        if (Array.isArray(args.operations)) {
+          const selectionKeys = new Set(["linkId", "requirementVersionId", "testcaseId",
+            "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"]);
+          for (const operation of args.operations) {
+            if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
+                operation.opType !== "requirement_revision" ||
+                !Array.isArray(operation.carryForwardLinks)) continue;
+            for (const link of operation.carryForwardLinks) {
+              if (!link || typeof link !== "object" || Array.isArray(link)) continue;
+              if (Object.keys(link).some(key => !selectionKeys.has(key))) {
+                throw new McpError(RpcCode.InvalidParams,
+                  "carryForwardLinks accepts selection identities only; reviewed Skill authority is server-derived");
+              }
+            }
+          }
         }
         const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false, operation: "requirement" });
         try {

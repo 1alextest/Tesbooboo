@@ -156,6 +156,29 @@ describe("MCP-P07 protected testcase publication and unpublished proposal previe
     expect(JSON.parse(read.result.content[0].text)).toMatchObject({ id: taskId });
   });
 
+  it("accepts explicit carry-forward intent but refuses caller-supplied reviewed Skill authority", async () => {
+    const f = fixture();
+    const selection = { linkId: taskId, requirementVersionId: tokenId, testcaseId,
+      testcaseRevision: revision, testcaseApprovalRevision: revision, criterionKeys: ["AC-1"] };
+    const operation = { opType: "requirement_revision", operationId: projectId, documentId: taskId,
+      expectedRevision: revision, title: "Carry forward", criteria: [{ key: "AC-1", text: "Obligation" }],
+      carryForwardLinks: [selection] };
+    const staged = await f.call("stage_requirement_change_bundle", { requestKey: "carry-forward", operations: [operation] });
+    expect(staged.error).toBeUndefined();
+    expect(f.legacy.stageRequirementChangeBundle).toHaveBeenCalledWith(projectId, "issuer-user",
+      expect.objectContaining({ operations: [operation] }), expect.objectContaining({ kind: "api_token", transport: "mcp" }));
+    const forged = await f.call("stage_requirement_change_bundle", { requestKey: "forged-carry-forward", operations: [
+      { ...operation, carryForwardLinks: [{ ...selection, originatingLinkSkill: { assignmentId: tokenId } }] }
+    ] });
+    expect(forged.error.code).toBe(RpcCode.InvalidParams);
+    expect(forged.error.message).toMatch(/server-derived/);
+    const unknown = await f.call("stage_requirement_change_bundle", { requestKey: "unknown-carry-forward", operations: [
+      { ...operation, carryForwardLinks: [{ ...selection, clientCertified: true }] }
+    ] });
+    expect(unknown.error.code).toBe(RpcCode.InvalidParams);
+    expect(f.legacy.stageRequirementChangeBundle).toHaveBeenCalledTimes(1);
+  });
+
   it.each([false, true])("binds initialize/session fingerprints to the exact granted catalog with preview=%p", async enabled => {
     process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = enabled ? "1" : "0";
     for (const scopes of [["read"], ["read", "write"]]) {

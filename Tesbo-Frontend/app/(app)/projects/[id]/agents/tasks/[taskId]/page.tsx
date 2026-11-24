@@ -42,6 +42,7 @@ import { isMarkdownSource, renderMarkdown } from "@/lib/markdown";
 import { TechniqueBadges } from "@/components/agents/ZyraChatReviewPanel";
 import { ZyraSeverityBadge } from "@/components/agents/ZyraContextDrawer";
 import { RequirementReviewPanel } from "@/components/agents/RequirementReviewPanel";
+import { RequirementCarryForwardReview } from "@/components/agents/RequirementCarryForwardReview";
 import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPanel";
 import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
@@ -606,6 +607,7 @@ export default function ZyraTaskDetailPage() {
     criteria?: Array<{ key?: string; text?: string; normative?: boolean }>;
     draft?: Record<string, unknown> & { title?: string };
     criterionKeys?: string[];
+    carryForwardLinks?: unknown;
   };
   const requirementOps: RequirementBundleEntry[] = Array.isArray(task.requirementBundle)
     ? (task.requirementBundle as RequirementBundleEntry[]) : [];
@@ -767,6 +769,7 @@ export default function ZyraTaskDetailPage() {
                   </ul>
                 </div>
               )}
+              <RequirementCarryForwardReview selections={bundleRequirement?.carryForwardLinks} skillContext={task.skillContext} />
               {bundleCase && (
                 <div data-testid="requirement-bundle-case">
                   <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Testcase candidate (Draft proposal)</p>
@@ -820,7 +823,7 @@ export default function ZyraTaskDetailPage() {
                   : done
                     ? "This bundle was not published. No requirement version, case or link was created; the recorded outcome above is authoritative."
                     : skillsResolved
-                      ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
+                      ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates the exact submitted requirement revision and only the case/link candidates included in the bundle. Requirement approval and selected existing link activation remain separate human decisions."
                       : task.skillContext?.status === "conflict"
                         ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
                         : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
