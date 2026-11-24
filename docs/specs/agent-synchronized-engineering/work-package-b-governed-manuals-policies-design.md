@@ -189,12 +189,13 @@ policy. An approved document does not become Zyra-visible merely because it is a
   metadata edit, submitted snapshot metadata, owner approve, QA refusal, stale approval, lost-response replay,
   later rejection superseding an earlier approval, AI-context exclusion for draft and approved governed documents,
   owner/manager API approval, QA engineers, guests and unauthenticated users refused; project boundary 404; machine API token
-  `HUMAN_REVIEW_REQUIRED`, replay, and refusal of a governed→general type change.
+  `HUMAN_REVIEW_REQUIRED`, refusal of agent-token governed creation/update, a policy with enforcement references
+  through submit/approve, replay, and refusal of a governed→general type change.
 - UI: author a manual/policy with metadata, submit, owner reviews the exact version and its metadata and approves;
   QA is refused while the owner still has the actions (not after a decision hides them); an edit clears the
   reported decision even though history keeps the snapshot; a later rejection supersedes the approval on reload;
-  exact-version history/readback. The Zyra context picker still lists governed documents that the backend then
-  excludes; filtering the picker is a follow-up, not a claim of this slice.
+  exact-version history/readback. The Zyra context picker filters governed documents before a selection can copy
+  their body into task context; the API/RAG gates remain the authoritative exclusion.
 - Native Tesbo: REQ-WPB-01 task `d5b7ab51-1c6b-460b-971f-280d1f567edb` staged; execution UNRUN until human apply.
 
 ---
@@ -233,15 +234,14 @@ policy. An approved document does not become Zyra-visible merely because it is a
 12. **Autosave restore metadata.** Decision snapshots carry the exact governance metadata; autosave snapshots do not.
     Restoring an autosave therefore keeps the current metadata and the trigger re-drafts the document. Restore of a
     decision snapshot restores its metadata with the body.
-13. **MCP surface is not governed-aware.** `create_knowledge_document`/`update_knowledge_document` accept an
-    unconstrained `documentType`, so an agent token can read a governed manual/policy and edit its existing title
-    or body (which re-drafts it); it cannot set `governedMetadata`, change the document type, set `status` or approve.
-    The human exact-version decision invariant therefore still holds, but governed documents are not absent from the
-    agent surface. A guarded MCP authoring contract, or refusing governed-document edits from agent tokens, is a
-    follow-up; do not describe the current tools as legacy-only.
+13. **Agent write boundary for governed documents.** API-token principals are refused when they create a
+    `user_manual`/`policy`, supply `governedMetadata`, or update a governed document (the REST controller and MCP
+    handlers pass the token principal; the service enforces it). Agents may still read/list governed documents and
+    their metadata, and none of them can set `status` or approve. This is a containment rule for the first slice,
+    not a complete MCP schema; a future governed-authoring contract would need an explicit human-review design.
 14. **Submit does not flush a pending editor autosave.** The panel submits the persisted revision and only patches
     metadata first. The page autosaves quickly and the empty-state copy asks the author to save content first, but a
     click inside the debounce window can submit the prior body. A shared editor flush hook is the follow-up.
-15. **Zyra context picker.** The task composer lists all KB documents, including governed manuals/policies, while
-    the backend snapshot/AI-context gate excludes them. No content is exposed, but the picker offers an inert
-    choice and shows the raw type. Filtering/labelling it belongs with the exposure-policy follow-up.
+15. **Zyra context picker (filtered).** The task composer no longer offers `user_manual`/`policy` documents,
+    because selecting one copies its full text into the task context sent to the model. The backend snapshot and
+    AI-context gates remain authoritative; a future exposure policy may reintroduce an explicitly labelled option.

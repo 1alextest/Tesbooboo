@@ -234,9 +234,12 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
     .filter((version) => version.snapshotKind === "approved" || version.snapshotKind === "rejected")
     .sort((a, b) => b.versionNumber - a.versionNumber)[0];
   // A prior decision on this submitted version no longer applies after the body/metadata edit
-  // that cleared the document's binding. Offer a refreshed submission, not a stale decision.
+  // that cleared the document's binding. The same is true for an undecided submission that has
+  // since been edited: its digest no longer matches the document, so approving it can only 409.
+  const submittedRevision = submittedDetail?.snapshotMetadata?.expectedRevision;
   const submittedSuperseded = Boolean(currentDecision === "" && submittedVersion
-    && latestDecisionSnapshot?.snapshotMetadata?.sourceVersionId === submittedVersion.id);
+    && (latestDecisionSnapshot?.snapshotMetadata?.sourceVersionId === submittedVersion.id
+      || (typeof submittedRevision === "string" && submittedRevision !== doc.editRevision)));
   const decidedOnSubmitted = Boolean(currentDecision && decidedSnapshot && submittedVersion
     && doc.reviewedVersionId === decidedSnapshot.id
     && decidedSnapshot.snapshotMetadata?.sourceVersionId === submittedVersion.id);
@@ -292,6 +295,10 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged }: 
             ) : submittedSuperseded ? (
               <p className="text-sm text-[var(--muted)]" data-testid="governed-decision-superseded">
                 The document changed after this version was submitted. Submit the current revision for a new decision.
+              </p>
+            ) : doc.status !== "draft" ? (
+              <p className="text-sm text-[var(--muted)]" data-testid="governed-decision-readonly">
+                This document is {doc.status}. Edit it to create a new draft before submitting another version.
               </p>
             ) : canManage ? (
               <div className="space-y-2">

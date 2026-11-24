@@ -19,7 +19,8 @@ const EMBEDDING_TRIM_CHARACTERS_SQL = "U&'\\0009\\000A\\000B\\000C\\000D\\0020\\
  */
 export function knowledgeDocumentAiContextSql(alias: "knowledge_documents" | "d" = "knowledge_documents", chunkHash?: "c.content_hash"): string {
   return `((${alias}.document_type != 'ai_memory' AND ${alias}.document_type NOT IN ('user_manual','policy')) OR (
-    ${alias}.status = 'approved' AND ${alias}.reviewed_by IS NOT NULL AND ${alias}.reviewed_at IS NOT NULL
+    ${alias}.document_type = 'ai_memory'
+    AND ${alias}.status = 'approved' AND ${alias}.reviewed_by IS NOT NULL AND ${alias}.reviewed_at IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM knowledge_document_versions reviewed
       WHERE reviewed.id = ${alias}.reviewed_version_id AND reviewed.document_id = ${alias}.id

@@ -1982,7 +1982,7 @@ export class LegacyController {
 
   @Post("/api/projects/:projectId/knowledge-base/documents")
   createKnowledgeDocument(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Body() body: Record<string, any>) {
-    return this.legacy.createKnowledgeDocument(projectId, req.userId, body);
+    return this.legacy.createKnowledgeDocument(projectId, req.userId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   @Get("/api/projects/:projectId/knowledge-base/documents/:documentId/versions")
@@ -2096,7 +2096,7 @@ export class LegacyController {
     @Param("documentId") documentId: string,
     @Body() body: Record<string, any>
   ) {
-    return this.legacy.updateKnowledgeDocument(projectId, req.userId, documentId, body);
+    return this.legacy.updateKnowledgeDocument(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
   // Zyra AI Memory's only write path for people: correct or remove one entry (owner/manager only).

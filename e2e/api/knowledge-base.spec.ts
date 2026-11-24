@@ -1325,9 +1325,39 @@ test.describe("knowledge base v2 — folders and documents", () => {
         expect(result.status()).toBe(403);
         expect((await result.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
       }
+      // An agent token cannot originate governed metadata or rewrite a governed document.
+      const tokenCreate = await anon.post(kbUrl("/documents"), {
+        headers: { Authorization: `Bearer ${token.token}` },
+        data: { title: stamp("Agent governed"), folderId: rootFolderId, documentType: "user_manual", governedMetadata: metadata },
+        failOnStatusCode: false,
+      });
+      expect(tokenCreate.status()).toBe(403);
+      const tokenUpdate = await anon.patch(kbUrl(`/documents/${doc.id}`), {
+        headers: { Authorization: `Bearer ${token.token}` }, data: { governedMetadata: metadata }, failOnStatusCode: false,
+      });
+      expect(tokenUpdate.status()).toBe(403);
     } finally {
       await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
     }
+
+    // The policy half uses the same exact-version machinery with policy-only enforcement refs.
+    const policyMetadata = { ...metadata, subtype: "policy", enforcementRefs: ["ACME-POL-1"] };
+    const policy = await createDocument({
+      title: stamp("Governed policy"), documentType: "policy", contentText: "Policy body", contentHtml: "<p>Policy body</p>",
+      governedMetadata: policyMetadata,
+    });
+    const policySubmission = await asOwner.post(kbUrl(`/documents/${policy.id}/submissions`), {
+      data: { expectedRevision: policy.editRevision, submissionKey: randomUUID() }, failOnStatusCode: false,
+    });
+    expect(policySubmission.status(), await policySubmission.text()).toBe(201);
+    const policyVersion = await policySubmission.json();
+    const policyApproval = await asOwner.post(kbUrl(`/documents/${policy.id}/governed-approval`), {
+      data: { versionId: policyVersion.id }, failOnStatusCode: false,
+    });
+    expect(policyApproval.status(), await policyApproval.text()).toBe(201);
+    expect(await policyApproval.json()).toMatchObject({ status: "approved", sourceVersionId: policyVersion.id });
+    expect((await (await asOwner.get(kbUrl(`/documents/${policy.id}`))).json()).governedMetadata)
+      .toMatchObject({ subtype: "policy", enforcementRefs: ["ACME-POL-1"] });
 
     // A governed type cannot be changed to bypass the exact-version decision.
     const converted = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { documentType: "general" }, failOnStatusCode: false });

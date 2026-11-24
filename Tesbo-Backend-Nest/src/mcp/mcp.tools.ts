@@ -1733,7 +1733,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         requireString(args, "title");
         requireString(args, "folderId");
-        return ctx.legacy.createKnowledgeDocument(ctx.projectId, ctx.userId, args);
+        return ctx.legacy.createKnowledgeDocument(ctx.projectId, ctx.userId, args, { kind: "api_token" });
       }
     },
     {
@@ -1757,7 +1757,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
-        return ctx.legacy.updateKnowledgeDocument(ctx.projectId, ctx.userId, documentId, args);
+        return ctx.legacy.updateKnowledgeDocument(ctx.projectId, ctx.userId, documentId, args, { kind: "api_token" });
       }
     },
     {

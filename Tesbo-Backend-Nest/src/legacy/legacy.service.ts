@@ -12270,7 +12270,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async createKnowledgeDocument(projectId: string, userId: string | null | undefined, body: Body) {
+  async createKnowledgeDocument(projectId: string, userId: string | null | undefined, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const title = String(body.title || "").trim();
@@ -12289,6 +12290,11 @@ export class LegacyService implements OnModuleInit {
     await this.kbFolder(projectId, folderId);
 
     const documentType = String(body.documentType || "general");
+    // Governed manuals/policies are authored and decided on the human KB surface. An agent
+    // token may read them, but it may not originate or rewrite their governance metadata.
+    if (principal?.kind === "api_token" && (isGovernedDocumentType(documentType) || body.governedMetadata !== undefined)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
     const governedMetadata = normalizeGovernedMetadata(body.governedMetadata, documentType);
     // Exposure hold: governed content stays out of the embedding pipeline until an owner decides
     // how it may leave the project. `unsupported` is the terminal state that keeps the boot-time
@@ -12573,7 +12579,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const initial = await this.kbDocument(projectId, documentId);
@@ -12641,7 +12648,11 @@ export class LegacyService implements OnModuleInit {
     const nextHtml = body.contentHtml !== undefined ? body.contentHtml : doc.content_html;
     const nextText = body.contentText !== undefined ? body.contentText : doc.content_text;
     const nextDocumentType = String(body.documentType || doc.document_type);
-    // V164's trigger refuses this too, but as a raw 23514. Refuse it here so the API answers
+    if (principal?.kind === "api_token"
+      && (isGovernedDocumentType(doc.document_type) || isGovernedDocumentType(nextDocumentType) || body.governedMetadata !== undefined)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+    // V165's trigger refuses this too, but as a raw 23514. Refuse it here so the API answers
     // 400 like every other type-change boundary rather than surfacing a database error as a 500.
     if ((doc.document_type === "requirement_note" || isGovernedDocumentType(doc.document_type))
       && nextDocumentType !== doc.document_type) {
