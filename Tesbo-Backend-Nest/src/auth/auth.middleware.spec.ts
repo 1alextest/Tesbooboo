@@ -1,5 +1,6 @@
 import type { NextFunction, Response } from "express";
 import { AuthMiddleware } from "./auth.middleware";
+import type { McpOAuthServer } from "./mcp-oauth-server";
 import { AppConfigService } from "../config/app-config.service";
 import { ApiTokenService } from "./api-token.service";
 import { OtpService } from "./otp.service";
@@ -65,7 +66,6 @@ describe("AuthMiddleware bearer precedence", () => {
   );
 
   it("attaches a verified opaque OAuth principal without upgrading its Tesbo user into a browser session", async () => {
-    const { McpOAuthServer } = await import("./mcp-oauth-server");
     const f = fixture(null);
     const verified = {
       kind: "oauth_access" as const, issuer: "https://tesbo.example/oauth", subject: "external-sub",
@@ -78,7 +78,7 @@ describe("AuthMiddleware bearer precedence", () => {
       { sessionCookieName: "session" } as unknown as AppConfigService,
       f.otp as unknown as OtpService,
       f.api as unknown as ApiTokenService,
-      oauth as unknown as InstanceType<typeof McpOAuthServer>
+      oauth as unknown as McpOAuthServer
     );
     const req = {
       headers: { authorization: "Bearer verified-oauth-opaque-value" },
@@ -93,14 +93,13 @@ describe("AuthMiddleware bearer precedence", () => {
   });
 
   it("never substitutes an invalid OAuth bearer with a Tesbo browser cookie", async () => {
-    const { McpOAuthServer } = await import("./mcp-oauth-server");
     const f = fixture(null);
     const oauth = { enabled: true, verifyAccessToken: jest.fn().mockResolvedValue(null) };
     const real = new AuthMiddleware(
       { sessionCookieName: "session" } as unknown as AppConfigService,
       f.otp as unknown as OtpService,
       f.api as unknown as ApiTokenService,
-      oauth as unknown as InstanceType<typeof McpOAuthServer>
+      oauth as unknown as McpOAuthServer
     );
     const req = {
       headers: { authorization: "Bearer rejected-oauth" },
