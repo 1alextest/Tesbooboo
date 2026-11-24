@@ -357,8 +357,9 @@ The existing proposal task owner (`ai_generation_requests`) now carries one iner
 provider `external_document_proposal`. The candidate is not a knowledge document and does not alter the target.
 
 - **Payload.** `opType='managed_document_revision'`, `operation='create'|'update'`, `documentType`, optional
-  `documentId`/`targetEditRevision`, create-only `folderId`, full `document` (`title`, `contentJson`, `contentHtml`,
-  `contentText`, `governedMetadata`) and a producer `reason`.
+  `documentId`/`targetEditRevision`, create-only `folderId`, a `document` with `title`, `governedMetadata` and the
+  proposed `contentJson`/`contentHtml`/`contentText` representations, and a producer `reason`. On update an
+  omitted representation means "preserve the current one"; it is not stored or applied as null.
 - **Exact base.** An update stages only after comparing the caller's `expectedRevision` with the target's locked
   `editRevision`; the task stores a base snapshot (title/content/metadata/type/status/revision/content digest).
   A target edit, type change, provider-owned row or deletion after staging refuses apply with
@@ -388,20 +389,6 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   an earlier task, remain owner decisions. The task record cannot be updated through the available native tools;
   REQ-WPB-03 `4c6d84b3-64e9-4508-a4fd-d6001fbb4c75` remains staged/`in_review`, execution **UNRUN**.
 
----
-
-## 10. PR #250 carried findings — disposition
-
-| Finding | Disposition |
-| --- | --- |
-| Title edited during governed Save/Submit could be overwritten | Fixed in #250 (in-flight local revision fence + refresh guard); KBU-77 covers save/submit. |
-| Decision path could overwrite a title/body edited during the in-flight decision | Fixed here: the decision captures the local revision and preserves the visible draft as unsaved; KBU-78 covers the browser path. |
-| `writer.needsReadback` blocked a decision retry after a failed decision | Fixed in #250: removed from the pre-decision guard; draft state still blocks a genuinely unsaved body. |
-| Ambiguous governed UPDATE acknowledgement | Confirmed follow-up: POST ambiguity is covered (KBU-73), but a PATCH that commits with a lost response still requires reload/readback. Not an authority or draft-loss defect. |
-| Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
-| Create-vs-folder-delete race | Confirmed follow-up: folder cascade checks the project lock used by conversions, but document create does not take that lock; a human create concurrent with a token folder delete can land in a deleted folder. Narrow, pre-existing for human deletes. |
-| Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |
-
 ### 9.1 Review-surface hardening after review
 
 - Omitted `contentText`/`contentHtml`/`contentJson` on an update now mean "preserve the current
@@ -419,3 +406,17 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   records `no_change` and the actual status instead of claiming a new Draft.
 - The managed review revision is a digest of the exact operation + pinned Skill context, not the
   unrelated testcase proposal dependency snapshot.
+
+---
+
+## 10. PR #250 carried findings — disposition
+
+| Finding | Disposition |
+| --- | --- |
+| Title edited during governed Save/Submit could be overwritten | Fixed in #250 (in-flight local revision fence + refresh guard); KBU-77 covers save/submit. |
+| Decision path could overwrite a title/body edited during the in-flight decision | Fixed here: the decision captures the local revision and preserves the visible draft as unsaved; KBU-78 covers the browser path. |
+| `writer.needsReadback` blocked a decision retry after a failed decision | Fixed in #250: removed from the pre-decision guard; draft state still blocks a genuinely unsaved body. |
+| Ambiguous governed UPDATE acknowledgement | Confirmed follow-up: POST ambiguity is covered (KBU-73), but a PATCH that commits with a lost response still requires reload/readback. Not an authority or draft-loss defect. |
+| Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
+| Create-vs-folder-delete race | Confirmed follow-up: folder cascade checks the project lock used by conversions, but document create does not take that lock; a human create concurrent with a token folder delete can land in a deleted folder. Narrow, pre-existing for human deletes. |
+| Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |
