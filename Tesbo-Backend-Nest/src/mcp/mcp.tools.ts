@@ -1734,7 +1734,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         requireString(args, "title");
         requireString(args, "folderId");
-        return ctx.legacy.createKnowledgeDocument(ctx.projectId, ctx.userId, args);
+        return ctx.legacy.createKnowledgeDocument(ctx.projectId, ctx.userId, args, { kind: "api_token" });
       }
     },
     {
@@ -1758,7 +1758,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
-        return ctx.legacy.updateKnowledgeDocument(ctx.projectId, ctx.userId, documentId, args);
+        return ctx.legacy.updateKnowledgeDocument(ctx.projectId, ctx.userId, documentId, args, { kind: "api_token" });
       }
     },
     {
@@ -1778,7 +1778,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
         requireString(args, "folderId");
-        return ctx.legacy.moveKnowledgeDocument(ctx.projectId, ctx.userId, documentId, args);
+        return ctx.legacy.moveKnowledgeDocument(ctx.projectId, ctx.userId, documentId, args, { kind: "api_token" });
       }
     },
     {
@@ -1794,7 +1794,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
-        return ctx.legacy.deleteKnowledgeDocument(ctx.projectId, ctx.userId, documentId);
+        return ctx.legacy.deleteKnowledgeDocument(ctx.projectId, ctx.userId, documentId, { kind: "api_token" });
       }
     },
     {
@@ -1810,7 +1810,7 @@ export function buildMcpTools(): McpTool[] {
       },
       handler: async (args, ctx) => {
         const documentId = requireString(args, "documentId");
-        return ctx.legacy.restoreKnowledgeDocument(ctx.projectId, ctx.userId, documentId);
+        return ctx.legacy.restoreKnowledgeDocument(ctx.projectId, ctx.userId, documentId, { kind: "api_token" });
       }
     },
     {
@@ -1894,7 +1894,7 @@ export function buildMcpTools(): McpTool[] {
       handler: async (args, ctx) => {
         const folderId = requireString(args, "folderId");
         requireString(args, "parentFolderId");
-        return ctx.legacy.moveKnowledgeFolder(ctx.projectId, ctx.userId, folderId, args);
+        return ctx.legacy.moveKnowledgeFolder(ctx.projectId, ctx.userId, folderId, args, { kind: "api_token" });
       }
     }
   ];

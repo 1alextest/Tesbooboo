@@ -176,6 +176,20 @@ describe("McpService", () => {
       expect(res.result.serverInfo.name).toBe(MCP_SERVER_NAME);
       expect(res.result.capabilities).toHaveProperty("tools");
       expect(res.result.instructions).toBe(MCP_SERVER_INSTRUCTIONS);
+      // These instructions reach remote MCP clients even when no repository AGENTS.md is loaded.
+      // Missing read/grant/Skill authority must be stated rather than inferred or bypassed.
+      const guidance = String(res.result.instructions);
+      for (const tool of ["list_testcases", "list_suites", "get_testcase",
+        "stage_testcase_changes", "stage_requirement_change_bundle",
+        "get_requirement_proposal_task"]) {
+        expect(guidance).toContain(tool);
+      }
+      expect(guidance).toContain("Only if stage_requirement_change_bundle is actually advertised");
+      expect(guidance).toContain("A successful repository unit/E2E test does not mean a Tesbo Run executed");
+      expect(guidance).toContain("re-approval of a changed definition is a separate human decision");
+      expect(guidance).toContain("not permission to publish official records");
+      expect(guidance).toContain("observable expectedResult on each applicable step");
+      expect(guidance).toContain("sourceRefs and automationRepo/automationPath");
       expect(res.id).toBe(1);
     });
 
@@ -438,7 +452,7 @@ describe("McpService", () => {
       expect((legacy as any).createKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", {
         title: "Runbook",
         folderId: "folder-1"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects create_knowledge_document without folderId", async () => {
@@ -465,7 +479,7 @@ describe("McpService", () => {
       expect((legacy as any).updateKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "doc-1", {
         documentId: "doc-1",
         title: "New title"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects update_knowledge_document without documentId", async () => {
@@ -509,7 +523,7 @@ describe("McpService", () => {
       expect((legacy as any).moveKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "doc-1", {
         documentId: "doc-1",
         folderId: "folder-2"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects move_knowledge_document without folderId", async () => {
@@ -589,7 +603,7 @@ describe("McpService", () => {
       expect((legacy as any).moveKnowledgeFolder).toHaveBeenCalledWith("proj-1", "user-7", "folder-1", {
         folderId: "folder-1",
         parentFolderId: "folder-2"
-      });
+      }, { kind: "api_token" });
     });
 
     it("rejects move_knowledge_folder without parentFolderId", async () => {
@@ -745,7 +759,7 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).deleteKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1");
+      expect((legacy as any).deleteKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1", { kind: "api_token" });
     });
 
     it("rejects archive_knowledge_document without documentId", async () => {
@@ -805,7 +819,7 @@ describe("McpService", () => {
         "proj-1"
       );
       expect(res.result.isError).toBe(false);
-      expect((legacy as any).restoreKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1");
+      expect((legacy as any).restoreKnowledgeDocument).toHaveBeenCalledWith("proj-1", "user-7", "kb-doc-1", { kind: "api_token" });
     });
 
     it("rejects restore_knowledge_document without documentId", async () => {

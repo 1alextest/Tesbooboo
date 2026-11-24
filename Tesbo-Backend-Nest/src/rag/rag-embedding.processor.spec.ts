@@ -125,6 +125,17 @@ describe("RagEmbeddingProcessor.process — knowledge source (document/file)", (
     expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
   });
 
+  it.each(["user_manual", "policy"])("keeps a queued %s document under the exposure hold and never calls the embeddings API", async (documentType) => {
+    resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
+    const db = makeDb({ source: { id: "doc-1", organization_id: "org-1", content: "Confidential governed content, long enough to chunk.", embedding_content_hash: null, document_type: documentType } });
+    const processor = new RagEmbeddingProcessor(db, chunking);
+    await processor.process(makeJob("embed-source", payload));
+    expect(embedTextsMock).not.toHaveBeenCalled();
+    expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
+    const statusUpdate = (db.query as jest.Mock).mock.calls.find((c) => String(c[0]).includes("embedding_status = $2"));
+    expect(statusUpdate?.[1]).toEqual(["doc-1", "unsupported"]);
+  });
+
   it("marks the source unsupported and never calls the embeddings API when there is no extractable text", async () => {
     const db = makeDb({ source: { id: "doc-1", organization_id: "org-1", content: "   ", embedding_content_hash: null } });
     const processor = new RagEmbeddingProcessor(db, chunking);

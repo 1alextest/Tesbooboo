@@ -29,6 +29,7 @@ import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/hum
 import { readMcpAccess } from "../mcp/mcp-access";
 import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, nativeProposalProducerIdentity, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
 import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
+import { governedMetadataSnapshot, isGovernedDocumentType, normalizeGovernedMetadata } from "./governed-document-metadata";
 import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
@@ -11558,7 +11559,7 @@ export class LegacyService implements OnModuleInit {
   private static readonly KB_DOCUMENT_MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
   private static readonly KB_DOCUMENT_COLUMNS = `id, organization_id, project_id, folder_id, title, content_json, content_html, content_text,
     document_type, status, is_ai_generated, source_provider, source_external_id, source_url,
-    source_role, source_synced_by, source_synced_at, is_read_only,
+    source_role, source_synced_by, source_synced_at, is_read_only, governed_metadata,
     created_by, updated_by, reviewed_by, reviewed_at, is_deleted, created_at, updated_at, deleted_at,
     reviewed_version_id, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision`;
 
@@ -11749,7 +11750,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async moveKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string, body: Body) {
+  async moveKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const folder = await this.kbFolder(projectId, folderId);
@@ -11769,6 +11771,7 @@ export class LegacyService implements OnModuleInit {
         if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be moved" });
         const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
         this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+        await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
         const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [targetParentId, projectId]);
         if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
         const invalid = await client.query(
@@ -11938,7 +11941,8 @@ export class LegacyService implements OnModuleInit {
     };
   }
 
-  async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
+  async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const folder = await this.kbFolder(projectId, folderId);
@@ -11953,6 +11957,7 @@ export class LegacyService implements OnModuleInit {
       if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be deleted" });
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
       const documents = await client.query<{ id: string }>(
         `${LegacyService.DESCENDANTS_CTE} SELECT id FROM knowledge_documents
          WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants) AND is_deleted=false AND title <> $3`,
@@ -11981,7 +11986,8 @@ export class LegacyService implements OnModuleInit {
     return { success: true };
   }
 
-  async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
+  async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const role = await this.kbProjectRole(uid, projectId);
@@ -12007,6 +12013,7 @@ export class LegacyService implements OnModuleInit {
       if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
       if (existing.rows[0].deletion_reason === "integration_disconnect") {
         const providerName = PROVIDER_FOLDER_NAMES[existing.rows[0].source_provider || ""];
         const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
@@ -12273,7 +12280,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async createKnowledgeDocument(projectId: string, userId: string | null | undefined, body: Body) {
+  async createKnowledgeDocument(projectId: string, userId: string | null | undefined, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const title = String(body.title || "").trim();
@@ -12291,10 +12299,21 @@ export class LegacyService implements OnModuleInit {
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
     await this.kbFolder(projectId, folderId);
 
-    const documentType = body.documentType || "general";
+    const documentType = String(body.documentType || "general");
+    // Governed manuals/policies are authored and decided on the human KB surface. An agent
+    // token may read them, but it may not originate or rewrite their governance metadata.
+    if (principal?.kind === "api_token" && (isGovernedDocumentType(documentType) || body.governedMetadata !== undefined)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+    const governedMetadata = normalizeGovernedMetadata(body.governedMetadata, documentType);
+    // Exposure hold: governed content stays out of the embedding pipeline until an owner decides
+    // how it may leave the project. `unsupported` is the terminal state that keeps the boot-time
+    // sweep from requeueing it; the sweep and processor also filter by document type so the hold
+    // survives a migration that resets terminal embedding states.
+    const embeddingStatus = isGovernedDocumentType(documentType) ? "unsupported" : "pending";
     const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'draft', $9, $9) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
       [
         project.organization_id,
         projectId,
@@ -12304,11 +12323,16 @@ export class LegacyService implements OnModuleInit {
         body.contentHtml || null,
         body.contentText || null,
         documentType,
+        JSON.stringify(governedMetadata),
+        embeddingStatus,
         uid
       ]
     );
     await this.logProjectActivity(projectId, uid, "created", "knowledge_document", res.rows[0].id, title, {});
-    this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    // Governed manuals/policies remain human-only until an exposure policy is accepted.
+    if (!isGovernedDocumentType(documentType)) {
+      this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    }
     return toCamel(res.rows[0]);
   }
 
@@ -12553,6 +12577,27 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
+  private async assertAgentMayTouchGovernedFolder(client: PoolClient, projectId: string, folderId: string,
+    principal: { kind: "human_session" | "api_token" } | undefined) {
+    if (principal?.kind !== "api_token") return;
+    const governed = await client.query(
+      `${LegacyService.DESCENDANTS_CTE}
+       SELECT 1 FROM knowledge_documents
+        WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants)
+          AND document_type IN ('user_manual','policy') LIMIT 1`,
+      [[folderId], projectId]
+    );
+    if (governed.rows[0]) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+  }
+
+  private assertAgentMayTouchGoverned(principal: { kind: "human_session" | "api_token" } | undefined, documentType: unknown) {
+    if (principal?.kind === "api_token" && isGovernedDocumentType(documentType)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+  }
+
   private assertKnowledgeDocumentBodyWritable(doc: Body) {
     // Provider-owned mirrors are rewritten wholesale by every sync, so an edit here would be
     // silently discarded later. Comments are the writable channel on these documents — they live
@@ -12565,7 +12610,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const initial = await this.kbDocument(projectId, documentId);
@@ -12591,17 +12637,18 @@ export class LegacyService implements OnModuleInit {
       if (nextDocumentType !== locked.rows[0].document_type) {
         await this.assertSkillsInactive(client, projectId, [documentId]);
       }
-      return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0]);
+      return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0], principal);
     });
     await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
-    if (contentChanged) this.enqueueEmbedding(row.organization_id, projectId, "document", documentId, "updated");
+    if (contentChanged && !isGovernedDocumentType(row.document_type)) this.enqueueEmbedding(row.organization_id, projectId, "document", documentId, "updated");
     if (contentChanged && !this.isZyraMemoryDocument(before)) {
       await this.notifyKnowledgeItem({ kind: "updated", projectId, actorId: uid, itemId: documentId, name: nextTitle || before.title, ownerId: before.created_by ?? null, isDocument: true });
     }
     return toCamel(row);
   }
 
-  private async writeKnowledgeDocument(client: PoolClient, projectId: string, uid: string, documentId: string, body: Body, doc: Body) {
+  private async writeKnowledgeDocument(client: PoolClient, projectId: string, uid: string, documentId: string, body: Body,
+    doc: Body, principal?: { kind: "human_session" | "api_token" }) {
     const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision);
     if (expectedRevision && expectedRevision !== doc.edit_revision) {
       throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "This document changed. Reload and review the current version before saving." });
@@ -12632,6 +12679,21 @@ export class LegacyService implements OnModuleInit {
     const nextJson = body.contentJson !== undefined ? JSON.stringify(body.contentJson) : doc.content_json != null ? JSON.stringify(doc.content_json) : null;
     const nextHtml = body.contentHtml !== undefined ? body.contentHtml : doc.content_html;
     const nextText = body.contentText !== undefined ? body.contentText : doc.content_text;
+    const nextDocumentType = String(body.documentType || doc.document_type);
+    if (principal?.kind === "api_token"
+      && (isGovernedDocumentType(doc.document_type) || isGovernedDocumentType(nextDocumentType) || body.governedMetadata !== undefined)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+    // V165's trigger refuses this too, but as a raw 23514. Refuse it here so the API answers
+    // 400 like every other type-change boundary rather than surfacing a database error as a 500.
+    if ((doc.document_type === "requirement_note" || isGovernedDocumentType(doc.document_type))
+      && nextDocumentType !== doc.document_type) {
+      throw new BadRequestException({ error: "A reviewed requirement, manual or policy cannot change document type" });
+    }
+    const governedMetadata = normalizeGovernedMetadata(
+      body.governedMetadata === undefined ? doc.governed_metadata : body.governedMetadata,
+      nextDocumentType
+    );
 
     if (!nextTitle && !String(nextText || "").trim()) {
       throw new BadRequestException({ error: "A document needs a title or some content — it can't be saved blank." });
@@ -12647,8 +12709,12 @@ export class LegacyService implements OnModuleInit {
       "SELECT $1::jsonb IS DISTINCT FROM $2::jsonb AS changed",
       [doc.content_json != null ? JSON.stringify(doc.content_json) : null, nextJson]
     )).rows[0].changed;
+    const metadataChanged = (await client.query<{ changed: boolean }>(
+      "SELECT $1::jsonb IS DISTINCT FROM $2::jsonb AS changed",
+      [JSON.stringify(doc.governed_metadata ?? {}), JSON.stringify(governedMetadata)]
+    )).rows[0].changed;
     const contentChanged =
-      nextTitle !== doc.title || nextHtml !== doc.content_html || nextText !== doc.content_text || jsonChanged;
+      nextTitle !== doc.title || nextHtml !== doc.content_html || nextText !== doc.content_text || jsonChanged || metadataChanged;
 
     if (contentChanged) {
       const latest = await client.query<{ id: string; title: string; content_text: string | null; created_at: string; snapshot_kind: string }>(
@@ -12701,7 +12767,12 @@ export class LegacyService implements OnModuleInit {
     let nextStatus = doc.status;
     let reviewedBy = doc.reviewed_by;
     let reviewedAt = doc.reviewed_at;
-    if (doc.document_type === "ai_memory" || body.documentType === "ai_memory") {
+    if (isGovernedDocumentType(nextDocumentType) || isGovernedDocumentType(doc.document_type)) {
+      if (body.status !== undefined && String(body.status) !== String(doc.status)) {
+        throw new BadRequestException({ error: "Governed document status changes only through its exact-version review decision" });
+      }
+      // The review-invalidation trigger clears the binding on content/metadata edits.
+    } else if (doc.document_type === "ai_memory" || body.documentType === "ai_memory") {
       if (doc.document_type !== "ai_memory" || (doc.status === "approved" && contentChanged)) {
         nextStatus = "draft";
         reviewedBy = null;
@@ -12714,19 +12785,22 @@ export class LegacyService implements OnModuleInit {
 
     const res = await client.query(
       `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5,
-       document_type = COALESCE($6, document_type), status = $7, reviewed_by = $8, reviewed_at = $9,
+       document_type = COALESCE($6, document_type), governed_metadata = $12::jsonb,
+       status = $7, reviewed_by = $8, reviewed_at = $9,
        updated_by = $10, updated_at = now()
         WHERE id = $1 AND project_id = $11 AND is_deleted = false RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, nextTitle, nextJson, nextHtml, nextText, body.documentType || null, nextStatus, reviewedBy, reviewedAt, uid, projectId]
+      [documentId, nextTitle, nextJson, nextHtml, nextText, body.documentType || null, nextStatus, reviewedBy, reviewedAt, uid, projectId, JSON.stringify(governedMetadata)]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Document not found" });
     return { row: res.rows[0], before: doc, contentChanged, nextTitle };
   }
 
-  async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     const folderId = String(body.folderId || "");
@@ -12735,8 +12809,11 @@ export class LegacyService implements OnModuleInit {
 
     const res = await this.db.transaction(async client => {
       await this.lockSkillAssignments(client, projectId);
-      const current = (await client.query("SELECT created_by FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [documentId, projectId])).rows[0];
+      const current = (await client.query("SELECT document_type, created_by FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [documentId, projectId])).rows[0];
       if (!current) throw new NotFoundException({ error: "Document not found" });
+      // Re-check against the locked row: the document may have become governed while this
+      // token-originated move waited for the transaction.
+      this.assertAgentMayTouchGoverned(principal, current.document_type);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
       const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [folderId, projectId]);
@@ -12751,27 +12828,45 @@ export class LegacyService implements OnModuleInit {
     return toCamel(res.rows[0]);
   }
 
-  async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
-    const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'draft', $9, $9) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [
-        project.organization_id,
-        projectId,
-        doc.folder_id,
-        `${doc.title} (copy)`,
-        doc.content_json ? JSON.stringify(doc.content_json) : null,
-        doc.content_html,
-        doc.content_text,
-        doc.document_type,
-        uid
-      ]
-    );
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
+    const res = await this.db.transaction(async client => {
+      // Pin the source while copying. A token duplicate that waited here must not copy a document
+      // that became governed in the meantime, and a later conversion must see the copy commit first.
+      const source = (await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+          WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE`,
+        [documentId, projectId]
+      )).rows[0];
+      if (!source) throw new NotFoundException({ error: "Document not found" });
+      this.assertAgentMayTouchGoverned(principal, source.document_type);
+      const embeddingStatus = isGovernedDocumentType(source.document_type) ? "unsupported" : "pending";
+      return client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [
+          project.organization_id,
+          projectId,
+          source.folder_id,
+          `${source.title} (copy)`,
+          source.content_json ? JSON.stringify(source.content_json) : null,
+          source.content_html,
+          source.content_text,
+          source.document_type,
+          JSON.stringify(source.governed_metadata ?? {}),
+          embeddingStatus,
+          uid
+        ]
+      );
+    });
     await this.logProjectActivity(projectId, uid, "duplicated", "knowledge_document", res.rows[0].id, res.rows[0].title, {});
-    this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    if (!isGovernedDocumentType(res.rows[0].document_type)) {
+      this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    }
     return toCamel(res.rows[0]);
   }
 
@@ -12780,10 +12875,12 @@ export class LegacyService implements OnModuleInit {
     return String(doc?.title ?? "").trim() === LegacyService.ZYRA_MEMORY_DOC_TITLE;
   }
 
-  async deleteKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async deleteKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     if (this.isZyraMemoryDocument(doc)) {
@@ -12798,6 +12895,7 @@ export class LegacyService implements OnModuleInit {
         [documentId, projectId]
       )).rows[0];
       if (!current) throw new NotFoundException({ error: "Document not found" });
+      this.assertAgentMayTouchGoverned(principal, current.document_type);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
       if (this.isZyraMemoryDocument(current)) throw new BadRequestException({ error: "The managed Zyra memory document cannot be deleted." });
@@ -12943,7 +13041,8 @@ export class LegacyService implements OnModuleInit {
     return { ...toCamel(row), ...this.zyraMemoryView(row) };
   }
 
-  async restoreKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async restoreKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const role = await this.kbProjectRole(uid, projectId);
@@ -12957,6 +13056,7 @@ export class LegacyService implements OnModuleInit {
       );
       const document = existing.rows[0];
       if (!document) throw new NotFoundException({ error: "Document not found" });
+      this.assertAgentMayTouchGoverned(principal, document.document_type);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
       if (document.is_deleted) await this.assertSkillsInactive(client, projectId, [documentId]);
@@ -13643,6 +13743,8 @@ export class LegacyService implements OnModuleInit {
     if (!isUuid(submissionKey)) throw new BadRequestException({ error: "submissionKey must be a UUID identifying this submission" });
     return this.db.transaction(async (client) => {
       const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      // Agent tokens may read governed documents but may not move them through the review cycle.
+      this.assertAgentMayTouchGoverned(principal, doc.document_type);
       this.kbRequireMutateAccess(role, doc.created_by, uid);
       this.assertKnowledgeDocumentBodyWritable(doc);
       const prior = await client.query("SELECT * FROM knowledge_document_versions WHERE document_id = $1 AND submission_key = $2", [documentId, submissionKey]);
@@ -13652,6 +13754,11 @@ export class LegacyService implements OnModuleInit {
           throw new ConflictException({ code: "SUBMISSION_KEY_CONFLICT", error: "This submission key already identifies different content or an actor" });
         }
         return toCamel(prior.rows[0]); // Exact retry reads its receipt, even after later edits.
+      }
+      // A governed submission snapshots the current draft. Approved/rejected governed content must be
+      // edited back to draft first. Skill candidates keep their existing review flow and are excluded.
+      if (isGovernedDocumentType(doc.document_type) && doc.status !== "draft") {
+        throw new ConflictException({ code: "DOCUMENT_NOT_DRAFT", error: "Only a draft governed document can be submitted for review" });
       }
       this.assertKnowledgeReviewRevision(doc, expectedRevision);
       const snapshot = await this.writeKnowledgeGovernedVersion(client, doc, uid, "submitted", expectedRevision, principal?.kind ?? "unknown", submissionKey);
@@ -13685,7 +13792,7 @@ export class LegacyService implements OnModuleInit {
   }
 
   private async writeKnowledgeGovernedVersion(client: PoolClient, doc: Body, uid: string, kind: "submitted" | "approved" | "rejected", expectedRevision: string, actorKind: string, submissionKey: string | null = null,
-    options: { authority?: string; criteria?: unknown; skillContext?: unknown; sourceVersionId?: string } = {}) {
+    options: { authority?: string; criteria?: unknown; skillContext?: unknown; sourceVersionId?: string; reason?: string } = {}) {
     const metadata = {
       schemaVersion: 1, actorId: uid, actorKind, expectedRevision,
       contentDigest: knowledgeDocumentContentDigest(doc), documentType: doc.document_type,
@@ -13694,10 +13801,16 @@ export class LegacyService implements OnModuleInit {
       sourceUrl: doc.source_url, sourceRole: doc.source_role, isReadOnly: doc.is_read_only,
       // This is the existing document review, not a Skills assignment or authority bootstrap.
       authority: options.authority ?? (kind === "submitted" ? "candidate" : "ai_memory_review"),
+      ...(governedMetadataSnapshot(doc.governed_metadata) ? { governedMetadata: doc.governed_metadata } : {}),
       ...(options.criteria === undefined ? {} : { criteria: options.criteria }),
       ...(options.skillContext === undefined ? {} : { skillContext: options.skillContext }),
-      ...(options.sourceVersionId === undefined ? {} : { sourceVersionId: options.sourceVersionId })
+      ...(options.sourceVersionId === undefined ? {} : { sourceVersionId: options.sourceVersionId }),
+      ...(options.reason === undefined ? {} : { reason: options.reason })
     };
+    const governed = isGovernedDocumentType(doc.document_type);
+    const summary = governed
+      ? `${kind === "submitted" ? "Submitted" : kind === "approved" ? "Approved" : "Rejected"} exact governed document version.`
+      : kind === "submitted" ? "Submitted exact document version." : `${kind === "approved" ? "Approved" : "Rejected"} exact AI memory version.`;
     const result = await client.query(
       `INSERT INTO knowledge_document_versions
          (document_id, version_number, title, content_json, content_html, content_text, created_by,
@@ -13706,8 +13819,7 @@ export class LegacyService implements OnModuleInit {
               $10, '[]'::jsonb
        FROM knowledge_document_versions WHERE document_id = $1 RETURNING *`,
       [doc.id, doc.title, doc.content_json == null ? null : JSON.stringify(doc.content_json), doc.content_html,
-        doc.content_text, uid, kind, JSON.stringify(metadata), submissionKey,
-        kind === "submitted" ? "Submitted exact document version." : `${kind === "approved" ? "Approved" : "Rejected"} exact AI memory version.`]);
+        doc.content_text, uid, kind, JSON.stringify(metadata), submissionKey, summary]);
     return result.rows[0];
   }
 
@@ -13721,10 +13833,12 @@ export class LegacyService implements OnModuleInit {
     return { list: res.rows.map(toCamel), total: res.rowCount };
   }
 
-  async restoreKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async restoreKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     this.assertKnowledgeDocumentBodyWritable(doc);
@@ -13762,6 +13876,9 @@ export class LegacyService implements OnModuleInit {
       );
       if (!current.rows[0]) throw new NotFoundException({ error: "Document not found" });
       const cur = current.rows[0];
+      // The pre-lock guard may have seen a general document. Re-check the locked type so a token
+      // restore that waited cannot overwrite a document that became governed.
+      this.assertAgentMayTouchGoverned(principal, cur.document_type);
       const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision);
       if (expectedRevision && expectedRevision !== cur.edit_revision) {
         throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "This document changed. Reload before restoring a version." });
@@ -13774,11 +13891,15 @@ export class LegacyService implements OnModuleInit {
       // same version twice in a row, or a stray extra click before the UI caught up) has nothing to
       // snapshot — skip the insert so repeated restores don't pile up identical junk versions, but
       // still apply the write below so the call remains a normal, idempotent success.
+      const restoreMetadata = isGovernedDocumentType(cur.document_type)
+        ? (v.snapshot_metadata?.governedMetadata ?? cur.governed_metadata ?? {})
+        : {};
       const isNoop =
         cur.title === v.title &&
         cur.content_html === v.content_html &&
         cur.content_text === v.content_text &&
-        JSON.stringify(cur.content_json) === JSON.stringify(v.content_json);
+        JSON.stringify(cur.content_json) === JSON.stringify(v.content_json) &&
+        JSON.stringify(cur.governed_metadata ?? {}) === JSON.stringify(restoreMetadata);
 
       if (!isNoop) {
         // Snapshot the current state before overwriting, so restoring a version is itself reversible.
@@ -13817,16 +13938,17 @@ export class LegacyService implements OnModuleInit {
       const revokeApproval = !isNoop && cur.document_type === "ai_memory" && cur.status === "approved";
       const restored = await client.query(
         `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5, updated_by = $6, updated_at = now(),
-         status = $7, reviewed_by = $8, reviewed_at = $9
+         governed_metadata = $11::jsonb, status = $7, reviewed_by = $8, reviewed_at = $9
          WHERE id = $1 AND project_id = $10 AND is_deleted = false RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
         [documentId, v.title, v.content_json != null ? JSON.stringify(v.content_json) : null, v.content_html, v.content_text, uid,
-          revokeApproval ? "draft" : cur.status, revokeApproval ? null : cur.reviewed_by, revokeApproval ? null : cur.reviewed_at, projectId]
+          revokeApproval ? "draft" : cur.status, revokeApproval ? null : cur.reviewed_by, revokeApproval ? null : cur.reviewed_at, projectId,
+          JSON.stringify(restoreMetadata)]
       );
       if (!restored.rows[0]) throw new NotFoundException({ error: "Document not found" });
       return { res: restored, changed: !isNoop };
     });
     await this.logProjectActivity(projectId, uid, "restored_version", "knowledge_document", documentId, res.rows[0].title, { versionNumber: v.version_number });
-    if (changed) this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", documentId, "updated");
+    if (changed && !isGovernedDocumentType(res.rows[0].document_type)) this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", documentId, "updated");
     return toCamel(res.rows[0]);
   }
 
@@ -16758,8 +16880,10 @@ export class LegacyService implements OnModuleInit {
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
-      // Re-read current human authority after the task wait, before any reviewed content is used.
-      const authorityAfterWait = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      // Re-read the full proposal authority after the task wait, before any reviewed content is
+      // used. This is the locking read: it re-checks membership and workspace role and also the
+      // project's testcaseStorage capability, which a settings change can disable while we wait.
+      const authorityAfterWait = await this.requireProposalAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authorityAfterWait.caller_role)));
       if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
       const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
@@ -16991,6 +17115,72 @@ export class LegacyService implements OnModuleInit {
         { retiredLinkId: linkId, requirementVersionId, testcaseId: link.testcase_id, testcaseRevision: expectedCaseRevision, approvalRevision: expectedApprovalRevision }, client);
       return { link: toCamel(created), retiredLinkId: String(linkId), replayed: false };
     });
+  }
+
+  async approveGovernedKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.reviewGovernedKnowledgeDocument(projectId, userId, documentId, "approved", body, principal);
+  }
+
+  async rejectGovernedKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.reviewGovernedKnowledgeDocument(projectId, userId, documentId, "rejected", body, principal);
+  }
+
+  /** Human exact-version decision for a governed manual/policy. Separate from requirement and AI-memory review. */
+  private async reviewGovernedKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    decision: "approved" | "rejected", body: Body, principal?: ReviewPrincipal): Promise<Body> {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Document not found" });
+    const versionId = String(body.versionId || "");
+    if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted governed document version" });
+    const reason = decision === "rejected" && typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    const result = await this.db.transaction(async (client) => {
+      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      this.kbRequireOwnerOrManager(role);
+      this.assertKnowledgeDocumentBodyWritable(doc);
+      if (!isGovernedDocumentType(doc.document_type)) {
+        throw new BadRequestException({ error: "Only user manuals and policies can be reviewed here" });
+      }
+      if (doc.source_provider) {
+        throw new ConflictException({ code: "GOVERNED_DOCUMENT_EXTERNAL_OWNED", error: "A provider-synced document remains read-only" });
+      }
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
+      if (!version || version.snapshot_kind !== "submitted") {
+        throw new BadRequestException({ error: "versionId must identify a submitted version of this document" });
+      }
+      if (doc.reviewed_version_id) {
+        const reviewed = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0];
+        if (reviewed?.snapshot_kind === decision && reviewed.snapshot_metadata?.sourceVersionId === versionId) {
+          return { doc, decidedVersionId: String(reviewed.id), sourceVersionId: versionId, replayed: true };
+        }
+      }
+      // A newer submission supersedes an older one even when the content is identical. Without
+      // this, a manager holding an older tab can bind an approval to a version the UI no longer
+      // shows as current, leaving the latest submission "awaiting" a decision that already exists.
+      const latestSubmitted = (await client.query(
+        `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted'
+          ORDER BY version_number DESC LIMIT 1`, [documentId]
+      )).rows[0];
+      if (latestSubmitted && String(latestSubmitted.id) !== versionId) {
+        throw new ConflictException({ code: "GOVERNED_VERSION_SUPERSEDED", error: "A newer submitted version exists; review that exact version instead" });
+      }
+      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The document changed after this version was submitted; review the exact submitted version or submit a refreshed revision" });
+      }
+      const snapshot = await this.writeKnowledgeGovernedVersion(client, doc, uid, decision, doc.edit_revision, "human_session", null,
+        { authority: "governed_document_review", sourceVersionId: versionId, ...(reason ? { reason } : {}) });
+      const updated = (await client.query(
+        `UPDATE knowledge_documents SET status=$2, reviewed_by=$3, reviewed_at=now(), reviewed_version_id=$4, updated_at=now()
+          WHERE id=$1 AND project_id=$5 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, decision, uid, snapshot.id, projectId]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, decision === "approved" ? "governed_document_approved" : "governed_document_rejected",
+        "knowledge_document", documentId, doc.title,
+        { versionId: snapshot.id, sourceVersionId: versionId, ...(reason ? { reason } : {}) }, client);
+      return { doc: updated, decidedVersionId: String(snapshot.id), sourceVersionId: versionId, replayed: false };
+    });
+    return { ...toCamel(result.doc), decidedVersionId: result.decidedVersionId, sourceVersionId: result.sourceVersionId, replayed: result.replayed };
   }
 
   /** Authored/approved/executed/passing remain distinct; only persisted exact-basis attempts qualify. */

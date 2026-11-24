@@ -1094,6 +1094,8 @@ test.describe("governed skills operator journey (UI)", () => {
         const appliedResponse = await responsePromise;
         expect(appliedResponse.status(), await appliedResponse.text()).toBe(201);
         const applied = await appliedResponse.json();
+        // The browser session's identity, not merely the owner's, is what the apply receipt names.
+        expect(applied.receipt.reviewerId).toBe(tenant!.qa.userId);
         requirementIds.push(applied.receipt.requirement.documentId);
         caseIds.push(applied.receipt.testcase.id);
         await page.reload();
@@ -1107,7 +1109,12 @@ test.describe("governed skills operator journey (UI)", () => {
       const refused = await stage();
       const requirementRows = () => scalar("SELECT COUNT(*)::int FROM knowledge_documents WHERE project_id=" +
         literal(tenant!.mainProjectId) + " AND title=" + literal(`Apply role requirement ${suffix}`) + ";");
-      const beforeRefusal = requirementRows();
+      const caseRows = () => scalar("SELECT COUNT(*)::int FROM testcases WHERE project_id=" +
+        literal(tenant!.mainProjectId) + " AND title=" + literal(`Apply role case ${suffix}`) + ";");
+      const linkRows = () => scalar("SELECT COUNT(*)::int FROM requirement_case_links l JOIN knowledge_documents d " +
+        "ON d.id=l.requirement_id AND d.project_id=l.project_id WHERE l.project_id=" + literal(tenant!.mainProjectId) +
+        " AND d.title=" + literal(`Apply role requirement ${suffix}`) + ";");
+      const beforeRefusal = { requirements: requirementRows(), cases: caseRows(), links: linkRows() };
       const page = await open(browser, "/agents/tasks/" + refused.id, "qa");
       const refusedPromise = page.waitForResponse(response =>
         response.request().method() === "POST" && response.url().includes("/proposals/" + refused.id + "/apply"));
@@ -1115,7 +1122,7 @@ test.describe("governed skills operator journey (UI)", () => {
       expect((await refusedPromise).status()).toBe(403);
       expect(scalar("SELECT task_status FROM ai_generation_requests WHERE id=" + literal(refused.id) + ";")).toBe("in_review");
       // The two legacy applies above share this title; the refusal must add nothing.
-      expect(requirementRows()).toBe(beforeRefusal);
+      expect({ requirements: requirementRows(), cases: caseRows(), links: linkRows() }).toEqual(beforeRefusal);
       await page.close();
     } finally {
       exec("UPDATE project_members SET role='qa_engineer' WHERE project_id=" + literal(tenant!.mainProjectId) +

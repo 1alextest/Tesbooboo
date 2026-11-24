@@ -344,7 +344,14 @@ function invokeSyntheticMcp({ script = "mcp-deploy-check.mjs", mode = "complete"
     const hook = path.join(x.dir, "mock-fetch.mjs");
     const tools = validTools();
     if (mode === "duplicate-name-echo") tools.push(tool(fileToken), tool(fileToken));
-    if (mode.startsWith("pilot-") && mode !== "pilot-missing-tool") tools.push(tool("list_testcases"), tool("list_suites"));
+    if (mode.startsWith("pilot-")) {
+      // A real read-only credential never sees the writer-heavy default catalog.
+      tools.length = 0;
+      tools.push(tool("list_testcases", {
+        limit: {type:"number"}, offset: {type:"number"}, includeArchived: {type:"boolean"}
+      }));
+      if (mode !== "pilot-missing-tool") tools.push(tool("list_suites"));
+    }
     const instructions = "Synthetic MCP instructions";
     const build = mode === "version-echo" ? fileToken : "a".repeat(40);
     const version = `0.1.0+${build}.${catalogFingerprint(tools, instructions)}`;
@@ -378,9 +385,13 @@ globalThis.fetch = async (url, init = {}) => {
     if (mode === "pilot-refused") return new Response(JSON.stringify({jsonrpc:"2.0",error:{
       code:-32001,message:authorization+" rejected"}}),{status:201});
     const payload=request.params.name==="list_testcases"
-      ? (mode==="pilot-malformed" ? {unexpected:true} : [
-          {id:"private-case-1",title:"Highly confidential title",status:"Draft"},
-          {id:"private-case-2",title:"Unreleased feature",status:"Approved"}])
+      ? (mode==="pilot-malformed" ? {unexpected:true} :
+         mode==="pilot-short-page" ? {rows:[{id:"private-case-1",status:"Draft"}],total:4} :
+         mode==="pilot-large-total" ? {rows:new Array(25).fill(0).map((_,i)=>({
+           id:"private-case-"+i,title:"Sensitive",status:"Draft"})),total:38} :
+         {rows:[
+           {id:"private-case-1",title:"Highly confidential title",status:"Draft"},
+           {id:"private-case-2",title:"Unreleased feature",status:"Approved"}],total:2})
       : {suites:[{id:"private-suite",name:"Top secret suite"}]};
     return new Response(JSON.stringify({jsonrpc:"2.0",result:{
       isError:false,content:[{type:"text",text:JSON.stringify(payload)}]}}),{status:201});
@@ -521,16 +532,16 @@ test("TESBOPROJECT pilot requires both pre-existing authorized read tools, not w
 });
 
 test("bounded native inventory reports only counts, never case identities or sensitive fields", () => {
-  const cases = [
+  const cases = { rows: [
     { id: "private-case-A", title: "Sensitive medical case", status: "Draft", sourceRefs: ["private"] },
     { id: "private-case-B", title: "Hidden client name", status: "Approved", token: "synthetic-secret" },
     { id: "private-case-C", title: "Unknown confidential title", status: "not-known" }
-  ];
+  ], total: 3 };
   const suites = { suites: [{ id: "private-suite", name: "Secret owner suite" }] };
   const result = summarizeNativePilotCases(cases, suites);
-  assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, suites: 1,
+  assert.deepEqual(result, { sampledCases: 3, sampleLimit: 25, reportedCaseTotal: 3, suites: 1,
     statusCounts: { Draft: 1, "In Review": 0, Approved: 1, Deprecated: 0, Archived: 0, Other: 1 },
-    fullCaseTotalVerified: false, recordMutation: false });
+    fullCaseTotalVerified: true, writeToolCalls: 0, nativeRecordMutation: "not_assessed" });
   for(const privateValue of ["private-case-A", "private-suite", "Sensitive", "Hidden", "synthetic-secret"]) {
     assert.ok(!JSON.stringify(result).includes(privateValue));
   }
@@ -539,12 +550,17 @@ test("bounded native inventory reports only counts, never case identities or sen
 test("pilot refuses malformed, duplicate and unbounded native records", () => {
   const one = {id:"same",status:"Draft"};
   const suites = {suites:[{id:"s1"}]};
-  for(const c of [[one,one],[{}],new Array(26).fill(0).map((_,i)=>({id:String(i)}))]){
-    assert.throws(()=>summarizeNativePilotCases(c,suites),/incomplete|bounded/);
-  }
-  assert.throws(()=>summarizeNativePilotCases([one],{suites:[{name:"missing id"}]}),/incomplete|bounded/);
-  assert.throws(()=>summarizeNativePilotCases({unexpected:[]},suites),/incomplete|bounded/);
-  assert.throws(()=>summarizeNativePilotCases([one],{suites:new Array(2001).fill(0).map((_,i)=>({id:String(i)}))}),/incomplete|bounded/);
+  for (const response of [
+    {rows:[one,one], total:2}, {rows:[{}], total:1},
+    {rows:new Array(26).fill(0).map((_,i)=>({id:String(i),status:"Draft"})), total:26},
+    {rows:[one],total:3}, {rows:[one], total:0},
+    {rows:[one],total:"1"}, {rows:[one],total:1.5},
+    {rows:[]}, {testcases:[one],total:1},
+    [one]
+  ]) assert.throws(()=>summarizeNativePilotCases(response,suites),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({rows:[one],total:1},{suites:[{name:"missing id"}]}),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({rows:[one],total:1},{suites:new Array(2001).fill(0).map((_,i)=>({id:String(i)}))}),/incomplete|bounded/);
+  assert.throws(()=>summarizeNativePilotCases({rows:[one],total:1},{suites:[{id:"s1"},{id:"s1"}]}),/incomplete|bounded/);
 });
 
 test("native pilot invokes only two read tools and never discloses case identities",()=>{
@@ -553,7 +569,8 @@ test("native pilot invokes only two read tools and never discloses case identiti
   assert.deepEqual(run.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),["list_testcases","list_suites"]);
   assert.match(run.stdout,/"sampledCases":2/);
   assert.match(run.stdout,/"suites":1/);
-  assert.match(run.stdout,/"recordMutation":false/);
+  assert.match(run.stdout,/"writeToolCalls":0/);
+  assert.match(run.stdout,/"nativeRecordMutation":"not_assessed"/);
   for(const secret of ["private-case-1","private-suite","confidential","Unreleased","synthetic-file-token"]){
     assert.ok(!run.stdout.includes(secret));assert.ok(!run.stderr.includes(secret));
   }
@@ -561,10 +578,11 @@ test("native pilot invokes only two read tools and never discloses case identiti
   assert.equal(run.requests.filter(x=>x.authorization).length,4);
   assert.ok(run.requests.every(x=>x.redirect==="manual"));
 });
-test("native pilot missing read grants refuses without an attempted record query",()=>{
+test("native pilot missing read grants refuses at catalog validation before record queries",()=>{
   const run=invokeSyntheticMcp({mode:"pilot-missing-tool"});
   assert.equal(run.status,1,run.stdout+run.stderr);
-  assert.match(run.stderr,/native pilot read permission unavailable/);
+  assert.match(run.stdout,/missing tool: list_suites/);
+  assert.match(run.stderr,/Native read-only pilot requires a verified build\/catalog/);
   assert.equal(run.requests.filter(x=>x.method==="tools/call").length,0);
 });
 test("native pilot failure never reflects server token or private result",()=>{
@@ -584,4 +602,59 @@ test("native pilot accepts the same project-path trailing slash as the approved-
   assert.equal(result.status,0,result.stdout+result.stderr);
   assert.deepEqual(result.requests.filter(x=>x.method==="tools/call").map(x=>x.tool),
     ["list_testcases","list_suites"]);
+});
+
+test("native paginated total reports a bounded sample rather than claiming every case was read",()=>{
+  const list = { rows: Array.from({length:25},(_,i)=>({id:"private-"+i,status:"Draft"})),total:38 };
+  const result = summarizeNativePilotCases(list,{suites:[]});
+  assert.deepEqual([result.sampledCases,result.reportedCaseTotal,result.fullCaseTotalVerified],
+    [25,38,false]);
+  assert.ok(!JSON.stringify(result).includes("private-"));
+  assert.deepEqual(summarizeNativePilotCases({rows:[],total:0},{suites:[]}).statusCounts,
+    {Draft:0,"In Review":0,Approved:0,Deprecated:0,Archived:0,Other:0});
+});
+
+test("live-entrypoint fixture enforces native rows/total pagination completeness",()=>{
+  const valid=invokeSyntheticMcp({mode:"pilot-large-total"});
+  assert.equal(valid.status,0,valid.stdout+valid.stderr);
+  assert.match(valid.stdout,/"reportedCaseTotal":38/);
+  assert.match(valid.stdout,/"sampledCases":25/);
+  assert.match(valid.stdout,/"fullCaseTotalVerified":false/);
+  assert.ok(!valid.stdout.includes("private-case-"));
+  const short=invokeSyntheticMcp({mode:"pilot-short-page"});
+  assert.equal(short.status,1,short.stdout+short.stderr);
+  assert.match(short.stderr,/incomplete or outside its bounded read contract/);
+  assert.ok(!short.stderr.includes("private-case-"));
+});
+
+test("read-only pilot accepts a least-privilege catalog with no write capabilities",()=>{
+  const tools=[tool("list_testcases",{
+    limit:{type:"number"},offset:{type:"number"},includeArchived:{type:"boolean"}
+  }),tool("list_suites")];
+  const instructions="Pilot least-privilege instructions";
+  const version="0.1.0+abc123."+catalogFingerprint(tools,instructions);
+  assert.deepEqual(catalogGaps(tools,{pilotReadOnly:true}).errors,[]);
+  assert.deepEqual(schemaGaps(tools,{pilotReadOnly:true}).errors,[]);
+  assert.deepEqual(catalogGaps(tools).errors,
+    REQUIRED_TOOLS.map(name=>"missing tool: "+name));
+  const result=summarize({tools,instructions,serverVersion:version,
+    health:{gitSha:"abc123"},expectedGitSha:"abc123",pilotReadOnly:true});
+  assert.equal(result.ok,true,JSON.stringify(result.errors));
+  assert.equal(result.toolCount,2);
+  assert.equal(result.fingerprintCheck,"matches");
+  assert.equal(summarize({tools,instructions,serverVersion:version,
+    health:{gitSha:"abc123"},expectedGitSha:"abc123"}).ok,false);
+});
+
+test("pilot rejects hidden/renamed read schemas and incompatible write-preview requirements",()=>{
+  const tools=[tool("list_testcases",{
+    limit:{type:"number"},offset:{type:"number"},includeArchived:{type:"boolean"}
+  }),tool("list_suites")];
+  delete tools[0].inputSchema.properties.includeArchived;
+  assert.match(schemaGaps(tools,{pilotReadOnly:true}).errors.join("\n"),/includeArchived/);
+  tools[0].inputSchema.properties.includeArchived={type:"boolean"};
+  tools[1].inputSchema.properties=null;
+  assert.match(schemaGaps(tools,{pilotReadOnly:true}).errors.join("\n"),/list_suites/);
+  assert.match(catalogGaps(tools,{pilotReadOnly:true,requireProposalPreview:true}).errors.join("\n"),
+    /cannot require write-scoped proposal tools/);
 });

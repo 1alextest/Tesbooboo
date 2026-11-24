@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { JSONContent } from "@tiptap/react";
 import {
@@ -19,6 +19,9 @@ import {
 } from "@tabler/icons-react";
 import {
   getKnowledgeDocument,
+  submitKnowledgeDocument,
+  approveGovernedKnowledgeDocument,
+  rejectGovernedKnowledgeDocument,
   updateKnowledgeDocument,
   duplicateKnowledgeDocument,
   deleteKnowledgeDocument,
@@ -37,6 +40,7 @@ import RichTextEditor from "@/components/knowledge-base/RichTextEditor";
 import { DocumentComments } from "@/components/knowledge-base/DocumentComments";
 import { ZyraMemoryEntries } from "@/components/knowledge-base/ZyraMemoryEntries";
 import { ChangeHistoryList } from "@/components/knowledge-base/ChangeHistory";
+import { GovernedDocumentPanel } from "@/components/knowledge-base/GovernedDocumentPanel";
 import { blankDocumentFlagKey } from "@/lib/validation";
 import { formatDateTime } from "@/lib/date";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/workflows";
@@ -72,6 +76,8 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   release_note: "Release Note",
   requirement_note: "Requirement",
   test_data_note: "Test Data",
+  user_manual: "User Manual",
+  policy: "Policy",
 };
 
 function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
@@ -232,6 +238,11 @@ export default function KnowledgeDocumentPage() {
   const [titleError, setTitleError] = useState<string | null>(null);
   const editRevision = useRef(0);
   const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
+  // Save and Submit are separate HTTP commits. Retain the exact saved revision after a
+  // failed/ambiguous Submit so the same-key retry cannot accidentally save again.
+  const pendingGovernedSubmission = useRef<{
+    key: string; editRevision: string; editorSnapshot: string;
+  } | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
   // before React re-renders the disabled button, so this is checked and set before any await.
   const restoreInFlightRef = useRef(false);
@@ -247,6 +258,7 @@ export default function KnowledgeDocumentPage() {
   useEffect(() => {
     const writer = new DocumentWriteQueue<KnowledgeDocument>();
     writerRef.current = writer;
+    pendingGovernedSubmission.current = null;
     editRevision.current = 0;
     restoreInFlightRef.current = false;
     return () => {
@@ -261,6 +273,133 @@ export default function KnowledgeDocumentPage() {
       if (writerRef.current === writer) writerRef.current = null;
     };
   }, [projectId, documentId]);
+
+  const refreshDocument = useCallback(async () => {
+    const data = await getKnowledgeDocument(projectId, documentId);
+    setDoc(data);
+    setBreadcrumb(data.breadcrumb);
+    if (latestTitle.current === data.title) {
+      setTitle(data.title);
+      lastValidTitle.current = data.title;
+    } else {
+      // A title edit happened after the server snapshot this read returned; keep the visible
+      // draft rather than replacing it with the older persisted title.
+      setSaveStatus("unsaved");
+    }
+  }, [projectId, documentId]);
+
+  /**
+   * Runs a governed write through the same queue as editor saves. Any debounced editor save is
+   * cancelled first and its current title/body is written in the same operation, so Submit binds
+   * exactly what the author sees rather than an older persisted revision.
+   */
+  async function commitGovernedDocument(metadata: Record<string, unknown>, submissionKey: string | null) {
+    const writer = writerRef.current;
+    if (!writer) throw new Error("Reload this document before saving its governance.");
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      pendingAutosave.current = null;
+    }
+    let versionNumber: number | null = null;
+    let submittedLocalRevision = editRevision.current;
+    const saved = await writer.restore(async () => {
+      // Capture the local revision at the same time as the editor payload. Edits made
+      // during this asynchronous write must remain visibly unsaved on completion.
+      submittedLocalRevision = editRevision.current;
+      const payload = latestContent.current;
+      // Capture editor state when this queued operation begins, after previous writes drain.
+      const editorSnapshot = JSON.stringify({
+        title: latestTitle.current, contentJson: payload?.contentJson,
+        contentHtml: payload?.contentHtml, contentText: payload?.contentText, metadata,
+      });
+      const pending = pendingGovernedSubmission.current;
+      if (submissionKey && pending?.key === submissionKey) {
+        // The prior UPDATE committed. On an ambiguous SUBMIT response, the server's
+        // submissionKey receipt is the authority; never issue another UPDATE first.
+        if (pending.editorSnapshot !== editorSnapshot) {
+          throw new Error("The draft changed after submission failed. Review or reload before retrying; the prior submission may already exist.");
+        }
+        const current = await getKnowledgeDocument(projectId, documentId);
+        const version = await submitKnowledgeDocument(projectId, documentId, {
+          expectedRevision: pending.editRevision,
+          submissionKey: pending.key,
+        });
+        versionNumber = version.versionNumber;
+        pendingGovernedSubmission.current = null;
+        return current;
+      }
+      if (pending) {
+        throw new Error("Resolve the previous uncertain submission before saving or submitting new changes.");
+      }
+      const acknowledged = writer.acknowledged;
+      if (acknowledged?.id !== documentId || !acknowledged.editRevision) {
+        throw new Error("Reload this document before saving its governance.");
+      }
+      const updated = await updateKnowledgeDocument(projectId, documentId, {
+        title: latestTitle.current,
+        contentJson: payload?.contentJson,
+        contentHtml: payload?.contentHtml,
+        contentText: payload?.contentText,
+        governedMetadata: metadata,
+        expectedRevision: acknowledged.editRevision,
+      });
+      if (submissionKey) {
+        if (!updated.editRevision) throw new Error("Reload this document before submitting this revision.");
+        pendingGovernedSubmission.current = {
+          key: submissionKey, editRevision: updated.editRevision, editorSnapshot,
+        };
+        // This call can fail after the server has already created its immutable snapshot.
+        // Preserve the checkpoint above until the exact-key receipt is confirmed.
+        const version = await submitKnowledgeDocument(projectId, documentId, {
+          expectedRevision: updated.editRevision,
+          submissionKey,
+        });
+        versionNumber = version.versionNumber;
+        pendingGovernedSubmission.current = null;
+      }
+      return updated;
+    });
+    if (isMountedRef.current && writerRef.current === writer) {
+      setDoc(saved);
+      if (submittedLocalRevision !== editRevision.current) {
+        // Do not replace a title/body edited after our snapshot or claim it was saved.
+        // The existing editor debounce/manual Save owns that newer local revision.
+        setSaveStatus("unsaved");
+      } else {
+        setTitle(saved.title);
+        latestTitle.current = saved.title;
+        lastValidTitle.current = saved.title;
+        setSaveStatus("saved");
+        setError(null);
+      }
+    }
+    return { saved, versionNumber };
+  }
+
+  /** A decision is made against the exact submitted snapshot; it deliberately does not write a draft. */
+  async function commitGovernedDecision(decision: "approved" | "rejected", versionId: string, reason?: string) {
+    const writer = writerRef.current;
+    if (!writer) throw new Error("Reload this document before reviewing it.");
+    // A decision binds the exact submitted revision. Do not silently drop an unsaved editor draft:
+    // make the reviewer save/discard it (which re-drafts and requires a refreshed submission) first.
+    // saveStatus covers a debounce that already failed, where the timer/refs are null. Do not
+    // include writer.needsReadback: a failed decision also sets it, and retrying the decision must
+    // remain possible without an unrelated document save.
+    if (saveTimer.current || pendingAutosave.current || saveStatus !== "saved") {
+      throw new Error("Save or discard the current editor draft before approving or rejecting this submitted version.");
+    }
+    const updated = await writer.restore(() => decision === "approved"
+      ? approveGovernedKnowledgeDocument(projectId, documentId, versionId)
+      : rejectGovernedKnowledgeDocument(projectId, documentId, versionId, reason));
+    if (isMountedRef.current && writerRef.current === writer) {
+      setDoc(updated);
+      setTitle(updated.title);
+      setSaveStatus("saved");
+      setError(null);
+    }
+    return updated;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -884,6 +1023,24 @@ export default function KnowledgeDocumentPage() {
         <div className="mb-3 flex items-center justify-between rounded-lg border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-4 py-2.5 text-[13px] text-[var(--warning-foreground)]">
           <span>{anchorMissMessage}</span>
           <button onClick={() => setAnchorMissMessage(null)}><IconX size={15} /></button>
+        </div>
+      )}
+
+      {!isSyncedMirror && !isZyraMemory && (doc.documentType === "user_manual" || doc.documentType === "policy") && (
+        <div className="mb-4">
+          <GovernedDocumentPanel
+            projectId={projectId}
+            doc={doc}
+            canManage={canApprove}
+            onChanged={refreshDocument}
+            onSaveMetadata={async (metadata) => (await commitGovernedDocument(metadata, null)).saved}
+            onSubmitForReview={async (metadata, submissionKey) => {
+              const { versionNumber } = await commitGovernedDocument(metadata, submissionKey);
+              if (versionNumber === null) throw new Error("The submission was not created. Reload and retry.");
+              return { versionNumber };
+            }}
+            onDecide={commitGovernedDecision}
+          />
         </div>
       )}
 

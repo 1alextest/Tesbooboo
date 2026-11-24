@@ -8,7 +8,7 @@ import { ProjectLookupService } from "../request-cache/project-lookup.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
 import type { AppConfigService } from "../config/app-config.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
-import { KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
+import { KNOWLEDGE_DOCUMENT_REVISION_SQL, knowledgeDocumentAiContextSql } from "./knowledge-document-revision";
 import { TESTCASE_APPROVAL_CURRENT_SQL, TESTCASE_APPROVAL_REVISION_SQL, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
 
 const url=process.env.DATABASE_URL || "";
@@ -597,6 +597,10 @@ type Body=Record<string,any>;
       "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE $2",
       [applicationName,pattern]
     )).rowCount;
+    const waitingLockers=async()=>Number((await admin.query(
+      "SELECT COUNT(*)::int AS n FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'",
+      [applicationName]
+    )).rows[0].n);
     const revisionsOf=async(id:string)=>(await admin.query(
       `SELECT ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id=$1`,[id]
     )).rows[0] as Body;
@@ -714,6 +718,7 @@ type Body=Record<string,any>;
         // Hold the task row after the initial authorization check, change the role, then release:
         // the post-wait check must re-read and normalize the current role.
         const waitBundle=await stageBundle(ops()); taskIds.push(waitBundle.id);
+        const beforeWait=await bundleWrites(waitBundle.id);
         const blocker=new Client({connectionString:url}); await blocker.connect();
         let pending:Promise<{v?:Body;e?:Body}>|undefined;
         try{
@@ -743,6 +748,21 @@ type Body=Record<string,any>;
           await blocker.end();
         }
         expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[waitBundle.id])).rows[0].task_status).toBe("in_review");
+        const afterWait=await bundleWrites(waitBundle.id);
+        expect({documents:afterWait.documents,cases:afterWait.cases,links:afterWait.links})
+          .toEqual({documents:beforeWait.documents,cases:beforeWait.cases,links:beforeWait.links});
+
+        // Rejection is the same authority decision as approval; a legacy alias can reject, and
+        // the refusal leaves no requirement, case or link behind.
+        await admin.query("UPDATE project_members SET role='test_manager' WHERE project_id=$1 AND user_id=$2",[project,legacyId]);
+        const rejectionBundle=await stageBundle(ops()); taskIds.push(rejectionBundle.id);
+        const beforeRejection=await bundleWrites(rejectionBundle.id);
+        await service().rejectRequirementProposal(project,legacyId,rejectionBundle.id,
+          {expectedProposalRevision:rejectionBundle.proposalRevision,reason:"Legacy role rejection"},human);
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[rejectionBundle.id])).rows[0].task_status).toBe("done");
+        const afterRejection=await bundleWrites(rejectionBundle.id);
+        expect({documents:afterRejection.documents,cases:afterRejection.cases,links:afterRejection.links})
+          .toEqual({documents:beforeRejection.documents,cases:beforeRejection.cases,links:beforeRejection.links});
       }finally{
         for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
         if(requirementId) await cleanupRequirement(requirementId);
@@ -754,6 +774,58 @@ type Body=Record<string,any>;
           await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,id]);
           await admin.query("DELETE FROM users WHERE id=$1",[id]);
         }
+        await cleanupSkills(skillIds);
+      }
+    },120000);
+
+    it("re-reads the project's proposal capability after the task wait",async()=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let taskId="";
+      let pending:Promise<{v?:Body;e?:Body}>|undefined;
+      const blocker=new Client({connectionString:url}); await blocker.connect();
+      const before=(await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings;
+      try{
+        const bundle=await stageBundle(ops()); taskId=bundle.id;
+        const beforeCapability=await bundleWrites(bundle.id);
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 FOR UPDATE",[taskId]);
+        pending=service().applyRequirementProposal(project,user,taskId,
+          {expectedProposalRevision:bundle.proposalRevision},human).then(v=>({v}),e=>({e}));
+        const deadline=Date.now()+30000;
+        let sawWait=false;
+        while(Date.now()<deadline){
+          if(await waitingOn("%ai_generation_requests%FOR UPDATE%")){sawWait=true;break;}
+          await new Promise(resolve=>setTimeout(resolve,50));
+        }
+        expect(sawWait).toBe(true);
+        // The initial preflight saw the capability enabled; disable it while the apply waits.
+        // Replace each intermediate object explicitly: jsonb_set does not create a path through a
+        // JSON null intermediate, which would leave the setting unchanged and pass for the wrong reason.
+        await admin.query(
+          `UPDATE projects SET settings=jsonb_set(COALESCE(settings,'{}'::jsonb),'{zyraAgent}',
+             jsonb_set(COALESCE(settings->'zyraAgent','{}'::jsonb),'{capabilities}',
+               jsonb_set(COALESCE(settings#>'{zyraAgent,capabilities}','{}'::jsonb),'{testcaseStorage}','false'::jsonb,true),true),true)
+           WHERE id=$1`,
+          [project]);
+        expect((await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings)
+          .toMatchObject({zyraAgent:{capabilities:{testcaseStorage:false}}});
+        await blocker.query("COMMIT");
+        const settled=await Promise.race([
+          pending,
+          new Promise<{e?:Body}>((resolve)=>setTimeout(()=>resolve({e:{status:0,code:"TEST_WAIT_TIMEOUT"}}),30000))
+        ]);
+        expect(settled.e).toMatchObject({status:403});
+        expect((await admin.query("SELECT task_status FROM ai_generation_requests WHERE id=$1",[taskId])).rows[0].task_status).toBe("in_review");
+        const afterCapability=await bundleWrites(bundle.id);
+        expect({documents:afterCapability.documents,cases:afterCapability.cases,links:afterCapability.links})
+          .toEqual({documents:beforeCapability.documents,cases:beforeCapability.cases,links:beforeCapability.links});
+      }finally{
+        await blocker.query("ROLLBACK").catch(()=>undefined);
+        if(pending) await Promise.race([pending,new Promise(resolve=>setTimeout(resolve,5000))]);
+        await blocker.end();
+        await admin.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",[project,JSON.stringify(before ?? {})]);
+        if(taskId) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[taskId]);
         await cleanupSkills(skillIds);
       }
     },120000);
@@ -1194,6 +1266,204 @@ type Body=Record<string,any>;
         await cleanupSkills(skillIds);
       }
     });
+
+    it("governs manual/policy metadata and exact submitted versions without Zyra exposure",async()=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",subtype:"manual",confidentiality:"internal",
+        distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:"2026-01-01",to:null},enforcementRefs:[]};
+      let docId="";
+      let duplicateId="";
+      let legacyId="";
+      let qaId="";
+      try{
+        const created=await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Governed manual ${randomUUID()}`,
+          documentType:"user_manual",contentText:"Manual body",contentHtml:"<p>Manual body</p>",governedMetadata:metadata});
+        docId=created.id;
+        expect(created.governedMetadata).toMatchObject({audience:"internal",subtype:"manual",confidentiality:"internal"});
+        // Exposure hold: the row is terminally unsupported so neither the boot sweep nor an
+        // explicitly queued job can send confidential text to an embedding provider.
+        expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[docId])).rows[0].embedding_status)
+          .toBe("unsupported");
+        // Draft governed content is excluded by the type filter, not merely because an approval
+        // snapshot is absent from the AI-context predicate.
+        const exposedDraft=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposedDraft.rows[0].n).toBe(0);
+
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Invalid manual ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,audience:"nope"}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Missing metadata ${randomUUID()}`,
+          documentType:"user_manual"})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Unknown metadata key ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,unexpected:true}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Impossible date ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,effectivity:{from:"2026-02-31",to:null}}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Inverted effectivity ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,effectivity:{from:"2026-06-01",to:"2026-01-01"}}})).rejects.toMatchObject({status:400});
+        await expect(service().createKnowledgeDocument(project,user,{folderId:folder,title:`Manual enforcement ${randomUUID()}`,
+          documentType:"user_manual",governedMetadata:{...metadata,enforcementRefs:["ACME-1"]}})).rejects.toMatchObject({status:400});
+
+        const duplicate=await service().duplicateKnowledgeDocument(project,user,docId);
+        duplicateId=duplicate.id;
+        expect(duplicate.governedMetadata).toMatchObject({audience:"internal",subtype:"manual",confidentiality:"internal",distribution:"internal"});
+        expect((await admin.query("SELECT embedding_status FROM knowledge_documents WHERE id=$1",[duplicateId])).rows[0].embedding_status)
+          .toBe("unsupported");
+
+        const submitted=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:created.editRevision,submissionKey:randomUUID()},human);
+        const detail=await service().getKnowledgeDocumentVersion(project,user,docId,submitted.id);
+        expect(detail.snapshotMetadata).toMatchObject({governedMetadata:{audience:"internal",subtype:"manual"}});
+
+        qaId=(await admin.query("INSERT INTO users(email,name) VALUES ($1,'Governed docs reader') RETURNING id",[`governed-reader-${randomUUID()}@tesbo.invalid`])).rows[0].id;
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[org,qaId]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",[project,qaId]);
+        await expect(service().approveGovernedKnowledgeDocument(project,qaId,docId,{versionId:submitted.id},human))
+          .rejects.toMatchObject({status:403});
+
+        const changed=await service().updateKnowledgeDocument(project,user,docId,
+          {governedMetadata:{...metadata,confidentiality:"confidential"},expectedRevision:created.editRevision});
+        await expect(service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human))
+          .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_REVISION_CONFLICT"}});
+        await service().updateKnowledgeDocument(project,user,docId,
+          {governedMetadata:metadata,expectedRevision:changed.editRevision});
+        const approved=await service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human);
+        expect(approved).toMatchObject({status:"approved",sourceVersionId:submitted.id,replayed:false});
+        expect(approved.reviewedVersionId).toBe(approved.decidedVersionId);
+        const retry=await service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:submitted.id},human);
+        expect(retry).toMatchObject({decidedVersionId:approved.decidedVersionId,replayed:true});
+        // Approval alone must not expose the manual to Zyra/RAG. Assert while the document is
+        // actually approved: doing this only after a rejection would pass for the wrong reason.
+        const exposedApproved=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposedApproved.rows[0].n).toBe(0);
+
+        // A later rejection must supersede the earlier approval as the current decision. The
+        // snapshot is bound to the exact newly submitted version, not to the document's latest
+        // content at review time.
+        const current=await service().getKnowledgeDocument(project,user,docId);
+        const edited=await service().updateKnowledgeDocument(project,user,docId,
+          {contentText:"Manual body revised",contentHtml:"<p>Manual body revised</p>",expectedRevision:current.editRevision});
+        const second=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:edited.editRevision,submissionKey:randomUUID()},human);
+        const rejected=await service().rejectGovernedKnowledgeDocument(project,user,docId,
+          {versionId:second.id,reason:"Effectivity is out of date"},human);
+        expect(rejected).toMatchObject({status:"rejected",sourceVersionId:second.id,replayed:false});
+        const rejectedRetry=await service().rejectGovernedKnowledgeDocument(project,user,docId,
+          {versionId:second.id,reason:"Effectivity is out of date"},human);
+        expect(rejectedRetry).toMatchObject({decidedVersionId:rejected.decidedVersionId,replayed:true});
+        const decisions=await admin.query(
+          `SELECT snapshot_kind,snapshot_metadata->>'sourceVersionId' AS source_version_id,version_number
+             FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind IN ('approved','rejected')
+            ORDER BY version_number`,[docId]);
+        expect(decisions.rows.map(row=>row.snapshot_kind)).toEqual(["approved","rejected"]);
+        expect(decisions.rows[1]).toMatchObject({snapshot_kind:"rejected",source_version_id:second.id});
+        expect((await admin.query("SELECT status,reviewed_version_id FROM knowledge_documents WHERE id=$1",[docId])).rows[0])
+          .toMatchObject({status:"rejected",reviewed_version_id:rejected.decidedVersionId});
+
+        const exposed=await admin.query(`SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE id=$1 AND ${knowledgeDocumentAiContextSql()}`,[docId]);
+        expect(exposed.rows[0].n).toBe(0);
+        // A rejected document must be edited back to draft before another submission. Two identical
+        // submissions then bind to different exact versions; approving the older one must not leave
+        // the latest submission showing as undecided.
+        const rejectedState=await service().getKnowledgeDocument(project,user,docId);
+        await expect(service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:rejectedState.editRevision,submissionKey:randomUUID()},human))
+          .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_NOT_DRAFT"}});
+        const reopened=await service().updateKnowledgeDocument(project,user,docId,
+          {contentText:"Manual body reopened",expectedRevision:rejectedState.editRevision});
+        const older=await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:reopened.editRevision,submissionKey:randomUUID()},human);
+        await service().submitKnowledgeDocument(project,user,docId,
+          {expectedRevision:reopened.editRevision,submissionKey:randomUUID()},human);
+        await expect(service().approveGovernedKnowledgeDocument(project,user,docId,{versionId:older.id},human))
+          .rejects.toMatchObject({status:409,response:{code:"GOVERNED_VERSION_SUPERSEDED"}});
+        await expect(service().updateKnowledgeDocument(project,user,docId,
+          {documentType:"general",expectedRevision:reopened.editRevision}))
+          .rejects.toMatchObject({status:400});
+
+        legacyId=(await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Legacy general ${randomUUID()}`,documentType:"general",contentText:"Legacy"})).id;
+        await expect(service().approveGovernedKnowledgeDocument(project,user,legacyId,{versionId:submitted.id},human))
+          .rejects.toMatchObject({status:400});
+      }finally{
+        for(const id of [docId,duplicateId,legacyId].filter(Boolean)){
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
+        }
+        if(qaId){
+          await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",[project,qaId]);
+          await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2",[org,qaId]);
+          await admin.query("DELETE FROM users WHERE id=$1",[qaId]);
+        }
+      }
+    });
+
+    it("rechecks the agent restriction against a document that becomes governed while a token operation waits",async()=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const otherFolder=(await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name) SELECT organization_id,id,$2 FROM projects WHERE id=$1 RETURNING id",[project,`Race target ${randomUUID()}`])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",subtype:"manual",confidentiality:"internal",
+        distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:null,to:null},enforcementRefs:[]};
+      const blocker=new Client({connectionString:url}); await blocker.connect();
+      const docIds:string[]=[];
+      const makeDoc=async(title:string)=>service().createKnowledgeDocument(project,user,{folderId:folder,title,contentText:`${title} body`});
+      const race=async(docId:string,expectedRevision:string,operation:()=>Promise<Body>)=>{
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT id FROM knowledge_documents WHERE id=$1 FOR UPDATE",[docId]);
+        const conversion=service().updateKnowledgeDocument(project,user,docId,
+          {documentType:"user_manual",governedMetadata:metadata,expectedRevision});
+        expect(await waitUntil(async()=>(await waitingLockers())>=1)).toBe(true);
+        const pending=operation().then(value=>({value,error:undefined as Body|undefined}),error=>({value:undefined as Body|undefined,error:error as Body}));
+        // Both the conversion and the token operation must be visibly blocked before release:
+        // otherwise the token call may not have passed its pre-lock read and a pre-lock 403
+        // would pass for the in-lock recheck.
+        expect(await waitUntil(async()=>(await waitingLockers())>=2)).toBe(true);
+        await blocker.query("COMMIT");
+        await conversion;
+        expect((await pending).error).toMatchObject({status:403});
+      };
+      try{
+        const moveDoc=await makeDoc(`Race move ${randomUUID()}`); docIds.push(moveDoc.id);
+        await race(moveDoc.id,moveDoc.editRevision,
+          ()=>service().moveKnowledgeDocument(project,user,moveDoc.id,{folderId:otherFolder},{kind:"api_token"}));
+        expect((await admin.query("SELECT folder_id,document_type FROM knowledge_documents WHERE id=$1",[moveDoc.id])).rows[0])
+          .toEqual({folder_id:folder,document_type:"user_manual"});
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM audit_logs WHERE entity_id=$1 AND action='moved'",[moveDoc.id])).rows[0].n).toBe(0);
+
+        const restoreDoc=await makeDoc(`Race restore ${randomUUID()}`); docIds.push(restoreDoc.id);
+        const changed=await service().updateKnowledgeDocument(project,user,restoreDoc.id,
+          {contentText:"Changed restore body",expectedRevision:restoreDoc.editRevision});
+        const originalVersion=(await admin.query(
+          "SELECT id FROM knowledge_document_versions WHERE document_id=$1 ORDER BY version_number LIMIT 1",[restoreDoc.id]
+        )).rows[0]?.id;
+        const version=await service().submitKnowledgeDocument(project,user,restoreDoc.id,
+          {expectedRevision:changed.editRevision,submissionKey:randomUUID()},human);
+        expect(version.contentText).toBe("Changed restore body");
+        const versionsBefore=(await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n;
+        await race(restoreDoc.id,changed.editRevision,
+          ()=>service().restoreKnowledgeDocumentVersion(project,user,restoreDoc.id,{versionId:originalVersion},{kind:"api_token"}));
+        expect((await service().getKnowledgeDocument(project,user,restoreDoc.id)).contentText).toBe("Changed restore body");
+        // The owner conversion itself writes one autosave snapshot (metadata changed); the refused
+        // restore must not add another.
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[restoreDoc.id])).rows[0].n).toBe(versionsBefore+1);
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM audit_logs WHERE entity_id=$1 AND action='restored_version'",[restoreDoc.id])).rows[0].n).toBe(0);
+
+        const duplicateDoc=await makeDoc(`Race duplicate ${randomUUID()}`); docIds.push(duplicateDoc.id);
+        await race(duplicateDoc.id,duplicateDoc.editRevision,
+          ()=>service().duplicateKnowledgeDocument(project,user,duplicateDoc.id,{kind:"api_token"}));
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id=$1 AND title=$2",[project,`${duplicateDoc.title} (copy)`])).rows[0].n).toBe(0);
+      }finally{
+        await blocker.query("ROLLBACK").catch(()=>undefined);
+        await blocker.end();
+        for(const id of docIds){
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
+        }
+        await admin.query("DELETE FROM knowledge_folders WHERE id=$1",[otherFolder]);
+      }
+    },120000);
 
     it.each(["apply","approval"])("marks a resolved pin stale after revocation before %s and preserves every native write",async phase=>{
       const skills=await publishSkills();

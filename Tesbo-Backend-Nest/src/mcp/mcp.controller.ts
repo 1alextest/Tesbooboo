@@ -73,7 +73,15 @@ export class McpController {
       await this.respondOAuth(req, res, body, projectId);
       return;
     }
-    const principal = this.requirePrincipal(req, res, projectId);
+    // Authenticate independently of the URL parameter. Discovery only decorates
+    // an already-denied request; it can never select or bypass authentication.
+    let principal: NonNullable<AuthenticatedRequest["apiToken"]>;
+    try {
+      principal = this.requirePrincipal(req);
+    } catch (error) {
+      this.advertiseProtectedResource(res, projectId);
+      throw error;
+    }
     await this.respond(req, res, body, principal, projectId);
   }
 
@@ -215,19 +223,18 @@ export class McpController {
     res.status(201).json(result);
   }
 
-  private requirePrincipal(req: AuthenticatedRequest, res?: Response, resourceProjectId?: string) {
+  private advertiseProtectedResource(res: Response, projectId: string): void {
+    // Preview only, never on the shared alias. Invalid project/configuration
+    // cannot alter the authentication refusal or advertise a misleading URL.
+    try {
+      const policy = mcpOAuthDiscoveryPolicy();
+      if (policy) res.setHeader("WWW-Authenticate", mcpOAuthUnauthorizedChallenge(policy, projectId));
+    } catch { /* refuse without discovery metadata */ }
+  }
+
+  private requirePrincipal(req: AuthenticatedRequest) {
     const principal = req.apiToken;
     if (!principal) {
-      // Machine surface: must present a valid API bearer token (not a browser session).
-      // Preview-only discovery; the OAuth bearer path remains disabled.
-      // This challenge is never attached to the dynamic/ambiguous /api/mcp alias.
-      if (res && resourceProjectId) {
-        const policy = mcpOAuthDiscoveryPolicy();
-        if (policy) {
-          try { res.setHeader("WWW-Authenticate", mcpOAuthUnauthorizedChallenge(policy, resourceProjectId)); }
-          catch { /* invalid resource: do not advertise a misleading challenge */ }
-        }
-      }
       throw new UnauthorizedException({ error: "MCP requires a valid API token (Authorization: Bearer <token>)" });
     }
     return principal;
