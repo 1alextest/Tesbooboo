@@ -795,9 +795,16 @@ type Body=Record<string,any>;
         }
         expect(sawWait).toBe(true);
         // The initial preflight saw the capability enabled; disable it while the apply waits.
+        // Replace each intermediate object explicitly: jsonb_set does not create a path through a
+        // JSON null intermediate, which would leave the setting unchanged and pass for the wrong reason.
         await admin.query(
-          `UPDATE projects SET settings=jsonb_set(COALESCE(settings,'{}'::jsonb),'{zyraAgent,capabilities,testcaseStorage}','false'::jsonb,true) WHERE id=$1`,
+          `UPDATE projects SET settings=jsonb_set(COALESCE(settings,'{}'::jsonb),'{zyraAgent}',
+             jsonb_set(COALESCE(settings->'zyraAgent','{}'::jsonb),'{capabilities}',
+               jsonb_set(COALESCE(settings#>'{zyraAgent,capabilities}','{}'::jsonb),'{testcaseStorage}','false'::jsonb,true),true),true)
+           WHERE id=$1`,
           [project]);
+        expect((await admin.query("SELECT settings FROM projects WHERE id=$1",[project])).rows[0].settings)
+          .toMatchObject({zyraAgent:{capabilities:{testcaseStorage:false}}});
         await blocker.query("COMMIT");
         const settled=await Promise.race([
           pending,
