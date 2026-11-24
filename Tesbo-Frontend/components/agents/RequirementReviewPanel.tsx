@@ -18,6 +18,7 @@ import {
 } from "@/lib/api";
 import { Button, Card, StatusChip } from "@/components/ui";
 import { VersionContent } from "@/components/knowledge-base/GovernedVersionContent";
+import { RequirementCarryForwardReview } from "@/components/agents/RequirementCarryForwardReview";
 import { formatDateTime } from "@/lib/date";
 
 type Criterion = { key: string; text: string; normative: boolean };
@@ -345,6 +346,12 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
         } else if (err.status === 409 && err.code === "REQUIREMENT_VERSION_CONFLICT") {
           message = "The approved requirement version changed since it was displayed. Review the current version before activating its link.";
           setContentNonce((value) => value + 1);
+        } else if (err.status === 409 && err.code === "SKILL_LINK_REVIEW_REQUIRED") {
+          message = "This link has no current reviewed Skill authority. Stage and review a requirement revision with this exact existing link selected before activating it.";
+          setContentNonce((value) => value + 1);
+        } else if (err.status === 409 && ["SKILL_CONTEXT_STALE", "SKILL_CONTEXT_UNAVAILABLE", "SKILL_ASSIGNMENT_CONFLICT"].includes(err.code || "")) {
+          message = "The reviewed Skill assignment is no longer current or available. Resolve the assignment in Skills settings and stage and review a refreshed requirement revision before activating. Historical coverage remains readable.";
+          setContentNonce((value) => value + 1);
         } else if (err.status === 409 && err.code === "LINK_NOT_ACTIVE") {
           message = "That link is no longer active. Reload the current coverage and choose the current link.";
         } else if (err.status >= 500) {
@@ -438,6 +445,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
             </div>
           </div>
 
+          <RequirementCarryForwardReview selections={version.snapshotMetadata?.carryForwardLinks} skillContext={version.snapshotMetadata?.skillContext} />
           <details className="rounded-lg border border-[var(--border)] p-3 text-sm" data-testid="requirement-review-full-content">
             <summary className="cursor-pointer font-medium">Complete stored version</summary>
             <div className="mt-2 max-h-80 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs">
