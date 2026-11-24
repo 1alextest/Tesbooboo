@@ -28872,7 +28872,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // without re-deriving it from the mutable requirement document.
       item.requirementApplyReceipt = this.requirementApplyReceipt(row);
     }
-    const managedPreview = managedEntries.length === 0 || process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
+    const managedPreview = (row.provider !== "external_document_proposal" && managedEntries.length === 0) || process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     if (snapshot && managedPreview) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;
@@ -28884,16 +28884,21 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // pinned Skill basis.
       delete item.generatedPayload;
       delete item.proposalSnapshot;
+      delete item.proposalRevision;
       delete item.proposalReviewRevision;
       delete item.saveEvents;
       delete item.skillContext;
       delete item.proposalProvenance;
+      delete item.proposalRequestKey;
+      delete item.proposalRequestDigest;
+      delete item.activityLog;
+      delete item.sourceSummary;
     }
     item.jiraIssueKeys = normalizeJsonArray(row.jira_issue_keys);
     item.linearIssueKeys = normalizeJsonArray(row.linear_issue_keys);
     item.notionPageIds = normalizeJsonArray(row.notion_page_ids);
-    item.sources = normalizeJsonArray(row.source_summary);
-    item.activities = normalizeJsonArray(row.activity_log);
+    item.sources = managedPreview ? normalizeJsonArray(row.source_summary) : [];
+    item.activities = managedPreview ? normalizeJsonArray(row.activity_log) : [];
     // A Russian task's timeline and sources are rendered in Russian; the stored English is untouched
     // (see zyra-task-activity-ru.ts). Every other task is returned exactly as before.
     if (row.language === "ru") {
