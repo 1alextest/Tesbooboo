@@ -445,3 +445,34 @@ Actual later CI, screenshot artifacts and final independent/White verdicts must 
 own exact candidate on PR228/226; this ledger does not predeclare their outcomes. The six prepared
 panel captures will be actual browser-fixture screenshots only if the corresponding test states are
 reached. Native TESBOPROJECT execution remains UNRUN.
+
+
+### Governed activation lineage continuation — tests-first, not implementation acceptance
+
+The §16.8 amendment records the proposed explicit carry-forward rule on the existing native
+proposal/KB version/Skills/link owners. A source read establishes that the current shared
+activation writer has no assignment lock or pin comparison; the approved requirement writer
+does. The following **repository regression definitions are UNRUN until exact-head CI evidence
+is read back**. They are not new native cases or live executions.
+
+| Regression purpose | Existing automated owner / selector | Expected outcome |
+| --- | --- | --- |
+| Revoked reviewed link Skill before first activation | `testcase-proposal-review.db.spec.ts`: refuses fresh activation after its reviewed link Skill assignment is revoked | 409 stale; unchanged persisted records and historical coverage |
+| Revoked reviewed link Skill after committed activation and valid replay | Same suite: refuses replay activation after its reviewed link Skill assignment is revoked | 409 stale rather than false current success; original link/audit preserved |
+| Implicit cross-version rebind after requirement-only approval | Same suite: replays activation only against the current approved requirement version | Preserve earlier replay refusal; intentional active old-link rebind without reviewed selection now refuses with SKILL_LINK_REVIEW_REQUIRED |
+| Explicit selected carry-forward across a new requirement approval | Existing DB/API/UI suites; selector pending implementation | Selected exact group rebinds, neighboring/unselected groups cannot inherit; no duplicate case |
+| Changed/replaced/conflicting pins, lock-order race, stale selection, foreign scope and uncertain response | Existing DB/API/UI suites; selectors pending implementation | Exact reviewed authority or safe refusal; no partial write, false confirmation or duplicate audit |
+
+**Assurance challenge targets (not signed-off review receipts):** Blue — existing ownership and
+prior positive rebind fixture; Red — forged/omitted/retired scope and replay after revocation;
+Green — proposal digest, KB snapshot, activation, and coverage seams; QA — both serialization
+orders and lifecycle transitions; Security — exact tenant and human authority; Grey/Purple —
+explicit review and recoverable refusal; Graph — one relation owner and semantic distinction
+between history and current authorization; EG — independently derived counterexamples;
+Observability — actionable refusal and attributable audit; White — do not graduate the slice
+without the positive selected carry-forward path, real DB/API/UI evidence, and required approvals.
+
+Native sync: discover/reuse the matching requirement, cases, task, manuals/policies and evidence
+in TESBOPROJECT when a permitted client is available. Do not mark anything published, approved
+or executed based on repository test definitions. No native mutation or execution has occurred
+in this continuation.
