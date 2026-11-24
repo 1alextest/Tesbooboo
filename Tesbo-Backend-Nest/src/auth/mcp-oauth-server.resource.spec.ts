@@ -112,6 +112,7 @@ describe("OAuth access-token read-only resource and live revocation", () => {
       f => { f.token.scope = "mcp:read mcp:write"; },
       f => { f.token.scope = "mcp:write"; },
       f => { f.token.clientId = "https://other.example/oauth/client.json"; },
+      f => { f.token.clientId = ""; },
       f => { f.token.grantId = ""; },
       f => { f.grant.accountId = "somebody-else"; },
       f => { f.grant.clientId = "https://other.example/oauth/client.json"; },
