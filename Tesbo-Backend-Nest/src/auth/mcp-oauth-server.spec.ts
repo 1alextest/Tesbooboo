@@ -1,4 +1,5 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { Test } from "@nestjs/testing";
 import { allowedChatGptCimdClientId, McpOAuthServer } from "./mcp-oauth-server";
 import { DatabaseService } from "../database/database.service";
 
@@ -28,6 +29,24 @@ describe("Tesbo in-process OAuth issuer — default OFF, registered clients and 
     expect(fakeApp.getHttpAdapter).not.toHaveBeenCalled();
     expect(fakeDb.query).not.toHaveBeenCalled();
     expect(await oauth.verifyAccessToken("forged")).toBeNull();
+  });
+
+  it("resolves the real OAuth server through Nest dependency injection while default OFF", async () => {
+    delete process.env.TESBO_MCP_OAUTH_ENABLED;
+    const module = await Test.createTestingModule({
+      providers: [McpOAuthServer, { provide: DatabaseService, useValue: fakeDb }]
+    }).compile();
+    try {
+      const oauth = module.get(McpOAuthServer);
+      expect(oauth).toBeInstanceOf(McpOAuthServer);
+      await expect(oauth.mount(fakeApp)).resolves.toBeUndefined();
+      expect(oauth.enabled).toBe(false);
+      expect(fakeApp.getHttpAdapter).not.toHaveBeenCalled();
+      expect(fakeDb.query).not.toHaveBeenCalled();
+      expect(await oauth.verifyAccessToken("forged")).toBeNull();
+    } finally {
+      await module.close();
+    }
   });
 
   it("refuses to enable with unapproved HTTP issuer or missing signing/client keys", async () => {
