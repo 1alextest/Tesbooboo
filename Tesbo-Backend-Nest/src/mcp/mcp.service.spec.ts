@@ -176,6 +176,18 @@ describe("McpService", () => {
       expect(res.result.serverInfo.name).toBe(MCP_SERVER_NAME);
       expect(res.result.capabilities).toHaveProperty("tools");
       expect(res.result.instructions).toBe(MCP_SERVER_INSTRUCTIONS);
+      // These instructions reach remote MCP clients even when no repository AGENTS.md is loaded.
+      // Missing read/grant/Skill authority must be stated rather than inferred or bypassed.
+      const guidance = String(res.result.instructions);
+      for (const tool of ["list_testcases", "list_suites", "get_testcase",
+        "stage_testcase_changes", "stage_requirement_change_bundle",
+        "get_requirement_proposal_task"]) {
+        expect(guidance).toContain(tool);
+      }
+      expect(guidance).toContain("Only if stage_requirement_change_bundle is actually advertised");
+      expect(guidance).toContain("A successful repository unit/E2E test does not mean a Tesbo Run executed");
+      expect(guidance).toContain("re-approval of a changed definition is a separate human decision");
+      expect(guidance).toContain("not permission to publish official records");
       expect(res.id).toBe(1);
     });
 
