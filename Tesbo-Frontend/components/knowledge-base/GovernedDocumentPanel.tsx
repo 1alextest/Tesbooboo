@@ -181,8 +181,9 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
       await onChanged();
       setMessage(`Submitted v${version.versionNumber} as an immutable candidate. Review and approval are separate.`);
     } catch (err) {
+      // Do not reload here: load() clears the error, and the retained draft/uncertain submission
+      // must stay visible until the author resolves or retries it.
       setError(err instanceof Error ? err.message : "The exact version could not be submitted. Your draft remains in the editor.");
-      await load();
     } finally {
       if (mounted.current) setBusy(false);
     }
