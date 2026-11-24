@@ -75,3 +75,25 @@ A reported issue says credentials and portfolios remain publicly visible when a 
 ## Distillation and evolution
 
 Generalize the failure mechanism, not the seller-specific nouns. Keep the principle stable across domains; contextualize against each product's true policies. Record human feedback on the usefulness of a decision brief and refine the living skill without treating one approval as universal proof. Do not mandate a separate skill-validation campaign for adopting this instruction.
+
+
+## Specification-stage discovery: question generation before design freeze
+
+**The failure mode:** a team can thoroughly review the questions already written in a spec yet fail to recognize that the spec has omitted a decision entirely. Specification completeness is not the same as decision completeness; multiagent agreement is not evidence that all consequential questions have been discovered.
+
+**Discovery is generative, not merely reactive.** For each proposed feature, independently construct potential questions from evidence and latent interactions, without waiting for the user, developer, issue or coordinator to pose them. In particular:
+
+1. **Reconstruct the outcome:** What problem, human outcome and invariant does the feature serve? What would make a technically correct implementation product-wrong?
+2. **Derive the semantic axes:** Distinguish identity, standing, publication, visibility, entitlement, individual-content eligibility, actor permission, record existence, lifecycle and display projection when those mechanisms exist. Do not collapse similarly named states into one eligibility flag without evidence.
+3. **Explore combinations:** For meaningful states and audiences, ask what happens to dependent records, direct and indirect readers, before/after transitions, restoration, legacy data, cached projections and third-party copies. Look at *non-participation*, excluded states and absence of a parent.
+4. **Intersect with decided ground:** Search not just the new feature's own spec but adjacent product decisions, roles, plans, trust rules and existing public-read contracts. Identify semantic collisions even when all documents look individually complete.
+5. **Generate candidate questions:** Derive alternative behavior policies and surface genuine unresolved choices. An unresolved choice may be a missing rule, a rule's ambiguous applicability, or an apparent contradiction between two accepted rules.
+6. **Assign consequence and authority:** Classify whether each candidate affects human outcomes, rights, security, money, data, external access, irreversible transitions, or other material commitments. Report through any available tool/handoff; ask a human only when established authority does not already settle it.
+7. **Close the discovery loop:** In specs record discovered decisions, source and owner, alternatives, disposition (decided/delegated/open/blocked), affected semantic axes and downstream obligations. A “no open decisions found” conclusion must name inspected scope and known gaps.
+
+**Counterexample from the actual Nesberry record (ISS-9482, D-115):** credential/portfolio visibility was initially keyed to suspension alone. The prompt about paused, under-review and rejected sellers did surface a missing question, but even the first proposed answer “require a published seller profile” conflicted with the accepted every-plan availability decision: branded-page publication was a separate entitlement, and a seller on Basic/Verified or in draft need not have a published page. The subsequent founder clarification was “Any not-blocked profile”. The missed discovery obligation was to *generate and reconcile the cross-axis eligibility question* before choosing the visibility rule—not merely to ask what triggered the original issue. This is an illustrative historical resolution in Nesberry, not a transferable policy for Tesbo or other products.
+
+**Reviewer anti-patterns:** “The spec does not mention it, so it is out of scope”; “every team agreed”; “we have a state matrix” when the matrix is only one dimension; “ask Claude to ask” instead of every subagent discovering; “published” silently conflated with “authorized”; “we found an issue” treated as proof all connected issues were found.
+
+**Decision discovery is not a mandate to ask unlimited questions.** Deduplicate, investigate first, make small delegated choices autonomously, and report the remainder proportionally. Distinguish candidate coverage from the strength of evidence and never fabricate an exhaustive review.
+
