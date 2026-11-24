@@ -1699,6 +1699,26 @@ type Body=Record<string,any>;
         await expect(service().applyManagedDocumentProposal(project,user,changedTaskId,{expectedProposalRevision:changedView.proposalRevision},human))
           .rejects.toMatchObject({status:409,response:{code:"PROPOSAL_TARGET_CONFLICT"}});
         expect((await admin.query("SELECT content_text FROM knowledge_documents WHERE id=$1",[targetId])).rows[0].content_text).toBe("Concurrent edit");
+
+        // With the preview capability off, the dedicated routes refuse and the generic read must
+        // not become a side door to the same unpublished governed content, receipts or Skill basis.
+        const priorPreview=process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        try{
+          process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="0";
+          await expect(service().managedDocumentProposalTask(project,user,changedTaskId))
+            .rejects.toMatchObject({status:501});
+          const redacted=await service().zyraTask(project,user,changedTaskId);
+          expect(redacted.generatedPayload).toBeUndefined();
+          expect(redacted.proposalSnapshot).toBeUndefined();
+          expect(redacted.proposalRevision).toBeUndefined();
+          expect(redacted.saveEvents).toBeUndefined();
+          expect(redacted.skillContext).toBeUndefined();
+          const history=await service().aiHistory(project,user,{limit:"100"});
+          expect(history.list.some((entry:Body)=>entry.id===changedTaskId)).toBe(false);
+        }finally{
+          if(priorPreview===undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+          else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED=priorPreview;
+        }
       }finally{
         for(const id of [targetId,createdId].filter(Boolean)){
           await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);

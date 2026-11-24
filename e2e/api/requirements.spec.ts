@@ -979,6 +979,7 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
       module: "user_manuals", subtype: "internal", operation: "manual_revision",
     } });
     expect(assigned.status(), await assigned.text()).toBe(201);
+    const assignmentId = (await assigned.json()).assignment.id as string;
 
     const root = await (await request.get(`${base}/knowledge-base/folders/tree`)).json();
     const created = await request.post(`${base}/knowledge-base/documents`, { data: {
@@ -1033,6 +1034,17 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     expect(listed.list.some((task: { id: string }) => task.id === staged.id)).toBe(true);
     expect((await request.get(`${base}/knowledge-base/document-proposals/${staged.id}`)).status()).toBe(200);
     expect((await request.get(`/api/projects/${randomUUID()}/knowledge-base/document-proposals/${staged.id}`, { failOnStatusCode: false })).status()).toBe(404);
+    // The generic draft editor is a different surface for a different owner. It must not rewrite or
+    // delete the exact candidate the owner is about to decide.
+    for (const tamper of [
+      () => request.delete(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false }),
+      () => request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered candidate" }, failOnStatusCode: false }),
+    ]) {
+      const refused = await tamper();
+      expect(refused.status(), await refused.text()).toBe(409);
+      expect((await refused.json()).code).toBe("MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE");
+    }
+    expect((await (await request.get(`${base}/knowledge-base/document-proposals/${staged.id}`)).json()).proposalRevision).toBe(staged.proposalRevision);
 
     // A machine identity may stage, but only a human session may decide.
     const tokenApply = await machine.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
@@ -1120,6 +1132,49 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     // edit_revision is a computed digest, not a column: read it back through the API.
     const afterNoChange = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
     expect(afterNoChange).toMatchObject({ editRevision: latest.editRevision, contentText: latest.contentText });
+
+    // The target moving after staging refuses the apply instead of overwriting the newer edit.
+    const movedResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: afterNoChange.editRevision,
+        document: { title: afterNoChange.title, contentText: "Candidate over a moving target", governedMetadata: afterNoChange.governedMetadata },
+      }, failOnStatusCode: false,
+    });
+    expect(movedResponse.status(), await movedResponse.text()).toBe(201);
+    const moved = await movedResponse.json();
+    taskIds.push(moved.id);
+    const concurrentEdit = await request.patch(`${base}/knowledge-base/documents/${target.id}`, {
+      data: { contentText: "Edited after the candidate was staged", expectedRevision: afterNoChange.editRevision },
+    });
+    expect(concurrentEdit.status(), await concurrentEdit.text()).toBe(200);
+    const movedApply = await request.post(`${base}/knowledge-base/document-proposals/${moved.id}/apply`, {
+      data: { expectedProposalRevision: moved.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(movedApply.status()).toBe(409);
+    expect((await movedApply.json()).code).toBe("PROPOSAL_TARGET_CONFLICT");
+    const editedTarget = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(editedTarget.contentText).toBe("Edited after the candidate was staged");
+
+    // Deactivating the pinned Skill after staging refuses the apply at decision time, not only in
+    // the review panel's disabled button.
+    const staleCandidateResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: editedTarget.editRevision,
+        document: { title: editedTarget.title, contentText: "Stale candidate body", governedMetadata: editedTarget.governedMetadata },
+      }, failOnStatusCode: false,
+    });
+    expect(staleCandidateResponse.status(), await staleCandidateResponse.text()).toBe(201);
+    const staleCandidate = await staleCandidateResponse.json();
+    taskIds.push(staleCandidate.id);
+    const revoked = await request.patch(`${base}/skill-assignments/${assignmentId}/deactivate`, { data: {}, failOnStatusCode: false });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+    const staleApply = await request.post(`${base}/knowledge-base/document-proposals/${staleCandidate.id}/apply`, {
+      data: { expectedProposalRevision: staleCandidate.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(staleApply.status()).toBe(409);
+    expect((await staleApply.json()).code).toBe("DOCUMENT_PROPOSAL_SKILL_STALE");
+    expect((await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json()).contentText)
+      .toBe("Edited after the candidate was staged");
   } finally {
     await machine?.dispose();
     for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);

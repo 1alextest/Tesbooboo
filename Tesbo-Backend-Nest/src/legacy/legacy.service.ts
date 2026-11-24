@@ -16450,15 +16450,17 @@ export class LegacyService implements OnModuleInit {
     const applicability = classifySkillResolution(pinned, current);
     const base = operation.target?.base || null;
     const proposed = operation.document;
+    // Omitted representations are preserved on apply, so the comparison must show the effective
+    // value too. Diffing an omitted contentText as "" would claim the body is being erased.
+    const effective = (key: string) => proposed?.[key] !== undefined ? proposed[key] : base?.[key] ?? null;
     const diff = summarizeDocumentChange(
       { title: base?.title || "", contentText: base?.contentText || "" },
-      { title: proposed?.title || "", contentText: proposed?.contentText || "" }
+      { title: String(effective("title") ?? ""), contentText: String(effective("contentText") ?? "") }
     );
     const receipt = normalizeJsonArray(task.saveEvents)
       .filter((entry: Body) => entry?.action === "managed_document_apply")
       .sort((left: Body, right: Body) => String(left.appliedAt || "").localeCompare(String(right.appliedAt || "")))
       .pop() || null;
-    const effective = (key: string) => proposed?.[key] !== undefined ? proposed[key] : base?.[key] ?? null;
     const changes: string[] = [];
     if (operation.operation === "create") changes.push("New governed document");
     else {
@@ -16516,7 +16518,11 @@ export class LegacyService implements OnModuleInit {
       await this.lockSkillAssignments(client, projectId);
       const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
-      if (!existing) throw new NotFoundException({ error: "Document proposal not found" });
+      // The provider is the ownership boundary for the operation shape below; do not infer it
+      // from an opType another producer could one day emit.
+      if (!existing || existing.provider !== "external_document_proposal") {
+        throw new NotFoundException({ error: "Document proposal not found" });
+      }
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
       const prior = normalizeJsonArray(existing.save_events).find((entry: Body) => entry?.decisionKey === decisionKey);
@@ -16538,6 +16544,9 @@ export class LegacyService implements OnModuleInit {
       const proposed = operation.document;
       let document: Body;
       if (operation.operation === "create") {
+        if (!isGovernedDocumentType(operation.documentType)) {
+          throw new BadRequestException({ error: "A managed candidate must create a user_manual or policy document" });
+        }
         // Staging refuses this too. Keep the check here so a candidate staged before that guard
         // existed still cannot capture the title Zyra looks its memory up by.
         if (String(proposed.title) === LegacyService.ZYRA_MEMORY_DOC_TITLE) {
@@ -16557,6 +16566,7 @@ export class LegacyService implements OnModuleInit {
           status: inserted.status, documentType: inserted.document_type, operation: "create" };
       } else {
         const target = operation.target;
+        if (!target?.documentId) throw new BadRequestException({ error: "This update candidate has no exact target" });
         const current = (await client.query(
           `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
             WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
@@ -22900,9 +22910,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const limit = pageNumber(query.limit, 50, 0, 100);
     const offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    // This generic history returns rows verbatim. While the governed document proposal surface is
+    // disabled, keep staged candidates out of it rather than exposing their payload and receipts.
+    const managedPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     const res = await this.db.query(
-      `SELECT * FROM ai_generation_requests WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-      [projectId, limit, offset]
+      `SELECT * FROM ai_generation_requests WHERE project_id = $1
+         AND ($4::boolean OR provider IS DISTINCT FROM 'external_document_proposal')
+       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset, managedPreview]
     );
     return { list: res.rows.map(toCamel) };
   }
@@ -23212,6 +23227,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       this.assertGuardedPublicationAvailable(existing.rows[0]);
+      // A governed document candidate is the exact artifact the owner reviews. Deleting its only
+      // operation would destroy that artifact and rewrite the review revision.
+      this.assertOrdinaryProposalMutation(existing.rows[0]);
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -23251,6 +23269,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       this.assertGuardedPublicationAvailable(existing.rows[0]);
+      // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
+      // under the reviewer without changing the exact revision they approved.
+      this.assertOrdinaryProposalMutation(existing.rows[0]);
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }
@@ -28851,10 +28872,22 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // without re-deriving it from the mutable requirement document.
       item.requirementApplyReceipt = this.requirementApplyReceipt(row);
     }
-    if (snapshot) {
+    const managedPreview = managedEntries.length === 0 || process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
+    if (snapshot && managedPreview) {
       item.proposalSnapshot = snapshot;
       item.proposalRevision = row.proposal_review_revision;
       delete item.proposalReviewRevision;
+    }
+    if (!managedPreview) {
+      // The dedicated document-proposal surface (and staging itself) is disabled. The generic read
+      // must not become a side door to the unpublished governed content, its apply receipts or
+      // pinned Skill basis.
+      delete item.generatedPayload;
+      delete item.proposalSnapshot;
+      delete item.proposalReviewRevision;
+      delete item.saveEvents;
+      delete item.skillContext;
+      delete item.proposalProvenance;
     }
     item.jiraIssueKeys = normalizeJsonArray(row.jira_issue_keys);
     item.linearIssueKeys = normalizeJsonArray(row.linear_issue_keys);

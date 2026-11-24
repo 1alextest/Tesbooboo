@@ -2468,6 +2468,15 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(staged.skillContext).toMatchObject({ status: "resolved" });
       const before = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
       expect(before).toMatchObject({ contentText: "Base manual body", status: "draft", editRevision: target.editRevision });
+      // A project member without the owner/manager role cannot decide the candidate.
+      const qaApply = await qaApi.post(`${base()}/knowledge-base/document-proposals/${staged.id}/apply`, {
+        data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+      });
+      expect(qaApply.status()).toBe(403);
+      // The generic draft editor is not the owner/manager decision surface either.
+      const genericDelete = await ownerApi.delete(`${base()}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false });
+      expect(genericDelete.status()).toBe(409);
+      expect((await genericDelete.json()).code).toBe("MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE");
 
       const page = await open(browser, `/agents/tasks/${staged.id}`);
       const panel = page.getByTestId("managed-document-proposal");
@@ -2502,6 +2511,12 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(stalePage.getByTestId("managed-document-proposal")).toContainText("Skill: stale");
       await expect(stalePage.getByTestId("managed-document-apply")).toBeDisabled();
       await expect(stalePage.getByTestId("managed-document-proposal")).toContainText("Apply is blocked");
+      // The disabled button is not the boundary: a direct decision is refused server-side too.
+      const staleDecision = await ownerApi.post(`${base()}/knowledge-base/document-proposals/${stale.id}/apply`, {
+        data: { expectedProposalRevision: stale.proposalRevision }, failOnStatusCode: false,
+      });
+      expect(staleDecision.status()).toBe(409);
+      expect((await staleDecision.json()).code).toBe("DOCUMENT_PROPOSAL_SKILL_STALE");
       expect((await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
     } finally {
       for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);

@@ -395,17 +395,26 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   value"; they are not coerced to JSON null. The panel shows plain text, stored HTML, editor JSON,
   the base title/status/revision, the changed representations and the producer provenance.
 - A text-only diff no longer has to stand in for HTML/JSON or metadata-only changes: the read
-  model lists `Title`, `Plain text`, `HTML`, `Editor JSON` and `Governance metadata` changes.
-- Managed candidates are immutable through the generic Zyra close/feedback/edit/delete paths, and
-  are excluded from `list_testcase_proposals`; only the dedicated owner/manager Apply/Reject
-  actions decide them.
+  model lists `Title`, `Plain text`, `HTML`, `Editor JSON` and `Governance metadata` changes, and
+  compares the effective value of an omitted representation (the current one), not `""`.
+- Managed candidates are immutable through the generic Zyra close/feedback/edit/delete draft
+  paths, and are excluded from `list_testcase_proposals`; only the dedicated owner/manager
+  Apply/Reject actions decide them.
 - Reject requires the exact `expectedProposalRevision`, stores a decision receipt and refuses a
   candidate already applied/decided or changed since review. All managed REST reads/apply/reject
   share the same preview gate as staging.
-- Apply rechecks provider ownership/read-only and the reserved Zyra-memory title. A no-op update
-  records `no_change` and the actual status instead of claiming a new Draft.
+- Apply asserts the row's `external_document_proposal` provider and revalidates governed type,
+  provider ownership/read-only state, the exact target revision and the reserved Zyra-memory title.
+  A no-op update records `no_change` and the actual status instead of claiming a new Draft.
+- With the preview capability off, the generic agent-task read and AI history redact the staged
+  payload, receipts and pinned Skill context instead of serving the same content through a side
+  door. The dedicated endpoints refuse with `not_implemented`.
 - The managed review revision is a digest of the exact operation + pinned Skill context, not the
   unrelated testcase proposal dependency snapshot.
+- e2e now covers: non-owner apply refusal, generic draft tamper refusal, target moved after
+  staging (`PROPOSAL_TARGET_CONFLICT`), Skill deactivated after staging
+  (`DOCUMENT_PROPOSAL_SKILL_STALE`), token apply refusal, revision-bound reject/replay and the
+  no-change receipt.
 
 ---
 
