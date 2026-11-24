@@ -874,7 +874,16 @@ test.describe("governed skills operator journey (UI)", () => {
       const neighborRefusal = await ownerApi.post(base() + "/requirements/" + f.requirementId + "/links/" + neighbor.linkId + "/reapply", { data: revisions });
       expect(neighborRefusal.status()).toBe(409);
       expect((await neighborRefusal.json()).code).toBe("SKILL_LINK_REVIEW_REQUIRED");
-      const activation = await ownerApi.post(base() + "/requirements/" + f.requirementId + "/links/" + source.linkId + "/reapply", { data: revisions });
+      const pending = await (await ownerApi.get(coverageUrl)).json();
+      expect(pending.cases).toHaveLength(0);
+      expect(pending.readings.authored).toBe(false);
+      expect(pending.pendingCarryForwardCases).toEqual([expect.objectContaining({ linkId: source.linkId, authored: false, approved: false })]);
+      await expect(page.getByTestId("requirement-coverage-case-" + f.groups.reversed)).toHaveCount(0);
+      await expect(page.getByTestId("requirement-coverage-case-" + f.groups.selected)).toContainText("pending activation");
+      const activationResponse = page.waitForResponse(response => response.request().method() === "POST" &&
+        response.url().endsWith("/links/" + source.linkId + "/reapply"));
+      await page.getByTestId("requirement-link-activate-" + f.groups.selected).click();
+      const activation = await activationResponse;
       expect(activation.ok(), await activation.text()).toBe(true);
       const activated = await activation.json();
       expect(activated.link).toMatchObject({ testcaseId: f.caseId, requirementVersionId: approval.approvedVersionId, criterionKeys: source.criterionKeys });
