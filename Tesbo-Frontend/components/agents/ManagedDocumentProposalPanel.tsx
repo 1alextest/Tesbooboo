@@ -92,14 +92,14 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm" data-testid="managed-document-content">
         <p className="font-medium">Full proposed content</p>
         <p className="mt-1 text-xs text-[var(--muted)]">Plain text</p>
-        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentText === undefined ? "Not supplied; the current plain text is preserved on apply." : proposal.proposed.contentText || "The proposed plain text is empty."}</pre>
+        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentText === undefined ? (proposal.operation === "create" ? "Not supplied; the new document starts without plain text." : "Not supplied; the current plain text is preserved on apply.") : proposal.proposed.contentText || "The proposed plain text is empty."}</pre>
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-medium">Stored HTML</summary>
-          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentHtml === undefined ? "Not supplied; the current HTML is preserved on apply." : proposal.proposed.contentHtml === null ? "The proposal clears the stored HTML." : proposal.proposed.contentHtml}</pre>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentHtml === undefined ? (proposal.operation === "create" ? "Not supplied; the new document starts without HTML." : "Not supplied; the current HTML is preserved on apply.") : proposal.proposed.contentHtml === null ? "The proposal clears the stored HTML." : proposal.proposed.contentHtml}</pre>
         </details>
         <details className="mt-2">
           <summary className="cursor-pointer text-xs font-medium">Editor JSON</summary>
-          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentJson === undefined ? "Not supplied; the current editor JSON is preserved on apply." : JSON.stringify(proposal.proposed.contentJson, null, 2)}</pre>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentJson === undefined ? (proposal.operation === "create" ? "Not supplied; the new document starts without editor JSON." : "Not supplied; the current editor JSON is preserved on apply.") : proposal.proposed.contentJson === null ? "The proposal clears the stored editor JSON." : JSON.stringify(proposal.proposed.contentJson, null, 2)}</pre>
         </details>
       </div>
 

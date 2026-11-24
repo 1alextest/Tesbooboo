@@ -1086,6 +1086,8 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     const replayReceipt = await replayApply.json();
     expect(replayReceipt.replayed).toBe(true);
     expect(replayReceipt.receipt.document.documentId).toBe(target.id);
+    // A replay is one publication: it must not append a second document history row.
+    expect(scalar(`SELECT COUNT(*)::int FROM audit_logs WHERE entity_type='knowledge_document' AND entity_id=${literal(target.id)} AND action='updated';`)).toBe("1");
     const rejectedAfterApply = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/reject`, {
       data: { expectedProposalRevision: staged.proposalRevision, reason: "Too late" }, failOnStatusCode: false,
     });
@@ -1137,7 +1139,11 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     expect(rejectedResponse.status(), await rejectedResponse.text()).toBe(201);
     const rejected = await rejectedResponse.json();
     expect(rejected.receipt).toMatchObject({ action: "managed_document_reject", proposalRevision: second.proposalRevision });
-    expect(await (await reject()).json()).toMatchObject({ replayed: true, receipt: { id: rejected.receipt.id } });
+    // The decision key binds the decision, not the note: a retry that arrives without the reason
+    // (e.g. after a reload) still replays the stored receipt.
+    expect(await (await request.post(`${base}/knowledge-base/document-proposals/${second.id}/reject`, {
+      data: { expectedProposalRevision: second.proposalRevision }, failOnStatusCode: false,
+    })).json()).toMatchObject({ replayed: true, receipt: { id: rejected.receipt.id } });
     expect((await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
 
     // A candidate that proposes exactly the current state records no change instead of claiming a

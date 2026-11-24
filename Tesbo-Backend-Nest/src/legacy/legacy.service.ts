@@ -16321,8 +16321,8 @@ export class LegacyService implements OnModuleInit {
     // all three and preserve the current body exactly.
     const contentKeys = ["contentText", "contentHtml", "contentJson"] as const;
     const suppliedContent = contentKeys.filter((key) => doc[key] !== undefined);
-    if (operation === "update" && suppliedContent.length > 0 && suppliedContent.length < contentKeys.length) {
-      throw new BadRequestException({ error: "A body-changing update must supply contentText, contentHtml and contentJson together; omit all three to keep the current body" });
+    if (suppliedContent.length > 0 && suppliedContent.length < contentKeys.length) {
+      throw new BadRequestException({ error: "A body-changing proposal must supply contentText, contentHtml and contentJson together; on an update, omit all three to keep the current body" });
     }
     const content: Body = {};
     if (doc.contentText !== undefined) content.contentText = doc.contentText == null ? null : String(doc.contentText);
@@ -16621,15 +16621,15 @@ export class LegacyService implements OnModuleInit {
       );
       await this.logProjectActivity(projectId, uid, "managed_document_proposal_applied", "ai_generation_request", taskId,
         existing.user_story, { decisionKey, proposalRevision: revision, documentId: document.documentId, editRevision: document.editRevision, skillContext: currentSkills }, client);
+      // Give the published document its own history entry, not only the proposal task's, in the
+      // same transaction so a replay cannot append a second row for one publication.
+      if (document.operation !== "no_change") {
+        await this.logProjectActivity(projectId, uid, document.operation === "create" ? "created" : "updated",
+          "knowledge_document", document.documentId, document.title,
+          { source: "managed_document_proposal", taskId, proposalRevision: revision }, client);
+      }
       return { receipt, replayed: false };
     });
-    // Give the published document its own history entry, not only the proposal task's. The task
-    // receipt remains the authoritative applied-proposal record.
-    const applied = result.receipt?.document;
-    if (applied && applied.operation !== "no_change") {
-      await this.logProjectActivity(projectId, uid, applied.operation === "create" ? "created" : "updated",
-        "knowledge_document", applied.documentId, applied.title, { source: "managed_document_proposal", taskId, proposalRevision: revision });
-    }
     return { taskId, taskStatus: "done", ...result };
   }
 

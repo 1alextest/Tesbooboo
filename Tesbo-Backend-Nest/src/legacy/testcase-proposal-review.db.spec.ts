@@ -1666,6 +1666,7 @@ type Body=Record<string,any>;
         const createStaged=await service().stageManagedDocumentProposal(project,user,{
           requestKey:randomUUID(),operation:"create",folderId:folder,
           document:{title:`Agent policy ${randomUUID()}`,contentText:"Policy draft",contentHtml:"<p>Policy draft</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Policy draft"}]}]},
             governedMetadata:{...metadata,subtype:"policy",enforcementRefs:["ACME-1"]}},reason:"New policy"
         },producer,"policy");
         createTaskId=createStaged.id;

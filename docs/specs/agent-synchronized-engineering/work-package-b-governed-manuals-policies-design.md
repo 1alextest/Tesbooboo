@@ -393,10 +393,10 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 
 - An update may omit all three of `contentText`/`contentHtml`/`contentJson` to keep the current
   body, and an explicit `null` clears one representation; an omitted representation is never
-  coerced to JSON null. A body-changing update must supply all three together, so the published
-  Draft cannot show revised text/HTML over stale editor JSON (which the next editor save would
-  revert). The panel distinguishes "preserved" from "cleared" and shows the base
-  title/status/revision, the changed representations and the producer provenance.
+  coerced to JSON null. A body-changing proposal (create or update) must supply all three
+  together, so the published Draft cannot show revised text/HTML over stale editor JSON (which the
+  next editor save would revert). The panel distinguishes "preserved" from "cleared" and shows the
+  base title/status/revision, the changed representations and the producer provenance.
 - A text-only diff no longer has to stand in for HTML/JSON or metadata-only changes: the read
   model lists `Title`, `Plain text`, `HTML`, `Editor JSON` and `Governance metadata` changes, and
   compares the effective value of an omitted representation (the current one), not `""`.
@@ -415,8 +415,9 @@ provider `external_document_proposal`. The candidate is not a knowledge document
   identity/digest, provenance and raw or rendered activity/source entries (which can themselves
   contain Skill pins). The dedicated endpoints refuse with `not_implemented`. Basic task metadata
   remains visible; this is a capability gate, not a replacement for project access control.
-- Apply gives the published document its own `created`/`updated` project activity entry (the task
-  receipt remains the authoritative applied-proposal record).
+- Apply gives the published document its own `created`/`updated` project activity entry in the
+  same transaction (the task receipt remains the authoritative applied-proposal record), so a
+  replay cannot append a second history row for one publication.
 - The managed review revision is a digest of the exact operation + pinned Skill context, not the
   unrelated testcase proposal dependency snapshot.
 - e2e now covers: non-owner apply refusal, generic draft tamper refusal, target moved after
