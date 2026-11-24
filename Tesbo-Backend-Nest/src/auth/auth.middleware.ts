@@ -1,16 +1,18 @@
-import { Injectable, NestMiddleware } from "@nestjs/common";
+import { Injectable, NestMiddleware, Optional } from "@nestjs/common";
 import type { Response, NextFunction } from "express";
 import { AppConfigService } from "../config/app-config.service";
 import { AuthenticatedRequest } from "../common/request.types";
 import { ApiTokenService } from "./api-token.service";
 import { OtpService } from "./otp.service";
+import { McpOAuthServer } from "./mcp-oauth-server";
 
 @Injectable()
 export class AuthMiddleware implements NestMiddleware {
   constructor(
     private readonly config: AppConfigService,
     private readonly otpService: OtpService,
-    private readonly apiTokens: ApiTokenService
+    private readonly apiTokens: ApiTokenService,
+    @Optional() private readonly oauth?: McpOAuthServer
   ) {}
 
   async use(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
@@ -38,6 +40,13 @@ export class AuthMiddleware implements NestMiddleware {
             scopes: principal.scopes
           }
         : null;
+      // Only the vetted issuer's AccessToken/Grant models can attach a
+      // read-only machine identity. The human userId deliberately remains NULL:
+      // valid OAuth bearer credentials are NEVER browser sessions.
+      if (!principal && bearer.token && this.oauth?.enabled) {
+        req.oauthAccess = await this.oauth.verifyAccessToken(bearer.token);
+        req.userId = null;
+      }
     } else {
       const sessionToken = req.cookies?.[this.config.sessionCookieName];
       req.userId = sessionToken ? await this.otpService.resolveSession(sessionToken) : null;
