@@ -4,6 +4,7 @@ import type { AuthenticatedRequest } from "../common/request.types";
 import { McpService } from "./mcp.service";
 import { MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
 import type { McpClientGrant } from "./mcp-access";
+import { unsupportedMcpProtocol } from "./mcp-protocol-compat";
 
 /**
  * Tesbo MCP — HTTP transport.
@@ -108,6 +109,15 @@ export class McpController {
     let grant: McpClientGrant;
     try { ({ grant } = await this.mcp.authorizeRequest(principal, projectId)); } catch (error) {
       res.status(201).json(this.mcp.toErrorResponse(id, error));
+      return;
+    }
+    // Only legacy initialize/session MCP is implemented here. A stateless 2026 client
+    // must receive a recognizable UnsupportedProtocolVersion response BEFORE a stale
+    // session check or tool dispatch; otherwise it could mistake legacy output
+    // for a modern, capability-checked result.
+    const unsupported = unsupportedMcpProtocol(body, req.header("MCP-Protocol-Version") ?? undefined);
+    if (unsupported) {
+      res.status(400).json(unsupported);
       return;
     }
     // initialize is exempt: it is how a client recovers from exactly this 404.
