@@ -406,9 +406,11 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 - Apply asserts the row's `external_document_proposal` provider and revalidates governed type,
   provider ownership/read-only state, the exact target revision and the reserved Zyra-memory title.
   A no-op update records `no_change` and the actual status instead of claiming a new Draft.
-- With the preview capability off, the generic agent-task read and AI history redact the staged
-  payload, receipts and pinned Skill context instead of serving the same content through a side
-  door. The dedicated endpoints refuse with `not_implemented`.
+- With the preview capability off, AI history excludes managed candidates. The generic agent-task
+  read redacts the staged payload, receipts, pinned Skill context, both revision aliases, request
+  identity/digest, provenance and raw or rendered activity/source entries (which can themselves
+  contain Skill pins). The dedicated endpoints refuse with `not_implemented`. Basic task metadata
+  remains visible; this is a capability gate, not a replacement for project access control.
 - The managed review revision is a digest of the exact operation + pinned Skill context, not the
   unrelated testcase proposal dependency snapshot.
 - e2e now covers: non-owner apply refusal, generic draft tamper refusal, target moved after
