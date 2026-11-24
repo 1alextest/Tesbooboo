@@ -1114,15 +1114,17 @@ export interface ManagedDocumentProposal {
   } | null;
   folderId: string | null;
   proposed: {
-    title: string; contentJson: unknown; contentHtml: string | null; contentText: string | null;
+    title: string; contentJson?: unknown; contentHtml?: string | null; contentText?: string | null;
     governedMetadata: Record<string, unknown>;
   };
+  changes: string[];
+  provenance: Record<string, unknown> | null;
   reason: string;
   diff: { summary: string; fields: Array<{ label: string; oldExcerpt: string; newExcerpt: string; oldLength: number; newLength: number; truncated: boolean }> };
   skillContext: ZyraTask["skillContext"] | null;
   skillApplicability: { status: "current" | "stale" | "conflict" | "unavailable"; current: ZyraTask["skillContext"] };
   applyReceipt: {
-    id: string; document: { documentId: string; editRevision: string; title: string; status: string; documentType: string; operation: string };
+    id: string; document: { documentId: string; editRevision: string; title: string; status: string; documentType: string; operation: "create" | "update" | "no_change" };
     proposalRevision: string; appliedAt: string;
   } | null;
 }
@@ -1595,10 +1597,10 @@ export async function applyManagedDocumentProposal(projectId: string, taskId: st
   });
 }
 
-export async function rejectManagedDocumentProposal(projectId: string, taskId: string, reason?: string): Promise<{ taskId: string; taskStatus: string; replayed: boolean }> {
+export async function rejectManagedDocumentProposal(projectId: string, taskId: string, expectedProposalRevision: string, reason?: string): Promise<{ taskId: string; taskStatus: string; replayed: boolean }> {
   return api(`/api/projects/${projectId}/knowledge-base/document-proposals/${taskId}/reject`, {
     method: "POST",
-    body: { ...(reason ? { reason } : {}) },
+    body: { expectedProposalRevision, ...(reason ? { reason } : {}) },
   });
 }
 

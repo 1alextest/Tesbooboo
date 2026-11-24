@@ -61,6 +61,19 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
             Effectivity: {String(effectivity.from || "—")} to {String(effectivity.to || "—")}
             {Array.isArray(metadata.enforcementRefs) && metadata.enforcementRefs.length ? ` · Enforcement: ${metadata.enforcementRefs.join(", ")}` : ""}
           </p>
+          {proposal.target?.base && (
+            <p className="mt-2 text-xs text-[var(--muted)]" data-testid="managed-document-base">
+              Base: {proposal.target.base.title} · {proposal.target.base.status} · revision {proposal.target.base.editRevision.slice(0, 12)}…
+            </p>
+          )}
+          {proposal.changes?.length ? <p className="mt-2 text-xs">Changes: {proposal.changes.join(", ")}</p> : null}
+          {typeof proposal.provenance?.kind === "string" && (
+            <p className="mt-2 text-xs text-[var(--muted)]" data-testid="managed-document-provenance">
+              Producer: {proposal.provenance.kind}
+              {typeof proposal.provenance.principalKey === "string" ? ` · ${proposal.provenance.principalKey}` : ""}
+              {typeof proposal.provenance.tokenId === "string" ? ` · token ${proposal.provenance.tokenId.slice(0, 8)}…` : ""}
+            </p>
+          )}
           {proposal.reason && <p className="mt-2 text-xs">Reason: {proposal.reason}</p>}
         </div>
         <div className="rounded-lg border border-[var(--border)] p-3 text-sm" data-testid="managed-document-diff">
@@ -78,7 +91,16 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm" data-testid="managed-document-content">
         <p className="font-medium">Full proposed content</p>
-        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentText || "No plain-text body."}</pre>
+        <p className="mt-1 text-xs text-[var(--muted)]">Plain text</p>
+        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentText === undefined ? "Not supplied; the current plain text is preserved on apply." : proposal.proposed.contentText || "The proposed plain text is empty."}</pre>
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-medium">Stored HTML</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentHtml ?? "Not supplied; the current HTML is preserved on apply."}</pre>
+        </details>
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs font-medium">Editor JSON</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs">{proposal.proposed.contentJson === undefined ? "Not supplied; the current editor JSON is preserved on apply." : JSON.stringify(proposal.proposed.contentJson, null, 2)}</pre>
+        </details>
       </div>
 
       <div className="rounded-lg border border-[var(--border)] p-3 text-xs" data-testid="managed-document-skills">
@@ -106,12 +128,16 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
 
       {proposal.applyReceipt ? (
         <div className="rounded-lg border border-[var(--success-foreground)]/40 bg-[var(--success-soft)] p-3 text-sm" data-testid="managed-document-apply-receipt">
-          <p>
-            Applied as native <strong>{proposal.applyReceipt.document.status === "draft" ? "Draft" : proposal.applyReceipt.document.status}</strong>{" "}
-            <Link className="underline" href={`/projects/${projectId}/knowledge-base/documents/${proposal.applyReceipt.document.documentId}`}>
-              {proposal.applyReceipt.document.title || proposal.applyReceipt.document.documentId}
-            </Link>.
-          </p>
+          {proposal.applyReceipt.document.operation === "no_change" ? (
+            <p>No content or metadata changed; the document remains <strong>{proposal.applyReceipt.document.status}</strong>. Nothing was submitted or approved.</p>
+          ) : (
+            <p>
+              Applied as native <strong>{proposal.applyReceipt.document.status === "draft" ? "Draft" : proposal.applyReceipt.document.status}</strong>{" "}
+              <Link className="underline" href={`/projects/${projectId}/knowledge-base/documents/${proposal.applyReceipt.document.documentId}`}>
+                {proposal.applyReceipt.document.title || proposal.applyReceipt.document.documentId}
+              </Link>.
+            </p>
+          )}
           <p className="mt-1 text-xs text-[var(--muted)]">Submission and approval remain separate human decisions.</p>
         </div>
       ) : decided ? (

@@ -422,12 +422,12 @@ export default function ZyraTaskDetailPage() {
   }
 
   async function handleManagedDocumentReject(reason: string) {
-    if (!task || done || bundleWorking) return;
+    if (!task || done || bundleWorking || !task.proposalRevision) return;
     setBundleWorking(true);
     setMessage(null);
     setError(null);
     try {
-      await rejectManagedDocumentProposal(projectId, taskId, reason.trim() || undefined);
+      await rejectManagedDocumentProposal(projectId, taskId, task.proposalRevision, reason.trim() || undefined);
       await loadData();
       setMessage("Candidate rejected. Nothing was published.");
     } catch (err) {

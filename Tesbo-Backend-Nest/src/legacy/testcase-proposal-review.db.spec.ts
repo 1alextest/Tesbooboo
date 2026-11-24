@@ -1628,7 +1628,7 @@ type Body=Record<string,any>;
         distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
         effectivity:{from:null,to:null},enforcementRefs:[]};
       const skillIds:string[]=[];
-      let targetId="",createdId="",taskId="",staleTaskId="",changedTaskId="";
+      let targetId="",createdId="",taskId="",createTaskId="",staleTaskId="",changedTaskId="";
       try{
         const skill=await skillFor("user_manuals","internal","manual_revision"); skillIds.push(skill.doc.id);
         const target=await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Agent manual ${randomUUID()}`,
@@ -1667,6 +1667,7 @@ type Body=Record<string,any>;
           document:{title:`Agent policy ${randomUUID()}`,contentText:"Policy draft",contentHtml:"<p>Policy draft</p>",
             governedMetadata:{...metadata,subtype:"policy",enforcementRefs:["ACME-1"]}},reason:"New policy"
         },producer,"policy");
+        createTaskId=createStaged.id;
         const createView=await service().managedDocumentProposalTask(project,user,createStaged.id);
         const created=await service().applyManagedDocumentProposal(project,user,createStaged.id,{expectedProposalRevision:createView.proposalRevision},human);
         createdId=created.receipt.document.documentId;
@@ -1704,7 +1705,7 @@ type Body=Record<string,any>;
           await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
           await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
         }
-        for(const id of [taskId,staleTaskId,changedTaskId].filter(Boolean)) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
+        for(const id of [taskId,createTaskId,staleTaskId,changedTaskId].filter(Boolean)) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
         await cleanupSkills(skillIds);
       }
     },120000);

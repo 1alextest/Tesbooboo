@@ -959,3 +959,177 @@ test("apply re-reads testcase storage after the task wait and refuses a disabled
     }
   }
 });
+
+test("an agent-staged governed manual candidate is inert and only an owner applies the exact pinned revision", async ({ request }) => {
+  const suffix = Date.now();
+  const skillDocs: string[] = [];
+  const taskIds: string[] = [];
+  let documentId = "";
+  let tokenId = "";
+  let machine: APIRequestContext | undefined;
+  const metadata = {
+    schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+    distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+    effectivity: { from: null, to: null }, enforcementRefs: [],
+  };
+  try {
+    const skill = await createApprovedSkill(request, skillDocs, "user_manuals", "internal", "manual_revision");
+    const assigned = await request.post(`${base}/skill-assignments`, { data: {
+      skillDocumentId: skill.documentId, versionId: skill.versionId,
+      module: "user_manuals", subtype: "internal", operation: "manual_revision",
+    } });
+    expect(assigned.status(), await assigned.text()).toBe(201);
+
+    const root = await (await request.get(`${base}/knowledge-base/folders/tree`)).json();
+    const created = await request.post(`${base}/knowledge-base/documents`, { data: {
+      title: `E2E agent manual ${suffix}`, folderId: root.id, documentType: "user_manual",
+      contentText: "Base manual body", contentHtml: "<p>Base manual body</p>",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] },
+      governedMetadata: metadata,
+    } });
+    expect(created.status(), await created.text()).toBe(201);
+    const target = await created.json();
+    documentId = target.id;
+
+    const issued = await request.post(`${base}/apikeys`, { data: { name: `E2E document proposal ${suffix}`, scopes: ["read", "write"] } });
+    expect(issued.status(), await issued.text()).toBe(201);
+    const token = await issued.json();
+    tokenId = token.id;
+    // A token context with no session cookies: the producer must be the machine identity itself.
+    machine = await newRequest.newContext({
+      baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
+      extraHTTPHeaders: { Authorization: `Bearer ${token.token}` },
+    });
+
+    const requestKey = randomUUID();
+    const payload = {
+      requestKey, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+      document: {
+        title: `${target.title} revised`, contentText: "Revised manual body",
+        governedMetadata: { ...metadata, confidentiality: "confidential" },
+      },
+      reason: "Security update",
+    };
+    const stagedResponse = await machine.post(`${base}/knowledge-base/document-proposals`, { data: payload, failOnStatusCode: false });
+    expect(stagedResponse.status(), await stagedResponse.text()).toBe(201);
+    const staged = await stagedResponse.json();
+    taskIds.push(staged.id);
+    expect(staged, "the candidate pins the exact base and Skill basis").toMatchObject({
+      proposalRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      managedDocumentProposal: {
+        operation: "update", documentType: "user_manual",
+        target: { documentId: target.id, editRevision: target.editRevision },
+        skillApplicability: { status: "current" },
+      },
+    });
+    const replay = await machine.post(`${base}/knowledge-base/document-proposals`, { data: payload, failOnStatusCode: false });
+    expect(replay.status()).toBe(201);
+    expect((await replay.json()).id).toBe(staged.id);
+
+    // Staging changes nothing on the governed target.
+    const untouched = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(untouched).toMatchObject({ contentText: "Base manual body", editRevision: target.editRevision, status: "draft" });
+    const listed = await (await request.get(`${base}/knowledge-base/document-proposals`)).json();
+    expect(listed.list.some((task: { id: string }) => task.id === staged.id)).toBe(true);
+    expect((await request.get(`${base}/knowledge-base/document-proposals/${staged.id}`)).status()).toBe(200);
+    expect((await request.get(`/api/projects/${randomUUID()}/knowledge-base/document-proposals/${staged.id}`, { failOnStatusCode: false })).status()).toBe(404);
+
+    // A machine identity may stage, but only a human session may decide.
+    const tokenApply = await machine.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(tokenApply.status()).toBe(403);
+    expect((await tokenApply.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
+    const staleDecision = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: "0".repeat(64) }, failOnStatusCode: false,
+    });
+    expect(staleDecision.status()).toBe(409);
+    expect((await staleDecision.json()).code).toBe("PROPOSAL_REVIEW_CONFLICT");
+
+    const appliedResponse = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(appliedResponse.status(), await appliedResponse.text()).toBe(201);
+    const applied = await appliedResponse.json();
+    expect(applied.receipt.document).toMatchObject({ documentId: target.id, status: "draft", operation: "update" });
+    expect(applied.receipt.proposalRevision).toBe(staged.proposalRevision);
+    const readback = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    expect(readback).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
+    expect(readback.governedMetadata).toMatchObject({ confidentiality: "confidential" });
+    // Omitted representations are not nulled: the rich body the agent did not propose survives.
+    expect(readback.contentHtml).toBe("<p>Base manual body</p>");
+    expect(readback.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] });
+    const replayApply = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/apply`, {
+      data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(replayApply.status()).toBe(201);
+    const replayReceipt = await replayApply.json();
+    expect(replayReceipt.replayed).toBe(true);
+    expect(replayReceipt.receipt.document.documentId).toBe(target.id);
+    const rejectedAfterApply = await request.post(`${base}/knowledge-base/document-proposals/${staged.id}/reject`, {
+      data: { expectedProposalRevision: staged.proposalRevision, reason: "Too late" }, failOnStatusCode: false,
+    });
+    expect(rejectedAfterApply.status()).toBe(409);
+
+    // Rejection is bound to the exact reviewed revision; a changed expectation cannot close a
+    // different candidate, and the same decision replays its own receipt.
+    const current = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    const secondPayload = {
+      requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: current.editRevision,
+      document: { title: current.title, contentText: "Rejected manual body", governedMetadata: current.governedMetadata },
+      reason: "Second candidate",
+    };
+    const secondResponse = await machine.post(`${base}/knowledge-base/document-proposals`, { data: secondPayload, failOnStatusCode: false });
+    expect(secondResponse.status(), await secondResponse.text()).toBe(201);
+    const second = await secondResponse.json();
+    taskIds.push(second.id);
+    const wrongReject = await request.post(`${base}/knowledge-base/document-proposals/${second.id}/reject`, {
+      data: { expectedProposalRevision: "f".repeat(64) }, failOnStatusCode: false,
+    });
+    expect(wrongReject.status()).toBe(409);
+    const reject = () => request.post(`${base}/knowledge-base/document-proposals/${second.id}/reject`, {
+      data: { expectedProposalRevision: second.proposalRevision, reason: "Not needed" }, failOnStatusCode: false,
+    });
+    const rejectedResponse = await reject();
+    expect(rejectedResponse.status(), await rejectedResponse.text()).toBe(201);
+    const rejected = await rejectedResponse.json();
+    expect(rejected.receipt).toMatchObject({ action: "managed_document_reject", proposalRevision: second.proposalRevision });
+    expect((await reject()).json()).toMatchObject({ replayed: true, receipt: { id: rejected.receipt.id } });
+    expect((await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
+
+    // A candidate that proposes exactly the current state records no change instead of claiming a
+    // new Draft revision.
+    const latest = await (await request.get(`${base}/knowledge-base/documents/${target.id}`)).json();
+    const noChangeResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: latest.editRevision,
+        document: {
+          title: latest.title, contentText: latest.contentText, contentHtml: latest.contentHtml,
+          contentJson: latest.contentJson, governedMetadata: latest.governedMetadata,
+        },
+      }, failOnStatusCode: false,
+    });
+    expect(noChangeResponse.status(), await noChangeResponse.text()).toBe(201);
+    const noChange = await noChangeResponse.json();
+    taskIds.push(noChange.id);
+    const noChangeApply = await request.post(`${base}/knowledge-base/document-proposals/${noChange.id}/apply`, {
+      data: { expectedProposalRevision: noChange.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(noChangeApply.status(), await noChangeApply.text()).toBe(201);
+    expect((await noChangeApply.json()).receipt.document).toMatchObject({ operation: "no_change", status: "draft" });
+    expect(scalar(`SELECT edit_revision FROM knowledge_documents WHERE id=${literal(target.id)};`)).toBe(latest.editRevision);
+  } finally {
+    await machine?.dispose();
+    for (const id of taskIds) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    if (tokenId) await request.delete(`${base}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    if (documentId) {
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(documentId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(documentId)} AND project_id=${literal(ctx.projectId)};`);
+    }
+    for (const id of skillDocs) {
+      exec(`DELETE FROM skill_assignments WHERE project_id=${literal(ctx.projectId)} AND skill_document_id=${literal(id)};`);
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(id)} AND project_id=${literal(ctx.projectId)};`);
+    }
+  }
+});

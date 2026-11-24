@@ -2442,7 +2442,9 @@ test.describe("governed skills operator journey (UI)", () => {
     };
     const created = await ownerApi.post(`${base()}/knowledge-base/documents`, { data: {
       title: `Agent manual target ${suffix}`, folderId: (await (await ownerApi.get(`${base()}/knowledge-base/folders/tree`)).json()).id,
-      documentType: "user_manual", contentText: "Base manual body", contentHtml: "<p>Base manual body</p>", governedMetadata: metadata,
+      documentType: "user_manual", contentText: "Base manual body", contentHtml: "<p>Base manual body</p>",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] },
+      governedMetadata: metadata,
     } });
     expect(created.ok(), await created.text()).toBe(true);
     const target = await created.json();
@@ -2478,6 +2480,10 @@ test.describe("governed skills operator journey (UI)", () => {
       const applied = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
       expect(applied).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
       expect(applied.governedMetadata).toMatchObject({ confidentiality: "confidential" });
+      // A text-only candidate must not erase the rich body it did not propose.
+      expect(applied.contentHtml).toBe("<p>Base manual body</p>");
+      expect(applied.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] });
+      await expect(panel).toContainText("Producer: api_token");
 
       const staleResponse = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
         headers: { Authorization: `Bearer ${token.token}` },

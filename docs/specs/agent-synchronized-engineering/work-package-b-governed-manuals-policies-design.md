@@ -401,3 +401,21 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 | Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
 | Create-vs-folder-delete race | Confirmed follow-up: folder cascade checks the project lock used by conversions, but document create does not take that lock; a human create concurrent with a token folder delete can land in a deleted folder. Narrow, pre-existing for human deletes. |
 | Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |
+
+### 9.1 Review-surface hardening after review
+
+- Omitted `contentText`/`contentHtml`/`contentJson` on an update now mean "preserve the current
+  value"; they are not coerced to JSON null. The panel shows plain text, stored HTML, editor JSON,
+  the base title/status/revision, the changed representations and the producer provenance.
+- A text-only diff no longer has to stand in for HTML/JSON or metadata-only changes: the read
+  model lists `Title`, `Plain text`, `HTML`, `Editor JSON` and `Governance metadata` changes.
+- Managed candidates are immutable through the generic Zyra close/feedback/edit/delete paths, and
+  are excluded from `list_testcase_proposals`; only the dedicated owner/manager Apply/Reject
+  actions decide them.
+- Reject requires the exact `expectedProposalRevision`, stores a decision receipt and refuses a
+  candidate already applied/decided or changed since review. All managed REST reads/apply/reject
+  share the same preview gate as staging.
+- Apply rechecks provider ownership/read-only and the reserved Zyra-memory title. A no-op update
+  records `no_change` and the actual status instead of claiming a new Draft.
+- The managed review revision is a digest of the exact operation + pinned Skill context, not the
+  unrelated testcase proposal dependency snapshot.
