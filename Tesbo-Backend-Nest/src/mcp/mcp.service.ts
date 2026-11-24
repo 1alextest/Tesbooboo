@@ -7,6 +7,7 @@ import { DatabaseService } from "../database/database.service";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { MCP_ACCESS_KEY, hasApprovedMcpToolPermission, isOAuthMcpGrant, onlyReducesMcpAccess, projectSettingsObject, readMcpAccess, validateMcpAccess, type ApiMcpClientGrant, type McpClientGrant, type OAuthMcpClientGrant } from "./mcp-access";
+import { currentOAuthGrantBinding } from "../auth/mcp-oauth-grant-binding";
 import type { ApiTokenContext, AuthenticatedRequest, OAuthMachineContext } from "../common/request.types";
 import { ModelStudioPreview } from "../behavior-graph/model-studio-preview";
 import { ModelStudioRepository } from "../behavior-graph/model-studio-repository";
@@ -263,6 +264,15 @@ export class McpService {
       throw new McpError(RpcCode.ProjectScopeDenied,
         "OAuth read access requires current project owner approval and a valid named client grant");
     }
+    // Reapproval of the same client does not restore an earlier human consent.
+    if (!(await currentOAuthGrantBinding(this.db, principal.grantId, {
+      projectId: urlProjectId, accountId: principal.userId,
+      clientId: principal.clientId, resource: expectedResource,
+      approvalRevision: access.revision
+    }))) {
+      throw new McpError(RpcCode.ProjectScopeDenied,
+        "OAuth consent has expired or was revoked; fresh authorization is required");
+    }
     return { organizationId: project.organization_id, grant };
   }
 
@@ -358,6 +368,12 @@ export class McpService {
       const after = { ...input, revision: before.revision + 1 };
       const settings = { ...projectSettingsObject(row.settings), [MCP_ACCESS_KEY]: after };
       await client.query("UPDATE projects SET settings = $2::jsonb, updated_at = now() WHERE id = $1", [projectId, JSON.stringify(settings)]);
+      // Project-owner updates invalidate old OAuth families in the same
+      // transaction. A later identical client approval cannot revive them.
+      await client.query(
+        "DELETE FROM mcp_oauth_grant_approval_bindings WHERE project_id=$1 AND approval_revision<>$2",
+        [projectId, after.revision]
+      );
       // The consent change and its attributable receipt commit together. Audit failure rolls back consent.
       // entity_id is varchar while project_id is uuid: reusing one parameter for both makes
       // Postgres fail with "inconsistent types deduced for parameter $1". Pass the project id twice.
