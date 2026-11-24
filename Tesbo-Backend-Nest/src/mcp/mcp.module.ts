@@ -4,6 +4,7 @@ import { LegacyModule } from "../legacy/legacy.module";
 import { PlanLimitsModule } from "../plan-limits/plan-limits.module";
 import { GraphChangeReviewModule } from "../behavior-graph/graph-change-review.module";
 import { McpController } from "./mcp.controller";
+import { McpOAuthInteractionController } from "./mcp-oauth-interaction.controller";
 import { McpService } from "./mcp.service";
 
 /**
@@ -13,7 +14,7 @@ import { McpService } from "./mcp.service";
  */
 @Module({
   imports: [LegacyModule, AuthModule, PlanLimitsModule, GraphChangeReviewModule],
-  controllers: [McpController],
+  controllers: [McpController, McpOAuthInteractionController],
   providers: [McpService]
 })
 export class McpModule {}
