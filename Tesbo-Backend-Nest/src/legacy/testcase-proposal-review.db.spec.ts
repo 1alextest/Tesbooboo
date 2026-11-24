@@ -1410,7 +1410,7 @@ type Body=Record<string,any>;
         const conversion=service().updateKnowledgeDocument(project,user,docId,
           {documentType:"user_manual",governedMetadata:metadata,expectedRevision});
         expect(await waitUntil(()=>waitingOn("%knowledge_documents%FOR UPDATE%"))).toBe(true);
-        const pending=operation().then(value=>({value}),error=>({error}));
+        const pending=operation().then(value=>({value,error:undefined as Body|undefined}),error=>({value:undefined as Body|undefined,error:error as Body}));
         await blocker.query("COMMIT");
         await conversion;
         expect((await pending).error).toMatchObject({status:403});
