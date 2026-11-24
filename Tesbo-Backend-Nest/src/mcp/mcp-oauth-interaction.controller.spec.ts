@@ -1,6 +1,6 @@
 import type { AuthenticatedRequest } from "../common/request.types";
 import type { AppConfigService } from "../config/app-config.service";
-import type { LegacyService } from "../legacy/legacy.service";
+import type { McpService } from "./mcp.service";
 import type { McpOAuthServer } from "../auth/mcp-oauth-server";
 import type { Response } from "express";
 import { ForbiddenException, NotFoundException, UnauthorizedException } from "@nestjs/common";
@@ -51,8 +51,8 @@ function fixture() {
       scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null
     })
   };
-  const legacy = {
-    requireProjectAccess: jest.fn().mockResolvedValue({ name: "QA Project", key: "QA" })
+  const mcp = {
+    requireOAuthConsentProject: jest.fn().mockResolvedValue({ name: "QA Project", key: "QA" })
   };
   const req = {
     userId: USER, apiToken: null, oauthAccess: null, headers: {},
@@ -65,7 +65,7 @@ function fixture() {
     send: jest.fn().mockReturnThis()
   };
   const ctrl = new McpOAuthInteractionController(oauth as unknown as McpOAuthServer,
-    legacy as unknown as LegacyService,
+    mcp as unknown as McpService,
     { sessionCookieName: "session" } as unknown as AppConfigService);
   const tokenFromPage = async () => {
     await ctrl.consentPage(req, res as unknown as Response, UID);
@@ -75,7 +75,7 @@ function fixture() {
     return { csrf: csrf!, output };
   };
   return {
-    ctrl, req, res, oauth, provider, legacy, grantCalls, addResourceScope,
+    ctrl, req, res, oauth, provider, mcp, grantCalls, addResourceScope,
     addOIDCScope, save, details, tokenFromPage
   };
 }
@@ -112,7 +112,7 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     expect(output).toContain("list_testcases");
     expect(output).toContain("offline read-only access until revoked");
     expect(output).toContain('value="' + csrf + '"');
-    expect(f.legacy.requireProjectAccess).toHaveBeenCalledWith(USER, PROJECT);
+    expect(f.mcp.requireOAuthConsentProject).toHaveBeenCalledWith(USER, PROJECT);
     expect(f.oauth.approvedClient).toHaveBeenCalledWith(CLIENT, RESOURCE);
     expect(f.provider.interactionFinished).not.toHaveBeenCalled();
     expect(f.res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
@@ -123,7 +123,7 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
       const f = fixture();
       if (mode === "unapproved") f.oauth.approvedClient.mockResolvedValue(null);
       if (mode === "foreign-resource") f.details.params.resource = "https://evil.example/mcp";
-      if (mode === "removed-member") f.legacy.requireProjectAccess.mockRejectedValue(new ForbiddenException());
+      if (mode === "removed-member") f.mcp.requireOAuthConsentProject.mockRejectedValue(new ForbiddenException());
       await expect(f.ctrl.consentPage(f.req, f.res as unknown as Response, UID)).rejects.toThrow();
       expect(f.res.send).not.toHaveBeenCalled();
       expect(f.provider.interactionFinished).not.toHaveBeenCalled();
@@ -199,7 +199,7 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
       const f = fixture();
       const { csrf } = await f.tokenFromPage();
       if (revoke === "grant") f.oauth.approvedClient.mockResolvedValue(null);
-      else f.legacy.requireProjectAccess.mockRejectedValue(new ForbiddenException());
+      else f.mcp.requireOAuthConsentProject.mockRejectedValue(new ForbiddenException());
       await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
         { action: "approve", csrf })).rejects.toThrow();
       expect(f.save).not.toHaveBeenCalled();
