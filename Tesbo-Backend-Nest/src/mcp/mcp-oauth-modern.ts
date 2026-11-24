@@ -70,11 +70,15 @@ export function validateModernMcpRequest(
     return rpcError(id, UNSUPPORTED, "Unsupported protocol version", 400,
       { requested: version, supported: [VERSION] });
   }
-  if (!object(meta["io.modelcontextprotocol/clientInfo"]) ||
-      typeof (meta["io.modelcontextprotocol/clientInfo"] as Record<string, unknown>).name !== "string" ||
-      typeof (meta["io.modelcontextprotocol/clientInfo"] as Record<string, unknown>).version !== "string" ||
-      !object(meta["io.modelcontextprotocol/clientCapabilities"])) {
-    return rpcError(id, INVALID, "Missing required MCP client identity or capability metadata", 400);
+  // The 2026-07-28 protocol makes clientInfo OPTIONAL and descriptive; it
+  // must never become an authentication or authorization credential. Only
+  // clientCapabilities is mandatory. Validate identity fields if supplied so
+  // malformed input cannot contaminate diagnostics.
+  const clientInfo = meta["io.modelcontextprotocol/clientInfo"];
+  if (!object(meta["io.modelcontextprotocol/clientCapabilities"]) ||
+      (clientInfo !== undefined && (!object(clientInfo) ||
+        typeof clientInfo.name !== "string" || typeof clientInfo.version !== "string"))) {
+    return rpcError(id, INVALID, "Invalid optional MCP client info or missing required capabilities", 400);
   }
   const methodHeader = header(req, "Mcp-Method");
   if (methodHeader !== body.method) {
