@@ -89,6 +89,25 @@ describe("OAuth access-token read-only resource and live revocation", () => {
     expect(await f.svc.verifyAccessToken("valid-opaque-token")).toBeNull();
   });
 
+  // OA-T18 failing-first resource regression. Synthetic provider models do
+  // not prove authorization-code exchange or refresh-family invalidation.
+  it("never resurrects a prior consent after the same client ID is reapproved", async () => {
+    const f = fixture();
+    const priorApproval = f.settings.externalMcpAccess.clients[0]!;
+    const priorToken = "same-unexpired-opaque-token";
+    expect(await f.svc.verifyAccessToken(priorToken)).not.toBeNull();
+
+    f.settings.externalMcpAccess.clients = [];
+    f.settings.externalMcpAccess.revision++;
+    expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
+
+    // Restore identical owner-visible facts, but as a later approval.
+    // The old provider token and Grant intentionally remain unchanged.
+    f.settings.externalMcpAccess.clients = [{ ...priorApproval }];
+    f.settings.externalMcpAccess.revision++;
+    expect(await f.svc.verifyAccessToken(priorToken)).toBeNull();
+  });
+
   it("refuses wrong audience, wrong issuer origin and a different project resource", async () => {
     const f = fixture();
     for (const aud of [
