@@ -1491,7 +1491,7 @@ type Body=Record<string,any>;
           target:{documentId:targetId,editRevision:target.editRevision},skillApplicability:{status:"current"}});
         expect(view.managedDocumentProposal.proposed).toMatchObject({contentText:"Revised body",governedMetadata:{confidentiality:"confidential"}});
         expect(view.managedDocumentProposal.diff.summary).toBeTruthy();
-        const untouched=(await admin.query("SELECT content_text,governed_metadata,status,${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS r FROM knowledge_documents WHERE id=$1",[targetId])).rows[0];
+        const untouched=(await admin.query(`SELECT content_text,governed_metadata,status,${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS r FROM knowledge_documents WHERE id=$1`,[targetId])).rows[0];
         expect(untouched).toMatchObject({content_text:"Base body",status:"draft",r:target.editRevision});
         await expect(service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},
           {kind:"api_token"})).rejects.toMatchObject({status:403,response:{code:"HUMAN_REVIEW_REQUIRED"}});
