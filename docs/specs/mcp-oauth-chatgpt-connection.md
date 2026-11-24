@@ -16,7 +16,19 @@ Standards basis: [MCP 2026-07-28 versioning](https://modelcontextprotocol.io/spe
 
 ## Assurance review reconciliation — 2026-11-23 (changes required)
 
-The [full eleven-lens challenge](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md) exposes **19 tracked findings (OA-01–OA-19)**. Review performed as distinct analytical lenses by one agent; **not** independently delegated-team output, human approval, or acceptance. This document remains **DRAFT**. Findings from the current implementation and protocol standards take precedence over ambiguous language below until they are resolved.
+The [full eleven-lens challenge](../reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md) exposes **20 tracked findings (OA-01–OA-20)**. Review performed as distinct analytical lenses by one agent; **not** independently delegated-team output, human approval, or acceptance. This document remains **DRAFT**. Findings from the current implementation and protocol standards take precedence over ambiguous language below until they are resolved.
+
+### Additional release-blocking lifecycle obligation — OA-20
+
+**Revocation must remain effective after a client is reapproved.** The current OAuth read-only verifier correctly checks the current project-owner grant, so removing preapproval immediately denies the access token. However, the owner-grant update path does not yet demonstrably revoke the *existing provider Grant and RefreshToken family*. A previous user consent and refresh token may therefore regain effective read access when the **same client ID is approved again later**. Temporary denial is not the same as permanent disconnection.
+
+Require a verified irreversible invalidation link from the existing revisioned `externalMcpAccess` owner to the relevant OAuth provider Grant/refresh families (or an equivalently enforced, immutable grant approval epoch bound to issued tokens). Never equate an OAuth `grantId` with a Tesbo API `tokenId`, and do not create a parallel client-permission owner. Reapproving the client must not reactivate any prior consent; require a **new explicit human OAuth consent** and fresh token family. Preserve historical proposal/evidence receipts, deny OAuth writes, and make any project membership restoration semantics explicit.
+
+**New OA-T18 acceptance sequence (not yet run):** owner approves client A → user explicitly consents to read project P → token/refresh family F1 works → owner revokes client A → all F1 reads and refreshes fail → owner reapproves the *identical* client ID A → F1 **continues to fail**, including concurrent/replayed refresh → new user consent produces separate F2 → only F2 may read P. Include account removal/reinstatement and app disconnect as distinct lifecycle decisions. Fail closed on provider DB outage and never let reapproval resurrect protected Skills/testcase approval authority.
+
+Until OA-T18 and durable key rotation/retention have actual source-bound, PostgreSQL, HTTP and real-client evidence, keep production OAuth issuance/acceptance disabled. A current valid-grant check alone does not close this lifecycle obligation.
+
+---
 
 ### Mandatory design constraints recovered from source and standards
 
