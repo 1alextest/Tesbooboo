@@ -200,6 +200,9 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
       await onChanged();
       setMessage(`${decisionKind === "approved" ? "Approved" : "Rejected"} submitted v${submittedVersion.versionNumber} exactly.`);
     } catch (err) {
+      // Refresh the submitted-version view first, then set the error: load() clears errors, so
+      // setting it after load keeps the refusal visible while the panel shows the current version.
+      await load();
       if (err instanceof ApiError && err.status === 409 && err.code === "DOCUMENT_REVISION_CONFLICT") {
         setError("The document changed after this version was submitted. Review the current submitted version or submit a refreshed revision.");
       } else if (err instanceof ApiError && err.status === 403) {
@@ -209,8 +212,6 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
       } else {
         setError(err instanceof Error ? err.message : "The decision could not be recorded.");
       }
-      // Keep the error visible; load() clears it. The panel's own state still shows the exact
-      // version, and a refresh is an explicit user action rather than silently hiding the refusal.
     } finally {
       if (mounted.current) setBusy(false);
     }

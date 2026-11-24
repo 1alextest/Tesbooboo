@@ -3075,6 +3075,41 @@ test.describe("knowledge base (UI)", () => {
     expect(history.filter(version => version.snapshotKind === "approved")).toHaveLength(1);
   });
 
+  test("KBU-76 a decision is refused while the editor draft is unsaved and keeps the refusal visible", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const createdResponse = await api.post(kbUrl("/documents"), {
+      data: { title: stamp("Governed decision guard"), folderId: rootFolderId, documentType: "user_manual", contentText: "Decision body", governedMetadata: metadata },
+    });
+    expect(createdResponse.status(), await createdResponse.text()).toBe(201);
+    const created = await createdResponse.json();
+    const documentId = created.id;
+    const submitted = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: created.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(submitted.status(), await submitted.text()).toBe(201);
+
+    const page = await openDocument(browser, documentId);
+    await page.route(`**/knowledge-base/documents/${documentId}`, async (route) => {
+      if (route.request().method() === "PATCH") {
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "E2E forced autosave failure" }) });
+        return;
+      }
+      await route.continue();
+    });
+    await page.locator(".ProseMirror").first().click();
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type(" unsaved decision draft");
+    await expect(page.getByText("E2E forced autosave failure")).toBeVisible({ timeout: 5000 });
+    await page.getByTestId("governed-approve").click();
+    await expect(page.getByTestId("governed-document-panel")).toContainText("Save or discard the current editor draft");
+    expect((await (await api.get(kbUrl(`/documents/${documentId}`))).json()).status).toBe("draft");
+    expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id = ${literal(documentId)} AND snapshot_kind = 'approved';`)).toBe("0");
+  });
+
   test("KBU-63 an ordinary document keeps its editor, editable title, Save and Delete", async ({ browser }) => {
     const created = await api.post(kbUrl("/documents"), {
       data: { title: stamp("Ordinary editable"), folderId: rootFolderId, documentType: "general", contentText: `## ${MEMORY_ISO_1}\nnot memory` },
