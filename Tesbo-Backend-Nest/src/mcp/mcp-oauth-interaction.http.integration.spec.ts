@@ -54,6 +54,8 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
       enabled: true,
       issuer: "https://tesbo.example/oauth",
       requireActive: jest.fn().mockReturnValue(provider),
+      bindIssuedGrant: jest.fn().mockResolvedValue(undefined),
+      discardUnboundGrant: jest.fn().mockResolvedValue(undefined),
       projectIdFromResource: (value: string) => {
         if (value !== RESOURCE) throw new Error("Wrong resource");
         return PROJECT;
