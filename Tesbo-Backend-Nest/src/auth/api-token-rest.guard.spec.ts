@@ -43,6 +43,37 @@ describe("ApiTokenRestGuard", () => {
   );
 
 
+  it("permits only a verified read-scoped OAuth principal to reach its exact project MCP resource", async () => {
+    const scope = futureOAuthRequest(`/api/projects/${P}/mcp`, "POST");
+    const req = scope.switchToHttp().getRequest() as Record<string, any>;
+    req.oauthAccess.scopes = ["mcp:read"];
+    const l = legacy();
+    expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(scope)).toBe(true);
+    expect(l.requireProjectAccess).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["GET", P, ["mcp:read"]],
+    ["POST", Q, ["mcp:read"]],
+    ["POST", P, ["read"]],
+    ["POST", P, ["mcp:read", "mcp:write"]],
+    ["POST", P, ["mcp:write"]]
+  ])("denies an OAuth principal with wrong method, project or scope: %s %s %j",
+    async (method, projectId, scopes) => {
+      const input = futureOAuthRequest(`/api/projects/${projectId}/mcp`, method);
+      const req = input.switchToHttp().getRequest() as Record<string, any>;
+      req.oauthAccess.scopes = scopes;
+      await expect(new ApiTokenRestGuard(legacy() as unknown as LegacyService).canActivate(input))
+        .rejects.toMatchObject({ response: expect.objectContaining({ code: "OAUTH_MACHINE_ACCESS_DISABLED" }) });
+    }
+  );
+  it("does not treat a read-only OAuth principal as browser auth on unrelated REST routes", async () => {
+    const input = futureOAuthRequest(`/api/projects/${P}/agents/zyra/tasks/proposals`, "POST");
+    const req = input.switchToHttp().getRequest() as Record<string, any>;
+    req.oauthAccess.scopes = ["mcp:read"];
+    await expect(new ApiTokenRestGuard(legacy() as unknown as LegacyService).canActivate(input))
+      .rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   it("preserves cookie requests", async () => {
     const l = legacy();
     expect(await new ApiTokenRestGuard(l as unknown as LegacyService).canActivate(request(`/api/projects/${P}/testcases`, "POST", null))).toBe(true);
