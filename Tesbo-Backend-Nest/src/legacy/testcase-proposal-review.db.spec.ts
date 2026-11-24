@@ -1713,6 +1713,16 @@ type Body=Record<string,any>;
           expect(redacted.proposalRevision).toBeUndefined();
           expect(redacted.saveEvents).toBeUndefined();
           expect(redacted.skillContext).toBeUndefined();
+          expect(redacted.proposalReviewRevision).toBeUndefined();
+          expect(redacted.proposalProvenance).toBeUndefined();
+          expect(redacted.proposalRequestKey).toBeUndefined();
+          expect(redacted.proposalRequestDigest).toBeUndefined();
+          expect(redacted.activityLog).toBeUndefined();
+          expect(redacted.sourceSummary).toBeUndefined();
+          expect(redacted.managedDocumentProposalEntries).toBeUndefined();
+          expect(redacted.managedDocumentProposal).toBeUndefined();
+          expect(redacted.activities).toEqual([]);
+          expect(redacted.sources).toEqual([]);
           const history=await service().aiHistory(project,user,{limit:"100"});
           expect(history.list.some((entry:Body)=>entry.id===changedTaskId)).toBe(false);
         }finally{
