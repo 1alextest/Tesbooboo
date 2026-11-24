@@ -16326,7 +16326,7 @@ export class LegacyService implements OnModuleInit {
 
   /** Stage an inert manual/policy candidate in the existing proposal-task owner. */
   async stageManagedDocumentProposal(projectId: string, userId: string | null | undefined, body: Body,
-    principal: TestcaseProposalPrincipal, forcedType?: "user_manual" | "policy") {
+    principal: TestcaseProposalPrincipal, forcedType?: "user_manual" | "policy"): Promise<Body> {
     if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
       throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented", error: "External document proposal submission is a disabled preview until governed effective-skill authority is implemented and accepted" });
     }
@@ -16404,10 +16404,10 @@ export class LegacyService implements OnModuleInit {
   }
 
   /** The reviewer's read model: base identity/content, proposed content/metadata, diff and applicability. */
-  async managedDocumentProposalTask(projectId: string, userId: string | null | undefined, taskId: string) {
+  async managedDocumentProposalTask(projectId: string, userId: string | null | undefined, taskId: string): Promise<Body> {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
-    const task = await this.zyraTask(projectId, userId, taskId);
+    const task = await this.zyraTask(projectId, userId, taskId) as Body;
     const operation = normalizeJsonArray(task.proposalSnapshot?.operations || []).find(entry => entry?.opType === MANAGED_DOCUMENT_OP_TYPE);
     if (!operation) throw new NotFoundException({ error: "Document proposal not found" });
     const pinned = task.skillContext || null;
