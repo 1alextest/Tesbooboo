@@ -11,7 +11,8 @@ function request(path: string, method: string, scopes: string[] | null = ["read"
   }) }) } as unknown as ExecutionContext;
 }
 function futureOAuthRequest(path: string, method = "POST"): ExecutionContext {
-  return { switchToHttp: () => ({ getRequest: () => ({
+  // The test and guard must receive the same request instance.
+  const req = {
     path, method, userId: "tesbo-user", apiToken: null,
     cookies: { tesbo_session: "existing-browser-cookie" },
     oauthAccess: {
@@ -19,7 +20,8 @@ function futureOAuthRequest(path: string, method = "POST"): ExecutionContext {
       clientId: "client", grantId: "grant", userId: "tesbo-user", projectId: P,
       resource: `https://tesbo.example/api/projects/${P}/mcp`, scopes: ["read", "write"]
     }
-  }) }) } as unknown as ExecutionContext;
+  };
+  return { switchToHttp: () => ({ getRequest: () => req }) } as unknown as ExecutionContext;
 }
 
 describe("ApiTokenRestGuard", () => {
