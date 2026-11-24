@@ -160,6 +160,20 @@ function verifiedPinnedBasisDigest(pinned: unknown): string | null {
   return digest;
 }
 
+/** Inspect a historical reviewed pin without treating present-day assignments as its authority. */
+export function reviewedSkillTarget(pinned: unknown, target: SkillTarget): SkillBasis | null {
+  if (!verifiedPinnedBasisDigest(pinned)) return null;
+  const value = pinned as { assignments: SkillBasis[]; missing?: unknown[]; conflicts?: unknown[] };
+  if ((value.missing && (!Array.isArray(value.missing) || value.missing.length))
+    || (value.conflicts && (!Array.isArray(value.conflicts) || value.conflicts.length))) return null;
+  const keys = value.assignments.map(assignment => targetKey(assignment.target));
+  if (new Set(keys).size !== keys.length) return null;
+  const found = value.assignments.find(assignment => targetKey(assignment.target) === targetKey(target));
+  if (!found) return null;
+  return { assignmentId: found.assignmentId, target: { ...found.target }, skillDocumentId: found.skillDocumentId,
+    skillVersionId: found.skillVersionId, contentDigest: found.contentDigest };
+}
+
 /** Preserve a previously resolved pin as stale when its effective basis disappears. */
 export function classifySkillResolution(pinned: unknown, current: SkillResolution): SkillResolutionClassification {
   if (current.status === "conflict" || current.conflicts.length > 0) return "conflict";
