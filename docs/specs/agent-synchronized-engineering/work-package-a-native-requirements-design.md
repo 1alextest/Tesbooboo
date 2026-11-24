@@ -1005,34 +1005,85 @@ not verified. **Tesbo sync not performed; native cases and executions remain Dra
 Repository tests must not be relabeled as official Tesbo executions. The source-side cases and
 operator contract can be prepared while this access gap remains.
 
-### 16.8 Unresolved governed activation basis — separate from reliability delivery
+### 16.8 Governed activation basis — proposed contract amendment (implementation pending)
 
-**Observed contradiction:** §4.5 requires effective, pinned Skills checks for link re-application,
-but the current link writer does not call the assignment lock, effective resolver or pinned-context
-assertion. Requirement approval does. This is a pre-existing source-level gap; the current session
-has not executed a live revoked-assignment activation or verified TESBOPROJECT's assignments.
+**Source observation:** §4.5 requires effective pinned Skills checks for link re-application.
+The shared `reapplyRequirementCaseLink` writer currently does not lock assignments, resolve
+effective Skills or validate an immutable reviewed pin; requirement approval does. Full bundles
+pin requirement, testcase-create and link targets, while requirement-only revisions pin only
+the requirement target. The existing intentional cross-revision rebind journey is therefore not
+safely addressed by copying the approval guard or by silently resolving the latest link Skill.
 
-Copying the approval guard alone does not resolve every supported lifecycle. A full requirement +
-case + link bundle pins all three operation targets, while a valid requirement-only revision pins
-only `requirement_revision`. Its submitted/approved version preserves that narrower context, and
-the current bundle normalizer requires a new case for a link operation. Consequently, reapplying an
-existing case after a requirement-only revision cannot simply require a link pin on the new snapshot
-without breaking the existing intentional rebind path.
+**Product direction for review:** explicit, scoped carry-forward into the review of a new
+requirement revision, not implicit inheritance or a new parallel approval store. Preserve
+the ability to intentionally reuse an existing case and ordered criterion group; never let a
+requirement-only approval silently confer link authority. A previously approved snapshot is
+immutable. If a needed selection was omitted, stage a new reviewed requirement revision
+(including an unchanged-content revision when appropriate), not an edit to the old approval.
 
-**Decision needed:** which reviewed immutable Skill context authorizes link re-application after a
-requirement-only revision? Options include retaining and validating the originating link's reviewed
-context, explicitly carrying forward a reviewed link context into the new requirement review, or
-requiring an explicit new link review. Each has different stale-context and user-review consequences.
-The recommendation is to define that lineage through the existing proposal/version owners, then
-enforce effective assignments and exact reviewed pins in the shared writer for both fresh activation
-and replay. Do not silently fabricate a pin or substitute the latest assignment for reviewed consent.
+**Immutable review basis and scope:**
+- A proposal for an existing requirement may explicitly select existing native link groups for
+  carry-forward. Selection identifies source link and originating requirement version, case
+  identity, exact case edit and approval revisions, and ordered criterion keys; it is bounded
+  to this project/requirement and to groups whose keys remain valid in the proposed criteria.
+  No new testcase is required for this operation. Absence of a selection grants no cross-version
+  authority; two groups on the same case are distinct. Duplicate selections and foreign,
+  retired, malformed or stale identities are rejected, not silently normalized into consent.
+- The existing proposal owner validates selections against native persisted records, captures
+  the effective link Skill alongside the requirement Skill, includes both the selection and
+  the full pin in the reviewed digest, and exposes the difference from the originating basis
+  (including assignment/version/content changes). The reviewer sees and explicitly approves
+  the selected scope and any changed Skill basis. A changed historical Skill cannot be
+  carried as if unchanged; explicit fresh review of the new basis is necessary.
+- Apply and approval use the existing task and KB version owners, storing the validated scope,
+  exact immutable source identity and reviewed Skill pins with the submitted/approved
+  snapshots. Require current bases and revalidate under transaction locks before publishing;
+  do not accept caller-supplied authority or derive consent from a client display flag.
+  Requirement-only approval without a selection remains valid but does not authorize rebind.
+- Fresh same-generation activation of a link originating in a fully reviewed bundle may use
+  its approved snapshot's exact reviewed link-target pin when native lineage establishes that
+  exact group. For cross-generation rebind, the currently approved requirement version must
+  contain a reviewed carry-forward selection for that exact source group and case basis.
+  Missing or unverifiable scope returns `409 SKILL_LINK_REVIEW_REQUIRED` and actionable
+  review guidance, without altering any persisted link. Legacy pins must be validated against
+  their immutable source, never backfilled from present-day assignments. A subsequent case
+  change invalidates a carry-forward selection until reviewed again.
+- The shared writer acquires the existing project Skill-assignment advisory lock before
+  membership/document/link/case locks (consistent with requirement approval and bundle apply),
+  verifies current human/project authority and current exact requirement and case bases after
+  relevant waits, and re-resolves the exact reviewed targets using the existing Skills owner.
+  Check actual link-target coverage as well as digest integrity: a requirement-only pin is
+  not authority for link activation. Reuse the canonical classifier for stale, unavailable
+  and conflicting pins; return the existing `SKILL_CONTEXT_STALE`,
+  `SKILL_CONTEXT_UNAVAILABLE`, or `SKILL_ASSIGNMENT_CONFLICT` semantics as appropriate.
+  Hold the authorization locks through commit. A revocation that wins the serialization
+  boundary must block the operation; one that waits behind a committed activation does not
+  retroactively rewrite that historical result.
+- Fresh activation and replay both require valid current reviewed scope and effective link
+  authority before any new generation or success readback; replay is current-state
+  confirmation, not a historical command receipt. Preserve existing exact-version, case
+  approval, ordered-group, role-alias and tenant protections. Keep authoritative historical
+  coverage reads available when action authority is absent. The existing audit owner records
+  the exact reviewed basis and carried source identity; no second store or synthetic Skill pin.
+- UI uses the existing task/review panel: show selected groups, current vs originating Skill
+  and case bases, changed criteria and explicit reviewer decision; distinguish missing review,
+  stale assignment, conflict and unavailable reads. Existing approved history stays visible.
+  A blocked action provides the native recovery path and must not auto-approve or auto-retry.
 
-This requires authorized product/governance judgment and a focused contract amendment; it is not an
-unambiguous guard insertion. The bounded reliability repair can proceed, but **complete governed
-activation acceptance remains partial** until this decision, implementation and a real regression
-for revoked/changed assignments are complete. No new schema, service, live approval or bypass is
-authorized by recording this gap. Preserve the observation in the existing living work record and
-matching native task when the permitted connection is available.
+**Outcome acceptance:** eligible reviewed scope succeeds once and safely replays; revoked,
+replaced, conflicting or missing scope blocks writes and success readback; explicit carry-forward
+permits an intentional cross-version rebind without creating another case; unselected or
+neighboring groups do not inherit authority. Verify real DB transaction and audit invariants,
+cross-project isolation, exact ordered groups, both race orderings, lost response and stale
+case/requirement behavior using existing DB/API/Playwright owners. Test in disposable fixtures
+only and retain exact-head failing-first/fixed-source evidence separately.
+
+**Delivery boundary:** first add failing-first DB regressions against the demonstrated writer gap;
+implement the selected-scope staging/review/approval and shared activation enforcement together
+before marking acceptance complete. No runtime enforcement, approved native records, live
+TESBOPROJECT assignment or execution is asserted by this amendment. Treat the decision as a
+proposed implementation contract subject to source and independent assurance review, not an
+official publication or a relaxation of human approval gates.
 
 ### 16.9 Apply authorization uses the normalized owner/manager policy
 
