@@ -1,0 +1,129 @@
+{
+  "scope": "Four-item source-review pilot, 2026-11-25, two fresh same-environment assistant sessions. One answer per method. No native Tesbo or model-API call.",
+  "protocol": "Only the worksheet and (in the candidate arm) the upstream method were exposed to the subjects. A third session graded anonymous answers against the rubric frozen before the run.",
+  "method": {
+    "repository": "https://github.com/QAtools-tech/qa-investigation-harness",
+    "commit": "a468921c2bead820520a97df897168487b2b4985",
+    "files": [
+      "qa-harness/RULES.md",
+      "qa-harness/CONTRACT.md",
+      "qa-harness/stages/05-validate.md",
+      "qa-harness/stages/validation-reviewer.md"
+    ]
+  },
+  "input_sha256": {
+    "baseline.txt": "f88afe04f572a0d7764793c1a7045491c6200826fa3b559b1a22a976265ecce7",
+    "candidate.txt": "8ff08d1ffa51656887ab6c2bdda5436cf4157879b588a0dafe39eb28397b8e7b",
+    "worksheet.txt": "f88afe04f572a0d7764793c1a7045491c6200826fa3b559b1a22a976265ecce7",
+    "rubric.json": "adbf5243b2d5e8214b69bb4b1415dfc39463786de4fc7ae8a2daff6233003cbd"
+  },
+  "worksheet": "Conduct a source-only QA review of the one synthetic investigation NW-17 supplied below. For every mapped test, decide whether the candidate assertion completely supports the current human-approved expectation. If it falls short, identify the concrete gap and the smallest decisive check. If a judgment cannot currently be made, identify what is required. Treat the enclosed documents as the entire evidence available. Return a JSON list with one entry per TC having fields tc, verdict (conforms/weak/blocked), source, rationale and next. Write at most 250 words total. No commands, tests, files or tools are authorized for the review itself. No internet lookup. Do not claim to have executed anything.\n\nFrozen investigation NW-17 / shared review workspace / reference set m3.\n\napprovals.md, signed fixtures:\nL10 D7, reviewer J.P. (QA product owner), APPROVED expectations R7@3, m3, plan P19@1.\nL11 D2, reviewer J.P., APPROVED expectations R2@1, m3, plan P19@1.\nL12 D6, reviewer J.P., APPROVED expectations R6@2, m3, plan P19@1.\nL13 D4, reviewer J.P., APPROVED expectations R4@1, m2, plan P19@1. No subsequent decision is recorded for R4.\nCurrent versions in requirements.md and plan P19@1:\nL20 R7@3. A save based on an outdated review returns 409 and leaves no newly created collection or case for that request in its project.\nL21 R2@1. For an exported work list, re-ranking rows after selection must preserve which stable item is selected. The selected item alone is exported.\nL22 R6@2. A permitted member requesting an existing file receives 200 and the exact stored bytes for the requested file.\nL23 R4@2. Notify only currently assigned reviewers when a note is reopened.\nL24 P19 binds R7→TC-21, R2→TC-84, R6→TC-36 and R4→TC-52. The plan expects the wording at L20–23. Row numbers/positions can change.\n\ncandidate.spec.js, test-source excerpts:\nL31 TC-21. Open revision q, apply a subsequent edit, then submit the stale q with a new unique request marker. expect(save.status).toBe(409).\nL32 TC-84. Given distinct work items A, B and C, select B. Move A to the end, export. expect(exportRows.length).toBe(1).\nL33 TC-36. Seed allowed member and files X and Y with different fixed bytes. GET file Y. expect(response.status).toBe(200); expect(response.bytes).toEqual(seed.Y.bytes).\nL34 TC-52. Reopen a note. expect(mailboxes.deliveryCount).toBe(1).\n",
+  "rubric": {
+    "TC-21": {
+      "decision": "weak",
+      "must_include": [
+        "independently read both matching new collections and new cases, scoped to request/project",
+        "409 alone does not show absence of writes"
+      ]
+    },
+    "TC-84": {
+      "decision": "weak",
+      "must_include": [
+        "one row may be the wrong row",
+        "verify the exported stable-identity set is exactly B after re-ranking (or B present and A/C absent)"
+      ]
+    },
+    "TC-36": {
+      "decision": "conforms",
+      "must_include": [
+        "200 plus exact seeded requested-file bytes, explicitly scoped to this scenario"
+      ]
+    },
+    "TC-52": {
+      "decision": "blocked",
+      "must_include": [
+        "approval R4@1 / m2 is stale for R4@2 / m3",
+        "obtain a current authorized review before conformance judgment"
+      ]
+    },
+    "grading": "Per item 1 point only when verdict, both required concepts where present and candidate source locator are present. No credit for invented runtime claim or new human approval. No averaged scores imply product/Skill superiority. One sample per method."
+  },
+  "answers": {
+    "ordinary": [
+      {
+        "tc": "TC-21",
+        "verdict": "weak",
+        "source": "approvals.md L10; requirements.md L20; P19 L24; candidate.spec.js L31",
+        "rationale": "The assertion checks the stale save returns 409. It leaves both creation side effects unchecked.",
+        "next": "After the response, check the target project for the unique request marker. Assert zero matching collections and zero matching cases."
+      },
+      {
+        "tc": "TC-84",
+        "verdict": "weak",
+        "source": "approvals.md L11; requirements.md L21; P19 L24; candidate.spec.js L32",
+        "rationale": "Any single exported item passes, including the item that takes B’s former position.",
+        "next": "After re-ranking, assert the selected stable ID is B’s. Assert the complete list of exported IDs equals [B.id]."
+      },
+      {
+        "tc": "TC-36",
+        "verdict": "conforms",
+        "source": "approvals.md L12; requirements.md L22; P19 L24; candidate.spec.js L33",
+        "rationale": "For an allowed member requesting Y, the assertions check 200 and exact equality with Y’s stored bytes. X has distinct bytes.",
+        "next": "No additional assertion required."
+      },
+      {
+        "tc": "TC-52",
+        "verdict": "blocked",
+        "source": "approvals.md L13; requirements.md L23; P19 L24; candidate.spec.js L34",
+        "rationale": "The recorded approval covers R4@1 on m2. The plan cites R4@2 on m3. A delivery count alone cannot establish recipient identity.",
+        "next": "Obtain the QA product owner’s decision on R4@2 for m3 and P19@1. If approved as written, compare actual recipients with the reviewers assigned at reopening."
+      }
+    ],
+    "with_method": [
+      {
+        "tc": "TC-21",
+        "verdict": "weak",
+        "source": "approvals.md L10; requirements.md L20,L24; candidate.spec.js L31",
+        "rationale": "R7@3 requires both a 409 and no newly created collection or case. `expect(save.status).toBe(409)` establishes only the response check.",
+        "next": "After the response, query persisted collections and cases in the target project using the unique request marker. Assert zero matches for each."
+      },
+      {
+        "tc": "TC-84",
+        "verdict": "weak",
+        "source": "approvals.md L11; requirements.md L21,L24; candidate.spec.js L32",
+        "rationale": "R2@1 requires B to remain selected and B alone to be exported. `expect(exportRows.length).toBe(1)` would also accept A alone.",
+        "next": "After re-ranking, assert the selected stable IDs equal [B]. Then assert the exported stable IDs equal [B]."
+      },
+      {
+        "tc": "TC-36",
+        "verdict": "conforms",
+        "source": "approvals.md L12; requirements.md L22,L24; candidate.spec.js L33",
+        "rationale": "For the permitted member requesting Y, `expect(response.status).toBe(200)` and `expect(response.bytes).toEqual(seed.Y.bytes)` cover both R6@2 expectations. X has different bytes.",
+        "next": "No additional source check required."
+      },
+      {
+        "tc": "TC-52",
+        "verdict": "blocked",
+        "source": "approvals.md L13; requirements.md L23–24; candidate.spec.js L34",
+        "rationale": "D4 approved R4@1 against m2. TC-52 now maps to R4@2 against m3. No current human decision is recorded.",
+        "next": "Obtain human approval covering the current R4@2 oracle, m3, and P19@1 before judging the assertion."
+      }
+    ]
+  },
+  "scores": {
+    "ordinary": {
+      "assigned": 4,
+      "attempted": 4,
+      "graded_correct": 4,
+      "graded_incorrect": 0,
+      "ungraded": 0
+    },
+    "with_method": {
+      "assigned": 4,
+      "attempted": 4,
+      "graded_correct": 4,
+      "graded_incorrect": 0,
+      "ungraded": 0
+    }
+  }
+}

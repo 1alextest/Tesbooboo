@@ -83,6 +83,23 @@ The proposed two-member workflow requires separately authenticated members. Both
 
 Across clients, require the same fields, coverage of both storage effects, and the same treatment of missing evidence. Use a versioned template for fields that require identical wording. To test the method's benefit, compare ordinary Zyra and Zyra with the candidate reviewer on the same inputs, permissions and budget. Repeat within each supported client and keep the wrong-target A/B/C case held out. The local example uses two fixed assertions and measures whether the grader can tell them apart. Live model decisions, per-member MCP attribution and native submission are separate pilot outcomes. [Pilot measures and acceptance](../ZYRA_QA_HARNESS_OPTIONS.md#pilot-decisions-and-measurement)
 
+## Source-review pilot run on November 25, 2026
+
+Two fresh assistant sessions reviewed the same four synthetic cases. Each received a 250-word output budget, the same candidate assertions, source locations, human decisions and plan. Only the candidate received the four pinned upstream investigation documents. A separate grader prepared the scoring key before either session and received both answers with their assignments hidden.
+
+| Case | Expected reviewer decision | Ordinary reviewer | With pinned method |
+| --- | --- | --- | --- |
+| Stale save returning 409 | Find both omitted storage checks and scope them to the request/project | Correct | Correct |
+| Reordered export | Catch the one-row assertion that silently accepts the wrong selected item | Correct | Correct |
+| File download | Accept the status and exact requested-file byte checks for the authorized request | Correct | Correct |
+| Reopened-note recipients | Withhold conformance until a human approves the current requirement and reference version | Correct | Correct |
+
+Each session received four items, attempted four, and made four gradable, correct decisions. Asking for the missing current approval earned credit because that was the independently expected decision. Neither asserted it had executed a test. The ordinary input was 2,359 bytes and the candidate input was 23,176 bytes. The comparison did not measure billed tokens, latency or cost. A tie on one clearly specified worksheet gives no reason to deploy the longer prompt by default. More discriminating cases should test whether Zyra discovers the missing test obligation when a tester simply asks it to write cases.
+
+A companion `ZYR-P07` regression exercises the MCP credential boundary in Tesbo’s disposable CI project. It issues two project credentials from two human accounts, grants each client consent, reuses a request key across the two credentials, and inspects which producer and reviewer the native receipt records. That scenario checks two independently staged batches. It does not establish authorship of individual changes inside a shared batch. [Native regression](../../../e2e/api/zyra.spec.ts)
+
+The comparison ran on the assistant surface. The workspace exposed neither a configured Tesbo MCP connection nor a running native Zyra or local-model service. The authenticated local coding CLI stopped before inference. The successful sessions received their method in the input. Native method retrieval, inference through the project model allocation and cross-client enforcement are still unverified. The [audit record](zyra-review-pilot.json) contains the shared worksheet, frozen rubric, method provenance and both answers. The [Playwright inventory](../../../e2e/README.md#inventory-at-development-commit-399b1803) records the product tests available to serve as independent references.
+
 ## What a team can change
 
 - **QA method.** A QA lead can propose a version of the shared review instructions with a new obligation, such as checking that an existing case was preserved. Qualify it on new positive and faulty controls before changing the effective Skill for the team.
