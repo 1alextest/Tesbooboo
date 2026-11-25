@@ -495,5 +495,6 @@ There is no hard-delete path for `knowledge_folders` in product code.
 - `5214acf9` (`actions/runs/45522403393`): the new duplicate/ancestor-delete regression failed with `Expected:
   0, Received: 1` live copies under the deleted folder; 725 existing tests passed.
 
-The advisory-first fix is verified by the green exact-head run recorded in the PR. Native execution remains
-UNRUN; native record update is blocked as in §9.2.
+The advisory-first fix is verified green at `2060ae82`
+(`actions/runs/45524121118`, 726 database tests). Native execution remains UNRUN; native record update is
+blocked as in §9.2.
