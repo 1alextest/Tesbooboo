@@ -717,12 +717,13 @@ test.describe("zyra / agents (UI)", () => {
       // The first visible meaning is the human decision, not raw graph ids or a model draft.
       // The evidence is the persisted native receipt seeded above, not a fabricated UI outcome.
       const reviewFocus = page.getByTestId("qa-review-focus-" + historyId);
-      await expect(reviewFocus.getByRole("heading", { name: "Decide which existing cases apply to this change" })).toBeVisible();
-      await expect(reviewFocus).toContainText("1 changed graph node(s) and 1 nominated existing case(s)");
+      await expect(reviewFocus.getByRole("heading", { name: "Assess nominated case references for this change" })).toBeVisible();
+      await expect(reviewFocus).toContainText("1 changed graph node(s) and 1 nominated case reference(s)");
       await expect(reviewFocus).toContainText("Still unknown:");
       await expect(reviewFocus).toContainText("Source freshness is unverified");
       await expect(reviewFocus).toContainText("Next human action:");
       await expect(reviewFocus).toContainText("It does not approve a requirement, test case, policy, execution result or release");
+      await expect(page.getByRole("link", { name: "Configure source" })).toHaveAttribute("href", "#source-setup");
       const humanReviewFirst = await page.evaluate(() => {
         const history = document.querySelector('section[aria-label="Graph change history"]');
         const sourceTools = document.querySelector('section[aria-label="Source configuration and draft model inspection"]');
@@ -983,7 +984,7 @@ test.describe("zyra / agents (UI)", () => {
       await expect(sourceOnlyFocus.getByRole("heading", {
         name: "Identify affected behavior before selecting tests"
       })).toBeVisible();
-      await expect(sourceOnlyFocus).toContainText("0 nominated existing case(s)");
+      await expect(sourceOnlyFocus).toContainText("0 nominated case reference(s)");
       await expect(sourceOnlyFocus).toContainText("Investigate the changed behavior and approved requirements");
       await expect(sourceOnly.getByText("Review source-only QA gaps")).toBeVisible();
       await sourceOnly.locator("summary").click();
