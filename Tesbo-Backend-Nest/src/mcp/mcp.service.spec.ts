@@ -184,6 +184,15 @@ describe("McpService", () => {
         "get_requirement_proposal_task"]) {
         expect(guidance).toContain(tool);
       }
+      // Proactive decision discovery reaches an external coding agent through MCP initialize;
+      // presentation of a question remains separate from discovering that one is needed.
+      expect(guidance).toContain("Independently generate potential missing consequential product decisions");
+      expect(guidance).toContain("ALREADY_DECIDED");
+      expect(guidance).toContain("DELEGATED");
+      expect(guidance).toContain("HUMAN_REQUIRED");
+      expect(guidance).toContain("EVIDENCE_BLOCKED");
+      expect(guidance).toContain("If this client cannot ask the user interactively");
+      expect(guidance).toContain("unpublished proposals are not approved requirements");
       expect(guidance).toContain("Only if stage_requirement_change_bundle is actually advertised");
       expect(guidance).toContain("A successful repository unit/E2E test does not mean a Tesbo Run executed");
       expect(guidance).toContain("re-approval of a changed definition is a separate human decision");
