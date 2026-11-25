@@ -41,7 +41,11 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
   const authenticateApiToken = jest.fn();
   const query = jest.fn();
   const currentGrantRows = (sql: string) => ({
-    rows: sql.includes("mcp_oauth_grant_approval_bindings")
+    rows: sql.includes("pm.id AS project_membership_id")
+      ? memberActive ? [{
+        project_membership_id: P, organization_membership_id: OTHER
+      }] : []
+      : sql.includes("mcp_oauth_grant_approval_bindings")
       ? consentSaved ? [{
         project_id: P, account_id: "tesbo-human", client_id: CLIENT,
         resource: RESOURCE, approval_revision: 7, settings: ownerGrant()
