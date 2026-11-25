@@ -96,7 +96,11 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     jest.clearAllMocks();
     resolveSession.mockImplementation(async token => token === SESSION ? "test-member" : null);
     authenticate.mockResolvedValue(null);
-    members.mockResolvedValue({ name: "Existing project", key: "TES" });
+    members.mockResolvedValue({
+      name: "Existing project", key: "TES",
+      project_membership_id: "11111111-1111-4111-8111-111111111111",
+      organization_membership_id: "22222222-2222-4222-8222-222222222222"
+    });
     approvedClient.mockResolvedValue({
       kind: "oauth_client", clientName: "QA approved browser client",
       scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null, accessRevision: 1
