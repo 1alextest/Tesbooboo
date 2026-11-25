@@ -1935,6 +1935,7 @@ export type MyMcpOAuthConsent = {
   clientName: string;
   resource: string;
   status: "consent_current" | "reconsent_required" | "revoked";
+  currentAllowedTools: string[] | null;
   createdAt: string;
   revokedAt: string | null;
 };
