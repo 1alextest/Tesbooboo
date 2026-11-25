@@ -496,5 +496,6 @@ There is no hard-delete path for `knowledge_folders` in product code.
   0, Received: 1` live copies under the deleted folder; 725 existing tests passed.
 
 The advisory-first fix is verified green at `2060ae82`
-(`actions/runs/45524121118`, 726 database tests). Native execution remains UNRUN; native record update is
-blocked as in §9.2.
+(`actions/runs/45524121118`, 726 database tests). PR #263 merged into `development` as
+`551e7eab4906f11a67c4046c2a02ca2be80dc8ce`; the Railway deployment succeeded and production `/api/health`
+returns that exact SHA. Native execution remains UNRUN; native record update is blocked as in §9.2.
