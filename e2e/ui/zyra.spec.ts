@@ -817,7 +817,7 @@ test.describe("zyra / agents (UI)", () => {
         WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
 
       const prepare = page.getByTestId("graph-review-run-" + historyId);
-      await prepare.locator("summary").click();
+      await prepare.locator(":scope > summary").click();
       const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
       await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
       const selectionIdentity = prepare.getByRole("region", { name: "Native case identity" });
@@ -886,7 +886,7 @@ test.describe("zyra / agents (UI)", () => {
       // canonical case must be idempotent through the native API.
       await page.reload();
       const reopened = page.getByTestId("graph-review-run-" + historyId);
-      await reopened.locator("summary").click();
+      await reopened.locator(":scope > summary").click();
       await reopened.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await reopened.getByRole("radio", { name: "Add to existing test run" }).check();
       await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
@@ -961,7 +961,7 @@ test.describe("zyra / agents (UI)", () => {
       // Do not blindly retry: find the already-created run in the native list.
       await page.reload();
       const uncertain = page.getByTestId("graph-review-run-" + historyId);
-      await uncertain.locator("summary").click();
+      await uncertain.locator(":scope > summary").click();
       await uncertain.getByRole("checkbox", { name: "Select linked case 1" }).check();
       const uncertainName = "E2E Unconfirmed graph run " + stamp;
       await uncertain.getByLabel("New run name").fill(uncertainName);
@@ -1013,7 +1013,7 @@ test.describe("zyra / agents (UI)", () => {
       await expect(changedIdentity).toContainText("not currently approved for a new run");
       await expect(changedIdentity).not.toContainText("approval current");
       const rejected = page.getByTestId("graph-review-run-" + historyId);
-      await rejected.locator("summary").click();
+      await rejected.locator(":scope > summary").click();
       await rejected.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await rejected.getByLabel("Execution environment").fill("Disposable QA");
       await rejected.getByRole("button", { name: "Create run and add selected cases" }).click();
@@ -1043,7 +1043,7 @@ test.describe("zyra / agents (UI)", () => {
       await expect(sourceOnlyFocus).toContainText("0 nominated case reference(s)");
       await expect(sourceOnlyFocus).toContainText("Investigate the changed behavior and approved requirements");
       await expect(sourceOnly.getByText("Review source-only QA gaps")).toBeVisible();
-      await sourceOnly.locator("summary").click();
+      await sourceOnly.locator(":scope > summary").click();
       const sourceGaps = sourceOnly.getByRole("region", { name: "QA verification gaps" });
       await expect(sourceGaps).toContainText("0 nominated case");
       await expect(sourceGaps).toContainText("Changed graph nodes have no nominated cases");
