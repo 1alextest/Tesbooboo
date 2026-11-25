@@ -100,6 +100,32 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
     throw new Error(`No PostgreSQL writer waited behind ${pid}`);
   }
+  async function waitForAnyLockWait() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if ((await setup.query(
+        "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+      )).rowCount) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error("No PostgreSQL writer entered a lock wait");
+  }
+  async function waitForAdvisoryWait() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if ((await setup.query(
+        "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%pg_advisory_xact_lock%'"
+      )).rowCount) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error("No writer waited on the project mutation advisory lock");
+  }
+  function realService(dbPool = pool) {
+    const svc = makeLegacy(new DatabaseService(dbPool));
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: projectId, organization_id: orgId } as never);
+    jest.spyOn(svc as unknown as { enqueueEmbedding: (...args: unknown[]) => void }, "enqueueEmbedding").mockReturnValue(undefined);
+    return svc;
+  }
   const update = (svc: ReturnType<typeof service>["svc"], text = "Saved body") => svc.updateKnowledgeDocument(projectId, actor, documentId, { contentJson: json(text), contentHtml: `<p>${text}</p>`, contentText: text });
 
   it.each(["new snapshot", "coalesced diff", "restore"])("rolls back the complete %s and actual document UPDATE after a late native SQL fault", async (kind) => {
@@ -509,5 +535,262 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       expect(changed.editRevision).not.toBe(approved.editRevision);
       expect(changed).toMatchObject({ status: "draft", reviewedVersionId: null });
     });
+  });
+
+  it("rechecks a folder under a lock so a concurrent delete cannot strand a newly created document", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name) VALUES ($1,$2,$3) RETURNING id",
+      [orgId, projectId, `Race folder ${randomUUID()}`]
+    )).rows[0].id;
+    const blocker = new Client({ connectionString: url });
+    const f = service();
+    // The fixture default returns `{}`; the create needs the real organization for its INSERT, and
+    // with it the pre-fix INSERT blocks on the folder FK and then lands in the deleted folder.
+    (f.svc.requireProjectAccess as unknown as jest.Mock).mockResolvedValue({ id: projectId, organization_id: orgId });
+    await blocker.connect();
+    try {
+      await blocker.query("BEGIN");
+      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await blocker.query("SELECT id FROM knowledge_folders WHERE id = $1 FOR UPDATE", [target]);
+      // The preflight read has already passed; only the locked recheck in the create transaction
+      // can see the folder being deleted underneath it. Attach the rejection handler immediately
+      // so a failed wait cannot leave an unhandled rejection behind.
+      const create = f.svc.createKnowledgeDocument(projectId, actor, {
+        folderId: target, title: `Race create ${randomUUID()}`,
+        contentText: "Body", contentHtml: "<p>Body</p>", contentJson: json("Body")
+      }).then(() => null, (error) => error);
+      await waitForBlocker(pid);
+      await blocker.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [target]);
+      await blocker.query("COMMIT");
+      expect(await create).toMatchObject({ status: 404 });
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1", [target])).rows[0].n).toBe(0);
+      expect(f.activity).not.toHaveBeenCalled();
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      await blocker.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
+
+  it("rolls back the created document when its audit insert fails", async () => {
+    let failed = false;
+    const observed = observedPool(async (sql, _values, _result, raw) => {
+      if (!failed && /INSERT INTO audit_logs/.test(sql)) {
+        failed = true;
+        await raw("SELECT 1 / 0");
+      }
+    });
+    const svc = makeLegacy(new DatabaseService(observed));
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: projectId, organization_id: orgId } as never);
+    const title = `Audit failure ${randomUUID()}`;
+    try {
+      await expect(svc.createKnowledgeDocument(projectId, actor, { folderId, title, contentText: "Body" }))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(failed).toBe(true);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, title])).rows[0].n).toBe(0);
+    } finally {
+      await observed.end();
+    }
+  });
+
+  it("serialises a document move behind the mutation lock before it reads the destination", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Move target ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiredP = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /pg_advisory_xact_lock/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const f = service(observed);
+    try {
+      // The delete holds the project mutation lock while the move queues behind it. The move must
+      // read the destination only after that wait, when the folder is already gone.
+      const deletion = f.svc.deleteKnowledgeFolder(projectId, actor, target).then(() => null, (error) => error);
+      await acquiredP;
+      const move = f.svc.moveKnowledgeDocument(projectId, actor, documentId, { folderId: target }).then(() => null, (error) => error);
+      await waitForAdvisoryWait();
+      release();
+      expect(await deletion).toBeNull();
+      expect(await move).toMatchObject({ status: 404 });
+      expect((await setup.query("SELECT folder_id FROM knowledge_documents WHERE id = $1", [documentId])).rows[0].folder_id).toBe(folderId);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
+
+  it("cascades a document moved into a folder before that folder is deleted", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Move then delete ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const f = service();
+    try {
+      await f.svc.moveKnowledgeDocument(projectId, actor, documentId, { folderId: target });
+      await f.svc.deleteKnowledgeFolder(projectId, actor, target);
+      const moved = (await setup.query("SELECT folder_id,is_deleted FROM knowledge_documents WHERE id = $1", [documentId])).rows[0];
+      expect(moved).toMatchObject({ folder_id: target, is_deleted: true });
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1 AND is_deleted = false", [target])).rows[0].n).toBe(0);
+    } finally {
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
+
+  it("refuses a duplicate whose author loses project membership while waiting on the source", async () => {
+    const title = `Duplicate source ${randomUUID()}`;
+    await setup.query("UPDATE knowledge_documents SET title = $2 WHERE id = $1", [documentId, title]);
+    const f = realService();
+    const blocker = new Client({ connectionString: url });
+    await blocker.connect();
+    try {
+      await blocker.query("BEGIN");
+      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await blocker.query("SELECT id FROM knowledge_documents WHERE id = $1 FOR UPDATE", [documentId]);
+      const duplicate = f.duplicateKnowledgeDocument(projectId, actor, documentId).then(() => null, (error) => error);
+      await waitForBlocker(pid);
+      await setup.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, actor]);
+      await blocker.query("COMMIT");
+      expect(await duplicate).toMatchObject({ status: 403 });
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, `${title} (copy)`])).rows[0].n).toBe(0);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      await blocker.end();
+      await setup.query(
+        "INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT (project_id,user_id) DO UPDATE SET role = 'owner'",
+        [projectId, actor]
+      );
+      await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, `${title} (copy)`]);
+    }
+  });
+
+  it("rolls back a document move when its audit insert fails", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Move audit ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    let failed = false;
+    const observed = observedPool(async (sql, _values, _result, raw) => {
+      if (!failed && /INSERT INTO audit_logs/.test(sql)) {
+        failed = true;
+        await raw("SELECT 1 / 0");
+      }
+    });
+    const svc = realService(observed);
+    try {
+      await expect(svc.moveKnowledgeDocument(projectId, actor, documentId, { folderId: target }))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(failed).toBe(true);
+      expect((await setup.query("SELECT folder_id FROM knowledge_documents WHERE id = $1", [documentId])).rows[0].folder_id).toBe(folderId);
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
+
+  it("rolls back a folder move when its audit insert fails", async () => {
+    const source = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Move source ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Move parent ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    let failed = false;
+    const observed = observedPool(async (sql, _values, _result, raw) => {
+      if (!failed && /INSERT INTO audit_logs/.test(sql)) {
+        failed = true;
+        await raw("SELECT 1 / 0");
+      }
+    });
+    const svc = realService(observed);
+    try {
+      await expect(svc.moveKnowledgeFolder(projectId, actor, source, { parentFolderId: target }))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(failed).toBe(true);
+      expect((await setup.query("SELECT parent_folder_id FROM knowledge_folders WHERE id = $1", [source])).rows[0].parent_folder_id).toBe(folderId);
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[source, target]]);
+    }
+  });
+
+  it("rolls back a duplicate when its audit insert fails", async () => {
+    const title = `Duplicate audit ${randomUUID()}`;
+    await setup.query("UPDATE knowledge_documents SET title = $2 WHERE id = $1", [documentId, title]);
+    let failed = false;
+    const observed = observedPool(async (sql, _values, _result, raw) => {
+      if (!failed && /INSERT INTO audit_logs/.test(sql)) {
+        failed = true;
+        await raw("SELECT 1 / 0");
+      }
+    });
+    const svc = realService(observed);
+    try {
+      await expect(svc.duplicateKnowledgeDocument(projectId, actor, documentId))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(failed).toBe(true);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, `${title} (copy)`])).rows[0].n).toBe(0);
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, `${title} (copy)`]);
+    }
+  });
+
+  it("does not strand a duplicate copy when an ancestor folder is deleted during the copy", async () => {
+    const ancestor = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Duplicate ancestor ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const destination = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Duplicate destination ${randomUUID()}`, ancestor]
+    )).rows[0].id;
+    const title = `Duplicate orphan ${randomUUID()}`;
+    await setup.query("UPDATE knowledge_documents SET title = $2, folder_id = $3 WHERE id = $1", [documentId, title, destination]);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let pausedSignal!: () => void;
+    const paused = new Promise<void>((resolve) => { pausedSignal = resolve; });
+    let held = false;
+    const observed = observedPool(async (sql) => {
+      if (!held && /FROM projects p JOIN project_members/.test(sql)) {
+        held = true;
+        pausedSignal();
+        await released;
+      }
+    });
+    const duplicating = realService(observed);
+    const deleting = service();
+    try {
+      // Hold the duplicate after its source/authority reads. A delete that starts now either
+      // waits on the same project advisory lock (fixed) or races the copy insert (pre-fix).
+      const duplicate = duplicating.duplicateKnowledgeDocument(projectId, actor, documentId).then(() => null, (error) => error);
+      await paused;
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, ancestor).then(() => null, (error) => error);
+      await waitForAnyLockWait();
+      release();
+      expect(await deletion).toBeNull();
+      expect(await duplicate).toBeNull();
+      expect((await setup.query(
+        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1 AND is_deleted = false",
+        [destination]
+      )).rows[0].n).toBe(0);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_documents WHERE folder_id = $1", [destination]);
+      await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[destination, ancestor]]);
+    }
   });
 });

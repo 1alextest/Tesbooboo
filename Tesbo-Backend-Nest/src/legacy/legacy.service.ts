@@ -11773,18 +11773,21 @@ export class LegacyService implements OnModuleInit {
         const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
         this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
         await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
+        // Same-project deletion and moves take the project mutation lock, so this target cannot
+        // change underneath the cycle check and the parent update below.
         const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [targetParentId, projectId]);
         if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
         const invalid = await client.query(
           `${LegacyService.DESCENDANTS_CTE} SELECT 1 FROM descendants WHERE id=$2`, [[folderId], targetParentId]
         );
         if (invalid.rows[0]) throw new BadRequestException({ error: "A folder cannot be moved into itself or one of its subfolders" });
-        return client.query(
+        const moved = await client.query(
           "UPDATE knowledge_folders SET parent_folder_id=$2, updated_by=$3, updated_at=now() WHERE id=$1 AND project_id=$4 RETURNING *",
           [folderId, targetParentId, uid, projectId]
         );
+        await this.logProjectActivity(projectId, uid, "moved", "knowledge_folder", folderId, moved.rows[0].name, {}, client);
+        return moved;
       });
-      await this.logProjectActivity(projectId, uid, "moved", "knowledge_folder", folderId, res.rows[0].name, {});
       return toCamel(res.rows[0]);
     } catch (error) {
       if ((error as { code?: string }).code === "23505")
@@ -11806,10 +11809,9 @@ export class LegacyService implements OnModuleInit {
   // Soft-deletes one or more folder trees (and every descendant folder/document/file beneath each),
   // special-casing the Zyra memory document (never deleted, re-homed to its own project's root
   // instead — a correlated subquery on knowledge_documents.project_id, since a single call here can
-  // span multiple projects). Shared by deleteKnowledgeFolder (deletionReason 'manual') and the
-  // integration-disconnect cleanup (deletionReason 'integration_disconnect') so the two removal
-  // paths can never drift apart in behavior — only in whether the result is restorable, which
-  // restoreKnowledgeFolder decides by reading the reason back.
+  // span multiple projects). deleteKnowledgeFolder is currently the only caller and records
+  // deletionReason 'manual'; the reason remains in the row so restoreKnowledgeFolder can refuse a
+  // disconnected item if a future cleanup path starts using 'integration_disconnect' again.
   private async cascadeSoftDeleteFolderTree(
     client: PoolClient,
     folderIds: string[],
@@ -12312,24 +12314,40 @@ export class LegacyService implements OnModuleInit {
     // sweep from requeueing it; the sweep and processor also filter by document type so the hold
     // survives a migration that resets terminal embedding states.
     const embeddingStatus = isGovernedDocumentType(documentType) ? "unsupported" : "pending";
-    const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [
-        project.organization_id,
-        projectId,
-        folderId,
-        title,
-        body.contentJson ? JSON.stringify(body.contentJson) : null,
-        body.contentHtml || null,
-        body.contentText || null,
-        documentType,
-        JSON.stringify(governedMetadata),
-        embeddingStatus,
-        uid
-      ]
-    );
-    await this.logProjectActivity(projectId, uid, "created", "knowledge_document", res.rows[0].id, title, {});
+    const res = await this.db.transaction(async client => {
+      // Recheck the folder under a shared lock. A delete locks the target FOR UPDATE and its
+      // cascade updates descendants with FOR NO KEY UPDATE; FOR SHARE conflicts with both, so
+      // this insert either wins (and the cascade then sees the new document) or sees the deleted
+      // folder and refuses. The earlier kbFolder() read is only a fast preflight. Do not take the
+      // skill-assignment advisory lock after this point: the delete acquires it before the folder
+      // lock, so reversing that order would create a cycle.
+      const folder = await client.query(
+        "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",
+        [folderId, projectId]
+      );
+      if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      // The preflight access read may be stale after the wait; revalidate membership/role here.
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const inserted = await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [
+          project.organization_id,
+          projectId,
+          folderId,
+          title,
+          body.contentJson ? JSON.stringify(body.contentJson) : null,
+          body.contentHtml || null,
+          body.contentText || null,
+          documentType,
+          JSON.stringify(governedMetadata),
+          embeddingStatus,
+          uid
+        ]
+      );
+      await this.logProjectActivity(projectId, uid, "created", "knowledge_document", inserted.rows[0].id, title, {}, client);
+      return inserted;
+    });
     // Governed manuals/policies remain human-only until an exposure policy is accepted.
     if (!isGovernedDocumentType(documentType)) {
       this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
@@ -12817,25 +12835,32 @@ export class LegacyService implements OnModuleInit {
       this.assertAgentMayTouchGoverned(principal, current.document_type);
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      // Same-project folder deletion takes the project mutation lock before its cascade, so this
+      // destination read cannot observe a folder that is concurrently being soft-deleted.
       const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [folderId, projectId]);
       if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
-      return client.query(
+      const moved = await client.query(
         `UPDATE knowledge_documents SET folder_id = $2, updated_by = $3, updated_at = now()
          WHERE id = $1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
         [documentId, folderId, uid, projectId]
       );
+      await this.logProjectActivity(projectId, uid, "moved", "knowledge_document", documentId, moved.rows[0].title, {}, client);
+      return moved;
     });
-    await this.logProjectActivity(projectId, uid, "moved", "knowledge_document", documentId, res.rows[0].title, {});
     return toCamel(res.rows[0]);
   }
 
   async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
     principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
     this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const res = await this.db.transaction(async client => {
+      // Match deleteKnowledgeFolder/move paths: advisory first, then domain rows. Without this the
+      // source-document lock and the folder cascade can deadlock, or the copy can be inserted into
+      // a folder whose ancestor delete already took its document snapshot.
+      await this.lockSkillAssignments(client, projectId);
       // Pin the source while copying. A token duplicate that waited here must not copy a document
       // that became governed in the meantime, and a later conversion must see the copy commit first.
       const source = (await client.query(
@@ -12845,12 +12870,16 @@ export class LegacyService implements OnModuleInit {
       )).rows[0];
       if (!source) throw new NotFoundException({ error: "Document not found" });
       this.assertAgentMayTouchGoverned(principal, source.document_type);
+      // The source wait can outlive the preflight read; a removed member or archived project must
+      // not still receive a copy. The project mutation advisory lock serialises this with folder
+      // deletion, so source.folder_id cannot be deleted between this check and the insert.
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       const embeddingStatus = isGovernedDocumentType(source.document_type) ? "unsupported" : "pending";
-      return client.query(
+      const inserted = await client.query(
         `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
         [
-          project.organization_id,
+          authority.organization_id,
           projectId,
           source.folder_id,
           `${source.title} (copy)`,
@@ -12863,10 +12892,11 @@ export class LegacyService implements OnModuleInit {
           uid
         ]
       );
+      await this.logProjectActivity(projectId, uid, "duplicated", "knowledge_document", inserted.rows[0].id, inserted.rows[0].title, {}, client);
+      return inserted;
     });
-    await this.logProjectActivity(projectId, uid, "duplicated", "knowledge_document", res.rows[0].id, res.rows[0].title, {});
     if (!isGovernedDocumentType(res.rows[0].document_type)) {
-      this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+      this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", res.rows[0].id, "created");
     }
     return toCamel(res.rows[0]);
   }

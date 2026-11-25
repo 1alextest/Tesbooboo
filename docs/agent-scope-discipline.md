@@ -18,6 +18,10 @@ Classify what you notice, then act:
 | **Adjacent finding** — stale test, unrelated flake, missing cleanup, refactor opportunity, accessibility smell, etc. | Record it and continue. Put it in the PR's "Findings not fixed" section with `file:line`, evidence, consequence and a suggested next step; where actionable, file a Basecamp card/issue so it is not lost. Do not silently repair it, and do not let it block the increment. |
 | **New feature / platform / dependency / subsystem** — a second store, scheduler, observability product, agent runtime, or a competing spec package | Do not start it. Write a short proposal (problem, evidence, cost, alternatives, what it displaces) and get explicit owner sign-off. It is its own increment, with its own spec amendment and PR. |
 
+## Unasked decision discovery within named scope
+
+Before implementing a consequential interpretation, follow the [evidence-grounded decision skill](agent-skills/evidence-grounded-decisions/SKILL.md#tesbo-specification-to-native-record-handoff). Agents must independently **generate** candidate product questions from omitted states, actors, conflicting prior rules, upstream/downstream dependencies and human consequences—even when the assigned card or spec contains no open questions. This is distinct from merely explaining an existing question. Reconcile with prior authoritative decisions and classify candidates as already decided, delegated, human-required or evidence-blocked. Only the affected choice is held for appropriate authority; unrelated authorized work may continue. Subagents without a questioning interface or native write access report candidates to coordination for the existing review and Tesbo records, never silently suppress them. Do not create a new decision service or claim native persistence without an actual authorized write.
+
 ## No unsanctioned pivot
 
 A plan existing is not sign-off. If implementation shows the named spec is wrong or incomplete, stop and

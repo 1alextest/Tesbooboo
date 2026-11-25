@@ -188,6 +188,58 @@ test('scope detects renamed protected files and keeps unrelated changes not appl
   snapshot.reviews = [];
   assert.equal(evaluateAssurance(snapshot).status, 'not_applicable');
 });
+test('agent instructions and living skills receive independent assurance even for rename and no-change claims', () => {
+  const guarded = [
+    'AGENTS.md',
+    'CLAUDE.md',
+    'skills-lock.json',
+    '.agents/skills/langfuse/SKILL.md',
+    '.claude/skills/mcp-production-verify/SKILL.md',
+    'docs/agent-skills/living-security-engineering/SKILL.md',
+    'docs/agent-skills/evidence-grounded-decisions/SKILL.md',
+    'docs/agent-skills/a-new-context/SKILL.md',
+  ];
+  for (const filename of guarded) {
+    assert.equal(requiresAssurance(filename), true, filename);
+    const snapshot = fixtureSnapshot();
+    snapshot.files = [{ filename, status: 'modified', sha: 'd'.repeat(40) }];
+    snapshot.reviews = [];
+    assert.equal(evaluateAssurance(snapshot).status, 'blocked', filename);
+    // A rename of governed guidance must not escape by moving the file elsewhere.
+    assert.equal(requiresAssurance({filename:'notes/archived.md',previous_filename:filename}), true);
+  }
+  const unrelated = fixtureSnapshot();
+  unrelated.files = [{filename:'README.md',status:'modified',sha:'d'.repeat(40)}];
+  unrelated.reviews = [];
+  assert.equal(evaluateAssurance(unrelated).status, 'not_applicable');
+  unrelated.reviewThreads = [{id:'finding',isResolved:false,isOutdated:true}];
+  assert.equal(evaluateAssurance(unrelated).status, 'blocked',
+    'all native unresolved findings block even unrelated file paths');
+});
+
+for (const owner of ['docs/agent-scope-discipline.md', 'scripts/branch-rulesets.mjs']) {
+  test('finding control owner requires assurance on edits and renames: ' + owner, () => {
+    const other = 'archive/previous-owner';
+    for (const file of [
+      { filename: owner, status: 'modified' },
+      { filename: other, previous_filename: owner, status: 'renamed' },
+      { filename: owner, previous_filename: other, status: 'renamed' },
+    ]) {
+      const snapshot = fixtureSnapshot();
+      snapshot.files = [{ ...file, sha: 'd'.repeat(40) }];
+      snapshot.reviews = [];
+      assert.equal(evaluateAssurance(snapshot).status, 'blocked');
+      installReceipts(snapshot);
+      assert.equal(evaluateAssurance(snapshot).status, 'analytical_evidence_accepted');
+      if (file.previous_filename) {
+        installReceipts(snapshot, { independent: { coveredPaths: [file.filename] } });
+        assert.equal(evaluateAssurance(snapshot).status, 'blocked');
+      }
+    }
+    assert.equal(requiresAssurance(owner + '.example'), false);
+  });
+}
+
 test('draft and unsupported target branches refuse; closed PRs receive no approval', () => {
   const draft = fixtureSnapshot(); draft.pr.draft = true; blocked(draft);
   const target = fixtureSnapshot(); target.pr.base.ref = 'unreviewed-feature'; blocked(target);

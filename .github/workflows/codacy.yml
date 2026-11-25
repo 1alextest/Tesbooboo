@@ -30,6 +30,8 @@ jobs:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Test Codacy output guard
         run: python3 -B -m unittest discover -s scripts -p 'test_codacy_output_guard.py'
@@ -38,9 +40,16 @@ jobs:
         shell: bash
         env:
           CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          # On pull_request, checkout and the SARIF uploader both use the event
+          # merge commit. Do not label that tree with the contributor head SHA.
+          scan_commit=$(git rev-parse HEAD)
+          if [[ "$scan_commit" != "$GITHUB_SHA" ]]; then
+            echo 'Codacy checkout does not match the event commit' >&2
+            exit 1
+          fi
+          echo "Codacy source commit: $scan_commit"
           # Same 7.10.4 image and analyzer defaults as the upstream action. Use its
           # published digest and Docker's container ID to supervise the formatter.
           image=codacy/codacy-analysis-cli:7.10.4@sha256:2ae34a48ca2a70b221dd51f470edca878db01d3f7186f34e397595bef287978a
@@ -54,7 +63,7 @@ jobs:
             --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
             --volume /var/run/docker.sock:/var/run/docker.sock \
             --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
-            "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$SCAN_COMMIT" \
+            "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
             --verbose --format sarif --output "$GITHUB_WORKSPACE/results.sarif" \
             --gh-code-scanning-compat --fail-if-incomplete --max-allowed-issues 2147483647 \
             2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile"
