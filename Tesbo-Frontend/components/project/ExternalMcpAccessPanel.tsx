@@ -96,6 +96,7 @@ function MyOAuthConsentHistory({ projectId, refreshKey }: { projectId: string; r
           <p className="font-medium break-words">{consent.clientName}</p>
           <p className="break-all text-[var(--muted)]">{consent.clientId}</p>
           <p>State: {stateLabel}</p>
+          <p>{consent.status === "consent_current" ? "Read-only tools: " + (consent.currentAllowedTools ? consent.currentAllowedTools.join(", ") : "all currently permitted read tools") : "This consent has no current access."}</p>
           <p className="text-[var(--muted)]">Approved resource: {consent.resource}</p>
           <p className="text-[var(--muted)]">Consent recorded: {new Date(consent.createdAt).toLocaleString()}</p>
           {consent.status !== "revoked" && <Button variant="secondary" disabled={busyId !== null}
