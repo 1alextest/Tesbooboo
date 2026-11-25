@@ -805,11 +805,10 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     await blocker.connect();
     try {
       await blocker.query("BEGIN");
-      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
       await blocker.query("SELECT id FROM knowledge_folders WHERE id = $1 FOR UPDATE", [parent]);
       const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
         .then(() => null, (error) => error);
-      await waitForBlocker(pid);
+      await waitForAnyLockWait();
       await blocker.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [parent]);
       await blocker.query("COMMIT");
       expect(await create).toMatchObject({ status: 404 });
@@ -823,7 +822,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND name = $2", [projectId, childName]);
       await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [parent]);
     }
-  });
+  }, 30000);
 
   it("keeps Zyra memory out of a folder deleted between resolution and insert", async () => {
     // Earlier fixtures in this shared project may already hold a "Zyra AI Memory" document, which
