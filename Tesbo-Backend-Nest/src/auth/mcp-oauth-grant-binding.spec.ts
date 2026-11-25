@@ -149,6 +149,21 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     expect(query).toHaveBeenCalledWith(expect.stringContaining("project_membership_id,organization_membership_id"),
       [expect.any(String), PROJECT, ACCOUNT, CLIENT, RESOURCE, 3,
         "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]);
+    // A member can leave and rejoin with the same project settings/revision.
+    // The reviewed membership identity must be checked again under the binding lock.
+    for (const changed of [
+      { projectMembershipId: "33333333-3333-4333-8333-333333333333",
+        organizationMembershipId: "22222222-2222-4222-8222-222222222222" },
+      { projectMembershipId: "11111111-1111-4111-8111-111111111111",
+        organizationMembershipId: "33333333-3333-4333-8333-333333333333" }
+    ]) {
+      await expect(bindOAuthGrantToApproval(db, "stale-review-" + changed.projectMembershipId +
+        changed.organizationMembershipId, { ...basis, ...changed })).rejects.toThrow(/changed/);
+      expect(inserted).toBe(1);
+    }
+    await expect(bindOAuthGrantToApproval(db, "incomplete-membership-proof",
+      { ...basis, projectMembershipId: "11111111-1111-4111-8111-111111111111" }))
+      .rejects.toThrow(/Incomplete/);
     f.state.revision = 4;
     await expect(bindOAuthGrantToApproval(db, "late-grant", basis)).rejects.toThrow(/changed/);
     expect(inserted).toBe(1);
