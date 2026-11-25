@@ -259,6 +259,16 @@ describe("McpService", () => {
       const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
       const names = res.result.tools.map((t: any) => t.name);
+      // Staging tools are a second decision point beyond initialize; they must
+      // surface discovery guidance without claiming to enforce a policy gate.
+      for (const name of ["stage_testcase_changes", "stage_requirement_change_bundle"]) {
+        const entry = res.result.tools.find((t: any) => t.name === name);
+        if (entry) {
+          expect(entry.description).toContain("independently");
+          expect(entry.description).toContain("staging");
+        }
+      }
+
       expect(names).toEqual(
         expect.arrayContaining([
           "preview_behavior_model_draft",
