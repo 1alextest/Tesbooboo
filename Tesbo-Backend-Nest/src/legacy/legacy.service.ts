@@ -16011,7 +16011,11 @@ export class LegacyService implements OnModuleInit {
       this.db.query<{ saved: string; generated: string }>(
         `SELECT COALESCE(SUM(saved_count), 0) AS saved, COALESCE(SUM(generated_count), 0) AS generated
            FROM ai_generation_requests
-          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'`,
+          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'
+            -- Only completed testcase proposal batches are eligible. Requirement
+            -- bundles count revision/link operations; managed document requests
+            -- count documents. Neither is a generated testcase denominator.
+            AND provider NOT IN ('external_requirement_proposal', 'external_document_proposal')`,
         [projectId, ZYRA_AGENT_NAMES]
       )
     ]);
