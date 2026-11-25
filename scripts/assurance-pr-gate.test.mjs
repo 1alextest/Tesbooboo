@@ -217,6 +217,29 @@ test('agent instructions and living skills receive independent assurance even fo
     'all native unresolved findings block even unrelated file paths');
 });
 
+for (const owner of ['docs/agent-scope-discipline.md', 'scripts/branch-rulesets.mjs']) {
+  test('finding control owner requires assurance on edits and renames: ' + owner, () => {
+    const other = 'archive/previous-owner';
+    for (const file of [
+      { filename: owner, status: 'modified' },
+      { filename: other, previous_filename: owner, status: 'renamed' },
+      { filename: owner, previous_filename: other, status: 'renamed' },
+    ]) {
+      const snapshot = fixtureSnapshot();
+      snapshot.files = [{ ...file, sha: 'd'.repeat(40) }];
+      snapshot.reviews = [];
+      assert.equal(evaluateAssurance(snapshot).status, 'blocked');
+      installReceipts(snapshot);
+      assert.equal(evaluateAssurance(snapshot).status, 'analytical_evidence_accepted');
+      if (file.previous_filename) {
+        installReceipts(snapshot, { independent: { coveredPaths: [file.filename] } });
+        assert.equal(evaluateAssurance(snapshot).status, 'blocked');
+      }
+    }
+    assert.equal(requiresAssurance(owner + '.example'), false);
+  });
+}
+
 test('draft and unsupported target branches refuse; closed PRs receive no approval', () => {
   const draft = fixtureSnapshot(); draft.pr.draft = true; blocked(draft);
   const target = fixtureSnapshot(); target.pr.base.ref = 'unreviewed-feature'; blocked(target);

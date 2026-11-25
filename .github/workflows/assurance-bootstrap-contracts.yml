@@ -26,7 +26,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Source snapshot: 93ca0d6050f26cdad0c95c1bb62b15681ac90910
+          # Source snapshot: abd093cc109c9080210e5dc98fc6410bc32a3b9a
           while read -r expected file; do
             actual="$(git hash-object "$file")"
             if [ "$actual" != "$expected" ]; then
@@ -34,8 +34,8 @@ jobs:
               exit 1
             fi
           done <<'BLOBS'
-          c043af23925e4b6e06563302a3064e40c910abbc scripts/assurance-pr-gate.mjs
-          ee37a552925ec5903b424f9ffe09894f4eeb95a3 scripts/assurance-pr-gate.test.mjs
+          b822b62cbcd19326714e44a0a3972c472dcc2612 scripts/assurance-pr-gate.mjs
+          f91ef52fc257408ae9bd07914006bd4af9c46821 scripts/assurance-pr-gate.test.mjs
           856d664b0f6165ae6ffbfc75394866bd9c2379cf scripts/publish-assurance-status.mjs
           6d41964ad5a847fc3d0459361bde0d87a72b1fbc scripts/publish-assurance-status.test.mjs
           9b396e0aa7160b68453e99273a9ef285ea02f125 .github/assurance-policy.json
