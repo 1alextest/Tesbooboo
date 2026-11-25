@@ -226,6 +226,27 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     }
   });
 
+  it.each(["project", "organization"])("refuses stale review after membership replacement: %s", async membership => {
+    const f = fixture();
+    // The existing membership rows are the authority generation. A remove/rejoin
+    // can leave all visible project/client facts and the owner revision identical.
+    const original = { name: "QA Project", key: "QA",
+      project_membership_id: "11111111-1111-4111-8111-111111111111",
+      organization_membership_id: "22222222-2222-4222-8222-222222222222" };
+    f.mcp.requireOAuthConsentProject.mockResolvedValue(original);
+    const { csrf, review } = await f.tokenFromPage();
+    f.mcp.requireOAuthConsentProject.mockResolvedValue({
+      ...original,
+      [membership === "project" ? "project_membership_id" : "organization_membership_id"]:
+        "33333333-3333-4333-8333-333333333333"
+    });
+    await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+      { action: "approve", csrf, review })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.save).not.toHaveBeenCalled();
+    expect(f.oauth.bindIssuedGrant).not.toHaveBeenCalled();
+    expect(f.provider.interactionFinished).not.toHaveBeenCalled();
+  });
+
   it("requires a review proof for approval but permits cancellation after revocation", async () => {
     const f = fixture();
     const { csrf } = await f.tokenFromPage();
