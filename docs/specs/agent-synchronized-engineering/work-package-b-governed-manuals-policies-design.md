@@ -533,9 +533,9 @@ Evidence:
   child was inserted under the folder the paused delete had already soft-deleted. The same test is
   green with the fix (`e684b92f`, `actions/runs/45551136629`, 728 database tests).
 - The integration-worker defect was established from the coordinator→job folder-id lifecycle and is
-  pinned by a processor contract test that fails if the transaction, advisory lock or in-transaction
-  `ensureProviderFolder` call is removed; a deterministic queue/DB interleaving was not reproducible
-  in the DB suite.
+  pinned by a processor contract test that fails if the transaction, exact shared advisory key or
+  in-transaction `findProviderFolderForWrite` call is removed; a deterministic queue/DB interleaving
+  was not reproducible in the DB suite.
 - Protected paths already covered by #263: move document/folder, duplicate, ordinary and ancestor
   deletion, with observed advisory waits.
 - `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
@@ -562,3 +562,9 @@ not recreate a deleted provider folder, a corrected proposal was staged as task
 `3aff650be7f35792f0d49f06967ead360761688c1b110e9b06e52f635fa3842e`); the earlier task is left as
 history rather than deleted. Both remain `in_review`, **unassigned**, with no approved Skill
 assignment, so apply stays a human action; manual execution **UNRUN**.
+
+PR #268 merged into `development` as `313dd1e649bd21ae05356d0e82dea4f5db7f7e1a`; the Railway
+deployment succeeded and production `/api/health` returned that exact SHA. The approved-origin
+binding was created beside the existing project token as `tesbo-approved-origin` (exact origin,
+regular file, ACL restricted to the owning Windows principal), and the connection was verified as
+project `df072dfe-e4d0-406a-9350-e0d022c6323f` before staging.
