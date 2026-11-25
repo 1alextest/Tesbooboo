@@ -826,7 +826,9 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await new Promise((resolve) => setTimeout(resolve, 300));
       release();
       expect(await deletion).toBeNull();
-      expect(await create).toMatchObject({ status: 404 });
+      const createResult = await create;
+      console.log("FOLDER CREATE RESULT", JSON.stringify(createResult));
+      expect(createResult).toMatchObject({ status: 404 });
       expect((await setup.query(
         "SELECT COUNT(*)::int AS n FROM knowledge_folders WHERE project_id = $1 AND name = $2 AND is_deleted = false",
         [projectId, childName]
