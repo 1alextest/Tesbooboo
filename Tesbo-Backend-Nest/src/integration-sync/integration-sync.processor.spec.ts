@@ -562,7 +562,7 @@ describe("IntegrationSyncProcessor, notion provider", () => {
       } as unknown as DatabaseService,
       {
         recordTicketResult: jest.fn(),
-        ensureProviderFolder: jest.fn().mockResolvedValue("f"),
+        findProviderFolderForWrite: jest.fn().mockResolvedValue("f"),
         recordSyncEvent: jest.fn().mockResolvedValue(undefined)
       } as unknown as IntegrationSyncService,
       { loadConnection: jest.fn().mockResolvedValue({ id: "conn-1" }), fetchComments: jest.fn().mockResolvedValue([]), fetchNotionBody } as unknown as IntegrationSyncClient,
@@ -727,7 +727,7 @@ describe("IntegrationSyncProcessor — provider folder destination", () => {
       transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => callback(client))
     };
     const runs = {
-      ensureProviderFolder: jest.fn().mockResolvedValue("folder-new"),
+      findProviderFolderForWrite: jest.fn().mockResolvedValue("folder-new"),
       recordSyncEvent: jest.fn().mockResolvedValue(undefined),
       recordTicketResult: jest.fn().mockResolvedValue(undefined)
     };
@@ -753,10 +753,12 @@ describe("IntegrationSyncProcessor — provider folder destination", () => {
     });
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(runs.ensureProviderFolder).toHaveBeenCalledWith("org-1", "PROJECT-UUID", "jira", "user-1", client);
+    expect(runs.findProviderFolderForWrite).toHaveBeenCalledWith("PROJECT-UUID", "jira", client);
     expect(client.query.mock.calls[0][0]).toContain("pg_advisory_xact_lock");
+    // The exact shared key is what serialises this write with KB folder deletion/moves.
+    expect(client.query.mock.calls[0][1]).toEqual(["skill-assignments:project-uuid"]);
     expect(client.query.mock.calls[1][0]).toContain("INSERT INTO knowledge_documents");
-    // The stale coordinator id is not reused; the re-resolved folder is the destination.
+    // The stale coordinator id is not reused; the folder found under the lock is the destination.
     expect(client.query.mock.calls[1][1][2]).toBe("folder-new");
   });
 });

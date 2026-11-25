@@ -188,8 +188,10 @@ export class IntegrationSyncProcessor extends WorkerHost {
       );
 
       // Created before any ticket lands, so the folder exists by the time the first document
-      // needs a home — and only ever for projects that actually ran a sync.
-      const folderId = await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy);
+      // needs a home — and only ever for projects that actually ran a sync. The id is deliberately
+      // not carried in the job payload: the worker re-resolves it under the project lock at write
+      // time instead of trusting a value that may have been deleted since fan-out.
+      await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy);
 
       await this.runs.setStage(runId, "fetching_tickets");
       const queued: SyncTicketJobPayload[] = [];
@@ -213,7 +215,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
           }
           try {
             const ticketId = await this.upsertTicket(projectId, String(connection.id), provider, ticket, remote.remote_id);
-            queued.push({ runId, organizationId, projectId, provider, ticketId, issueId: ticket.issueId, issueKey: ticket.issueKey, folderId, triggeredBy });
+            queued.push({ runId, organizationId, projectId, provider, ticketId, issueId: ticket.issueId, issueKey: ticket.issueKey, triggeredBy });
           } catch (err) {
             // One ticket's data (an oversized field, or anything else unexpected) must never abort
             // the rest of the page or the run — an incremental run cursors off the last
@@ -569,7 +571,10 @@ export class IntegrationSyncProcessor extends WorkerHost {
       // the same project mutation lock as the KB folder deletion/move paths, re-resolve (or
       // recreate) the provider folder under it, and write the mirror in the same transaction.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
-      const destinationFolderId = await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy, client);
+      const destinationFolderId = await this.runs.findProviderFolderForWrite(projectId, provider, client);
+      if (!destinationFolderId) {
+        throw new Error(`The ${PROVIDER_FOLDER_NAMES[provider]} folder was deleted during the run; the next sync will recreate it.`);
+      }
       return client.query<{ id: string; inserted: boolean }>(
         `INSERT INTO knowledge_documents (
            organization_id, project_id, folder_id, title, content_text, content_html, document_type, status,

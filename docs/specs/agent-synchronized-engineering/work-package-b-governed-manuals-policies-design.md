@@ -518,8 +518,10 @@ All are now transaction-scoped:
   (`FOR SHARE`) inside the transaction with the root fallback, and keeps the per-document advisory for
   appends. A deleted AI Memory folder falls back to the undeletable root; embedding enqueue stays
   after commit.
-- The sync worker takes the advisory lock, re-resolves (or recreates) the provider folder under it,
-  and writes the mirror in the same transaction; the stale coordinator `folderId` is no longer used.
+- The sync worker takes the advisory lock, re-resolves the existing provider folder under it, and
+  writes the mirror in the same transaction; the stale coordinator `folderId` is no longer carried in
+  the job payload. It never recreates a deleted folder: that ticket fails and the next sync's
+  coordinator recreates it, so a user deletion or disconnect is not resurrected by a late job.
   Post-commit sync-event/notification/embedding effects are unchanged.
 
 Evidence:
@@ -537,10 +539,21 @@ Evidence:
   deletion, with observed advisory waits.
 - `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
   folders.
+- Remaining same-class follow-up: `uploadKnowledgeFiles` and `moveKnowledgeFile` still insert/update
+  `knowledge_files.folder_id` without the project mutation lock or a locked destination recheck, so a
+  file upload/move can still be stranded under a deleted folder. The storage write precedes the row
+  write, so its repair needs a compensating delete and belongs to the files owner.
+- `restoreKnowledgeFolder` does not reject restoring a child under a still-deleted parent; the Trash
+  API marks it non-restorable, but the service can be called directly. Recorded, not a lock race.
+- Integration-sync recreation of a provider folder mid-run was deliberately removed; `folderId` is no
+  longer carried in per-ticket jobs.
+- Coverage note: this PR's deterministic proof is the observed-wait DB suite plus the processor
+  transaction contract; the existing `api/knowledge-base`/`api/integrations` Playwright specs were not
+  re-run in this PR, and no new e2e route/response changed.
 
 Native coverage was staged through the approved project-scoped MCP connection (origin
 `https://tesbooboo-production.up.railway.app`, verified project `df072dfe-e4d0-406a-9350-e0d022c6323f`):
 review task `1d615021-4c92-46df-bcef-2d9745ca557b`, proposal revision
 `24f89e425bca573b52a41e1aa3281a7dae818ccb49fd7af463cf96c9e47644cc`, containing one requirement
-revision, one Draft case and one explicit case link. It remains `in_review` with no approved Skill
-assignment, so apply stays a human action; manual execution **UNRUN**.
+revision, one Draft case and one explicit case link. It remains `in_review`, **unassigned**, with no
+approved Skill assignment, so apply stays a human action; manual execution **UNRUN**.

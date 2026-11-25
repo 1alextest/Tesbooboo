@@ -11660,6 +11660,7 @@ export class LegacyService implements OnModuleInit {
             [projectId]
           );
           parentFolderId = root.rows[0]?.id || null;
+          if (!parentFolderId) throw new BadRequestException({ error: "Knowledge base root folder not found" });
         } else {
           const parent = await client.query(
             "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",

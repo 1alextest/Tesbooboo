@@ -821,9 +821,8 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await acquiring;
       const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
         .then(() => null, (error) => error);
-      // The create is either waiting on the project lock (fixed) or on the parent row lock
-      // (pre-fix); either way it has reached its wait before the delete is allowed to commit.
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Observe that the create reached its wait before allowing the delete to commit.
+      await waitForAnyLockWait();
       release();
       expect(await deletion).toBeNull();
       expect(await create).toMatchObject({ status: 404 });
@@ -835,6 +834,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       release();
       await observed.end();
       await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND name = $2", [projectId, childName]);
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [parent]);
     }
   }, 30000);
 
