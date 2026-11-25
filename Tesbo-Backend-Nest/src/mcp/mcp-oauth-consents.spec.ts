@@ -29,7 +29,8 @@ function fixture() {
   };
   const query = jest.fn(async (sql: string, _params?: unknown[]) => {
     if (sql.includes("SELECT b.grant_fingerprint")) return { rows: [binding] };
-    if (sql.includes("SELECT b.client_id")) return { rows: [binding] };
+    if (sql.includes("SELECT p.organization_id")) return { rows: [{ organization_id: "org-ci" }] };
+    if (sql.includes("SELECT client_id,revoked_at")) return { rows: [binding] };
     if (sql.includes("SET revoked_at")) {
       binding.revoked_at = new Date("2026-11-21T10:00:00Z");
       return { rows: [{ grant_fingerprint: FINGERPRINT }] };
@@ -101,6 +102,7 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
     f.requireProjectAccess.mockRejectedValueOnce(new ForbiddenException());
     await expect(f.svc.listMyOAuthConsents(req(), PROJECT)).rejects.toBeInstanceOf(ForbiddenException);
     expect(f.query).not.toHaveBeenCalled();
+    f.query.mockImplementationOnce(async () => ({ rows: [{ organization_id: "org-ci" }] }));
     f.query.mockImplementationOnce(async () => ({ rows: [] }));
     await expect(f.svc.revokeMyOAuthConsent(req(), PROJECT, FINGERPRINT))
       .rejects.toBeInstanceOf(NotFoundException);
@@ -114,13 +116,16 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
     expect(f.transaction).toHaveBeenCalledTimes(1);
     expect(f.binding.revoked_at).toBeInstanceOf(Date);
     expect(f.query.mock.calls.map(c => c[0])).toEqual([
-      expect.stringContaining("FOR UPDATE OF b FOR SHARE OF p,pm,om"),
+      expect.stringContaining("FOR SHARE OF p,pm,om"),
+      expect.stringContaining("FOR UPDATE OF b"),
       expect.stringContaining("SET revoked_at"),
       expect.stringContaining("INSERT INTO audit_logs")
     ]);
-    expect(f.query.mock.calls[2][1]?.[0]).toBe(PROJECT);
-    expect(f.query.mock.calls[2][1]?.[1]).toBe(USER);
-    expect(f.query.mock.calls[2][1]?.[2]).toBe(FINGERPRINT);
+    expect(f.query.mock.calls[0][1]).toEqual([PROJECT, USER]);
+    expect(f.query.mock.calls[1][1]).toEqual([PROJECT, USER, FINGERPRINT]);
+    expect(f.query.mock.calls[3][1]?.[0]).toBe(PROJECT);
+    expect(f.query.mock.calls[3][1]?.[1]).toBe(USER);
+    expect(f.query.mock.calls[3][1]?.[2]).toBe(FINGERPRINT);
     const replay = await f.svc.revokeMyOAuthConsent(req(), PROJECT, FINGERPRINT);
     expect(replay).toEqual({ id: FINGERPRINT, status: "revoked", replayed: true });
     expect(f.query.mock.calls.filter(c => c[0].includes("INSERT INTO audit_logs"))).toHaveLength(1);
@@ -131,7 +136,8 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
     await expect(f.svc.revokeMyOAuthConsent(req(), PROJECT, "main")).rejects.toBeInstanceOf(NotFoundException);
     expect(f.transaction).not.toHaveBeenCalled();
     f.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("SELECT b.client_id")) return { rows: [f.binding] };
+      if (sql.includes("SELECT p.organization_id")) return { rows: [{ organization_id: "org-ci" }] };
+      if (sql.includes("SELECT client_id,revoked_at")) return { rows: [f.binding] };
       if (sql.includes("SET revoked_at")) return { rows: [{}] };
       throw new Error("audit write failed");
     });
