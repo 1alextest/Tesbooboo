@@ -555,5 +555,9 @@ Native coverage was staged through the approved project-scoped MCP connection (o
 `https://tesbooboo-production.up.railway.app`, verified project `df072dfe-e4d0-406a-9350-e0d022c6323f`):
 review task `1d615021-4c92-46df-bcef-2d9745ca557b`, proposal revision
 `24f89e425bca573b52a41e1aa3281a7dae818ccb49fd7af463cf96c9e47644cc`, containing one requirement
-revision, one Draft case and one explicit case link. It remains `in_review`, **unassigned**, with no
-approved Skill assignment, so apply stays a human action; manual execution **UNRUN**.
+revision, one Draft case and one explicit case link. Because the final sync policy re-resolves but does
+not recreate a deleted provider folder, a corrected proposal was staged as task
+`d2cae745-c550-4a58-b85e-6d000f28b472` (revision
+`3aff650be7f35792f0d49f06967ead360761688c1b110e9b06e52f635fa3842e`); the earlier task is left as
+history rather than deleted. Both remain `in_review`, **unassigned**, with no approved Skill
+assignment, so apply stays a human action; manual execution **UNRUN**.
