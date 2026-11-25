@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getTestCaseRevisionBasis, type TestCaseRevisionBasis } from "@/lib/api";
+import { getTestCase } from "@/lib/api";
+
+type DisplayCase = { title: string; status: string; approvalCurrent: boolean };
 
 /**
  * A graph reference is not proof that a native case currently exists or is approved.
@@ -12,7 +14,7 @@ export function CaseCandidateDetails({ projectId, caseId }: {
   projectId: string;
   caseId: string;
 }) {
-  const [caseDetails, setCaseDetails] = useState<TestCaseRevisionBasis | null>(null);
+  const [caseDetails, setCaseDetails] = useState<DisplayCase | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "read" | "unavailable">("idle");
   const activeRead = useRef<AbortController | null>(null);
 
@@ -34,13 +36,21 @@ export function CaseCandidateDetails({ projectId, caseId }: {
     // An earlier authorized read is not permission to keep showing stale details.
     setCaseDetails(null);
     try {
-      const current = await getTestCaseRevisionBasis(projectId, caseId, controller.signal);
+      const current = await getTestCase(projectId, caseId, controller.signal);
       if (controller.signal.aborted || activeRead.current !== controller) return;
-      if (current.id !== caseId || !current.title.trim() || !current.status.trim()) {
+      // Require the server's explicit identity; a fallback to the requested URL
+      // would falsely verify a malformed or unrelated case response.
+      if (current.id !== caseId || typeof current.title !== "string" ||
+          !current.title.trim() || typeof current.status !== "string" ||
+          !current.status.trim()) {
         setState("unavailable");
         return;
       }
-      setCaseDetails(current);
+      setCaseDetails({
+        title: current.title,
+        status: current.status,
+        approvalCurrent: current.approvalCurrent === true,
+      });
       setState("read");
     } catch {
       if (!controller.signal.aborted && activeRead.current === controller) {
