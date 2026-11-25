@@ -63,7 +63,7 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
       approvedClient
     };
     const legacy = { requireProjectAccess: members };
-    const config = { sessionCookieName: "tesbo_session" };
+    const config = { sessionCookieName: "tesbo_session", frontendUrl: "https://app.tesbo.example" };
     const module = await Test.createTestingModule({
       controllers: [McpOAuthInteractionController],
       providers: [
@@ -101,7 +101,8 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
       kind: "oauth_client", clientName: "QA approved browser client",
       scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null, accessRevision: 1
     });
-    details.mockResolvedValue({
+    details.mockReset().mockResolvedValue({
+      uid: UID,
       prompt: { name: "consent" },
       params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read" }
     });
@@ -121,6 +122,44 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
       }
     });
   }
+
+  it("sends a signed-out browser with a current provider interaction to the configured Tesbo login", async () => {
+    const response = await request(UID, { headers: { Accept: "text/html,application/xhtml+xml,*/*;q=0.8" } }, false);
+    expect(response.status).toBe(303);
+    const login = new URL(response.headers.get("location")!);
+    expect(login.origin + login.pathname).toBe("https://app.tesbo.example/login");
+    expect([...login.searchParams]).toEqual([["redirect", `/api/oauth/interactions/${UID}`]]);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(approvedClient).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it.each<Record<string, string>>([
+    { Accept: "application/json" },
+    { Accept: "*/*" },
+    { Accept: "text/html", Authorization: "Bearer invalid" }
+  ])("requires a session for an API or credential-bearing GET", async headers => {
+    const response = await request(UID, { headers }, false);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("location")).toBeNull();
+    expect(details).not.toHaveBeenCalled();
+  });
+
+  it("reports an expired interaction and does not send the user through login", async () => {
+    details.mockRejectedValueOnce(Object.assign(new Error("invalid_request"), { name: "SessionNotFound" }));
+    const response = await request(UID, { headers: { Accept: "text/html" } }, false);
+    expect(response.status).toBe(410);
+    expect(response.headers.get("location")).toBeNull();
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  it("only resumes the interaction returned by the provider for this browser", async () => {
+    const response = await request("different-interaction", { headers: { Accept: "text/html" } }, false);
+    expect(response.status).toBe(410);
+    expect(response.headers.get("location")).toBeNull();
+    expect(finish).not.toHaveBeenCalled();
+  });
 
   it("renders existing-account/project/read-only scope from a real GET, then processes an actual URL-encoded consent POST", async () => {
     const page = await request(UID);

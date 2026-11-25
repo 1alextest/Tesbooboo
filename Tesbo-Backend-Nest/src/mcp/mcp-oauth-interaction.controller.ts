@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, NotFoundException, Param, Post, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
+import { Body, Controller, Get, GoneException, HttpCode, NotFoundException, Param, Post, Req, Res, UnauthorizedException, ForbiddenException } from "@nestjs/common";
 import type { Response } from "express";
 import { timingSafeEqual } from "node:crypto";
 import type { AuthenticatedRequest } from "../common/request.types";
@@ -8,6 +8,7 @@ import { McpService } from "./mcp.service";
 import { McpOAuthServer } from "../auth/mcp-oauth-server";
 
 type InteractionDetails = {
+  uid: string;
   prompt?: { name?: string };
   params?: { client_id?: string; scope?: string; resource?: string | string[] };
 };
@@ -46,6 +47,21 @@ export class McpOAuthInteractionController {
       throw new UnauthorizedException({ error: "Sign in using a Tesbo browser session before authorizing this client" });
     }
     return req.userId;
+  }
+
+  private async currentInteraction(req: AuthenticatedRequest, res: Response, uid: string): Promise<InteractionDetails> {
+    let details: InteractionDetails;
+    try {
+      details = await this.oauth.requireActive().interactionDetails(req, res);
+    } catch (error) {
+      // oidc-provider uses SessionNotFound for an absent/expired interaction cookie or session.
+      if (!(error instanceof Error) || error.name !== "SessionNotFound") throw error;
+      throw new GoneException("This authorization request has expired. Reconnect from your client.");
+    }
+    if (details.uid !== uid) {
+      throw new GoneException("This authorization request is no longer current. Reconnect from your client.");
+    }
+    return details;
   }
 
   private csrf(req: AuthenticatedRequest, interactionId: string): string {
@@ -88,9 +104,20 @@ export class McpOAuthInteractionController {
     @Res() res: Response,
     @Param("uid") uid: string
   ) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    const needsBrowserLogin = !req.userId && !req.apiToken && !req.oauthAccess &&
+      req.headers.authorization === undefined && req.headers.accept &&
+      req.accepts(["json", "html"]) === "html";
+    if (this.oauth.enabled && needsBrowserLogin) {
+      await this.currentInteraction(req, res, uid);
+      const login = new URL("/login", this.config.frontendUrl);
+      login.searchParams.set("redirect", `/api/oauth/interactions/${encodeURIComponent(uid)}`);
+      res.redirect(303, login.href);
+      return;
+    }
     const userId = this.humanUser(req);
-    const provider = this.oauth.requireActive();
-    const details = await provider.interactionDetails(req, res) as InteractionDetails;
+    const details = await this.currentInteraction(req, res, uid);
     const prompt = details.prompt?.name;
     if (prompt !== "login" && prompt !== "consent") throw new ForbiddenException("Unsupported OAuth interaction");
     const target = await this.reviewedTarget(req, details);
@@ -98,7 +125,6 @@ export class McpOAuthInteractionController {
     const review = this.reviewedProof(csrf, prompt, target);
     const login = prompt === "login";
     const label = login ? "Continue as this Tesbo user" : "Authorize read-only access";
-    res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
     res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Authorize read-only Tesbo QA access</title>
@@ -138,7 +164,7 @@ export class McpOAuthInteractionController {
       throw new ForbiddenException({ error: "A user choice is required" });
     }
     const provider = this.oauth.requireActive();
-    const details = await provider.interactionDetails(req, res) as InteractionDetails;
+    const details = await this.currentInteraction(req, res, uid);
     if (body.action === "deny") {
       await provider.interactionFinished(req, res, { error: "access_denied" }, { mergeWithLastSubmission: false });
       return;

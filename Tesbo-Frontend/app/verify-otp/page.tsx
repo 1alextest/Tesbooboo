@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { IconMailOpened } from "@tabler/icons-react";
 import { authMe, requestOtp, verifyOtp } from "@/lib/api";
+import { navigateAfterSignIn, safeRedirectPath } from "@/lib/redirect";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
 import { OtpBoxInput } from "@/components/auth/OtpBoxInput";
 import { AuthLoadingScreen } from "@/components/auth/AuthLoadingScreen";
@@ -19,7 +20,7 @@ function VerifyOtpForm() {
   const emailParam = searchParams.get("email") ?? "";
   const inviteEmail = searchParams.get("inviteEmail")?.trim().toLowerCase() || "";
   const isInviteEmailLocked = searchParams.get("lockEmail") === "1" && Boolean(inviteEmail);
-  const redirectParam = searchParams.get("redirect");
+  const redirectParam = safeRedirectPath(searchParams.get("redirect"));
   const email = isInviteEmailLocked ? inviteEmail : emailParam;
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -58,11 +59,10 @@ function VerifyOtpForm() {
       // file yet — detour through the one-time profile step before continuing on to `destination`.
       const me = await authMe();
       if (me && !me.profileComplete) {
-        router.push(`/complete-profile?redirect=${encodeURIComponent(destination)}`);
+        navigateAfterSignIn(router, `/complete-profile?redirect=${encodeURIComponent(destination)}`);
       } else {
-        router.push(destination);
+        navigateAfterSignIn(router, destination);
       }
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invalid or expired code");
     } finally {

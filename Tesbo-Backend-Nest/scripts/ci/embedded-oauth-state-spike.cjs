@@ -18,6 +18,7 @@ const { DatabaseService } = require("../../dist/database/database.service");
 const { McpOAuthServer } = require("../../dist/auth/mcp-oauth-server");
 const { createMcpOAuthPostgresAdapter } = require("../../dist/auth/mcp-oauth-postgres.adapter");
 const { McpService } = require("../../dist/mcp/mcp.service");
+const { verifyBrowserConsentRead } = require("./oauth-interaction-redirect.cjs");
 const { oauthReferenceFingerprint } = require("../../dist/common/crypto.util");
 
 const PROVIDER_VERSION = "9.15.1";
@@ -104,6 +105,7 @@ async function main() {
       });
     }
     await setOwnerClients([clientId, otherClientId]);
+    await verifyBrowserConsentRead(dbA, accountId, projectId);
     function configuration(Adapter) {
       return {
         adapter: Adapter,
@@ -201,9 +203,8 @@ async function main() {
     await new AdapterB("AuthorizationCode").destroy(rawCode);
 
 
-    // Mount the same real-provider instance in a local Nest/Express app. The
-    // public metadata is a test fixture; no Tesbo auth route or token issuer is
-    // ever mounted by the actual product.
+    // Use the provider on a separate loopback listener to test persistence
+    // and credential rotation across the two replicas.
     class IsolatedNestModule {}
     Module({})(IsolatedNestModule);
     app = await NestFactory.create(IsolatedNestModule, { logger: false, cors: false });

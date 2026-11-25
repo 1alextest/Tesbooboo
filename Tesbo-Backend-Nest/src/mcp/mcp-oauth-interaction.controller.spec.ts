@@ -31,6 +31,7 @@ function fixture() {
     save() { return save(); }
   }
   const details = {
+    uid: UID,
     prompt: { name: "consent" },
     params: { client_id: CLIENT, resource: RESOURCE, scope: "openid mcp:read offline_access" }
   };

@@ -1,7 +1,8 @@
 "use strict";
 
 // Exercise Tesbo's compiled issuer mount and the locked provider. A fresh synthetic
-// browser request stops at the login redirect; no real account, DB or remote URL is used.
+// browser request checks the first redirect. The disposable PostgreSQL job also drives
+// both forms and reads a QA record with the issued token. Neither contacts external URLs.
 const assert = require("node:assert/strict");
 const { createHash, generateKeyPairSync, randomBytes, randomUUID } = require("node:crypto");
 const { Module } = require("@nestjs/common");
@@ -10,11 +11,11 @@ const request = require("supertest");
 const { McpOAuthServer } = require("../../dist/auth/mcp-oauth-server");
 const { decryptSecret } = require("../../dist/common/crypto.util");
 
-async function main() {
-  const origin = "https://tesbo.example";
-  const clientId = "https://client.example/qa";
-  const redirect = "https://client.example/complete";
-  const project = randomUUID();
+const origin = "https://tesbo.example";
+const clientId = "https://client.example/qa";
+const redirect = "https://client.example/complete";
+
+function configureIssuer() {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   Object.assign(process.env, {
     TESBO_MCP_OAUTH_ENABLED: "true",
@@ -25,9 +26,20 @@ async function main() {
       { ...privateKey.export({ format: "jwk" }), use: "sig", alg: "RS256", kid: "fixture" }
     ] }),
     TESBO_MCP_OAUTH_COOKIE_KEYS_JSON: JSON.stringify([randomBytes(32), randomBytes(32)].map(k => k.toString("base64url"))),
-    TESBO_MCP_OAUTH_REGISTERED_CLIENTS: JSON.stringify([{ client_id: clientId, redirect_uris: [redirect] }]),
-    SECRETS_ENCRYPTION_KEY: randomBytes(32).toString("base64")
+    TESBO_MCP_OAUTH_REGISTERED_CLIENTS: JSON.stringify([{ client_id: clientId, redirect_uris: [redirect] }])
   });
+  process.env.SECRETS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64");
+}
+
+function authorization(resource, state, verifier) {
+  return { client_id: clientId, redirect_uri: redirect, response_type: "code",
+    scope: "openid mcp:read", resource, state, code_challenge_method: "S256",
+    code_challenge: createHash("sha256").update(verifier).digest("base64url") };
+}
+
+async function main() {
+  configureIssuer();
+  const project = randomUUID();
   let interaction;
   const db = {
     async query(sql, args) {
@@ -56,9 +68,7 @@ async function main() {
     const verifier = randomBytes(32).toString("base64url");
     const response = await request(app.getHttpServer()).get("/oauth/auth")
       .set("Host", new URL(origin).host).set("X-Forwarded-Proto", "https")
-      .query({ client_id: clientId, redirect_uri: redirect, response_type: "code",
-        scope: "openid mcp:read", resource: issuer.resource(project), state: randomUUID(),
-        code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" })
+      .query(authorization(issuer.resource(project), randomUUID(), verifier))
       .redirects(0);
     assert.equal(response.status, 303, "A valid authorization request must redirect to login");
     assert.equal(interaction?.prompt?.name, "login");
@@ -73,4 +83,129 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; });
+// The PostgreSQL job supplies an existing disposable member, project and current owner approval.
+async function verifyBrowserConsentRead(db, accountId, projectId) {
+  const { Test } = require("@nestjs/testing");
+  const { APP_GUARD } = require("@nestjs/core");
+  const { json, urlencoded } = require("express");
+  const cookieParser = require("cookie-parser");
+  const { CookieJar, CookieAccessInfo } = require("cookiejar"); // the jar used by supertest's HTTP client
+  const { AuthMiddleware } = require("../../dist/auth/auth.middleware");
+  const { ApiTokenRestGuard } = require("../../dist/auth/api-token-rest.guard");
+  const { ApiTokenService } = require("../../dist/auth/api-token.service");
+  const { OtpService } = require("../../dist/auth/otp.service");
+  const { SessionCacheService } = require("../../dist/cache/session-cache.service");
+  const { AppConfigService } = require("../../dist/config/app-config.service");
+  const { DatabaseService } = require("../../dist/database/database.service");
+  const { LegacyService } = require("../../dist/legacy/legacy.service");
+  const { McpController } = require("../../dist/mcp/mcp.controller");
+  const { McpOAuthInteractionController } = require("../../dist/mcp/mcp-oauth-interaction.controller");
+  const { McpService } = require("../../dist/mcp/mcp.service");
+  const { ProjectWriteLockGuard } = require("../../dist/plan-limits/project-write-lock.guard");
+  const { RequestCacheService } = require("../../dist/request-cache/request-cache.service");
+
+  configureIssuer();
+  const frontendOrigin = "https://app.tesbo.example";
+  process.env.FRONTEND_URL = frontendOrigin;
+  process.env.SESSION_CACHE_ENABLED = "false"; // resolve the real, persisted Tesbo session directly
+  const moduleRef = await Test.createTestingModule({
+    controllers: [McpOAuthInteractionController, McpController],
+    providers: [AppConfigService, AuthMiddleware, OtpService, ApiTokenService, SessionCacheService,
+      McpOAuthServer, McpService, LegacyService, RequestCacheService,
+      { provide: DatabaseService, useValue: db }, { provide: APP_GUARD, useClass: ApiTokenRestGuard },
+      { provide: APP_GUARD, useClass: ProjectWriteLockGuard }]
+  }).useMocker(() => ({})).compile(); // unused integrations (email, billing, workers) stay disconnected
+  const app = moduleRef.createNestApplication({ bodyParser: false, logger: false });
+  try {
+    const issuer = app.get(McpOAuthServer);
+    const middleware = app.get(AuthMiddleware);
+    app.set("trust proxy", 1);
+    app.use(json(), urlencoded({ extended: true }), cookieParser());
+    const cache = app.get(RequestCacheService);
+    app.use((_req, _res, next) => cache.run(next));
+    await issuer.mount(app);
+    app.use((req, res, next) => middleware.use(req, res, next).catch(next));
+    await app.listen(0, "127.0.0.1");
+    const local = request(app.getHttpServer());
+    const host = new URL(origin).hostname;
+    const resource = issuer.resource(projectId);
+    const state = randomUUID();
+    const verifier = randomBytes(32).toString("base64url");
+    const jar = new CookieJar();
+
+    function localRequest(method, url) {
+      assert.equal(url.origin, origin, "Only the test issuer may receive HTTP requests");
+      return local[method](url.pathname + url.search).set("Host", host).set("X-Forwarded-Proto", "https").redirects(0);
+    }
+    async function navigate(method, url, form) {
+      const call = localRequest(method, url).accept("html");
+      const cookies = jar.getCookies(new CookieAccessInfo(host, url.pathname, true)).toValueString();
+      if (cookies) call.set("Cookie", cookies);
+      if (form) call.set("Origin", origin).type("form").send(form);
+      const response = await call;
+      for (const cookie of response.headers["set-cookie"] || []) jar.setCookie(cookie, host, url.pathname);
+      return response;
+    }
+    function destination(response, stage) {
+      assert.ok([302, 303].includes(response.status) && response.headers.location,
+        stage + " must redirect (HTTP " + response.status + ")");
+      return new URL(response.headers.location, origin);
+    }
+
+    const start = new URL("/oauth/auth", origin);
+    start.search = new URLSearchParams(authorization(resource, state, verifier)).toString();
+    let page = destination(await navigate("get", start), "Authorization");
+    const signedOut = await navigate("get", page);
+    assert.equal(signedOut.status, 303, "A signed-out browser must be sent to Tesbo sign-in");
+    const login = destination(signedOut, "Tesbo sign-in");
+    const returnPath = login.searchParams.get("redirect");
+    assert.ok(login.origin === frontendOrigin && login.pathname === "/login" && !login.hash &&
+      login.searchParams.size === 1 && returnPath === page.pathname && page.search === "" &&
+      /^\/api\/oauth\/interactions\/[^/]+$/.test(returnPath), "Sign-in must retain exactly the provider-issued interaction path");
+    // The frontend sign-in UI has separate browser coverage. Resume with a real saved session.
+    const session = await app.get(OtpService).createSession(accountId);
+    jar.setCookie(app.get(AppConfigService).sessionCookieName + "=" + session + "; Path=/; HttpOnly; Secure", host, "/");
+    page = new URL(returnPath, origin);
+    for (const label of ["Continue as this Tesbo user", "Authorize read-only access"]) {
+      assert.ok(page.pathname.startsWith("/api/oauth/interactions/"), "Expected Tesbo's review page");
+      const response = await navigate("get", page);
+      assert.equal(response.status, 200, label + " page");
+      assert.ok(response.text.includes(label) && response.text.includes("Disposable OAuth CI") &&
+        response.text.includes("Disposable reader"), "The review must name the project, client and requested action");
+      const action = /<form method="post" action="([^"]+)"/.exec(response.text)?.[1];
+      const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(response.text)?.[1];
+      const review = /name="review" value="([a-f0-9]{64})"/.exec(response.text)?.[1];
+      assert.ok(action === page.pathname && csrf && review, "Expected the session-bound approval form");
+      const resume = destination(await navigate("post", new URL(action, page), { action: "approve", csrf, review }), label);
+      page = destination(await navigate("get", resume), "Resume after " + label);
+    }
+    assert.ok(page.origin + page.pathname === redirect, "Expected registered callback after consent");
+    assert.ok(page.searchParams.get("state") === state && page.searchParams.get("code"), "Expected matching state and code");
+    const exchange = await localRequest("post", new URL("/oauth/token", origin)).type("form").send({
+      grant_type: "authorization_code", client_id: clientId, redirect_uri: redirect,
+      code: page.searchParams.get("code"), code_verifier: verifier, resource
+    });
+    assert.equal(exchange.status, 200, "The browser-issued code and original verifier must exchange successfully");
+    assert.ok(exchange.body.token_type?.toLowerCase() === "bearer" && exchange.body.access_token, "Expected a bearer token");
+
+    const title = "Reviewed OAuth fixture " + randomUUID();
+    const fixture = await db.query("INSERT INTO testcases(project_id,external_id,title) VALUES ($1,'OA18-1',$2) RETURNING id",
+      [projectId, title]);
+    const version = "2026-07-28";
+    const read = await localRequest("post", new URL(resource)).set("Authorization", "Bearer " + exchange.body.access_token)
+      .set("MCP-Protocol-Version", version).set("Mcp-Method", "tools/call").set("Mcp-Name", "list_testcases")
+      .send({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_testcases", arguments: { search: title },
+        _meta: { "io.modelcontextprotocol/protocolVersion": version, "io.modelcontextprotocol/clientCapabilities": {} } } });
+    assert.equal(read.status, 200, "The issued bearer must authorize the project read without a session cookie");
+    assert.equal(read.body.result?.resultType, "complete");
+    const data = JSON.parse(read.body.result.content[0].text);
+    assert.ok(data.rows.length === 1 && data.rows[0].id === fixture.rows[0].id && data.rows[0].title === title,
+      "The read must return the QA case persisted for this project");
+    process.stdout.write("Verified the sign-in return path. A persisted session resumed it, approved both forms, exchanged its PKCE code and read the matching disposable QA case.\n");
+  } finally {
+    await app.close();
+  }
+}
+
+module.exports = { verifyBrowserConsentRead };
+if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });

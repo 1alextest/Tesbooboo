@@ -99,6 +99,7 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
     jest.spyOn(oauth, "discardUnboundGrant").mockResolvedValue(undefined);
     const provider = {
       interactionDetails: jest.fn().mockResolvedValue({
+        uid: UID,
         prompt: { name: "consent" },
         params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read" }
       }),
