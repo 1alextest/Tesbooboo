@@ -554,13 +554,21 @@ describe("IntegrationSyncProcessor, notion provider", () => {
       if (sql.startsWith("UPDATE notion_pages SET description")) updates.push(params);
       return Promise.resolve({ rows: [] });
     });
+    const transactionClient = { query: jest.fn().mockResolvedValue({ rows: [{ id: "doc-1", inserted: true }] }) };
     const processor = new IntegrationSyncProcessor(
-      { query: dbQuery } as unknown as DatabaseService,
-      { recordTicketResult: jest.fn() } as unknown as IntegrationSyncService,
+      {
+        query: dbQuery,
+        transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => callback(transactionClient))
+      } as unknown as DatabaseService,
+      {
+        recordTicketResult: jest.fn(),
+        findProviderFolderForWrite: jest.fn().mockResolvedValue("f"),
+        recordSyncEvent: jest.fn().mockResolvedValue(undefined)
+      } as unknown as IntegrationSyncService,
       { loadConnection: jest.fn().mockResolvedValue({ id: "conn-1" }), fetchComments: jest.fn().mockResolvedValue([]), fetchNotionBody } as unknown as IntegrationSyncClient,
       { buildMirror: build } as unknown as IntegrationSyncDocumentBuilder,
       { resolveAllocation: jest.fn() } as unknown as IntegrationSyncDecisions,
-      {} as unknown as RagIngestionService,
+      { enqueueEmbedding: jest.fn().mockResolvedValue(undefined) } as unknown as RagIngestionService,
       { checkStorageAvailable: jest.fn().mockResolvedValue({ allowed: true }) } as unknown as PlanLimitsService
     );
     const ticketJob = {
@@ -693,5 +701,64 @@ describe.each<SyncProvider>(["jira", "linear", "notion"])("IntegrationSyncProces
     const again = await h.run();
     expect(again.queued).toHaveLength(0);
     expect(again.finish).toBe("Every ticket in Engineering is already synced.");
+  });
+});
+
+describe("IntegrationSyncProcessor — provider folder destination", () => {
+  it("re-resolves the provider folder and writes the mirror in one locked transaction", async () => {
+    const client = { query: jest.fn() } as { query: jest.Mock };
+    client.query.mockImplementation((sql: string) => {
+      if (/pg_advisory_xact_lock/.test(sql)) return Promise.resolve({ rows: [] });
+      if (/INSERT INTO knowledge_documents/.test(sql)) return Promise.resolve({ rows: [{ id: "doc-1", inserted: true }] });
+      throw new Error(`unexpected transaction query: ${sql}`);
+    });
+    const db = {
+      query: jest.fn().mockImplementation((sql: string) => {
+        if (/FROM jira_tickets/.test(sql)) {
+          return Promise.resolve({ rows: [{
+            id: "ticket-1", jira_issue_id: "I-1", jira_issue_key: "KAN-1", summary: "Summary",
+            description: "Description", issue_type: "Task", status: "Open", priority: "High",
+            assignee: "", reporter: "", labels: "", jira_created_at: null, jira_updated_at: null,
+            jira_url: "https://example.invalid/KAN-1", comments_hash: "stale"
+          }] });
+        }
+        return Promise.resolve({ rows: [] });
+      }),
+      transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => callback(client))
+    };
+    const runs = {
+      findProviderFolderForWrite: jest.fn().mockResolvedValue("folder-new"),
+      recordSyncEvent: jest.fn().mockResolvedValue(undefined),
+      recordTicketResult: jest.fn().mockResolvedValue(undefined)
+    };
+    const syncClient = {
+      loadConnection: jest.fn().mockResolvedValue({ id: "connection-1" }),
+      fetchComments: jest.fn().mockResolvedValue([])
+    };
+    const builder = {
+      buildMirror: jest.fn().mockReturnValue({ title: "KAN-1 Summary", markdown: "Body", html: "<p>Body</p>" })
+    };
+    const rag = { enqueueEmbedding: jest.fn().mockResolvedValue(undefined) };
+    const plan = { checkStorageAvailable: jest.fn().mockResolvedValue({ allowed: true }) };
+    const processor = new IntegrationSyncProcessor(
+      db as unknown as DatabaseService, runs as unknown as IntegrationSyncService,
+      syncClient as unknown as IntegrationSyncClient, builder as unknown as IntegrationSyncDocumentBuilder,
+      {} as unknown as IntegrationSyncDecisions, rag as unknown as RagIngestionService,
+      plan as unknown as PlanLimitsService
+    );
+
+    await (processor as unknown as { processTicket: (payload: unknown) => Promise<void> }).processTicket({
+      runId: "run-1", organizationId: "org-1", projectId: "PROJECT-UUID", provider: "jira",
+      ticketId: "ticket-1", issueId: "I-1", issueKey: "KAN-1", folderId: "folder-stale", triggeredBy: "user-1"
+    });
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(runs.findProviderFolderForWrite).toHaveBeenCalledWith("PROJECT-UUID", "jira", client);
+    expect(client.query.mock.calls[0][0]).toContain("pg_advisory_xact_lock");
+    // The exact shared key is what serialises this write with KB folder deletion/moves.
+    expect(client.query.mock.calls[0][1]).toEqual(["skill-assignments:project-uuid"]);
+    expect(client.query.mock.calls[1][0]).toContain("INSERT INTO knowledge_documents");
+    // The stale coordinator id is not reused; the folder found under the lock is the destination.
+    expect(client.query.mock.calls[1][1][2]).toBe("folder-new");
   });
 });
