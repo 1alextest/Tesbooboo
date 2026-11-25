@@ -15997,9 +15997,10 @@ export class LegacyService implements OnModuleInit {
       // <> 'failed') is deliberate: a 'in_review' task has drafts generated and saved_count still
       // 0 simply because the user hasn't finished reviewing it yet, not because they rejected
       // anything — counting it here would drag the rate down for work that is still pending, not
-      // decided. 'done' is only ever reached via aiSave or zyraCloseTask, an explicit save-or-close
-      // action, which is what "approved and saved" in the ticket actually means. Excludes 'failed'
-      // the same way, since a generation error leaves nothing to approve or reject.
+      // decided. Case-generation 'done' is reached through an explicit save-or-close
+      // decision. Other proposal types can also reach 'done' after a document or
+      // requirement decision; their operation counts are excluded below.
+      // 'failed' is excluded because no successful generation was reviewed.
       //
       // Deliberately NOT filtered on chat_session_id, unlike `tasks` above: a chat-staged batch is
       // not display-list material (it has no task-board card to show), but it is saved through the
@@ -16011,7 +16012,12 @@ export class LegacyService implements OnModuleInit {
       this.db.query<{ saved: string; generated: string }>(
         `SELECT COALESCE(SUM(saved_count), 0) AS saved, COALESCE(SUM(generated_count), 0) AS generated
            FROM ai_generation_requests
-          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'`,
+          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'
+            -- Only completed testcase proposal batches are eligible. Requirement
+            -- bundles count revision/link operations; managed document requests
+            -- count documents. Neither is a generated testcase denominator.
+            AND provider IS DISTINCT FROM 'external_requirement_proposal'
+            AND provider IS DISTINCT FROM 'external_document_proposal'`,
         [projectId, ZYRA_AGENT_NAMES]
       )
     ]);
