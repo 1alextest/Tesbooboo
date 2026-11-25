@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
+import { oauthReferenceFingerprint } from "../common/crypto.util";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { McpService } from "../mcp/mcp.service";
@@ -131,6 +132,9 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
         expect(otherHistory.consents.map(c => c.id)).not.toContain(index(ownGrant));
       } finally {
         await Promise.allSettled([grants.destroy(ownGrant), grants.destroy(otherGrant)]);
+        // Restore the disposable fixture basis for the existing OA-T18 journey.
+        await db.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",
+          [project, JSON.stringify(settings(1))]);
       }
     });
 
