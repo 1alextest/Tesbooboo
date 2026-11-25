@@ -14,7 +14,7 @@ const PROJECT_ROUTE = /^\/api\/projects\/([0-9a-fA-F-]{36})(?:\/|$)/i;
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** Token credentials cannot administer the project, its members, or further tokens. */
-const CONTROL_PLANE = /^\/(?:apikeys|members|mcp-access)(?:\/|$)/i;
+const CONTROL_PLANE = /^\/(?:apikeys|members|mcp-access|mcp-oauth-consents)(?:\/|$)/i;
 
 @Injectable()
 export class ApiTokenRestGuard implements CanActivate {
