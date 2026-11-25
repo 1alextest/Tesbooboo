@@ -454,20 +454,22 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 
 ### 10.1 Move/duplicate destination integrity (PR #263)
 
-**Lock map.** `moveKnowledgeDocument`, `moveKnowledgeFolder` and `duplicateKnowledgeDocument` already take
-`pg_advisory_xact_lock('skill-assignments:<project>')` before any domain row lock. `deleteKnowledgeFolder`
-takes the same project lock before its `FOR UPDATE` and recursive cascade, and every folder soft-delete in the
-product goes through that transaction; integration disconnect deliberately leaves KB rows in place, and setup
-seeding has no concurrently deletable destination. Therefore ordinary deletion, subtree deletion, moves and
-duplicates in the same project are serialised:
+**Lock map.** `moveKnowledgeDocument` and `moveKnowledgeFolder` take
+`pg_advisory_xact_lock('skill-assignments:<project>')` before any domain row lock. `duplicateKnowledgeDocument`
+did not; it now takes the same lock as its first transaction statement, before the source `FOR SHARE` (taking
+it after would invert the order against `deleteKnowledgeFolder` and can deadlock). `deleteKnowledgeFolder`
+takes the project lock before its `FOR UPDATE` and recursive cascade. Therefore ordinary deletion, subtree
+deletion, moves and duplicates in the same project are serialised:
 
 - Delete acquires first → the move/duplicate waits on the advisory lock, then reads the destination/source
   after the delete committed and refuses with 404; no row is written.
 - Move/duplicate acquires first → the delete waits, then its cascade statement sees the newly moved/copied
   row and soft-deletes it. No live row can point at a deleted folder.
 
-The new regressions observe that advisory wait in `pg_stat_activity`; the delete-wins and move-wins cases pass
-against the unchanged move/duplicate locking, so no extra destination lock was added.
+The move regressions observe that advisory wait in `pg_stat_activity`; the duplicate orphan regression was
+red before the advisory-first fix and green after it. No extra destination row lock was added: the project
+lock is the ordering boundary, and adding a folder lock after the source-document wait would reintroduce the
+deadlock it prevents.
 
 **Confirmed gaps fixed.** `duplicateKnowledgeDocument` did not revalidate membership/archive after its
 source-document wait; it now calls `requireCurrentProjectAuthority` under the transaction and inserts from the
@@ -475,14 +477,23 @@ current authority row. Document/folder move and duplicate wrote their audit entr
 so an audit failure left an unaudited mutation; all three now write it on the mutation transaction's client.
 External effects (duplicate embedding enqueue) remain after commit.
 
-**Sibling disposition (not changed).** `integration-sync.processor.ts` upserts provider mirrors with a
-`folder_id` resolved earlier, without the project mutation advisory lock or a locked folder recheck; a nightly
-sync racing a user-initiated deletion of its provider folder could insert/re-parent a mirror into a deleted
-folder. Owner: integration-sync; recorded as a follow-up rather than widened into this KB-owner repair.
-`setup.service.ts` seeds a document during project bootstrap, before the project is reachable, so no
-concurrent deletable destination exists. There is no hard-delete path for `knowledge_folders` in product code.
+**Sibling disposition (not changed).** These are the same unlocked-destination shape but belong to different
+owners; they are recorded, not widened into this KB move/duplicate repair:
+- `integration-sync.processor.ts` upserts provider mirrors with a `folder_id` resolved earlier, without the
+  project mutation advisory lock or a locked recheck. Owner: integration-sync.
+- `createKnowledgeFolder` (`legacy.service.ts`) checks the parent in a preflight and inserts without the
+  advisory lock or a locked parent recheck. Owner: KB folder writes; follow-up.
+- `rememberZyraMemory` (`legacy.service.ts`) resolves the AI Memory folder unlocked, then inserts the memory
+  document; an ancestor delete in that window can strand it. Owner: Zyra memory; follow-up.
+- `setup.service.ts` seeds a document during project bootstrap inside the project-creation transaction,
+  before the project is reachable, so no concurrent deletable destination exists.
+There is no hard-delete path for `knowledge_folders` in product code.
 
-**Evidence.** Failing-first run at tests-only head `6a415207`
-(`actions/runs/45513840933/job/138868072480`): 4 new regressions failed (duplicate resolved with `null`; the
-three audit cases resolved instead of rejecting); 721 existing tests passed. The fix commit flips them green
-in the same job. Native execution remains UNRUN; native record update is blocked as in §9.2.
+**Evidence.** Two failing-first runs against tests-only heads:
+- `6a415207` (`actions/runs/45513840933/job/138868072480`): 4 new regressions failed (duplicate resolved with
+  `null`; the three audit cases resolved instead of rejecting); 721 existing tests passed.
+- `5214acf9` (`actions/runs/45522403393`): the new duplicate/ancestor-delete regression failed with `Expected:
+  0, Received: 1` live copies under the deleted folder; 725 existing tests passed.
+
+The advisory-first fix is verified by the green exact-head run recorded in the PR. Native execution remains
+UNRUN; native record update is blocked as in §9.2.

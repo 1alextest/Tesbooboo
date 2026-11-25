@@ -11809,10 +11809,9 @@ export class LegacyService implements OnModuleInit {
   // Soft-deletes one or more folder trees (and every descendant folder/document/file beneath each),
   // special-casing the Zyra memory document (never deleted, re-homed to its own project's root
   // instead — a correlated subquery on knowledge_documents.project_id, since a single call here can
-  // span multiple projects). Shared by deleteKnowledgeFolder (deletionReason 'manual') and the
-  // integration-disconnect cleanup (deletionReason 'integration_disconnect') so the two removal
-  // paths can never drift apart in behavior — only in whether the result is restorable, which
-  // restoreKnowledgeFolder decides by reading the reason back.
+  // span multiple projects). deleteKnowledgeFolder is currently the only caller and records
+  // deletionReason 'manual'; the reason remains in the row so restoreKnowledgeFolder can refuse a
+  // disconnected item if a future cleanup path starts using 'integration_disconnect' again.
   private async cascadeSoftDeleteFolderTree(
     client: PoolClient,
     folderIds: string[],
