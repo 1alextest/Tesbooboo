@@ -202,6 +202,8 @@ export class McpOAuthServer {
         cookies: { keys: cookieKeys, long: { signed: true }, short: { signed: true } },
         pkce: { required: () => true },
         features: {
+          // The provider's development interaction handler replaces interactions.url when enabled.
+          devInteractions: { enabled: false },
           revocation: { enabled: true },
           clientIdMetadataDocument: {
             enabled: cimdEnabled,

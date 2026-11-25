@@ -131,6 +131,8 @@ describe("Tesbo in-process OAuth issuer — default OFF, registered clients and 
     const oauth = new McpOAuthServer(fakeDb);
     await expect(oauth.mount(app as any)).resolves.toBeUndefined();
     expect(oauth.enabled).toBe(true);
+    const provider = jest.requireMock("oidc-provider").Provider as jest.Mock;
+    expect(provider.mock.lastCall?.[1].features.devInteractions).toEqual({ enabled: false });
     expect(oauth.issuer).toBe("https://tesbo.example/oauth");
     expect(oauth.resource("11111111-1111-4111-8111-111111111111"))
       .toBe("https://tesbo.example/api/projects/11111111-1111-4111-8111-111111111111/mcp");

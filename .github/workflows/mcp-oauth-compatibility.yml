@@ -6,6 +6,7 @@ on:
       - ".github/workflows/mcp-oauth-compatibility.yml"
       - "Tesbo-Backend-Nest/scripts/ci/embedded-oauth-spike.cjs"
       - "Tesbo-Backend-Nest/scripts/ci/embedded-oauth-state-spike.cjs"
+      - "Tesbo-Backend-Nest/scripts/ci/oauth-interaction-redirect.cjs"
       - "Tesbo-Backend-Nest/migrations/V164_mcp_oauth_provider_artifacts.sql"
       - "Tesbo-Backend-Nest/src/common/crypto.util.ts"
       - "Tesbo-Backend-Nest/src/auth/**"
@@ -90,6 +91,9 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm run build
+      - name: Verify compiled issuer redirects to Tesbo login and consent
+        working-directory: Tesbo-Backend-Nest
+        run: node scripts/ci/oauth-interaction-redirect.cjs
       - name: Migrate disposable database and verify repeatable migration
         working-directory: Tesbo-Backend-Nest
         run: |
