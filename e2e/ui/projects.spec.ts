@@ -518,7 +518,7 @@ test("MCP-P18 human consent history does not claim live connection and revokes o
     await expect(history.getByText("Existing QA reader", { exact: true })).toBeVisible();
     await expect(history.getByText("Consent recorded (not live status)")).toBeVisible();
     await expect(history.getByText("Older revoked connection", { exact: true })).toBeVisible();
-    await expect(history.getByText("Revoked", { exact: true })).toBeVisible();
+    await expect(history.getByText("State: Revoked", { exact: true })).toBeVisible();
     await expect(history.getByRole("button", { name: "Revoke my consent" })).toHaveCount(1);
     await history.getByRole("button", { name: "Revoke my consent" }).click();
     await expect(history.getByText("This consent has been revoked.")).toBeVisible();
