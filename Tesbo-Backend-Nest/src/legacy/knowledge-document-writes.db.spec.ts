@@ -799,7 +799,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
       [orgId, projectId, `Folder race parent ${randomUUID()}`, folderId]
     )).rows[0].id;
-    const childName = `Folder race child ${randomUUID()}`;
+    const childName = `Child ${randomUUID().slice(0, 8)}`;
     let release!: () => void;
     const released = new Promise<void>((resolve) => { release = resolve; });
     let acquired!: () => void;
@@ -826,9 +826,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await new Promise((resolve) => setTimeout(resolve, 300));
       release();
       expect(await deletion).toBeNull();
-      const createResult = await create;
-      console.log("FOLDER CREATE RESULT", JSON.stringify(createResult));
-      expect(createResult).toMatchObject({ status: 404 });
+      expect(await create).toMatchObject({ status: 404 });
       expect((await setup.query(
         "SELECT COUNT(*)::int AS n FROM knowledge_folders WHERE project_id = $1 AND name = $2 AND is_deleted = false",
         [projectId, childName]
