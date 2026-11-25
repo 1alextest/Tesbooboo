@@ -488,10 +488,10 @@ test("MCP-P18 human consent history does not claim live connection and revokes o
   const records = [
     { id: consentId, clientId, clientName: "Existing QA reader",
       resource: "https://tesbo.example/api/projects/test/mcp",
-      status: "consent_current", createdAt: "2026-11-20T10:00:00.000Z", revokedAt: null },
+      status: "consent_current", currentAllowedTools: ["list_testcases"], createdAt: "2026-11-20T10:00:00.000Z", revokedAt: null },
     { id: otherId, clientId: "https://example.test/old-client.json",
       clientName: "Older revoked connection", resource: "https://tesbo.example/api/projects/test/mcp",
-      status: "revoked", createdAt: "2026-11-19T10:00:00.000Z",
+      status: "revoked", currentAllowedTools: null, createdAt: "2026-11-19T10:00:00.000Z",
       revokedAt: "2026-11-21T10:00:00.000Z" }
   ];
   const deletes: string[] = [];
@@ -517,6 +517,7 @@ test("MCP-P18 human consent history does not claim live connection and revokes o
     const history = page.getByRole("heading", { name: "Your OAuth consent history" }).locator("..").locator("..");
     await expect(history.getByText("Existing QA reader", { exact: true })).toBeVisible();
     await expect(history.getByText("Consent recorded (not live status)")).toBeVisible();
+    await expect(history.getByText("Read-only tools: list_testcases")).toBeVisible();
     await expect(history.getByText("Older revoked connection", { exact: true })).toBeVisible();
     await expect(history.getByText("State: Revoked", { exact: true })).toBeVisible();
     await expect(history.getByRole("button", { name: "Revoke my consent" })).toHaveCount(1);
