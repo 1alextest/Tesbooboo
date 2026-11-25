@@ -168,10 +168,13 @@ export default function ZyraChangeReviewPage() {
             Observed source and requirement changes, linked test-case candidates, and remaining verification gaps.
           </p>
         </div>
-        <button type="button" onClick={() => void capture()} disabled={capturing}
-          className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-60">
-          {capturing ? "Capturing…" : "Capture configured source"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => void capture()} disabled={capturing}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-60">
+            {capturing ? "Capturing…" : "Capture configured source"}
+          </button>
+          <Link href="#source-setup" className="text-sm underline">Configure source</Link>
+        </div>
       </div>
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>
@@ -213,14 +216,14 @@ export default function ZyraChangeReviewPage() {
                       className="space-y-2 rounded-lg border border-[var(--border)] p-3 text-sm">
                       <h3 className="font-semibold">
                         {receipt.candidates.length
-                          ? "Decide which existing cases apply to this change"
+                          ? "Assess nominated case references for this change"
                           : "Identify affected behavior before selecting tests"}
                       </h3>
                       <p>
                         The recorded source observation contains{" "}
                         {(delta?.modifiedNodeIds.length ?? 0) + (delta?.addedNodeIds.length ?? 0) + (delta?.removedNodeIds.length ?? 0)}
                         {" changed graph node(s) and "}
-                        {receipt.candidates.length} nominated existing case(s). These are investigation leads,
+                        {receipt.candidates.length} nominated case reference(s). These are investigation leads,
                         not verified product outcomes or test coverage.
                       </p>
                       <p>
@@ -231,7 +234,7 @@ export default function ZyraChangeReviewPage() {
                       <p>
                         <strong>Next human action:</strong>{" "}
                         {receipt.candidates.length
-                          ? "Inspect the linked cases and requirements, confirm applicability, then select approved cases for a native run below."
+                          ? "Inspect nominated case references and approved requirements, confirm applicability, then select eligible approved cases for a native run below."
                           : "Investigate the changed behavior and approved requirements, find or propose applicable cases, then prepare a native run."}
                       </p>
                       <p className="text-xs text-[var(--muted)]">
@@ -240,10 +243,6 @@ export default function ZyraChangeReviewPage() {
                         remains with its authorized native owner.
                       </p>
                     </section>
-                    <p className="text-sm">
-                      {receipt.candidates.length} linked case candidate(s) ·
-                      {(delta?.modifiedNodeIds.length ?? 0) + (delta?.addedNodeIds.length ?? 0) + (delta?.removedNodeIds.length ?? 0)} changed node(s)
-                    </p>
                     {delta && [...delta.addedNodeIds, ...delta.modifiedNodeIds, ...delta.removedNodeIds].length > 0 && (
                       <details><summary className="cursor-pointer text-sm">Observed changed nodes</summary>
                         <ul className="mt-2 list-disc pl-5 text-xs">
@@ -304,7 +303,7 @@ export default function ZyraChangeReviewPage() {
         className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">
         Older observations
       </button>}
-      <section aria-label="Source configuration and draft model inspection" className="space-y-3">
+      <section id="source-setup" aria-label="Source configuration and draft model inspection" className="space-y-3">
         <h2 className="text-base font-semibold">Source setup and draft model inspection</h2>
         <p className="text-sm text-[var(--muted)]">
           Configure the observed source or inspect an unapproved model draft here.
