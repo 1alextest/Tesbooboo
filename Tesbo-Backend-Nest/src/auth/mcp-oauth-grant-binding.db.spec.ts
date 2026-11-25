@@ -130,6 +130,30 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
         const otherHistory = await svc.listMyOAuthConsents(other, project);
         expect(otherHistory.consents.map(c => c.id)).toContain(index(otherGrant));
         expect(otherHistory.consents.map(c => c.id)).not.toContain(index(ownGrant));
+        // The same client and owner policy can survive a membership delete/rejoin,
+        // but the OLD binding must be rejected and shown as requiring new consent.
+        const priorMembership = (await db.query(
+          "SELECT id FROM project_members WHERE project_id=$1 AND user_id=$2",
+          [project, otherUser])).rows[0].id as string;
+        try {
+          await db.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",
+            [project, otherUser]);
+          expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(false);
+        } finally {
+          await db.query(
+            "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer') ON CONFLICT DO NOTHING",
+            [project, otherUser]);
+        }
+        const nextMembership = (await db.query(
+          "SELECT id FROM project_members WHERE project_id=$1 AND user_id=$2",
+          [project, otherUser])).rows[0].id as string;
+        expect(nextMembership).not.toBe(priorMembership);
+        expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(false);
+        const afterRejoin = await svc.listMyOAuthConsents(other, project);
+        const oldConsent = afterRejoin.consents.find(c => c.id === index(otherGrant));
+        expect(oldConsent?.status).toBe("reconsent_required");
+        expect(oldConsent?.currentAllowedTools).toBeNull();
+
       } finally {
         await Promise.allSettled([grants.destroy(ownGrant), grants.destroy(otherGrant)]);
         // Restore the disposable fixture basis for the existing OA-T18 journey.
