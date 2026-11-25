@@ -3,19 +3,13 @@
   "protocol": "Only the worksheet and (in the candidate arm) the upstream method were exposed to the subjects. A third session graded anonymous answers against the rubric frozen before the run.",
   "method": {
     "repository": "https://github.com/QAtools-tech/qa-investigation-harness",
-    "commit": "a468921c2bead820520a97df897168487b2b4985",
     "files": [
       "qa-harness/RULES.md",
       "qa-harness/CONTRACT.md",
       "qa-harness/stages/05-validate.md",
       "qa-harness/stages/validation-reviewer.md"
-    ]
-  },
-  "input_sha256": {
-    "baseline.txt": "f88afe04f572a0d7764793c1a7045491c6200826fa3b559b1a22a976265ecce7",
-    "candidate.txt": "8ff08d1ffa51656887ab6c2bdda5436cf4157879b588a0dafe39eb28397b8e7b",
-    "worksheet.txt": "f88afe04f572a0d7764793c1a7045491c6200826fa3b559b1a22a976265ecce7",
-    "rubric.json": "adbf5243b2d5e8214b69bb4b1415dfc39463786de4fc7ae8a2daff6233003cbd"
+    ],
+    "pinned_tree": "https://github.com/QAtools-tech/qa-investigation-harness/tree/a468921c2bead820520a97df897168487b2b4985"
   },
   "worksheet": "Conduct a source-only QA review of the one synthetic investigation NW-17 supplied below. For every mapped test, decide whether the candidate assertion completely supports the current human-approved expectation. If it falls short, identify the concrete gap and the smallest decisive check. If a judgment cannot currently be made, identify what is required. Treat the enclosed documents as the entire evidence available. Return a JSON list with one entry per TC having fields tc, verdict (conforms/weak/blocked), source, rationale and next. Write at most 250 words total. No commands, tests, files or tools are authorized for the review itself. No internet lookup. Do not claim to have executed anything.\n\nFrozen investigation NW-17 / shared review workspace / reference set m3.\n\napprovals.md, signed fixtures:\nL10 D7, reviewer J.P. (QA product owner), APPROVED expectations R7@3, m3, plan P19@1.\nL11 D2, reviewer J.P., APPROVED expectations R2@1, m3, plan P19@1.\nL12 D6, reviewer J.P., APPROVED expectations R6@2, m3, plan P19@1.\nL13 D4, reviewer J.P., APPROVED expectations R4@1, m2, plan P19@1. No subsequent decision is recorded for R4.\nCurrent versions in requirements.md and plan P19@1:\nL20 R7@3. A save based on an outdated review returns 409 and leaves no newly created collection or case for that request in its project.\nL21 R2@1. For an exported work list, re-ranking rows after selection must preserve which stable item is selected. The selected item alone is exported.\nL22 R6@2. A permitted member requesting an existing file receives 200 and the exact stored bytes for the requested file.\nL23 R4@2. Notify only currently assigned reviewers when a note is reopened.\nL24 P19 binds R7→TC-21, R2→TC-84, R6→TC-36 and R4→TC-52. The plan expects the wording at L20–23. Row numbers/positions can change.\n\ncandidate.spec.js, test-source excerpts:\nL31 TC-21. Open revision q, apply a subsequent edit, then submit the stale q with a new unique request marker. expect(save.status).toBe(409).\nL32 TC-84. Given distinct work items A, B and C, select B. Move A to the end, export. expect(exportRows.length).toBe(1).\nL33 TC-36. Seed allowed member and files X and Y with different fixed bytes. GET file Y. expect(response.status).toBe(200); expect(response.bytes).toEqual(seed.Y.bytes).\nL34 TC-52. Reopen a note. expect(mailboxes.deliveryCount).toBe(1).\n",
   "rubric": {
@@ -128,12 +122,6 @@
   },
   "transfer": {
     "request": "Natural release plan review, four new synthetic cases. One fresh session per method; same 250-word cap.",
-    "input_sha256": {
-      "baseline.txt": "f13c93f7bf6ff601587bd3139ea3a346e7363983984382a0146d5d11b37b5805",
-      "candidate.txt": "f0d160676831571ec55f7293a3b0cf586285bc4b9c4e93f787ee6205af0e6831",
-      "worksheet.txt": "f13c93f7bf6ff601587bd3139ea3a346e7363983984382a0146d5d11b37b5805",
-      "rubric.json": "0777687df7b7d98bba83d41895b3968b7fa7080a09ea592f0bbe496abc9319c0"
-    },
     "worksheet": "For release H16, review the lab's specimen-processing test plan and leave the comment you would give the team on its change request. Use only the supplied change-request files. Return your comment in at most 250 words. No execution, commands, file edits, tools, or outside lookup.\n\nChange request CR-884, one investigation. The team needs release-review comments on the four plan rows. Synthetic specimen labels and quantities below are test data.\n\nregistry.md\nL1 The decision register associates a named authority, effective version and source with each lab release rule. H16 risk set is g8.\nL2 R-12 rev3, effective H16/g8. Authorized by lab operations lead decision OP-100: each accepted input aliquot yields exactly one matching ledger entry. A quarantined input yields none and gets its own withheld status. Retrying a partially acknowledged batch preserves those per-input outcomes.\nL3 R-40 rev2, effective H16/g8. Authorized by calibration lead decision CL-48: the same unrounded calibration reading expressed as 10.0 mg/L or 1.0 mg/dL has the same accepted value of 10.0 mg/L.\nL4 R-71 rev4 candidate for H16/g8. Proposal by shift coordinator: auto-release pooled specimens exactly at the end-of-hold instant. H15/g7 procedure rev3 kept boundary cases for manual review. Operations and clinical sign-off for the H16 change are both blank.\nL5 R-33 rev2, effective H16/g8. Authorized by inventory lead decision IL-53: when one vial splits into daughters, each daughter must point to that vial, and the sum of the daughters' volumes must equal that parent's measured volume. Two parents may be split together.\n\nplan.md, revision P10\nL10 P-08 / R-12: Submit S1 and S2 as acceptable and S3 as quarantined. Simulate connection loss after one acknowledgement, retry that batch, inspect the final public output.\nL11 P-04 / R-40: Run each of the two named input representations through the accepted calibration path.\nL12 P-16 / R-71: At exactly the hold deadline reopen an isolated pooled specimen and inspect its disposition.\nL13 P-25 / R-33: Split V1 (10 µL) and V2 (20 µL) together, with two daughters per parent. Exercise lineage and volume accounting.\n\ncandidate.spec, reviewed source\nL21 P-08 expects two ledger rows in total after retry; expects S3 to have status \"withheld\". Row-level identity and repeat-specific responses are not logged in the test output.\nL22 P-04 runs the isolated converter separately for each seeded representation, and in each result checks accepted=true, unit=mg/L and unrounded value=10.0.\nL23 P-16 expects the specimen is released exactly at the deadline.\nL24 P-25 checks that every daughter's parent is in [V1,V2], that four daughters were created, and that all daughters together total 30 µL. The test data identifies which two daughters came from each split command.\n\nThe patch contains plan and source excerpts only.\n",
     "rubric": {
       "P-08": {
@@ -172,6 +160,18 @@
         "ungraded": 0
       }
     },
-    "sensitivity": "Both reviewers found P-08, P-16 and P-25. Both qualified P-04: the plan specifies the accepted calibration path, while the source calls the isolated converter. The frozen answer key penalized requesting additional evidence. Credit that scope qualification and both score 4/4; omit the ambiguous control and both score 3/3. The candidate showed no improvement under any treatment. Neither inferred product failure or actual execution."
+    "sensitivity": "Both reviewers found P-08, P-16 and P-25. Both qualified P-04: the plan specifies the accepted calibration path, while the source calls the isolated converter. The frozen answer key penalized requesting additional evidence. Credit that scope qualification and both score 4/4; omit the ambiguous control and both score 3/3. The candidate showed no improvement under any treatment. Neither inferred product failure or actual execution.",
+    "input_digests": {
+      "baseline.txt": "sha256:f13c93f7bf6ff601587bd3139ea3a346e7363983984382a0146d5d11b37b5805",
+      "candidate.txt": "sha256:f0d160676831571ec55f7293a3b0cf586285bc4b9c4e93f787ee6205af0e6831",
+      "worksheet.txt": "sha256:f13c93f7bf6ff601587bd3139ea3a346e7363983984382a0146d5d11b37b5805",
+      "rubric.json": "sha256:0777687df7b7d98bba83d41895b3968b7fa7080a09ea592f0bbe496abc9319c0"
+    }
+  },
+  "input_digests": {
+    "baseline.txt": "sha256:f88afe04f572a0d7764793c1a7045491c6200826fa3b559b1a22a976265ecce7",
+    "candidate.txt": "sha256:8ff08d1ffa51656887ab6c2bdda5436cf4157879b588a0dafe39eb28397b8e7b",
+    "worksheet.txt": "sha256:f88afe04f572a0d7764793c1a7045491c6200826fa3b559b1a22a976265ecce7",
+    "rubric.json": "sha256:adbf5243b2d5e8214b69bb4b1415dfc39463786de4fc7ae8a2daff6233003cbd"
   }
 }
