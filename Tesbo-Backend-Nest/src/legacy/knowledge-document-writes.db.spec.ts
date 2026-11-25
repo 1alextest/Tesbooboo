@@ -793,4 +793,85 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[destination, ancestor]]);
     }
   });
+
+  it("rechecks a parent folder under lock so a concurrent delete cannot strand a new child folder", async () => {
+    const parent = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Folder race parent ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const childName = `Child ${randomUUID().slice(0, 8)}`;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /UPDATE knowledge_folders SET is_deleted = true/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const deleting = service(observed);
+    const f = realService();
+    try {
+      // The delete has already soft-deleted the parent folder inside its transaction but has not
+      // committed. The create must queue behind the same project lock, then find the folder gone.
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, parent).then(() => null, (error) => error);
+      await acquiring;
+      const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
+        .then(() => null, (error) => error);
+      // The create is either waiting on the project lock (fixed) or on the parent row lock
+      // (pre-fix); either way it has reached its wait before the delete is allowed to commit.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      release();
+      expect(await deletion).toBeNull();
+      expect(await create).toMatchObject({ status: 404 });
+      expect((await setup.query(
+        "SELECT COUNT(*)::int AS n FROM knowledge_folders WHERE project_id = $1 AND name = $2 AND is_deleted = false",
+        [projectId, childName]
+      )).rows[0].n).toBe(0);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND name = $2", [projectId, childName]);
+    }
+  }, 30000);
+
+  it("keeps Zyra memory out of a folder deleted between resolution and insert", async () => {
+    // Earlier fixtures in this shared project may already hold a "Zyra AI Memory" document, which
+    // would route this call into the append branch instead of the insert this regression targets.
+    await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory'", [projectId]);
+    const memoryFolder = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,'AI Memory',$3) RETURNING id",
+      [orgId, projectId, folderId]
+    )).rows[0].id;
+    let deleted = false;
+    const observed = observedPool(async (sql) => {
+      if (!deleted && /SELECT organization_id FROM projects WHERE id = \$1/.test(sql)) {
+        deleted = true;
+        await setup.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [memoryFolder]);
+      }
+    });
+    const f = service(observed);
+    try {
+      await (f.svc as unknown as { rememberZyraMemory: (projectId: string, userId: string | null, entry: string) => Promise<void> })
+        .rememberZyraMemory(projectId, actor, "- Durable memory note");
+      expect(deleted).toBe(true);
+      // The folder was deleted after the earlier resolution. The memory must not be filed there;
+      // it falls back to the root, which cannot be deleted.
+      expect((await setup.query(
+        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND folder_id = $2 AND is_deleted = false",
+        [projectId, memoryFolder]
+      )).rows[0].n).toBe(0);
+      expect((await setup.query(
+        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND folder_id = $2 AND is_deleted = false",
+        [projectId, folderId]
+      )).rows[0].n).toBe(1);
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory'", [projectId]);
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [memoryFolder]);
+    }
+  });
 });
