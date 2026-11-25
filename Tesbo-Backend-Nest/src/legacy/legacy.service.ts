@@ -11640,27 +11640,44 @@ export class LegacyService implements OnModuleInit {
 
   async createKnowledgeFolder(projectId: string, userId: string | null | undefined, body: Body) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     const name = this.kbFolderName(body.name);
 
     let parentFolderId = body.parentFolderId ? String(body.parentFolderId) : null;
     if (parentFolderId) {
       await this.kbFolder(projectId, parentFolderId);
-    } else {
-      const root = await this.db.query<{ id: string }>(
-        "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true",
-        [projectId]
-      );
-      parentFolderId = root.rows[0]?.id || null;
     }
 
     try {
-      const res = await this.db.query(
-        `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *`,
-        [project.organization_id, projectId, parentFolderId, name, body.description || null, uid]
-      );
-      await this.logProjectActivity(projectId, uid, "created", "knowledge_folder", res.rows[0].id, name, {});
+      const res = await this.db.transaction(async client => {
+        // Match every other folder mutation: advisory first, then the parent row. A concurrent
+        // cascade must either see this new child or make this create refuse; it must not leave a
+        // live child under a soft-deleted parent.
+        await this.lockSkillAssignments(client, projectId);
+        if (!parentFolderId) {
+          const root = await client.query<{ id: string }>(
+            "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+            [projectId]
+          );
+          parentFolderId = root.rows[0]?.id || null;
+          if (!parentFolderId) throw new BadRequestException({ error: "Knowledge base root folder not found" });
+        } else {
+          const parent = await client.query(
+            "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",
+            [parentFolderId, projectId]
+          );
+          if (!parent.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        }
+        // The preflight access read may be stale after the waits; revalidate membership/archive.
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        const inserted = await client.query(
+          `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *`,
+          [authority.organization_id, projectId, parentFolderId, name, body.description || null, uid]
+        );
+        await this.logProjectActivity(projectId, uid, "created", "knowledge_folder", inserted.rows[0].id, name, {}, client);
+        return inserted;
+      });
       return toCamel(res.rows[0]);
     } catch (error) {
       if ((error as { code?: string }).code === "23505")
@@ -15980,9 +15997,10 @@ export class LegacyService implements OnModuleInit {
       // <> 'failed') is deliberate: a 'in_review' task has drafts generated and saved_count still
       // 0 simply because the user hasn't finished reviewing it yet, not because they rejected
       // anything — counting it here would drag the rate down for work that is still pending, not
-      // decided. 'done' is only ever reached via aiSave or zyraCloseTask, an explicit save-or-close
-      // action, which is what "approved and saved" in the ticket actually means. Excludes 'failed'
-      // the same way, since a generation error leaves nothing to approve or reject.
+      // decided. Case-generation 'done' is reached through an explicit save-or-close
+      // decision. Other proposal types can also reach 'done' after a document or
+      // requirement decision; their operation counts are excluded below.
+      // 'failed' is excluded because no successful generation was reviewed.
       //
       // Deliberately NOT filtered on chat_session_id, unlike `tasks` above: a chat-staged batch is
       // not display-list material (it has no task-board card to show), but it is saved through the
@@ -15994,7 +16012,12 @@ export class LegacyService implements OnModuleInit {
       this.db.query<{ saved: string; generated: string }>(
         `SELECT COALESCE(SUM(saved_count), 0) AS saved, COALESCE(SUM(generated_count), 0) AS generated
            FROM ai_generation_requests
-          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'`,
+          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'
+            -- Only completed testcase proposal batches are eligible. Requirement
+            -- bundles count revision/link operations; managed document requests
+            -- count documents. Neither is a generated testcase denominator.
+            AND provider IS DISTINCT FROM 'external_requirement_proposal'
+            AND provider IS DISTINCT FROM 'external_document_proposal'`,
         [projectId, ZYRA_AGENT_NAMES]
       )
     ]);
@@ -16489,6 +16512,18 @@ export class LegacyService implements OnModuleInit {
     const applicability = classifySkillResolution(pinned, current);
     const base = operation.target?.base || null;
     const proposed = operation.document;
+    // The base revision was pinned when the candidate was staged. A later edit to the target makes
+    // apply refuse even when the Skill basis is current, so the reviewer must see that before opening.
+    let targetApplicability: "current" | "changed" | "missing" | null = null;
+    if (operation.operation === "update" && operation.target?.documentId) {
+      const target = await this.db.query<{ edit_revision: string | null }>(
+        `SELECT ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision FROM knowledge_documents
+          WHERE id=$1 AND project_id=$2 AND is_deleted=false`,
+        [operation.target.documentId, projectId]
+      );
+      targetApplicability = !target.rows[0] ? "missing"
+        : target.rows[0].edit_revision === operation.target.targetEditRevision ? "current" : "changed";
+    }
     // Omitted representations are preserved on apply, so the comparison must show the effective
     // value too. Diffing an omitted contentText as "" would claim the body is being erased.
     const effective = (key: string) => proposed?.[key] !== undefined ? proposed[key] : base?.[key] ?? null;
@@ -16515,6 +16550,7 @@ export class LegacyService implements OnModuleInit {
         operation: operation.operation, documentType: operation.documentType,
         target: operation.target ? {
           documentId: operation.target.documentId, editRevision: operation.target.targetEditRevision,
+          applicability: targetApplicability,
           base: base ? { ...base, governedMetadata: base.governedMetadata } : null
         } : null,
         folderId: operation.folderId,
@@ -16534,13 +16570,49 @@ export class LegacyService implements OnModuleInit {
     this.requireManagedDocumentProposalPreview();
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    const rows = await this.db.query(
-      `SELECT id FROM ai_generation_requests
-        WHERE project_id=$1 AND provider='external_document_proposal' AND task_status IN ('in_review','failed')
-        ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
-      [projectId, limit, offset]
+    const documentType = query.documentType == null || query.documentType === "" ? null : String(query.documentType);
+    if (documentType && !isGovernedDocumentType(documentType)) {
+      throw new BadRequestException({ error: "documentType must be user_manual or policy" });
+    }
+    const status = query.status == null || query.status === "" ? "pending" : String(query.status);
+    if (!["pending", "in_review", "failed"].includes(status)) {
+      throw new BadRequestException({ error: "status must be pending, in_review or failed" });
+    }
+    const operation = query.operation == null || query.operation === "" ? null : String(query.operation);
+    if (operation && operation !== "create" && operation !== "update") {
+      throw new BadRequestException({ error: "operation must be create or update" });
+    }
+    const search = typeof query.q === "string" ? query.q.trim().slice(0, 200) : "";
+    const conditions = ["project_id=$1", "provider='external_document_proposal'"];
+    const params: unknown[] = [projectId];
+    const bind = (value: unknown) => { params.push(value); return `$${params.length}`; };
+    conditions.push(status === "pending" ? "task_status IN ('in_review','failed')" : `task_status=${bind(status)}`);
+    if (documentType) conditions.push(`generated_payload->0->>'documentType'=${bind(documentType)}`);
+    if (operation) conditions.push(`generated_payload->0->>'operation'=${bind(operation)}`);
+    if (search) {
+      // Treat the query as literal text: % and _ are wildcards in ILIKE, and PostgreSQL rejects a
+      // NUL byte. Project members only, but a 500 on a pasted title is still wrong.
+      const escaped = search.split("\u0000").join("").replace(/[\\%_]/g, (char) => "\\" + char);
+      conditions.push(`user_story ILIKE ${bind(`%${escaped}%`)} ESCAPE '\\'`);
+    }
+    const where = conditions.join(" AND ");
+    // One statement for page and count keeps total/hasMore consistent with the rows under
+    // concurrent staging. An out-of-range page returns no row, so only then fall back to a count
+    // (the caller uses it to clamp the offset and reload).
+    const rows = await this.db.query<{ id: string; total: string }>(
+      `SELECT id, COUNT(*) OVER() AS total FROM ai_generation_requests WHERE ${where}
+        ORDER BY updated_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
     );
-    return { list: await Promise.all(rows.rows.map(row => this.managedDocumentProposalTask(projectId, userId, String(row.id)))) };
+    const total = rows.rows.length
+      ? Number(rows.rows[0].total)
+      : Number((await this.db.query<{ total: string }>(
+        `SELECT COUNT(*)::int AS total FROM ai_generation_requests WHERE ${where}`, params
+      )).rows[0]?.total || 0);
+    return {
+      list: await Promise.all(rows.rows.map(row => this.managedDocumentProposalTask(projectId, userId, String(row.id)))),
+      total, limit, offset, hasMore: offset + rows.rows.length < total
+    };
   }
 
   /** Protected human apply. Publishes a native Draft only; submission/approval remain separate. */
@@ -24079,51 +24151,69 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // read/written directly since Zyra is both its author and its only reader; it's stored
   // as a plain 'general' document (not 'ai_memory') so it never needs approval, just filed
   // under the project's AI Memory folder for visibility.
-  private async kbAiMemoryFolderId(projectId: string): Promise<string | null> {
-    const folder = await this.db.query<{ id: string }>(
+  private async kbAiMemoryFolderId(projectId: string, client?: PoolClient): Promise<string | null> {
+    const query = <T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) =>
+      client ? client.query<T>(text, values) : this.db.query<T>(text, values);
+    // Locked recheck: a folder cascade takes the same project mutation lock before the folder
+    // update, so this cannot observe a folder that is about to disappear. A missing AI Memory
+    // folder falls back to the (undeletable) root, preserving memory availability.
+    const folder = await query<{ id: string }>(
       `SELECT kf.id FROM knowledge_folders kf
        JOIN knowledge_folders root ON kf.parent_folder_id = root.id AND root.is_root = true AND root.project_id = $1
-       WHERE kf.project_id = $1 AND kf.name = 'AI Memory' AND kf.is_deleted = false LIMIT 1`,
+       WHERE kf.project_id = $1 AND kf.name = 'AI Memory' AND kf.is_deleted = false FOR SHARE OF kf LIMIT 1`,
       [projectId]
     );
     if (folder.rows[0]?.id) return folder.rows[0].id;
-    const root = await this.db.query<{ id: string }>("SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true LIMIT 1", [projectId]);
+    const root = await query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+      [projectId]
+    );
     return root.rows[0]?.id || null;
   }
 
   private async rememberZyraMemory(projectId: string, userId: string | null, entry: string) {
     const title = "Zyra AI Memory";
-    const folderId = await this.kbAiMemoryFolderId(projectId);
-    if (!folderId) return;
-
-    const existing = await this.db.query<{ id: string; content_text: string }>(
-      "SELECT id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = $2 AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
-      [projectId, title]
-    );
     const stampedEntry = `## ${new Date().toISOString()}\n${entry.trim()}`.slice(0, 2500);
-    const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
-    if (existing.rows[0]) {
-      const documentId = existing.rows[0].id;
-      // Same per-document lock writeZyraMemoryEntry holds, with the text re-read under it, so an
-      // owner's correction landing mid-append is neither lost nor overwritten.
-      await this.db.transaction(async (client) => {
+    const result = await this.db.transaction(async client => {
+      // Advisory first, matching folder deletion/moves. The folder and memory document are then
+      // resolved under that lock; a concurrent delete either wins (folder gone, fall back to root)
+      // or waits and later cascades the committed memory document.
+      await this.lockSkillAssignments(client, projectId);
+      const project = await client.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
+      if (!project.rows[0]) return null;
+      const folderId = await this.kbAiMemoryFolderId(projectId, client);
+      if (!folderId) return null;
+
+      const existing = await client.query<{ id: string; content_text: string | null }>(
+        "SELECT id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = $2 AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
+        [projectId, title]
+      );
+      if (existing.rows[0]) {
+        const documentId = existing.rows[0].id;
+        // Same per-document lock writeZyraMemoryEntry holds, with the text re-read under it, so an
+        // owner's correction landing mid-append is neither lost nor overwritten.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
-        const current = await client.query<{ content_text: string | null }>("SELECT content_text FROM knowledge_documents WHERE id = $1", [documentId]);
-        const content = [stampedEntry, String(current.rows[0]?.content_text || "")].filter(Boolean).join("\n\n").slice(0, 20000);
+        const current = await client.query<{ content_text: string | null }>("SELECT content_text FROM knowledge_documents WHERE id = $1 AND is_deleted = false", [documentId]);
+        if (!current.rows[0]) return null;
+        const content = [stampedEntry, String(current.rows[0].content_text || "")].filter(Boolean).join("\n\n").slice(0, 20000);
         await client.query(
-          "UPDATE knowledge_documents SET content_text = $2, content_html = $3, updated_at = now() WHERE id = $1",
+          "UPDATE knowledge_documents SET content_text = $2, content_html = $3, updated_at = now() WHERE id = $1 AND is_deleted = false",
           [documentId, content, `<pre>${escapeHtml(content)}</pre>`]
         );
-      });
-      this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "document", existing.rows[0].id, "updated");
-      return;
-    }
-    const inserted = await this.db.query<{ id: string }>(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_text, content_html, document_type, status, is_ai_generated, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, 'general', 'published', true, $7, $7) RETURNING id`,
-      [project.rows[0]?.organization_id, projectId, folderId, title, stampedEntry, `<pre>${escapeHtml(stampedEntry)}</pre>`, userId]
-    );
-    if (inserted.rows[0]?.id) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "document", inserted.rows[0].id, "created");
+        return { organizationId: project.rows[0].organization_id, documentId, operation: "updated" as const };
+      }
+
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_text, content_html, document_type, status, is_ai_generated, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'general', 'published', true, $7, $7) RETURNING id`,
+        [project.rows[0].organization_id, projectId, folderId, title, stampedEntry, `<pre>${escapeHtml(stampedEntry)}</pre>`, userId]
+      );
+      return inserted.rows[0]?.id
+        ? { organizationId: project.rows[0].organization_id, documentId: inserted.rows[0].id, operation: "created" as const }
+        : null;
+    });
+    // External effect only after a successful commit.
+    if (result) this.enqueueEmbedding(result.organizationId, projectId, "document", result.documentId, result.operation);
   }
 
   /**

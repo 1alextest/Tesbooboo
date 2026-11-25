@@ -1,6 +1,7 @@
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable, Logger } from "@nestjs/common";
 import { Queue } from "bullmq";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { notificationLinks, notificationMessages, type IntegrationProvider } from "../legacy/notification-events";
 import { writeNotifications } from "../legacy/notification-writer";
@@ -419,6 +420,33 @@ export class IntegrationSyncService {
     // alternative silent behavior: reusing that folder would mix this provider's mirrored tickets
     // into a folder that belongs to a different one.
     throw new Error(`A folder named "${name}" already exists under this project's Knowledge Base root and belongs to a different provider — rename it before syncing ${name}.`);
+  }
+
+  /**
+   * Resolve (never create) the provider folder for a per-ticket write. The caller holds the project
+   * mutation advisory lock, so a concurrent folder delete cannot commit between this read and the
+   * mirror upsert. A folder deleted mid-run is not recreated: that ticket fails and the next sync's
+   * coordinator recreates it, preserving user deletion and disconnect semantics.
+   */
+  async findProviderFolderForWrite(projectId: string, provider: SyncProvider, client: PoolClient): Promise<string | null> {
+    const root = await client.query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+      [projectId]
+    );
+    if (!root.rows[0]) return null;
+    const folder = await client.query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND parent_folder_id = $2 AND source_provider = $3 AND is_deleted = false LIMIT 1",
+      [projectId, root.rows[0].id, provider]
+    );
+    if (folder.rows[0]) return folder.rows[0].id;
+    // Match ensureProviderFolder's historical name-slot reuse: a pre-existing user folder named
+    // exactly "Jira"/"Linear"/"Notion" is adopted by the coordinator without being tagged, so the
+    // worker must see the same folder or every ticket would fail after a successful adoption.
+    const adopted = await client.query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND parent_folder_id = $2 AND name = $3 AND source_provider IS NULL AND is_deleted = false LIMIT 1",
+      [projectId, root.rows[0].id, PROVIDER_FOLDER_NAMES[provider] || provider]
+    );
+    return adopted.rows[0]?.id || null;
   }
 
   private async ensureRootFolder(organizationId: string, projectId: string, userId: string | null): Promise<string> {

@@ -97,3 +97,47 @@ Generalize the failure mechanism, not the seller-specific nouns. Keep the princi
 
 **Decision discovery is not a mandate to ask unlimited questions.** Deduplicate, investigate first, make small delegated choices autonomously, and report the remainder proportionally. Distinguish candidate coverage from the strength of evidence and never fabricate an exhaustive review.
 
+
+## Tesbo specification-to-native-record handoff
+
+**Ownership:** Engineering principle 17 in `AGENTS.md` remains authoritative; this section is its operational application, not a new policy owner, record type, approval path, or MCP service. Execute during requirement/spec drafting, before implementation of a consequential interpretation, and when code/review uncovers new evidence. Individual agents must originate candidate gaps independently; their coordinator reconciles them.
+
+### Discover before asking
+
+For each material feature/increment, reconstruct the human outcome and enumerate the independent dimensions actually implicated by the feature (actor/role, tenant/project/object scope, lifecycle, publication, authorization, content eligibility, ownership, entitlement, history, UI/API/MCP caller and downstream projections). Trace source evidence for each intersection that materially changes outcomes. Use bounded relevance rather than a combinatorial requirement to enumerate every theoretical combination. Include what is absent, what is restored, and where dependent records retain independent eligibility.
+
+Require each applicable specialist agent to report its own candidate question **even if no question appeared in the user request or spec**. Coordinator consolidation is not a substitute for independent discovery. For every question, cross-check existing Tesbo requirements, approved policies/manuals, current implementation, prior decisions, tasks/issues and linked evidence before treating it as undecided. Preserve `NOT INSPECTED` or `UNKNOWN` when access is missing; do not invent a conflict or pretend a source was read.
+
+### One candidate disposition in the existing work record
+
+Use the existing requirement/spec review, native Task/Issue or linked evidence record, depending on its established owner. Capture the following fields as prose or supported metadata—**do not create a parallel decision table/service or fictitious MCP endpoint**:
+
+| Field | Meaning |
+| --- | --- |
+| Context and trigger | Named FR/T/QA/MBT/AC or issue, exact relevant version and observed evidence |
+| Candidate decision | The previously unasked consequential question, not just the immediate defect |
+| Source reconciliation | Existing authoritative rules/owners; contradictions or explicit absence; evidence vs inference |
+| Alternatives and impact | Material behavioral choices; affected actors, states, entry points and linked records |
+| Disposition | `ALREADY_DECIDED`, `DELEGATED`, `HUMAN_REQUIRED`, or `EVIDENCE_BLOCKED` |
+| Authority and scope | Accountable decision owner; whether only a named slice is blocked |
+| Outcome and follow-through | Authorized resolution/reference; requirements, manual/policy, cases, graph links and implementation consequences |
+| Confidence and open risks | Evidence gaps, residual uncertainties, stale inputs and conditions that would reopen it |
+
+A subagent lacking interactive questioning or native MCP write permission must **still report the candidate** in its normal output. The coordinator attaches it to the existing review/PR handoff and, when tools and authorization permit, writes/link it using the existing native owners. A proposed record, generated draft or pending decision must not be represented as approved. Preserve provenance, exact revision and identity where available; never forge evidence or quietly amend approved policies.
+
+### Escalation and continuation rule
+
+- `ALREADY_DECIDED`: cite and apply the relevant version; do not ask the owner again merely because the agent was uncertain.
+- `DELEGATED`: choose within documented authority and record material rationale; no ritual approval.
+- `HUMAN_REQUIRED`: state a concise recommendation and alternatives, identify the accountable human, and leave the **affected interpretation** unresolved until decision; do unrelated safe work.
+- `EVIDENCE_BLOCKED`: name inaccessible source/tool or missing provenance and the claim it prevents; continue only portions whose correctness does not depend on that evidence.
+
+After authorized resolution, propagate the decision through **existing** Tesbo Requirements, applicable Policies and User Manuals, linked Test Cases for regression, Tasks/Issues and Evidence, plus graph obligations where supported. Creating a draft test case or note does not confer approval or execution status. If an MCP capability is absent, write a truthful handoff and do not claim the native records were updated.
+
+### Why this matters for spec teams
+
+The historical Nesberry seller-visibility issue (ISS-9482 / D-115) did not fail only because an agent explained a question poorly. It also revealed that teams had not generated a question about two independent semantic axes: published branded-page status versus eligibility to display credentials and portfolios on every plan. For Tesbo, apply the **method**, not that marketplace policy. For example, when deciding whether a retired requirement hides its linked test cases, independently ask whether lifecycle, discoverability, historical evidence, test approval and regression reuse are separate decisions. Verify Tesbo's actual decided rules before recommending any outcome.
+
+### Reviewer completion language
+
+Say `candidate decisions found: N; already decided: A; delegated: B; human-required: C; evidence-blocked: D` only when those counts come from the inspected review scope. Cite record references and the inspected surfaces. If there are none, say `no candidate found in the inspected scope`, never `no product questions exist`. Do not turn this guidance into a mandatory extra runtime test campaign or a new feature implementation.

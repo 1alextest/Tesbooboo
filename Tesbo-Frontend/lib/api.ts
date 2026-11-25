@@ -1084,6 +1084,8 @@ export interface ZyraTask {
   /** Exact server revision of the reviewable operations and their target context. */
   proposalRevision?: string;
   proposalSnapshot?: Record<string, unknown>;
+  /** Producer identity pinned at staging (api_token/human_session, token, issuer). */
+  proposalProvenance?: Record<string, unknown> | null;
   sources: Array<{ type: string; title: string; detail: string }>;
   activities: Array<{ actor: "user" | "agent" | string; stage: string; title: string; detail: string; createdAt: string; kind?: string }>;
   tokenUsage: { input: number; output: number; total: number };
@@ -1106,6 +1108,7 @@ export interface ManagedDocumentProposal {
   target: {
     documentId: string;
     editRevision: string;
+    applicability?: "current" | "changed" | "missing" | null;
     base: {
       title: string; contentJson: unknown; contentHtml: string | null; contentText: string | null;
       governedMetadata: Record<string, unknown>; documentType: string; status: string;
@@ -1582,8 +1585,26 @@ export async function getManagedDocumentProposal(projectId: string, taskId: stri
   return api<ZyraTask>(`/api/projects/${projectId}/knowledge-base/document-proposals/${taskId}`);
 }
 
-export async function listManagedDocumentProposals(projectId: string): Promise<{ list: ZyraTask[] }> {
-  return api(`/api/projects/${projectId}/knowledge-base/document-proposals`);
+export interface ManagedDocumentProposalPage {
+  list: ZyraTask[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+export async function listManagedDocumentProposals(projectId: string, params: {
+  limit?: number; offset?: number; q?: string;
+  documentType?: "user_manual" | "policy" | "";
+  status?: "pending" | "in_review" | "failed";
+  operation?: "create" | "update" | "";
+} = {}): Promise<ManagedDocumentProposalPage> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return api(`/api/projects/${projectId}/knowledge-base/document-proposals${suffix}`);
 }
 
 /** Protected human apply of the exact reviewed candidate; publishes a native Draft only. */
@@ -2125,8 +2146,10 @@ export async function listTestCases(
   });
 }
 
-export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
-  return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+export async function getTestCase(
+  projectId: string, testcaseId: string, signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}`, { signal });
 }
 
 export interface TestCaseRevisionBasis {

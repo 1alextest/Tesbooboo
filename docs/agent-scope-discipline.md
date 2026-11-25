@@ -18,6 +18,10 @@ Classify what you notice, then act:
 | **Adjacent finding** — stale test, unrelated flake, missing cleanup, refactor opportunity, accessibility smell, etc. | Record it and continue. Put it in the PR's "Findings not fixed" section with `file:line`, evidence, consequence and a suggested next step; where actionable, file a Basecamp card/issue so it is not lost. Do not silently repair it, and do not let it block the increment. |
 | **New feature / platform / dependency / subsystem** — a second store, scheduler, observability product, agent runtime, or a competing spec package | Do not start it. Write a short proposal (problem, evidence, cost, alternatives, what it displaces) and get explicit owner sign-off. It is its own increment, with its own spec amendment and PR. |
 
+## Unasked decision discovery within named scope
+
+Before implementing a consequential interpretation, follow the [evidence-grounded decision skill](agent-skills/evidence-grounded-decisions/SKILL.md#tesbo-specification-to-native-record-handoff). Agents must independently **generate** candidate product questions from omitted states, actors, conflicting prior rules, upstream/downstream dependencies and human consequences—even when the assigned card or spec contains no open questions. This is distinct from merely explaining an existing question. Reconcile with prior authoritative decisions and classify candidates as already decided, delegated, human-required or evidence-blocked. Only the affected choice is held for appropriate authority; unrelated authorized work may continue. Subagents without a questioning interface or native write access report candidates to coordination for the existing review and Tesbo records, never silently suppress them. Do not create a new decision service or claim native persistence without an actual authorized write.
+
 ## No unsanctioned pivot
 
 A plan existing is not sign-off. If implementation shows the named spec is wrong or incomplete, stop and
@@ -47,6 +51,12 @@ MCP work follows P-10/P-18 in the canonical `00_README.md` and the MCP contracts
 behavior-graph / Model Studio work follows MBT-001 in [FEATURE_DOCUMENTATION.md](FEATURE_DOCUMENTATION.md)
 and the `docs/reviews/*` assurance records. Do not add a new MCP tool, graph surface, store or schema
 outside the increment under review.
+
+## Show the application journey in the existing review record
+
+For a specification or change that affects a user journey, apply engineering principle 2 in [AGENTS.md](../AGENTS.md) to the ordinary entry point and materially different writers, principals and side effects. In the existing PR review record, connect the actor's goal, actual starting state and input to the real handler, authority check, data read, writer and any jobs or external effects. Follow the same record through a fresh read and the next eligible person's decision. Pin the source revision and locations for each link. For a proposed link, give the owner, expected before/after and proof still needed. A UI label, role roster or passing component test alone cannot close a missing link.
+
+Blue identifies the actual entry and owner. Grey walks the journey. Green verifies the handoffs and downstream consumers. QA challenges one discriminating failure and a valid neighboring case for each material mechanism. Security and Red challenge identity and authority where they cross a boundary. Purple checks that the screen describes what the next person can actually decide. Graph links existing obligations and evidence. White reconciles the joins, each role's attributable evidence, residual unknowns and the scope of the conclusion. Record other applicable challenges in the same review and retain their existing responsibilities. Recheck affected links when the candidate, governing rules, permissions or integration changes. A bounded source finding can inform design while runtime acceptance remains open. For a worked example, see the [PR #264 application journey review](qa-orchestration/reviews/PR264-application-journey-review.md).
 
 ## Independent finding reconciliation
 

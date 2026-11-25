@@ -196,6 +196,10 @@ Design isn't ready until library version lineage, composition conflict, root-met
 
 No implementation or current deployment claim is implied by this section.
 
+### 10.6 Shared authoring across MCP clients
+
+Use the existing T-422 method resolver and each artifact’s native proposal, revision and approval owners for [mandatory Skill delivery and cross-member conformance](skills-governance.md#mandatory-skill-delivery-and-cross-member-authoring-conformance). Bind the method-delivery receipt to the authenticated actor, target and operation. Record generation order only when a controlled path observes it. At staging and publication, check the applicable permissions, Skill, input revisions and validation result. The [MCP team attribution contract](mcp-team-attribution.md) defines the evidence that lets a project member distinguish a colleague’s proposal, a reviewer’s selection and a later service write in the same history.
+
 ## 11. Hybrid source-change detection and reconciliation — Kiro precedent, Tesbo implementation
 **Source-owner reuse:** The existing project source binding, current-cache graph capture/history, `GraphChangeReviewController`, native notification writers and Zyra review feed remain the canonical Tesbo sources. Integration adapters supply observations only; no second repository record system.
 
@@ -796,3 +800,18 @@ An asserted no-impact result requires an independently grounded bounded frontier
 ### Equivalence decision owner qualification — revision 1.4.38
 
 The retained revision1.4.37 phrase “existing Change Packet adjudication owner” denotes the existing shared native review/apply path under FR-027–037 and the authoritative Requirements, Policy or Model record owners for the exact selected decision. A Change Packet remains a derived projection under R-ASE-01 and ASER-C02; it owns no approval authority, authoritative equivalence store or independent persistence lifecycle. Only an explicitly permitted human decision, bound to the exact governing revisions, scope and authority, can establish reviewed equivalence. Use the existing owner’s version/evidence/audit services and selected native operation. Withdrawal or supersession invalidates affected current projections and handoffs while retaining the original historical decision and receipts. Neither inferred similarity nor a report action transfers authority between linked records.
+
+
+### Proposed decision-discovery receipt within existing Change Packet (R-ASE-09/12/15/16/40)
+
+**No new storage or semantic owner is authorized by this subordinate design note.** Use the existing FR-115/T-455 changeset identity, native task/issue and requirement proposal reviews; the receipt below is a *derived view / review payload* linked by stable native IDs and exact revisions, not a second persisted decision registry. Agent-supplied discovery assertions are evidence of what the agent *reported*, not proof it explored every relevant state.
+
+**Producer boundary:** Independent specialist agents report candidate decision gaps in their usual outputs. MCP `initialize` and applicable staging-tool descriptions can prompt discovery even without repository instructions, but an LLM-generated assertion cannot prove discovery. The coordinator maps candidates to actual sources/affected requirements and reconciles duplicates. A client unable to ask interactively or lacking write scope submits a normal textual handoff; it does not simulate a successful native write.
+
+**Proposed receipt fields, all scoped to the existing task/Change Packet and available native support:** `originAgentRole`; `candidateQuestion`; `triggerRef` (source and revision); `sourceRefs` and `notInspected`; `semanticAxes`; `affectedArtifactRefs` (stable IDs/revisions); `alternativesAndImpacts`; `proposedDisposition` (`already_decided|delegated|human_required|evidence_blocked`); `decisionAuthority`; `blockingOperations`; `unaffectedContinuations`; `confidenceAndUnknowns`; `humanResolutionRef` (only after verified authorized action). These are a **conceptual contract**; do not send unsupported keys to current `stage_requirement_change_bundle` or `stage_testcase_changes` (both reject unknown shapes). Reuse existing permissible task comments, references and revisioned review attachments only where their current schema and permissions allow.
+
+**State reconciliation:** Distinguish a discovery candidate and its proposed disposition from authoritative requirement/policy decision, staging proposal status, workDisposition, case approval, execution verdict and release readiness. An unresolved human-owned interpretation blocks applying only the affected proposed normative change. It cannot veto unrelated implementation or change already approved/tested historical objects. Once human-resolved, recheck source revisions, effective Skills, current grants, dependent requirements, proposal revision and selected links before any existing authorized apply. Agent consensus and a green CI result never substitute for decision authority.
+
+**Safety and failure behavior:** Unknown authority, missing provenance, stale decisions, inaccessible documents, changed permissions, cross-tenant references or absent MCP capabilities remain explicit unknown/blocked claims; no defaults to “approved.” Duplicate candidate consolidation must retain each independent triggering source. The read model should show why a question was raised, what evidence was actually inspected, who must decide, and what can safely continue. No implied automatic policy detector, completeness guarantee, new approval tool or persistence migration.
+
+**Illustrative cross-axis failure:** a published branded seller page was incorrectly treated as synonymous with the right to show credentials despite an earlier every-plan decision (Nesberry ISS-9482/D-115). Transfer the *method* of separate semantic axes and cross-spec reconciliation, not the marketplace business rule.

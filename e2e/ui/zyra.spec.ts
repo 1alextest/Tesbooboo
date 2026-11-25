@@ -714,8 +714,70 @@ test.describe("zyra / agents (UI)", () => {
 
       const page = await open(browser, "/agents/zyra/changes", "qa");
       await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      // The first visible meaning is the human decision, not raw graph ids or a model draft.
+      // The evidence is the persisted native receipt seeded above, not a fabricated UI outcome.
+      const reviewFocus = page.getByTestId("qa-review-focus-" + historyId);
+      await expect(reviewFocus.getByRole("heading", { name: "Assess nominated case references for this change" })).toBeVisible();
+      await expect(reviewFocus).toContainText("1 changed graph node(s) and 1 nominated case reference(s)");
+      await expect(reviewFocus).toContainText("Still unknown:");
+      await expect(reviewFocus).toContainText("Source freshness is unverified");
+      await expect(reviewFocus).toContainText("Next human action:");
+      await expect(reviewFocus).toContainText("It does not approve a requirement, test case, policy, execution result or release");
+      await expect(page.getByRole("link", { name: "Configure source" })).toHaveAttribute("href", "#source-setup");
+      const humanReviewFirst = await page.evaluate(() => {
+        const history = document.querySelector('section[aria-label="Graph change history"]');
+        const sourceTools = document.querySelector('section[aria-label="Source configuration and draft model inspection"]');
+        return !!history && !!sourceTools &&
+          !!(history.compareDocumentPosition(sourceTools) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+      expect(humanReviewFirst).toBe(true);
       const link = page.getByRole("link", { name: "Open existing test case" });
       await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
+      const caseIdentity = page.getByRole("region", { name: "Native case identity" });
+      await expect(caseIdentity).toContainText("Its title, current approval and applicability have not been checked");
+      const currentCaseRead = page.waitForResponse(r =>
+        r.url().endsWith(`/api/projects/${projectId}/testcases/${caseId}`) &&
+        r.request().method() === "GET"
+      );
+      await caseIdentity.getByRole("button", { name: "Inspect case details" }).click();
+      const caseResponse = await currentCaseRead;
+      expect(caseResponse.status(), await caseResponse.text()).toBe(200);
+      await expect(caseIdentity).toContainText("E2E linked graph review");
+      await expect(caseIdentity).toContainText("At this read: Approved");
+      await expect(caseIdentity).toContainText("approval current");
+      await expect(caseIdentity).toContainText("Run attachment rechecks approval");
+
+      // An earlier authorized title must disappear when the subsequent read is denied.
+      // The failure response body must not be rendered as a case title or reviewer evidence.
+      const caseReadPath = `**/api/projects/${projectId}/testcases/${caseId}`;
+      const denyRead = async (route: import("@playwright/test").Route) =>
+        route.fulfill({ status: 403, json: { error: "Private provider detail" } });
+      await page.route(caseReadPath, denyRead);
+      try {
+        await caseIdentity.getByRole("button", { name: "Refresh case details" }).click();
+        await expect(caseIdentity).toContainText("Case details are unavailable or access has changed");
+        await expect(caseIdentity).not.toContainText("E2E linked graph review");
+        await expect(caseIdentity).not.toContainText("Private provider detail");
+      } finally {
+        await page.unroute(caseReadPath, denyRead);
+      }
+      // A successful HTTP response carrying a different case ID is not evidence
+      // of identity. A malformed/mismatched result must not be presented as
+      // the current case even if its title and approval fields look legitimate.
+      const wrongIdentity = async (route: import("@playwright/test").Route) =>
+        route.fulfill({ status: 200, json: {
+          id: tenant!.secondProjectId, title: "Wrong-project private case",
+          status: "Approved", approvalCurrent: true, editRevision: "untrusted"
+        } });
+      await page.route(caseReadPath, wrongIdentity);
+      try {
+        await caseIdentity.getByRole("button", { name: "Inspect case details" }).click();
+        await expect(caseIdentity).toContainText("Case details are unavailable or access has changed");
+        await expect(caseIdentity).not.toContainText("Wrong-project private case");
+        await expect(caseIdentity).not.toContainText("approval current");
+      } finally {
+        await page.unroute(caseReadPath, wrongIdentity);
+      }
       await expect(page.getByText("Review reason: case_changed")).toBeVisible();
       // The new read-only explanation stays within the existing QA review page,
       // using the actual persisted native receipt and authenticated project membership.
@@ -744,20 +806,26 @@ test.describe("zyra / agents (UI)", () => {
         WHERE dedupe_key = ${literal(`qa_change_review:${projectId}:${historyId}`)};`));
       expect(countNotifications()).toBe(0);
       await page.getByRole("button", { name: "Notify QA reviewers" }).click();
-      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      await expect(page.getByRole("status").filter({ hasText: /Reviewer notifications confirmed/ })).toContainText(/Reviewer notifications confirmed/);
       const delivered = countNotifications();
       expect(delivered).toBeGreaterThan(0);
       await page.getByRole("button", { name: "Notify QA reviewers" }).click();
-      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      await expect(page.getByRole("status").filter({ hasText: /Reviewer notifications confirmed/ })).toContainText(/Reviewer notifications confirmed/);
       expect(countNotifications(), "repeat notification is idempotent").toBe(delivered);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
         JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
         WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
 
       const prepare = page.getByTestId("graph-review-run-" + historyId);
-      await prepare.locator("summary").click();
+      await prepare.locator(":scope > summary").click();
       const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
       await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
+      const selectionIdentity = prepare.getByRole("region", { name: "Native case identity" });
+      await selectionIdentity.getByRole("button", { name: "Inspect case details" }).click();
+      await expect(selectionIdentity).toContainText("E2E linked graph review");
+      // The inspection button must not toggle its adjacent checkbox.
+      await expect(prepare.getByRole("checkbox", { name: "Select linked case 1" })).not.toBeChecked();
+      await expect(create).toBeDisabled();
       await prepare.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await expect(create).toBeDisabled(); // Environment is not fabricated from a source receipt.
       await prepare.getByLabel("Execution environment").fill("Disposable QA");
@@ -818,7 +886,7 @@ test.describe("zyra / agents (UI)", () => {
       // canonical case must be idempotent through the native API.
       await page.reload();
       const reopened = page.getByTestId("graph-review-run-" + historyId);
-      await reopened.locator("summary").click();
+      await reopened.locator(":scope > summary").click();
       await reopened.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await reopened.getByRole("radio", { name: "Add to existing test run" }).check();
       await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
@@ -893,7 +961,7 @@ test.describe("zyra / agents (UI)", () => {
       // Do not blindly retry: find the already-created run in the native list.
       await page.reload();
       const uncertain = page.getByTestId("graph-review-run-" + historyId);
-      await uncertain.locator("summary").click();
+      await uncertain.locator(":scope > summary").click();
       await uncertain.getByRole("checkbox", { name: "Select linked case 1" }).check();
       const uncertainName = "E2E Unconfirmed graph run " + stamp;
       await uncertain.getByLabel("New run name").fill(uncertainName);
@@ -939,8 +1007,13 @@ test.describe("zyra / agents (UI)", () => {
       const beforeDraft = Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
         literal(projectId) + " AND deleted_at IS NULL;"));
       await page.reload();
+      const changedIdentity = page.getByRole("region", { name: "Native case identity" });
+      await changedIdentity.getByRole("button", { name: "Inspect case details" }).click();
+      await expect(changedIdentity).toContainText("At this read: Draft");
+      await expect(changedIdentity).toContainText("not currently approved for a new run");
+      await expect(changedIdentity).not.toContainText("approval current");
       const rejected = page.getByTestId("graph-review-run-" + historyId);
-      await rejected.locator("summary").click();
+      await rejected.locator(":scope > summary").click();
       await rejected.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await rejected.getByLabel("Execution environment").fill("Disposable QA");
       await rejected.getByRole("button", { name: "Create run and add selected cases" }).click();
@@ -963,12 +1036,40 @@ test.describe("zyra / agents (UI)", () => {
           ${literal(JSON.stringify(sourceOnlyReceipt))}::jsonb) RETURNING id;`);
       await page.goto("/projects/" + projectId + "/agents/zyra/changes");
       const sourceOnly = page.getByTestId("graph-review-run-" + sourceOnlyHistoryId);
+      const sourceOnlyFocus = page.getByTestId("qa-review-focus-" + sourceOnlyHistoryId);
+      await expect(sourceOnlyFocus.getByRole("heading", {
+        name: "Identify affected behavior before selecting tests"
+      })).toBeVisible();
+      await expect(sourceOnlyFocus).toContainText("0 nominated case reference(s)");
+      await expect(sourceOnlyFocus).toContainText("Investigate the changed behavior and approved requirements");
       await expect(sourceOnly.getByText("Review source-only QA gaps")).toBeVisible();
-      await sourceOnly.locator("summary").click();
+      await sourceOnly.locator(":scope > summary").click();
       const sourceGaps = sourceOnly.getByRole("region", { name: "QA verification gaps" });
       await expect(sourceGaps).toContainText("0 nominated case");
       await expect(sourceGaps).toContainText("Changed graph nodes have no nominated cases");
       await expect(sourceOnly.getByRole("button", { name: "Create run and add selected cases" })).toHaveCount(0);
+
+      // A graph reference from a different project is not an authorized native
+      // case lookup. The source receipt is intentionally misleading; this page
+      // must show an unverified reference, not a cross-project identity/link.
+      const foreignRevision = "e2e-graph-foreign-" + stamp;
+      const foreignNode = JSON.stringify(["test_case", tenant!.secondProjectId, caseId]);
+      const foreignReceipt = {
+        ...receipt, id: "e2e-foreign-" + stamp,
+        changed: { ...receipt.changed, modifiedNodeIds: [foreignNode] },
+        candidates: [{ caseNodeId: foreignNode, reasons: ["foreign_reference"], requirementNodeIds: [] }]
+      };
+      const foreignHistoryId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(foreignRevision)}, ${literal(capture(foreignRevision))}::jsonb,
+          ${literal(JSON.stringify(foreignReceipt))}::jsonb) RETURNING id;`);
+      await page.goto("/projects/" + projectId + "/agents/zyra/changes");
+      const foreignArticle = page.locator('section[aria-label="Graph change history"] article')
+        .filter({ has: page.getByTestId("qa-review-focus-" + foreignHistoryId) });
+      await expect(foreignArticle).toContainText("Noncanonical or foreign-project case reference");
+      await expect(foreignArticle.getByRole("link", { name: "Open existing test case" })).toHaveCount(0);
+      await expect(foreignArticle.getByRole("region", { name: "Native case identity" })).toHaveCount(0);
 
       const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
       expect(resolvedResponse.ok()).toBeTruthy();
@@ -1002,7 +1103,7 @@ test.describe("zyra / agents (UI)", () => {
            FROM graph_capture_history
           WHERE project_id=${literal(projectId)} AND revision=${literal(reviewRevision)});`);
       exec(`DELETE FROM graph_capture_history WHERE project_id = ${literal(projectId)}
-         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(sourceOnlyRevision)});`);
+         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(sourceOnlyRevision)},${literal("e2e-graph-foreign-" + stamp)});`);
       if (caseId) exec(`DELETE FROM testcases WHERE id = ${literal(caseId)};`);
     }
   });

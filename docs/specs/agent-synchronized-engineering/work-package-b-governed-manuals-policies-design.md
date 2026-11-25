@@ -496,5 +496,127 @@ There is no hard-delete path for `knowledge_folders` in product code.
   0, Received: 1` live copies under the deleted folder; 725 existing tests passed.
 
 The advisory-first fix is verified green at `2060ae82`
-(`actions/runs/45524121118`, 726 database tests). Native execution remains UNRUN; native record update is
-blocked as in §9.2.
+(`actions/runs/45524121118`, 726 database tests). PR #263 merged into `development` as
+`551e7eab4906f11a67c4046c2a02ca2be80dc8ce`; the Railway deployment succeeded and production `/api/health`
+returns that exact SHA. Native execution remains UNRUN; native record update is blocked as in §9.2.
+
+### 10.2 Sibling destination writers (PR #268)
+
+Lifecycle and competing deletion paths:
+- `createKnowledgeFolder`: preflight parent read, plain INSERT. A folder delete/cascade could commit
+  after the preflight but before the insert, leaving a live child under a soft-deleted parent.
+- `rememberZyraMemory` insert branch: resolves the "AI Memory" folder (or root fallback), then inserts
+  the memory document. A concurrent delete of that folder/ancestor could strand a live memory document.
+- `integration-sync.processor` mirror upsert: the coordinator resolves the provider folder once and
+  passes its id to per-ticket jobs; a later job could write into a folder deleted after fan-out.
+
+All are now transaction-scoped:
+- `createKnowledgeFolder` takes the project mutation advisory lock first, rechecks the parent
+  `FOR SHARE` inside the transaction, revalidates membership/archive, and writes the audit row on the
+  same client. A delete wins → 404 with no child; create wins → the later cascade sees the child.
+- `rememberZyraMemory` takes the same advisory lock, resolves/locks the AI Memory folder
+  (`FOR SHARE`) inside the transaction with the root fallback, and keeps the per-document advisory for
+  appends. A deleted AI Memory folder falls back to the undeletable root; embedding enqueue stays
+  after commit.
+- The sync worker takes the advisory lock, re-resolves the existing provider folder under it
+  (source_provider-tagged, or the untagged default-named folder the coordinator adopts), and writes
+  the mirror in the same transaction; the stale coordinator `folderId` is no longer carried in the job
+  payload. It never recreates a deleted folder: that ticket fails and the next sync's coordinator
+  recreates it, so a user deletion or disconnect is not resurrected by a late job.
+  Post-commit sync-event/notification/embedding effects are unchanged.
+
+Evidence:
+- Failing-first tests-only head `1100ea3d` (`actions/runs/45539631646`): the Zyra-memory race failed
+  with `Expected: 0, Received: 1` live memory document under the deleted folder; 726 tests passed.
+- The final folder-create regression was run tests-only at `827a20af`
+  (`actions/runs/45554682776`): the pre-fix create resolved (`Received has value: null`), i.e. a live
+  child was inserted under the folder the paused delete had already soft-deleted. The same test is
+  green with the fix (`e684b92f`, `actions/runs/45551136629`, 728 database tests).
+- The integration-worker defect was established from the coordinator→job folder-id lifecycle and is
+  pinned by a processor contract test that fails if the transaction, exact shared advisory key or
+  in-transaction `findProviderFolderForWrite` call is removed; a deterministic queue/DB interleaving
+  was not reproducible in the DB suite.
+- Protected paths already covered by #263: move document/folder, duplicate, ordinary and ancestor
+  deletion, with observed advisory waits.
+- `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
+  folders.
+- Remaining same-class follow-up: `uploadKnowledgeFiles` and `moveKnowledgeFile` still insert/update
+  `knowledge_files.folder_id` without the project mutation lock or a locked destination recheck, so a
+  file upload/move can still be stranded under a deleted folder. The storage write precedes the row
+  write, so its repair needs a compensating delete and belongs to the files owner.
+- `restoreKnowledgeFolder` does not reject restoring a child under a still-deleted parent; the Trash
+  API marks it non-restorable, but the service can be called directly. Recorded, not a lock race.
+- Integration-sync recreation of a provider folder mid-run was deliberately removed; `folderId` is no
+  longer carried in per-ticket jobs.
+- Coverage note: this PR's deterministic proof is the observed-wait DB suite plus the processor
+  transaction contract; the existing `api/knowledge-base`/`api/integrations` Playwright specs were not
+  re-run in this PR, and no new e2e route/response changed.
+
+Native coverage was staged through the approved project-scoped MCP connection (origin
+`https://tesbooboo-production.up.railway.app`, verified project `df072dfe-e4d0-406a-9350-e0d022c6323f`):
+review task `1d615021-4c92-46df-bcef-2d9745ca557b`, proposal revision
+`24f89e425bca573b52a41e1aa3281a7dae818ccb49fd7af463cf96c9e47644cc`, containing one requirement
+revision, one Draft case and one explicit case link. Because the final sync policy re-resolves but does
+not recreate a deleted provider folder, a corrected proposal was staged as task
+`d2cae745-c550-4a58-b85e-6d000f28b472` (revision
+`3aff650be7f35792f0d49f06967ead360761688c1b110e9b06e52f635fa3842e`); the earlier task is left as
+history rather than deleted. Both remain `in_review`, **unassigned**, with no approved Skill
+assignment, so apply stays a human action; manual execution **UNRUN**.
+
+PR #268 merged into `development` as `313dd1e649bd21ae05356d0e82dea4f5db7f7e1a`; the Railway
+deployment succeeded and production `/api/health` returned that exact SHA. The approved-origin
+binding was created beside the existing project token as `tesbo-approved-origin` (exact origin,
+regular file, ACL restricted to the owning Windows principal), and the connection was verified as
+project `df072dfe-e4d0-406a-9350-e0d022c6323f` before staging.
+
+---
+
+## 11. Human discovery of pending governable candidates
+
+The owner journey reuses the existing Zyra Tasks navigation: a fourth tab, **Document proposals**,
+lists pending `external_document_proposal` tasks from
+`GET /knowledge-base/document-proposals`. The existing duplicate-test-case Review Board stays a
+separate tab with its own contract and pricing behaviour; this list does not import or alter it.
+
+**API.** The dedicated list now returns `{ list, total, limit, offset, hasMore }` and accepts
+`limit`, `offset`, `q` (proposal title), `documentType`, `operation` and `status`
+(`pending`/`in_review`/`failed`). The count uses the same filtered predicate as the page, so a
+limited page is never presented as the whole set; invalid filters are 400 and another project is 404.
+Each item is the existing managed-proposal view, so content, metadata, diff, provenance, pinned Skill
+identity/digest, apply receipt and exact target/base revision stay available for review. The view
+adds `target.applicability` (`current`/`changed`/`missing`) so a candidate whose target moved after
+staging shows that blocker before apply.
+
+**UI.** Cards show title, manual/policy type, create/update intent, target/base identity, proposer
+(human or token), updated date, changes and diff summary. Blockers list missing/conflicting/stale
+Skill assignment, target drift, failed staging, missing review revision and the owner/manager role
+requirement. Opening a card goes to the existing exact task review surface; the list itself has no
+apply/reject controls, so submission and approval keep their separate controls. After returning, a
+refresh re-reads the filtered set and total.
+
+**States and safety.** Loading, successful-empty, preview-unavailable (501), denied (403/404) and
+generic retry are distinct. A request sequence number fences late responses after a project switch or
+filter change. The tab can be opened by any project member; the API still enforces project access and
+the preview gate, and a disabled preview keeps the existing redaction/confidentiality behaviour.
+
+**Coverage.** UI journey `e2e/ui/skills.spec.ts` stages eleven candidates, checks pagination ranges,
+filters, target drift after apply, stale Skill and the QA role blocker. API assertions in
+`e2e/api/requirements.spec.ts` pin the filtered total/limit/offset/hasMore, document-type filter,
+invalid filter 400 and cross-project 404. Native requirement/case staging: task
+`d15e29fc-b5c4-44e2-9d2c-fbf481c2084f`, revision
+`a290d99fd0a86f56683940a5322d913a0f2d9759afb869d03e70299c0cfe92ae`, `in_review`, unassigned.
+Manual execution remains **UNRUN**; native task-evidence writing is unavailable through the exposed
+tools.
+
+Review hardening: the list re-reads `target.applicability` in the reused detail panel and disables Apply for
+`changed`/`missing`; an out-of-range offset after a concurrent apply clamps to the last real page and reloads;
+`q` is escaped for `ILIKE` and NUL bytes; page + count come from one windowed statement when rows exist; the
+member list not being loaded yet suppresses (rather than falsely shows) the role blocker; the client keys the
+list by project so a previous project's cards cannot paint under a new one.
+
+PR #279 merged into `development` as `e45675c76f079acdba0c6df09a17f20fc93d4be4`; the Railway deployment
+succeeded and production `/api/health` returned that exact SHA. The deployed MCP catalog advertises the
+preview tool set and `list_document_proposals` returns the new `{list,total,limit,offset,hasMore}` shape
+against the verified TESBOPROJECT connection. The automated Playwright API/UI checks were run in GitHub
+Actions and passed; **manual execution of the native case remains UNRUN**, and native task-evidence
+writing (execution results) is still unavailable through the exposed tools.
