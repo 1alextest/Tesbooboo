@@ -115,6 +115,7 @@ describe("ApiTokenRestGuard", () => {
   it.each([
     "POST /apikeys", "GET /apikeys", "DELETE /apikeys/token-2",
     "POST /members", "GET /members", "DELETE /members/user-2", "GET /mcp-access", "PUT /mcp-access",
+    "GET /mcp-oauth-consents", "DELETE /mcp-oauth-consents/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "POST /APIKEYS/", "GET /ApiKeys", "DELETE /MEMBERS/user-2", "PUT /MCP-ACCESS/"
   ])("blocks bearer project administration %s", async route => {
     const [method, suffix] = route.split(" ");
