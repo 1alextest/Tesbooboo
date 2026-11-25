@@ -26,7 +26,9 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
       }]
     };
     const binding = { project_id: PROJECT, account_id: ACCOUNT,
-      client_id: CLIENT, resource: RESOURCE, approval_revision: 3, revoked_at: null as string | null };
+      client_id: CLIENT, resource: RESOURCE, approval_revision: 3, revoked_at: null as string | null,
+      project_membership_id: "11111111-1111-4111-8111-111111111111",
+      organization_membership_id: "22222222-2222-4222-8222-222222222222" };
     const bindings = new Map<string, typeof binding>();
     const artifacts = new Map<string, string>();
     function addFamily(grantId: string) {
@@ -70,7 +72,9 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     for (const wrong of [
       { accountId: "another-user" }, { clientId: "https://attacker.example/client.json" },
       { projectId: "22222222-2222-4222-8222-222222222222" },
-      { resource: "https://tesbo.example/api/mcp" }, { approvalRevision: 4 }
+      { resource: "https://tesbo.example/api/mcp" }, { approvalRevision: 4 },
+      { projectMembershipId: "33333333-3333-4333-8333-333333333333" },
+      { organizationMembershipId: "33333333-3333-4333-8333-333333333333" }
     ]) {
       expect(await currentOAuthGrantBinding(db, GRANT, wrong)).toBe(false);
     }
@@ -142,7 +146,9 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     const db = { transaction: jest.fn(async (work: (client: { query: typeof query }) => Promise<void>) =>
       work({ query })) } as unknown as DatabaseService;
     const basis = { projectId: PROJECT, accountId: ACCOUNT, clientId: CLIENT,
-      resource: RESOURCE, approvalRevision: 3 };
+      resource: RESOURCE, approvalRevision: 3,
+      projectMembershipId: "11111111-1111-4111-8111-111111111111",
+      organizationMembershipId: "22222222-2222-4222-8222-222222222222" };
     await expect(bindOAuthGrantToApproval(db, GRANT, basis)).resolves.toBeUndefined();
     expect(inserted).toBe(1);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("FOR SHARE OF p,pm,om"), [PROJECT, ACCOUNT]);
@@ -162,7 +168,7 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
       expect(inserted).toBe(1);
     }
     await expect(bindOAuthGrantToApproval(db, "incomplete-membership-proof",
-      { ...basis, projectMembershipId: "11111111-1111-4111-8111-111111111111" }))
+      { ...basis, organizationMembershipId: "" }))
       .rejects.toThrow(/Incomplete/);
     f.state.revision = 4;
     await expect(bindOAuthGrantToApproval(db, "late-grant", basis)).rejects.toThrow(/changed/);
