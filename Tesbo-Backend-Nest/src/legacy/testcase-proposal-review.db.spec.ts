@@ -941,14 +941,118 @@ type Body=Record<string,any>;
       }
     });
 
+    it.each(["fresh","replay"])("refuses %s activation after its reviewed link Skill assignment is revoked",async phase=>{
+      const skills=await publishSkills();
+      const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
+      let requirementId="",caseId="",taskId="";
+      try{
+        const staged=await stageBundle(ops());taskId=staged.id;
+        const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;caseId=applied.receipt.testcase.id;
+        const approval=await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const before=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:before.edit_revision,expectedApprovalRevision:before.approval_revision},human);
+        const current=await revisionsOf(caseId);
+        expect(current.approval_current).toBe(true);
+        const request={expectedCaseRevision:current.edit_revision,expectedApprovalRevision:current.approval_revision,
+          expectedRequirementVersionId:approval.approvedVersionId};
+        const sourceLinkId=String(applied.receipt.link.id);
+        if(phase==="replay"){
+          const first=await service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human);
+          expect(first).toMatchObject({replayed:false,link:{requirementVersionId:approval.approvedVersionId}});
+          expect(await service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human))
+            .toEqual({...first,replayed:true});
+        }
+        const linkAssignments=(await admin.query(
+          "SELECT id FROM skill_assignments WHERE project_id=$1 AND module='requirements' AND subtype='functional' AND operation='requirement_case_link' AND status='active'",
+          [project])).rows;
+        expect(linkAssignments).toHaveLength(1);
+        await service().deactivateSkillAssignment(project,user,String(linkAssignments[0].id),{},human);
+        const preserved=await bundleWrites(taskId);
+        const beforeCoverage=await service().requirementCoverage(project,user,requirementId);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+        expect(await bundleWrites(taskId)).toEqual(preserved);
+        expect(await service().requirementCoverage(project,user,requirementId)).toEqual(beforeCoverage);
+      }finally{
+        if(requirementId)await cleanupRequirement(requirementId);
+        if(taskId)await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[taskId,project]);
+        if(caseId)await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
+        await cleanupSkills(skillIds);
+      }
+    });
+
+    it.each(["activation","revocation"])("serializes link activation when %s obtains the Skill lock first",async winner=>{
+      const skills=await publishSkills();
+      const activationService=service(),revocationService=service();
+      let requirementId="",caseId="",taskId="",checkpoint=false,secondFinished=false,release=()=>{};
+      const gate=new Promise<void>(resolve=>{release=resolve;});
+      let activation:Promise<Body>|undefined,revocation:Promise<Body>|undefined,barrier:jest.SpyInstance|undefined;
+      try{
+        const staged=await stageBundle(ops());taskId=staged.id;
+        const applied=await service().applyRequirementProposal(project,user,taskId,{expectedProposalRevision:staged.proposalRevision},human);
+        requirementId=applied.receipt.requirement.documentId;caseId=applied.receipt.testcase.id;
+        const approval=await service().approveRequirementVersion(project,user,requirementId,{versionId:applied.receipt.requirement.versionId},human);
+        const before=await revisionsOf(caseId);
+        await service().approveTestCaseForUser(user,project,caseId,{expectedRevision:before.edit_revision,expectedApprovalRevision:before.approval_revision},human);
+        const current=await revisionsOf(caseId);
+        const request={expectedCaseRevision:current.edit_revision,expectedApprovalRevision:current.approval_revision,
+          expectedRequirementVersionId:approval.approvedVersionId};
+        const sourceLinkId=String(applied.receipt.link.id);
+        const linkAssignments=(await admin.query(
+          "SELECT id FROM skill_assignments WHERE project_id=$1 AND module='requirements' AND subtype='functional' AND operation='requirement_case_link' AND status='active'",[project])).rows;
+        expect(linkAssignments).toHaveLength(1);
+        const assignmentId=String(linkAssignments[0].id);
+        const internals=(winner==="activation"?activationService:revocationService) as unknown as Body;
+        const method=winner==="activation"?"assertRequirementLinkAuthority":"lockSkillAssignments";
+        const original=internals[method].bind(internals);
+        barrier=jest.spyOn(internals,method).mockImplementation(async(...args:unknown[])=>{
+          const result=await original(...args);checkpoint=true;await gate;return result;
+        });
+        const activate=()=>activationService.reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human)
+          .then(value=>({value}),error=>({error})).finally(()=>{if(winner==="revocation")secondFinished=true;});
+        const revoke=()=>revocationService.deactivateSkillAssignment(project,user,assignmentId,{},human)
+          .then(value=>({value}),error=>({error})).finally(()=>{if(winner==="activation")secondFinished=true;});
+        if(winner==="activation")activation=activate();else revocation=revoke();
+        expect(await waitUntil(()=>checkpoint)).toBe(true);
+        const baseline=await bundleWrites(taskId);
+        if(winner==="activation")revocation=revoke();else activation=activate();
+        expect(await waitUntil(()=>waitingOn("%pg_advisory_xact_lock%"))).toBe(true);
+        expect(secondFinished).toBe(false);
+        expect(await bundleWrites(taskId)).toEqual(baseline);
+        release();
+        const activated=await activation!,revoked=await revocation!;
+        expect(revoked.error).toBeUndefined();
+        expect(revoked.value).toMatchObject({assignment:{status:"inactive"},replayed:false});
+        const settled=await bundleWrites(taskId);
+        if(winner==="activation"){
+          expect(activated.error).toBeUndefined();
+          expect(activated.value).toMatchObject({replayed:false,link:{requirementVersionId:approval.approvedVersionId}});
+          expect(settled.links.filter(row=>row.id===activated.value.link.id)).toHaveLength(1);
+        }else{
+          expect(activated.error).toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+          for(const key of ["documents","versions","profiles","links","cases","approvals"] as const)expect(settled[key]).toEqual(baseline[key]);
+        }
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,sourceLinkId,request,human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_STALE"}});
+        expect(await bundleWrites(taskId)).toEqual(settled);
+      }finally{
+        release();if(activation)await activation;if(revocation)await revocation;barrier?.mockRestore();
+        if(requirementId)await cleanupRequirement(requirementId);
+        if(taskId)await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[taskId,project]);
+        if(caseId)await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
+        await cleanupSkills([skills.requirement.doc.id,skills.cases.doc.id]);
+      }
+    },15000);
+
     it("replays activation only against the current approved requirement version",async()=>{
       const skills=await publishSkills();
       const skillIds=[skills.requirement.doc.id,skills.cases.doc.id];
       let requirementId="";
       let caseId="";
-      let v2TaskId="";
+      const taskIds:string[]=[];
       try{
-        const staged=await stageBundle(ops());
+        const staged=await stageBundle(ops());taskIds.push(staged.id);
         const applied=await service().applyRequirementProposal(project,user,staged.id,{expectedProposalRevision:staged.proposalRevision},human);
         requirementId=applied.receipt.requirement.documentId;
         caseId=applied.receipt.testcase.id;
@@ -974,7 +1078,7 @@ type Body=Record<string,any>;
             expectedRevision:await revision(requirementId),title:v2Title,description:"Newer requirement content",
             criteria:[{key:"AC-1",text:"Newer obligation"}]}]
         },{kind:"api_token",tokenId:token,transport:"rest"} as never);
-        v2TaskId=stagedV2.id;
+        taskIds.push(stagedV2.id);
         const appliedV2=await service().applyRequirementProposal(project,user,stagedV2.id,{expectedProposalRevision:stagedV2.proposalRevision},human);
         const approvedV2=await service().approveRequirementVersion(project,user,requirementId,{versionId:appliedV2.receipt.requirement.versionId},human);
 
@@ -987,19 +1091,71 @@ type Body=Record<string,any>;
         expect(after.rows).toEqual(before.rows);
         expect(after.rows.find(row=>String(row.id)===lostLink)).toMatchObject({state:"active",requirement_version_id:lostVersion});
 
-        // The still-active v1 link can be intentionally rebound to the current approved version; the
-        // returned identity is the new v2 link, and the v1 generation is retired.
-        const rebound=await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,
-          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision},human);
-        expect(rebound.replayed).toBe(false);
-        expect(String(rebound.link.id)).not.toBe(lostLink);
-        expect(String(rebound.link.requirementVersionId)).toBe(String(approvedV2.approvedVersionId));
-        const active=await admin.query("SELECT id,state,requirement_version_id FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND state='active'",[project,requirementId]);
-        expect(active.rows.some(row=>String(row.id)===String(rebound.link.id)&&String(row.requirement_version_id)===String(approvedV2.approvedVersionId))).toBe(true);
-        expect(active.rows.some(row=>String(row.id)===lostLink)).toBe(false);
+        // A requirement-only approval does not confer reviewed authority to carry an old link.
+        // The positive intentional-rebind journey must use the explicit selected carry-forward
+        // scope in the revised contract; do not remove that use case when implementing the guard.
+        const preserved=await bundleWrites(stagedV2.id);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,
+          {expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision,
+            expectedRequirementVersionId:approvedV2.approvedVersionId},human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_LINK_REVIEW_REQUIRED"}});
+        expect(await bundleWrites(stagedV2.id)).toEqual(preserved);
+        expect((await admin.query("SELECT id,state,requirement_version_id FROM requirement_case_links WHERE id=$1",[lostLink])).rows[0])
+          .toMatchObject({id:lostLink,state:"active",requirement_version_id:lostVersion});
+        // A fresh, explicitly selected scope restores the intentional rebind without duplicating
+        // the testcase or conferring authority on an unselected neighboring group.
+        const neighboring=(await admin.query(
+          `INSERT INTO requirement_case_links
+             (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+           VALUES ($1,$2,$3,ARRAY['AC-2']::text[],$4,$5,$6,'active',$7,$7,now()) RETURNING *`,
+          [project,requirementId,lostVersion,caseId,caseAfter.edit_revision,caseAfter.approval_revision,user])).rows[0];
+        const selection={linkId:lostLink,requirementVersionId:lostVersion,testcaseId:caseId,
+          testcaseRevision:caseAfter.edit_revision,testcaseApprovalRevision:caseAfter.approval_revision,criterionKeys:original.criterionKeys};
+        const revisionOperation={opType:"requirement_revision",operationId:randomUUID(),documentId:requirementId,
+          expectedRevision:await revision(requirementId),title:`Explicit rebind ${randomUUID()}`,
+          criteria:[{key:"AC-1",text:"Reviewed updated obligation"},{key:"AC-2",text:"Neighbor remains distinct"}],carryForwardLinks:[selection]};
+        // Malformed/foreign/duplicate selections cannot publish a task.
+        for(const {carryForwardLinks,status} of [
+          {carryForwardLinks:[{...selection,originatingLinkSkill:{assignmentId:randomUUID()}}],status:400},
+          {carryForwardLinks:[selection,selection],status:400},
+          {carryForwardLinks:[{...selection,linkId:randomUUID()}],status:409},
+          {carryForwardLinks:[{...selection,criterionKeys:["AC-2"]}],status:409}
+        ]){
+          const beforeInvalid=await bundleWrites(stagedV2.id);
+          const beforeTasks=(await admin.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 ORDER BY id",[project])).rows;
+          await expect(stageBundle([{...revisionOperation,carryForwardLinks}])).rejects.toMatchObject({status});
+          expect(await bundleWrites(stagedV2.id)).toEqual(beforeInvalid);
+          expect((await admin.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 ORDER BY id",[project])).rows).toEqual(beforeTasks);
+        }
+        const v3=await stageBundle([revisionOperation]);taskIds.push(v3.id);
+        expect(v3.skillContext.assignments.map((a:Body)=>a.target.operation).sort()).toEqual(["requirement_case_link","requirement_revision"]);
+        expect(v3.requirementBundle[0].carryForwardLinks[0]).toMatchObject({...selection,originatingApprovedVersionId:lostVersion,
+          originatingLinkSkill:{skillVersionId:skills.requirement.versionId}});
+        const beforeApplyCases=(await nativeCases()).rows;
+        const v3Applied=await service().applyRequirementProposal(project,user,v3.id,{expectedProposalRevision:v3.proposalRevision},human);
+        expect(v3Applied.receipt.testcase).toBeNull();
+        const v3Approved=await service().approveRequirementVersion(project,user,requirementId,{versionId:v3Applied.receipt.requirement.versionId},human);
+        const approvedMetadata=(await admin.query("SELECT snapshot_metadata FROM knowledge_document_versions WHERE id=$1",[v3Approved.approvedVersionId])).rows[0].snapshot_metadata;
+        expect(approvedMetadata.carryForwardLinks).toEqual(v3.requirementBundle[0].carryForwardLinks);
+        expect((await nativeCases()).rows).toEqual(beforeApplyCases);
+        const request={expectedCaseRevision:caseAfter.edit_revision,expectedApprovalRevision:caseAfter.approval_revision,
+          expectedRequirementVersionId:v3Approved.approvedVersionId};
+        const unselected=await bundleWrites(v3.id);
+        await expect(service().reapplyRequirementCaseLink(project,user,requirementId,String(neighboring.id),request,human))
+          .rejects.toMatchObject({status:409,response:{code:"SKILL_LINK_REVIEW_REQUIRED"}});
+        expect(await bundleWrites(v3.id)).toEqual(unselected);
+        const rebound=await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,request,human);
+        expect(rebound).toMatchObject({replayed:false,link:{requirementVersionId:v3Approved.approvedVersionId,testcaseId:caseId,criterionKeys:selection.criterionKeys}});
+        const reboundState=await bundleWrites(v3.id);
+        expect(await service().reapplyRequirementCaseLink(project,user,requirementId,lostLink,request,human))
+          .toEqual({...rebound,replayed:true});
+        expect(await bundleWrites(v3.id)).toEqual(reboundState);
+        expect((await admin.query("SELECT * FROM requirement_case_links WHERE id=$1",[neighboring.id])).rows[0]).toEqual(neighboring);
+        expect((await nativeCases()).rows).toEqual(beforeApplyCases);
       }finally{
-        if(v2TaskId) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[v2TaskId]);
         if(requirementId) await cleanupRequirement(requirementId);
+        for(const id of taskIds) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1 AND project_id=$2",[id,project]);
+        if(caseId) await admin.query("DELETE FROM testcases WHERE id=$1 AND project_id=$2",[caseId,project]);
         await cleanupSkills(skillIds);
       }
     });
@@ -1462,6 +1618,129 @@ type Body=Record<string,any>;
           await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
         }
         await admin.query("DELETE FROM knowledge_folders WHERE id=$1",[otherFolder]);
+      }
+    },120000);
+
+    it("stages an agent manual candidate with a pinned Skill and applies only a native draft",async()=>{
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",subtype:"manual",confidentiality:"internal",
+        distribution:"internal",sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:null,to:null},enforcementRefs:[]};
+      const skillIds:string[]=[];
+      let targetId="",createdId="",taskId="",createTaskId="",staleTaskId="",changedTaskId="";
+      try{
+        const skill=await skillFor("user_manuals","internal","manual_revision"); skillIds.push(skill.doc.id);
+        const target=await service().createKnowledgeDocument(project,user,{folderId:folder,title:`Agent manual ${randomUUID()}`,
+          documentType:"user_manual",contentText:"Base body",contentHtml:"<p>Base body</p>",governedMetadata:metadata});
+        targetId=target.id;
+        const producer={kind:"api_token" as const,transport:"rest" as const,tokenId:token};
+        const staged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"update",documentId:targetId,expectedRevision:target.editRevision,
+          document:{title:`${target.title} revised`,contentText:"Revised body",contentHtml:"<p>Revised body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Revised body"}]}]},
+            governedMetadata:{...metadata,confidentiality:"confidential"}},reason:"Security update"
+        },producer);
+        taskId=staged.id;
+        expect(staged).toMatchObject({taskStatus:"in_review",skillContext:{status:"resolved"}});
+        const view=await service().managedDocumentProposalTask(project,user,taskId);
+        expect(view.managedDocumentProposal).toMatchObject({operation:"update",documentType:"user_manual",
+          target:{documentId:targetId,editRevision:target.editRevision},skillApplicability:{status:"current"}});
+        expect(view.managedDocumentProposal.proposed).toMatchObject({contentText:"Revised body",governedMetadata:{confidentiality:"confidential"}});
+        expect(view.managedDocumentProposal.diff.summary).toBeTruthy();
+        const untouched=(await admin.query(`SELECT content_text,governed_metadata,status,${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS r FROM knowledge_documents WHERE id=$1`,[targetId])).rows[0];
+        expect(untouched).toMatchObject({content_text:"Base body",status:"draft",r:target.editRevision});
+        await expect(service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},
+          {kind:"api_token"})).rejects.toMatchObject({status:403,response:{code:"HUMAN_REVIEW_REQUIRED"}});
+        await expect(service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},human))
+          .resolves.toMatchObject({taskStatus:"done",replayed:false,receipt:{document:{documentId:targetId,status:"draft"}}});
+        const after=await admin.query("SELECT content_text,governed_metadata,status,reviewed_version_id FROM knowledge_documents WHERE id=$1",[targetId]);
+        expect(after.rows[0]).toMatchObject({content_text:"Revised body",status:"draft",reviewed_version_id:null});
+        expect(after.rows[0].governed_metadata).toMatchObject({confidentiality:"confidential"});
+        const versionsAfter=(await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[targetId])).rows[0].n;
+        expect(await service().applyManagedDocumentProposal(project,user,taskId,{expectedProposalRevision:view.proposalRevision},human))
+          .toMatchObject({taskStatus:"done",replayed:true});
+        expect((await admin.query("SELECT COUNT(*)::int AS n FROM knowledge_document_versions WHERE document_id=$1",[targetId])).rows[0].n).toBe(versionsAfter);
+
+        const policySkill=await skillFor("policies","internal","policy_revision"); skillIds.push(policySkill.doc.id);
+        const createStaged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"create",folderId:folder,
+          document:{title:`Agent policy ${randomUUID()}`,contentText:"Policy draft",contentHtml:"<p>Policy draft</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Policy draft"}]}]},
+            governedMetadata:{...metadata,subtype:"policy",enforcementRefs:["ACME-1"]}},reason:"New policy"
+        },producer,"policy");
+        createTaskId=createStaged.id;
+        const createView=await service().managedDocumentProposalTask(project,user,createStaged.id);
+        const created=await service().applyManagedDocumentProposal(project,user,createStaged.id,{expectedProposalRevision:createView.proposalRevision},human);
+        createdId=created.receipt.document.documentId;
+        expect((await admin.query("SELECT document_type,status,governed_metadata,embedding_status FROM knowledge_documents WHERE id=$1",[createdId])).rows[0])
+          .toMatchObject({document_type:"policy",status:"draft",embedding_status:"unsupported",governed_metadata:{subtype:"policy",enforcementRefs:["ACME-1"]}});
+
+        const staleStaged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"update",documentId:targetId,
+          expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
+          document:{title:`${target.title} stale`,contentText:"Stale body",contentHtml:"<p>Stale body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Stale body"}]}]},governedMetadata:metadata}
+        },producer);
+        staleTaskId=staleStaged.id;
+        const staleView=await service().managedDocumentProposalTask(project,user,staleTaskId);
+        await service().deactivateSkillAssignment(project,user,skill.assignmentId,{},human);
+        await expect(service().applyManagedDocumentProposal(project,user,staleTaskId,{expectedProposalRevision:staleView.proposalRevision},human))
+          .rejects.toMatchObject({status:409,response:{code:"DOCUMENT_PROPOSAL_SKILL_STALE",applicability:"stale"}});
+        expect((await admin.query("SELECT content_text FROM knowledge_documents WHERE id=$1",[targetId])).rows[0].content_text).toBe("Revised body");
+
+        const restaffedSkill=await skillFor("user_manuals","internal","manual_revision"); skillIds.push(restaffedSkill.doc.id);
+        const changedStaged=await service().stageManagedDocumentProposal(project,user,{
+          requestKey:randomUUID(),operation:"update",documentId:targetId,
+          expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision,
+          document:{title:`${target.title} changed`,contentText:"Changed body",contentHtml:"<p>Changed body</p>",
+            contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Changed body"}]}]},governedMetadata:metadata}
+        },producer);
+        changedTaskId=changedStaged.id;
+        const changedView=await service().managedDocumentProposalTask(project,user,changedTaskId);
+        await service().updateKnowledgeDocument(project,user,targetId,
+          {contentText:"Concurrent edit",expectedRevision:(await service().getKnowledgeDocument(project,user,targetId)).editRevision});
+        await expect(service().applyManagedDocumentProposal(project,user,changedTaskId,{expectedProposalRevision:changedView.proposalRevision},human))
+          .rejects.toMatchObject({status:409,response:{code:"PROPOSAL_TARGET_CONFLICT"}});
+        expect((await admin.query("SELECT content_text FROM knowledge_documents WHERE id=$1",[targetId])).rows[0].content_text).toBe("Concurrent edit");
+
+        // With the preview capability off, the dedicated routes refuse and the generic read must
+        // not become a side door to the same unpublished governed content, receipts or Skill basis.
+        const priorPreview=process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        try{
+          process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="0";
+          await expect(service().managedDocumentProposalTask(project,user,changedTaskId))
+            .rejects.toMatchObject({status:501});
+          const redacted=await service().zyraTask(project,user,changedTaskId);
+          expect(redacted.generatedPayload).toBeUndefined();
+          expect(redacted.proposalSnapshot).toBeUndefined();
+          expect(redacted.proposalRevision).toBeUndefined();
+          expect(redacted.saveEvents).toBeUndefined();
+          expect(redacted.skillContext).toBeUndefined();
+          expect(redacted.proposalReviewRevision).toBeUndefined();
+          expect(redacted.proposalProvenance).toBeUndefined();
+          expect(redacted.proposalRequestKey).toBeUndefined();
+          expect(redacted.proposalRequestDigest).toBeUndefined();
+          expect(redacted.activityLog).toBeUndefined();
+          expect(redacted.sourceSummary).toBeUndefined();
+          expect(redacted.managedDocumentProposalEntries).toBeUndefined();
+          expect(redacted.managedDocumentProposal).toBeUndefined();
+          expect(redacted.activities).toEqual([]);
+          expect(redacted.sources).toEqual([]);
+          const history=await service().aiHistory(project,user,{limit:"100"});
+          expect(history.list.some((entry:Body)=>entry.id===changedTaskId)).toBe(false);
+        }finally{
+          if(priorPreview===undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+          else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED=priorPreview;
+        }
+      }finally{
+        for(const id of [targetId,createdId].filter(Boolean)){
+          await admin.query("UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_document_versions WHERE document_id=$1",[id]);
+          await admin.query("DELETE FROM knowledge_documents WHERE id=$1",[id]);
+        }
+        for(const id of [taskId,createTaskId,staleTaskId,changedTaskId].filter(Boolean)) await admin.query("DELETE FROM ai_generation_requests WHERE id=$1",[id]);
+        await cleanupSkills(skillIds);
       }
     },120000);
 

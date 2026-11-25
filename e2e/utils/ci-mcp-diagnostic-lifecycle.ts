@@ -47,7 +47,7 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
     expect(discovery.ok(), await discovery.text()).toBe(true);
     const catalog = await discovery.json();
     expect(catalog.error).toBeUndefined();
-    expect(catalog.result.tools).toHaveLength(26);
+    expect(catalog.result.tools).toHaveLength(28);
     expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).toContain("list_projects");
     expect(catalog.result.tools.map((tool: { name: string }) => tool.name)).not.toContain("create_testcase");
     await page.clock.install();
@@ -72,8 +72,8 @@ export async function verifyMcpDiagnosticLifecycle(source: Page, api: string, we
       } finally { held.release(); await page.unroute(endpoint, held.handler); }
       await start();
       // Project grants now filter the credential-visible catalog: with the proposal preview enabled a
-      // read-scoped token sees 26 of the 52 advertised tools, and the card reports what it can use.
-      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 26 MCP tools advertised");
+      // read-scoped token sees 28 of the 56 advertised tools, and the card reports what it can use.
+      await expect(card().getByRole("status")).toContainText("Read permission and project identity verified; 28 MCP tools advertised");
       await expect(input()).toHaveValue("");
       await expect(card()).toContainText("Write permissions and reporting were not tested");
       // Capture the whole actual success card, not an unrelated viewport above its status.

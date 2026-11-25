@@ -59,6 +59,11 @@ export function requirementBundleTargets(operations: Array<Record<string, any>>)
   for (const operation of operations) {
     const target = REQUIREMENT_SKILL_TARGETS[String(operation?.opType || "") as keyof typeof REQUIREMENT_SKILL_TARGETS];
     if (target) targets.set(targetKey(target), target);
+    // A selected existing link is a separate reviewed obligation even when no new case is created.
+    if (operation?.opType === "requirement_revision" && Array.isArray(operation.carryForwardLinks) && operation.carryForwardLinks.length > 0) {
+      const link = REQUIREMENT_SKILL_TARGETS.requirement_case_link;
+      targets.set(targetKey(link), link);
+    }
   }
   return [...targets.values()].sort((a, b) => compareText(targetKey(a), targetKey(b)));
 }
@@ -153,6 +158,20 @@ function verifiedPinnedBasisDigest(pinned: unknown): string | null {
   // Earlier pins hashed their stored ordering. Verify that body too before canonical comparison.
   if (value.digest != null && value.digest !== digest && value.digest !== orderedSkillBasisDigest(assignments)) return null;
   return digest;
+}
+
+/** Inspect a historical reviewed pin without treating present-day assignments as its authority. */
+export function reviewedSkillTarget(pinned: unknown, target: SkillTarget): SkillBasis | null {
+  if (!verifiedPinnedBasisDigest(pinned)) return null;
+  const value = pinned as { assignments: SkillBasis[]; missing?: unknown[]; conflicts?: unknown[] };
+  if ((value.missing && (!Array.isArray(value.missing) || value.missing.length))
+    || (value.conflicts && (!Array.isArray(value.conflicts) || value.conflicts.length))) return null;
+  const keys = value.assignments.map(assignment => targetKey(assignment.target));
+  if (new Set(keys).size !== keys.length) return null;
+  const found = value.assignments.find(assignment => targetKey(assignment.target) === targetKey(target));
+  if (!found) return null;
+  return { assignmentId: found.assignmentId, target: { ...found.target }, skillDocumentId: found.skillDocumentId,
+    skillVersionId: found.skillVersionId, contentDigest: found.contentDigest };
 }
 
 /** Preserve a previously resolved pin as stale when its effective basis disappears. */

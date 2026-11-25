@@ -1980,7 +1980,7 @@ export function buildMcpTools(): McpTool[] {
     },
     {
       name: "stage_requirement_change_bundle", requiredScope: "write",
-      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, a Draft testcase candidate and a link intent between them — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The native owner resolves and pins the effective Skill context for the bundle's operations. Unassigned or conflicting contexts can be staged but block application. Applying the exact reviewed revision is a separate authorized human action that revalidates the pinned Skill context; staging does not approve or assign Skills. Returns a task and proposal revision, never official IDs.",
+      description: "Stage one unpublished Work Package A bundle — a native requirement revision candidate, optional Draft testcase/link intent, and explicit selections of existing links to carry forward — in the existing proposal review task owner. Requires an explicit requestKey; retry it only with the identical content. Nothing is published: no requirement document/version, testcase, active link or approval is created. The native owner validates selected link and current approved case revisions and resolves and pins the effective Skill context. Existing links are never carried implicitly; an explicit selection still requires human review and approval. Unassigned or conflicting contexts can be staged but block application. Applying the exact reviewed revision is a separate authorized human action that revalidates the pinned Skill context; staging does not approve or assign Skills. Returns a task and proposal revision, never official IDs.",
       inputSchema: { type: "object", additionalProperties: false, required: ["requestKey", "operations"], properties: {
         requestKey: { type: "string", minLength: 1, maxLength: 160 }, title: { type: "string", maxLength: 512 },
         operations: { type: "array", minItems: 1, maxItems: 3, items: { oneOf: [
@@ -1991,6 +1991,12 @@ export function buildMcpTools(): McpTool[] {
             criteria: { type: "array", minItems: 1, maxItems: 50, items: { type: "object", additionalProperties: false,
               required: ["key", "text"], properties: { key: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$" },
                 text: { type: "string", minLength: 1, maxLength: 4000 }, normative: { type: "boolean" } } } },
+            carryForwardLinks: { type: "array", maxItems: 50, items: { type: "object", additionalProperties: false,
+              required: ["linkId", "requirementVersionId", "testcaseId", "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"],
+              properties: { linkId: { type: "string", format: "uuid" }, requirementVersionId: { type: "string", format: "uuid" },
+                testcaseId: { type: "string", format: "uuid" }, testcaseRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                testcaseApprovalRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+                criterionKeys: { type: "array", minItems: 1, maxItems: 50, uniqueItems: true, items: { type: "string" } } } } },
             reason: { type: "string", maxLength: 4000 }
           } },
           { type: "object", additionalProperties: false, required: ["opType", "operationId", "draft"], properties: {
@@ -2009,6 +2015,25 @@ export function buildMcpTools(): McpTool[] {
         const requestKey = requireString(args, "requestKey");
         if (Object.keys(args).some(key => !["requestKey", "operations", "title"].includes(key))) {
           throw new McpError(RpcCode.InvalidParams, "Only requestKey, operations and title are accepted; principal and project come from the authenticated credential");
+        }
+        // The MCP dispatcher advertises nested additionalProperties:false but does not
+        // enforce that schema. Reject caller-provided review/Skill metadata at this boundary;
+        // the native proposal owner still independently verifies link identity and authority.
+        if (Array.isArray(args.operations)) {
+          const selectionKeys = new Set(["linkId", "requirementVersionId", "testcaseId",
+            "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"]);
+          for (const operation of args.operations) {
+            if (!operation || typeof operation !== "object" || Array.isArray(operation) ||
+                operation.opType !== "requirement_revision" ||
+                !Array.isArray(operation.carryForwardLinks)) continue;
+            for (const link of operation.carryForwardLinks) {
+              if (!link || typeof link !== "object" || Array.isArray(link)) continue;
+              if (Object.keys(link).some(key => !selectionKeys.has(key))) {
+                throw new McpError(RpcCode.InvalidParams,
+                  "carryForwardLinks accepts selection identities only; reviewed Skill authority is server-derived");
+              }
+            }
+          }
         }
         const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false, operation: "requirement" });
         try {
@@ -2031,6 +2056,53 @@ export function buildMcpTools(): McpTool[] {
       description: "List staged requirement change bundles awaiting review in this project. They are candidates only; none is an official requirement, case, link, approval or execution result.",
       inputSchema: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 } } },
       handler: async (args, ctx) => ctx.legacy.listRequirementProposals(ctx.projectId, ctx.userId, args)
+    },
+    ...(["manual", "policy"] as const).map((kind): McpTool => ({
+      name: kind === "manual" ? "propose_manual_revision" : "propose_policy_revision",
+      requiredScope: "write" as const,
+      proposalPreviewOnly: true,
+      description: `Stage an inert ${kind} candidate in the existing proposal review task owner. Provide a full proposed title, content and typed governance metadata; for an update also provide the exact target documentId and expectedRevision. A body-changing proposal must supply contentText, contentHtml and contentJson together; on an update, omit all three to keep the current body, or use null to clear a representation. Nothing is written to the governed document. The native owner pins the effective Skill assignment/version/digest and reports missing, conflicting or stale applicability. Applying the exact reviewed candidate is a separate human owner/manager action that revalidates current authority and Skills and publishes only a native Draft; submission and approval remain separate.`,
+      inputSchema: { type: "object", additionalProperties: false,
+        required: ["requestKey", "operation", "document"], properties: {
+          requestKey: { type: "string", minLength: 1, maxLength: 160 },
+          title: { type: "string", maxLength: 512 },
+          operation: { enum: ["create", "update"] },
+          documentId: { type: "string", format: "uuid" },
+          expectedRevision: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          folderId: { type: "string", format: "uuid" },
+          document: { type: "object", additionalProperties: false, required: ["title", "governedMetadata"], properties: {
+            title: { type: "string", minLength: 1, maxLength: 512 },
+            contentText: { type: ["string", "null"] }, contentHtml: { type: ["string", "null"] },
+            contentJson: { type: ["object", "null"] }, governedMetadata: { type: "object" }
+          } },
+          reason: { type: "string", maxLength: 4000 }
+        } },
+      handler: async (args, ctx) => {
+        const allowed = ["requestKey", "title", "operation", "documentId", "expectedRevision", "folderId", "document", "reason"];
+        if (Object.keys(args).some(key => !allowed.includes(key))) {
+          throw new McpError(RpcCode.InvalidParams, "Unknown document proposal field; principal and project come from the authenticated credential");
+        }
+        const producer = apiTokenStagingProducer(ctx, { requireAgentActor: false, operation: "document" });
+        try {
+          const task = await ctx.legacy.stageManagedDocumentProposal(ctx.projectId, ctx.userId,
+            { ...args, documentType: kind === "manual" ? "user_manual" : "policy" }, producer,
+            kind === "manual" ? "user_manual" : "policy");
+          return { publication: "unpublished", taskId: task.id, task,
+            reviewPath: `/projects/${ctx.projectId}/agents/tasks/${task.id}` };
+        } catch (error) { rethrowModelError(error); }
+      }
+    })),
+    {
+      name: "get_document_proposal", requiredScope: "read", proposalPreviewOnly: true,
+      description: "Read one staged manual/policy candidate with its exact target/base revision, full proposed content and metadata, diff, pinned Skill context/current applicability and apply receipt. A candidate is unpublished; reading cannot apply, submit or approve it.",
+      inputSchema: { type: "object", additionalProperties: false, required: ["taskId"], properties: { taskId: { type: "string" } } },
+      handler: async (args, ctx) => ctx.legacy.managedDocumentProposalTask(ctx.projectId, ctx.userId, requireString(args, "taskId"))
+    },
+    {
+      name: "list_document_proposals", requiredScope: "read", proposalPreviewOnly: true,
+      description: "List staged manual/policy candidates awaiting human review. They are unpublished candidates, not native documents, submissions or approvals.",
+      inputSchema: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100 }, offset: { type: "integer", minimum: 0 } } },
+      handler: async (args, ctx) => ctx.legacy.listManagedDocumentProposals(ctx.projectId, ctx.userId, args)
     }
   ];
   return [...tools.map(tool => DIRECT_TESTCASE_PUBLISHERS.has(tool.name) ? {

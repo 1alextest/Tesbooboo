@@ -348,3 +348,106 @@ Zyra context/RAG. A read-scope MCP token can still explicitly fetch a governed d
 
 Do not change the exposure gate or embedding hold until the owner chooses an option and the corresponding retrieval,
 audit and UI contract is reviewed. GitHub CI is not evidence that native publication/execution occurred.
+
+---
+
+## 9. Agent-authored manual/policy proposals (next workflow)
+
+The existing proposal task owner (`ai_generation_requests`) now carries one inert managed-document candidate under
+provider `external_document_proposal`. The candidate is not a knowledge document and does not alter the target.
+
+- **Payload.** `opType='managed_document_revision'`, `operation='create'|'update'`, `documentType`, optional
+  `documentId`/`targetEditRevision`, create-only `folderId`, a `document` with `title`, `governedMetadata` and the
+  proposed `contentJson`/`contentHtml`/`contentText` representations, and a producer `reason`. On update an
+  omitted representation means "preserve the current one"; it is not stored or applied as null.
+- **Exact base.** An update stages only after comparing the caller's `expectedRevision` with the target's locked
+  `editRevision`; the task stores a base snapshot (title/content/metadata/type/status/revision/content digest).
+  A target edit, type change, provider-owned row or deletion after staging refuses apply with
+  `PROPOSAL_TARGET_CONFLICT` and writes nothing.
+- **Pinned Skills.** Targets are `user_manuals` or `policies`, subtype `internal`/`external` from the metadata
+  audience, operation `manual_revision`/`policy_revision`. Staging pins the resolved assignment IDs, exact Skill
+  document/version IDs and content digests. Reading classifies the live basis as `current`, `stale`, `conflict` or
+  `unavailable`. Apply proceeds only when the pinned and current basis are exactly equal; otherwise
+  `DOCUMENT_PROPOSAL_SKILL_STALE` is returned with the current resolution.
+- **Review.** The task view exposes the exact target/base, full proposed content and metadata, a
+  `summarizeDocumentChange` diff, reason, producer provenance, pinned Skill context/assignments and current
+  applicability. It never offers direct editing of the governed document.
+- **Apply.** Human session only; owner/manager checked after the task row wait. The task row, project Skill
+  assignments and target row are locked in one transaction. Create publishes a native `draft` governed document with
+  `embedding_status='unsupported'`; update uses the existing KB writer, preserving the prior body as a version and
+  letting the invalidation trigger clear any review. The receipt is stored in `save_events` and the task becomes
+  `done`. The same decision key returns the receipt; a changed proposal revision is refused.
+- **State distinctions.** Candidate staged (`in_review`, no document write) → applied native Draft (document/version
+  exists, not submitted) → submitted exact version (existing submission) → human approved/rejected (existing review).
+  Apply does not submit or approve; submission does not approve.
+- **REST/MCP.** `POST/GET /knowledge-base/document-proposals`, `GET /:taskId`, `POST /:taskId/apply|reject`;
+  MCP `propose_manual_revision`, `propose_policy_revision`, `get_document_proposal`, `list_document_proposals`.
+  API-token producers need a write scope and current MCP consent; they cannot apply, reject or approve.
+- **Known limits / decisions.** Candidate revision is a new `requestKey` (an exact key replay resolves to the original
+  task). Archive/delete proposals, direct governed authoring, auto-submit and automatic approval are out of scope.
+  Whether a future Skill rename should preserve pinned applicability, and whether candidate revision should replace
+  an earlier task, remain owner decisions. The task record cannot be updated through the available native tools;
+  REQ-WPB-03 `4c6d84b3-64e9-4508-a4fd-d6001fbb4c75` remains staged/`in_review`, execution **UNRUN**.
+
+### 9.1 Review-surface hardening after review
+
+- An update may omit all three of `contentText`/`contentHtml`/`contentJson` to keep the current
+  body, and an explicit `null` clears one representation; an omitted representation is never
+  coerced to JSON null. A body-changing proposal (create or update) must supply all three
+  together, so the published Draft cannot show revised text/HTML over stale editor JSON (which the
+  next editor save would revert). The panel distinguishes "preserved" from "cleared" and shows the
+  base title/status/revision, the changed representations and the producer provenance.
+- A text-only diff no longer has to stand in for HTML/JSON or metadata-only changes: the read
+  model lists `Title`, `Plain text`, `HTML`, `Editor JSON` and `Governance metadata` changes, and
+  compares the effective value of an omitted representation (the current one), not `""`.
+- Managed candidates are immutable through the generic Zyra close/feedback/edit/delete draft
+  paths, and are excluded from `list_testcase_proposals`; only the dedicated owner/manager
+  Apply/Reject actions decide them.
+- Reject requires the exact `expectedProposalRevision`, stores a decision receipt and refuses a
+  candidate already applied/decided or changed since review. Its decision key is independent of
+  the optional reason text, so a retry after a lost response replays the stored receipt. All
+  managed REST reads/apply/reject share the same preview gate as staging.
+- Apply asserts the row's `external_document_proposal` provider and revalidates governed type,
+  provider ownership/read-only state, the exact target revision and the reserved Zyra-memory title.
+  A no-op update records `no_change` and the actual status instead of claiming a new Draft.
+- With the preview capability off, AI history excludes managed candidates. The generic agent-task
+  read redacts the staged payload, receipts, pinned Skill context, both revision aliases, request
+  identity/digest, provenance and raw or rendered activity/source entries (which can themselves
+  contain Skill pins). The dedicated endpoints refuse with `not_implemented`. Basic task metadata
+  remains visible; this is a capability gate, not a replacement for project access control.
+- Apply gives the published document its own `created`/`updated` project activity entry in the
+  same transaction (the task receipt remains the authoritative applied-proposal record), so a
+  replay cannot append a second history row for one publication.
+- The managed review revision is a digest of the exact operation + pinned Skill context, not the
+  unrelated testcase proposal dependency snapshot.
+- e2e now covers: non-owner apply refusal, generic draft tamper refusal, target moved after
+  staging (`PROPOSAL_TARGET_CONFLICT`), Skill deactivated after staging
+  (`DOCUMENT_PROPOSAL_SKILL_STALE`), token apply refusal, revision-bound reject/replay and the
+  no-change receipt.
+
+### 9.2 Merge and deployment record (2026-11-24)
+
+- PR #251 merged into `development` as `0bde8123726f0ad4c3b4e22d5fba4031a336e156`. The last
+  exact-head CI run at `9b1a61d6` passed all 32 required checks (1 expected skip), and fresh
+  Independent and White reviews at that head reported no BLOCKER or HIGH findings.
+- The Railway deployment for `0bde8123` reported success, and production `GET /api/health`
+  returned `{"status":"ok","gitSha":"0bde8123726f0ad4c3b4e22d5fba4031a336e156"}`.
+- Native Tesbo evidence writing remains unavailable in this session: the read-only MCP probe
+  requires a separately operator-approved origin file beside the project token, and no Tesbo MCP
+  tools are exposed to the agent. REQ-WPB-02 and REQ-WPB-03 stay `in_review`/unassigned with
+  execution **UNRUN**; the PR, CI and deployment evidence above is the authoritative record until
+  the native task can be updated.
+
+---
+
+## 10. PR #250 carried findings — disposition
+
+| Finding | Disposition |
+| --- | --- |
+| Title edited during governed Save/Submit could be overwritten | Fixed in #250 (in-flight local revision fence + refresh guard); KBU-77 covers save/submit. |
+| Decision path could overwrite a title/body edited during the in-flight decision | Fixed here: the decision captures the local revision and preserves the visible draft as unsaved; KBU-78 covers the browser path. |
+| `writer.needsReadback` blocked a decision retry after a failed decision | Fixed in #250: removed from the pre-decision guard; draft state still blocks a genuinely unsaved body. |
+| Ambiguous governed UPDATE acknowledgement | Confirmed follow-up: POST ambiguity is covered (KBU-73), but a PATCH that commits with a lost response still requires reload/readback. Not an authority or draft-loss defect. |
+| Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
+| Create-vs-folder-delete race | Fixed in #257 (`ca18d6c8`): document create rechecks the folder under `FOR SHARE` in the insert + audit transaction and revalidates authority after the wait; a delete either cascades the new document or makes the create 404. Regression race + audit-rollback tests run in `behavioral-quality`; deployment health returned the merge SHA. The same unlocked destination check remains for move/duplicate and the integration-sync/setup inserts — recorded as separate follow-ups, not closed here. |
+| Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |

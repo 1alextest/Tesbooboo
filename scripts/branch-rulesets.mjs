@@ -28,7 +28,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'b2f9ce02a06a7a688591b03e555008246df9e985',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'5854e79c30d0ce369e4db71799a2cc2a22f6bf90',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'df925a57c30f6c281dec27c82b77be517e0e33ae',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',
@@ -47,10 +47,25 @@ export const CHECKS=WORKFLOW_SOURCES.flatMap(source=>source.contexts);
 const PUBLISHER_SOURCES=[
  {path:'.github/workflows/assurance-pr-gate.yml',sha:'3910a61102a8765876f5134475be1a2e1506da63'},
  {path:'.github/assurance-policy.json',sha:'9b396e0aa7160b68453e99273a9ef285ea02f125'},
- {path:'scripts/assurance-pr-gate.mjs',sha:'ade522787581b2124d45c455c79ae833a6edaa2c'},
+ {path:'scripts/assurance-pr-gate.mjs',sha:'c043af23925e4b6e06563302a3064e40c910abbc'},
  {path:'scripts/publish-assurance-status.mjs',sha:'856d664b0f6165ae6ffbfc75394866bd9c2379cf'}
 ];
-export const required=phase=>phase==='foundation'?CHECKS:phase==='assurance'?[...CHECKS,'specification-assurance']:(()=>{throw Error('Invalid phase')})();
+// Candidate mandatory producers, verified against live analysis identities before activation.
+export const SCANNER_TOOLS=Object.freeze(['CodeQL','DevSkim']);
+const SCANNER_SOURCE={path:'.github/workflows/devskim.yml',sha:'20a5a970c27cd6f93c84021feeab0f776f51bac4'};
+const usesPublisher=phase=>phase==='assurance'||phase==='findings';
+export const required=phase=>phase==='foundation'?CHECKS:usesPublisher(phase)?[...CHECKS,'specification-assurance']:(()=>{throw Error('Invalid phase')})();
+function scannerEntries(rule){
+ const matches=rule.rules.filter(x=>x.type==='code_scanning');
+ if(matches.length>1)throw Error('Ambiguous code scanning rules');
+ if(!matches.length)return [];
+ const tools=matches[0].parameters?.code_scanning_tools;
+ if(!Array.isArray(tools)||tools.some(t=>typeof t?.tool!=='string'||!t.tool.trim()||
+   !['none','errors','errors_and_warnings','all'].includes(t.alerts_threshold)||
+   !['none','critical','high_or_higher','medium_or_higher','all'].includes(t.security_alerts_threshold))||
+   new Set(tools.map(t=>t.tool)).size!==tools.length)throw Error('Malformed or duplicate code scanning tools');
+ return tools;
+}
 export function exact(rule,branch){
  const x=rule?.conditions?.ref_name;
  return rule?.source===REPO&&rule?.target==='branch'&&rule?.enforcement==='active'&&
@@ -70,6 +85,15 @@ export function check(rule,branch,phase='foundation'){
  if(st?.strict_required_status_checks_policy!==true)fail.push('not up to date');
  const actual=new Set((st?.required_status_checks||[]).map(x=>x.context));
  for(const name of required(phase))if(!actual.has(name))fail.push('missing check '+name);
+ if(phase==='findings'){
+  try{
+   const tools=scannerEntries(rule);
+   for(const name of SCANNER_TOOLS){
+    const scanner=tools.find(t=>t.tool===name);
+    if(!scanner||scanner.alerts_threshold!=='all'||scanner.security_alerts_threshold!=='all')fail.push('missing or weaker scanner protection '+name);
+   }
+  }catch(error){fail.push(error.message);}
+ }
  return fail;
 }
 export function patch(rule,branch,phase='foundation'){
@@ -77,6 +101,7 @@ export function patch(rule,branch,phase='foundation'){
  const types=new Set(rule.rules.map(x=>x.type));
  if(!['deletion','non_fast_forward','pull_request','required_status_checks'].every(x=>types.has(x)))
  throw Error('Required owner protection type missing');
+ const existingScanners=phase==='findings'?scannerEntries(rule):null;
  const rules=rule.rules.map(x=>{
   if(x.type==='pull_request')return {...x,parameters:{...x.parameters,required_approving_review_count:Math.max(1,x.parameters.required_approving_review_count||0),dismiss_stale_reviews_on_push:true,require_last_push_approval:true,required_review_thread_resolution:true}};
   if(x.type==='required_status_checks'){
@@ -86,6 +111,13 @@ export function patch(rule,branch,phase='foundation'){
   }
   return x;
  });
+ if(existingScanners){
+  const tools=new Map(existingScanners.map(t=>[t.tool,t]));
+  for(const tool of SCANNER_TOOLS)tools.set(tool,{...tools.get(tool),tool,alerts_threshold:'all',security_alerts_threshold:'all'});
+  const previous=rules.findIndex(x=>x.type==='code_scanning');
+  const next={type:'code_scanning',parameters:{code_scanning_tools:[...tools.values()]}};
+  if(previous<0)rules.push(next);else rules[previous]=next;
+ }
  return {name:rule.name,target:'branch',enforcement:'active',conditions:rule.conditions,bypass_actors:[],rules};
 }
 async function api(path,token,method='GET',data){
@@ -132,6 +164,25 @@ function requireSources(source,expected,label){
     '; review and reconcile the source pins before activation');
  }
 }
+async function scannerAvailability(source,token){
+ const records=[];
+ for(const tool of SCANNER_TOOLS){
+  const ref='refs/heads/'+source.branch;
+  const query=new URLSearchParams({ref,tool_name:tool,per_page:'100',page:'1'});
+  const rows=await api('/code-scanning/analyses?'+query,token);
+  // Require the newest native record for this tool and target ref to match the
+  // actual branch head. A prior successful result cannot mask a newer failure.
+  const latest=Array.isArray(rows)&&rows[0];
+  if(!latest||latest.ref!==ref||latest.commit_sha!==source.sha||
+    latest.tool?.name!==tool||latest.error!==''||latest.warning!==''||
+    !Number.isSafeInteger(latest.id)||latest.id<=0||
+    !Number.isSafeInteger(latest.rules_count)||latest.rules_count<=0||
+    !Number.isSafeInteger(latest.results_count)||latest.results_count<0)
+   throw Error('Current successful scanner analysis unavailable: '+source.branch+' '+tool);
+  records.push({branch:source.branch,tool,analysisId:latest.id,commit:source.sha});
+ }
+ return records;
+}
 async function preflight(plans,phase,token){
  const repo=await repository(token),sources=new Map();
  const getSource=async branch=>{
@@ -139,15 +190,22 @@ async function preflight(plans,phase,token){
   return sources.get(branch);
  };
  let publisher;
- if(phase==='assurance'){
+ if(usesPublisher(phase)){
   publisher=await getSource(repo.default_branch);
   requireSources(publisher,PUBLISHER_SOURCES,'publisher');
  }
  for(const {branch} of plans)requireSources(await getSource(branch),WORKFLOW_SOURCES,'CI context');
+ const scans=[];
+ if(phase==='findings')for(const {branch} of plans){
+  const source=await getSource(branch);
+  requireSources(source,[SCANNER_SOURCE],'scanner');
+  scans.push(...await scannerAvailability(source,token));
+ }
  // Native active state is only availability evidence. In particular, a shared Actions app ID
  // is not accepted as authentication of this particular publisher or its emitted check.
  const workflowPaths=WORKFLOW_SOURCES.map(source=>source.path);
  if(publisher)workflowPaths.push(PUBLISHER_SOURCES[0].path);
+ if(phase==='findings')workflowPaths.push(SCANNER_SOURCE.path);
  for(const path of workflowPaths){
   const workflow=await api('/actions/workflows/'+encodeURIComponent(path.split('/').at(-1)),token);
   if(workflow.path!==path||workflow.state!=='active')
@@ -156,11 +214,16 @@ async function preflight(plans,phase,token){
  // Collect and validate BOTH branch plans before any PUT. Recheck observed inputs immediately
  // before writing. GitHub provides no cross-ruleset transaction/CAS: a later race or failed PUT
  // can still leave partial application, so successful readback and live rollout proof remain required.
- if(phase==='assurance'&&(await repository(token)).default_branch!==repo.default_branch)
+ if(usesPublisher(phase)&&(await repository(token)).default_branch!==repo.default_branch)
   throw Error('Repository default branch changed during activation preflight');
  for(const source of sources.values()){
   if(await sourceRef(source.branch,token)!==source.sha)
    throw Error('Source ref changed during activation preflight: '+source.branch);
+ }
+ if(phase==='findings'){
+  const fresh=[];
+  for(const {branch} of plans)fresh.push(...await scannerAvailability(await getSource(branch),token));
+  if(!isDeepStrictEqual(scans,fresh))throw Error('Scanner evidence changed during activation preflight');
  }
  for(const {branch,rule} of plans){
   if(!isDeepStrictEqual(await api('/rulesets/'+rule.id,token),rule))
@@ -169,12 +232,15 @@ async function preflight(plans,phase,token){
  return {
   sources:[...sources.values()].map(({branch,sha,tree})=>({branch,sha,tree})),
   ...(publisher?{publisherBranch:publisher.branch}:{}),
+  ...(phase==='findings'?{scannerAvailability:scans}:{}),
   scope:'reviewed installed sources and workflow availability; live publication/enforcement not verified'
  };
 }
 export async function run(env=process.env,args=process.argv.slice(2)){
  if(env.GITHUB_REPOSITORY&&env.GITHUB_REPOSITORY!==REPO)throw Error('Wrong repository');
- const apply=args.includes('--apply'),phase=args.includes('--assurance')?'assurance':'foundation';
+ if(args.some(arg=>!['--apply','--assurance','--findings'].includes(arg))||
+   (args.includes('--assurance')&&args.includes('--findings')))throw Error('Invalid or conflicting activation arguments');
+ const apply=args.includes('--apply'),phase=args.includes('--findings')?'findings':args.includes('--assurance')?'assurance':'foundation';
  if(apply&&(!env.GITHUB_RULESET_ADMIN_TOKEN||env.TESBO_RULESET_APPLY_CONFIRM!=='apply:'+REPO))
  throw Error('Admin token and exact explicit confirmation required');
  const token=apply?env.GITHUB_RULESET_ADMIN_TOKEN:env.GITHUB_TOKEN;

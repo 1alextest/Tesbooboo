@@ -19,6 +19,8 @@ import {
   listZyraTaskTicketComments,
   applyRequirementProposal,
   rejectRequirementProposal,
+  applyManagedDocumentProposal,
+  rejectManagedDocumentProposal,
   retryZyraTicketComment,
   saveZyraTask,
   withdrawRequirementProposal,
@@ -42,6 +44,8 @@ import { isMarkdownSource, renderMarkdown } from "@/lib/markdown";
 import { TechniqueBadges } from "@/components/agents/ZyraChatReviewPanel";
 import { ZyraSeverityBadge } from "@/components/agents/ZyraContextDrawer";
 import { RequirementReviewPanel } from "@/components/agents/RequirementReviewPanel";
+import { RequirementCarryForwardReview } from "@/components/agents/RequirementCarryForwardReview";
+import { ManagedDocumentProposalPanel } from "@/components/agents/ManagedDocumentProposalPanel";
 import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPanel";
 import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
@@ -401,6 +405,38 @@ export default function ZyraTaskDetailPage() {
     }
   }
 
+  async function handleManagedDocumentApply() {
+    if (!task || done || bundleWorking || !task.proposalRevision) return;
+    setBundleWorking(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const applied = await applyManagedDocumentProposal(projectId, taskId, task.proposalRevision);
+      await loadData();
+      setMessage(`Candidate applied as native ${applied.receipt?.document?.status || "Draft"} document${applied.receipt?.document?.documentId ? ` (${applied.receipt.document.documentId})` : ""}. Submission and approval remain separate human decisions.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The governed document candidate could not be applied.");
+    } finally {
+      setBundleWorking(false);
+    }
+  }
+
+  async function handleManagedDocumentReject(reason: string) {
+    if (!task || done || bundleWorking || !task.proposalRevision) return;
+    setBundleWorking(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await rejectManagedDocumentProposal(projectId, taskId, task.proposalRevision, reason.trim() || undefined);
+      await loadData();
+      setMessage("Candidate rejected. Nothing was published.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The governed document candidate could not be rejected.");
+    } finally {
+      setBundleWorking(false);
+    }
+  }
+
   function toggleDraft(index: number) {
     setSelectedDrafts((prev) => prev.includes(index) ? prev.filter((item) => item !== index) : [...prev, index]);
   }
@@ -595,17 +631,19 @@ export default function ZyraTaskDetailPage() {
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
   const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
+  const isManagedDocumentProposal = task.provider === "external_document_proposal" || Boolean(task.managedDocumentProposal);
   const requirementApplyReceipt = task.requirementApplyReceipt;
   // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
   const requirementApplied = done && Boolean(requirementApplyReceipt);
   const currentProjectRole = projectMembers.find((member) => member.userId === currentUser?.userId)?.role;
   const canApproveRequirement = isKnowledgeOwnerOrManager(currentProjectRole);
-  const canGiveFeedback = !isRequirementBundle && (taskStatusNow === "in_review" || taskStatusNow === "failed");
+  const canGiveFeedback = !isRequirementBundle && !isManagedDocumentProposal && (taskStatusNow === "in_review" || taskStatusNow === "failed");
   type RequirementBundleEntry = {
     opType?: string; title?: string; description?: string; reason?: string;
     criteria?: Array<{ key?: string; text?: string; normative?: boolean }>;
     draft?: Record<string, unknown> & { title?: string };
     criterionKeys?: string[];
+    carryForwardLinks?: unknown;
   };
   const requirementOps: RequirementBundleEntry[] = Array.isArray(task.requirementBundle)
     ? (task.requirementBundle as RequirementBundleEntry[]) : [];
@@ -699,7 +737,7 @@ export default function ZyraTaskDetailPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {!done && !isRequirementBundle && (
+            {!done && !isRequirementBundle && !isManagedDocumentProposal && (
               <Button variant="secondary" onClick={() => void handleCloseTask()} disabled={working}>{t("task.closeTask")}</Button>
             )}
           </div>
@@ -767,6 +805,7 @@ export default function ZyraTaskDetailPage() {
                   </ul>
                 </div>
               )}
+              <RequirementCarryForwardReview selections={bundleRequirement?.carryForwardLinks} skillContext={task.skillContext} />
               {bundleCase && (
                 <div data-testid="requirement-bundle-case">
                   <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Testcase candidate (Draft proposal)</p>
@@ -820,7 +859,7 @@ export default function ZyraTaskDetailPage() {
                   : done
                     ? "This bundle was not published. No requirement version, case or link was created; the recorded outcome above is authoritative."
                     : skillsResolved
-                      ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates an immutable submitted requirement version, a Draft case and an exact link in one transaction; requirement approval remains a separate human decision."
+                      ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates the exact submitted requirement revision and only the case/link candidates included in the bundle. Requirement approval and selected existing link activation remain separate human decisions."
                       : task.skillContext?.status === "conflict"
                         ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
                         : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
@@ -852,6 +891,17 @@ export default function ZyraTaskDetailPage() {
           documentId={requirementApplyReceipt.requirement.documentId}
           versionId={requirementApplyReceipt.requirement.versionId}
           canApprove={canApproveRequirement}
+        />
+      )}
+
+      {isManagedDocumentProposal && task.managedDocumentProposal && (
+        <ManagedDocumentProposalPanel
+          projectId={projectId}
+          task={task}
+          canApprove={canApproveRequirement}
+          working={bundleWorking}
+          onApply={() => void handleManagedDocumentApply()}
+          onReject={(reason) => void handleManagedDocumentReject(reason)}
         />
       )}
 

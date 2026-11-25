@@ -802,13 +802,15 @@ test.describe("governed skills operator journey (UI)", () => {
     }
   }
 
-  async function approveNewRequirementBasis(f: ActivationFixture): Promise<string> {
+  async function approveNewRequirementBasis(f: ActivationFixture, selection?: { linkId: string; requirementVersionId: string; criterionKeys: string[] }): Promise<string> {
     const doc = await (await ownerApi.get(base() + "/knowledge-base/documents/" + f.requirementId)).json();
     const stagedResponse = await ownerApi.post(base() + "/requirements/proposals", { data: {
       requestKey: "newer-activation-basis-" + randomUUID(), title: "Newer activation requirement",
       operations: [{ opType: "requirement_revision", operationId: randomUUID(), documentId: f.requirementId,
         expectedRevision: doc.editRevision, title: "Newer activation requirement " + randomUUID(),
-        criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Updated obligation " + key })) }],
+        criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Updated obligation " + key })),
+        ...(selection ? { carryForwardLinks: [{ ...selection, testcaseId: f.caseId,
+          testcaseRevision: f.caseBasis.editRevision, testcaseApprovalRevision: f.caseBasis.approvalRevision }] } : {}) }],
     } });
     expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
     const staged = await stagedResponse.json();
@@ -822,6 +824,74 @@ test.describe("governed skills operator journey (UI)", () => {
     expect(approved.ok(), await approved.text()).toBe(true);
     return String((await approved.json()).approvedVersionId);
   }
+
+  test("explicit carry-forward is visible in both reviews and authorizes only the selected group", async ({ browser }) => {
+    await withActivationFixture(async f => {
+      const coverageUrl = base() + "/requirements/" + f.requirementId + "/coverage";
+      const initial = await (await ownerApi.get(coverageUrl)).json();
+      const source = initial.cases.find((entry: { requirementVersionId: string; criterionKeys: string[] }) =>
+        entry.requirementVersionId === f.approvedVersionId && entry.criterionKeys.join("::") === "AC-1::AC-2");
+      const neighbor = initial.cases.find((entry: { requirementVersionId: string; criterionKeys: string[] }) =>
+        entry.requirementVersionId === f.approvedVersionId && entry.criterionKeys.join("::") === "AC-2::AC-1");
+      expect(source).toBeTruthy();
+      expect(neighbor).toBeTruthy();
+      const doc = await (await ownerApi.get(base() + "/knowledge-base/documents/" + f.requirementId)).json();
+      const stage = await ownerApi.post(base() + "/requirements/proposals", { data: {
+        requestKey: randomUUID(), title: "Explicit carry-forward review",
+        operations: [{ opType: "requirement_revision", operationId: randomUUID(), documentId: f.requirementId,
+          expectedRevision: doc.editRevision, title: "Reviewed carry-forward " + randomUUID(),
+          criteria: ["AC-1", "AC-2", "AC-3"].map(key => ({ key, text: "Changed meaning " + key })),
+          carryForwardLinks: [{ linkId: source.linkId, requirementVersionId: source.requirementVersionId,
+            testcaseId: f.caseId, testcaseRevision: f.caseBasis.editRevision,
+            testcaseApprovalRevision: f.caseBasis.approvalRevision, criterionKeys: source.criterionKeys }] }]
+      } });
+      expect(stage.ok(), await stage.text()).toBe(true);
+      const task = await stage.json();
+      f.extraTaskIds.push(task.id);
+      const page = await open(browser, "/agents/tasks/" + task.id);
+      const selected = page.getByTestId("requirement-change-bundle").getByTestId("requirement-carry-forward-" + source.linkId);
+      await expect(selected).toContainText("AC-1 → AC-2");
+      await expect(selected).toContainText(f.caseBasis.approvalRevision);
+      await expect(selected).toContainText("Originating reviewed Skill");
+      await expect(selected).toContainText("Changed meaning AC-1");
+      await expect(page.getByTestId("requirement-change-bundle").getByTestId("requirement-carry-forward-" + neighbor.linkId)).toHaveCount(0);
+      const appliedResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().includes("/proposals/" + task.id + "/apply"));
+      await page.getByTestId("requirement-bundle-apply").click();
+      const applied = await appliedResponse;
+      expect(applied.ok(), await applied.text()).toBe(true);
+      const receipt = await applied.json();
+      expect(receipt.receipt.testcase).toBeNull();
+      const versionReview = page.getByTestId("requirement-review-panel");
+      await expect(versionReview.getByTestId("requirement-carry-forward-" + source.linkId)).toContainText("Same reviewed link Skill basis");
+      await expect(versionReview.getByTestId("requirement-carry-forward-" + source.linkId)).toContainText("Changed meaning AC-2");
+      const approvedResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/requirements/" + f.requirementId + "/approve"));
+      await page.getByTestId("requirement-review-approve").click();
+      const approved = await approvedResponse;
+      expect(approved.ok(), await approved.text()).toBe(true);
+      const approval = await approved.json();
+      const revisions = { expectedRequirementVersionId: approval.approvedVersionId, expectedCaseRevision: f.caseBasis.editRevision,
+        expectedApprovalRevision: f.caseBasis.approvalRevision };
+      const neighborRefusal = await ownerApi.post(base() + "/requirements/" + f.requirementId + "/links/" + neighbor.linkId + "/reapply", { data: revisions });
+      expect(neighborRefusal.status()).toBe(409);
+      expect((await neighborRefusal.json()).code).toBe("SKILL_LINK_REVIEW_REQUIRED");
+      const pending = await (await ownerApi.get(coverageUrl)).json();
+      expect(pending.cases).toHaveLength(0);
+      expect(pending.readings.authored).toBe(false);
+      expect(pending.pendingCarryForwardCases).toEqual([expect.objectContaining({ linkId: source.linkId, authored: false, approved: false })]);
+      await expect(page.getByTestId("requirement-coverage-case-" + f.groups.reversed)).toHaveCount(0);
+      await expect(page.getByTestId("requirement-coverage-case-" + f.groups.selected)).toContainText("pending activation");
+      const activationResponse = page.waitForResponse(response => response.request().method() === "POST" &&
+        response.url().endsWith("/links/" + source.linkId + "/reapply"));
+      await page.getByTestId("requirement-link-activate-" + f.groups.selected).click();
+      const activation = await activationResponse;
+      expect(activation.ok(), await activation.text()).toBe(true);
+      const activated = await activation.json();
+      expect(activated.link).toMatchObject({ testcaseId: f.caseId, requirementVersionId: approval.approvedVersionId, criterionKeys: source.criterionKeys });
+      await page.reload();
+      await expect(page.getByTestId("requirement-link-state-" + f.groups.selected)).toContainText("active on the approved requirement version");
+      await expect(page.getByTestId("requirement-review-panel").getByTestId("requirement-carry-forward-" + source.linkId)).toContainText(f.caseId);
+    });
+  });
 
   test("activation recovery retains two uncertain ordered groups and verifies their exact native outcomes", async ({ browser }) => {
     await withActivationFixture(async f => {
@@ -960,7 +1030,8 @@ test.describe("governed skills operator journey (UI)", () => {
           caseBasis = await (await ownerApi.get(base() + "/testcases/" + f.caseId)).json();
           expect(caseBasis.editRevision).not.toBe(f.caseBasis.editRevision);
         } else {
-          requirementVersionId = await approveNewRequirementBasis(f);
+          requirementVersionId = await approveNewRequirementBasis(f, { linkId: link.linkId,
+            requirementVersionId: link.requirementVersionId, criterionKeys: link.criterionKeys });
           expect(requirementVersionId).not.toBe(f.approvedVersionId);
         }
         // A separate actual human API action activates the NEW basis. It must never prove that
@@ -2358,6 +2429,104 @@ test.describe("governed skills operator journey (UI)", () => {
       expect(scalar(`SELECT COUNT(*)::int FROM knowledge_document_versions WHERE document_id=${literal(documentId)} AND snapshot_kind='submitted';`)).toBe("1");
     } finally {
       await cleanupCandidatesWithTitle(title);
+    }
+  });
+
+  test("a coding agent stages a pinned-Skill manual candidate and an owner applies a native draft", async ({ browser }) => {
+    const suffix = randomUUID();
+    const skill = await apiSkill("user_manuals", "internal", "manual_revision");
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const created = await ownerApi.post(`${base()}/knowledge-base/documents`, { data: {
+      title: `Agent manual target ${suffix}`, folderId: (await (await ownerApi.get(`${base()}/knowledge-base/folders/tree`)).json()).id,
+      documentType: "user_manual", contentText: "Base manual body", contentHtml: "<p>Base manual body</p>",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base manual body" }] }] },
+      governedMetadata: metadata,
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const target = await created.json();
+    const issued = await ownerApi.post(`${base()}/apikeys`, { data: { name: `Agent document proposal ${suffix}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json();
+    const tasks: string[] = [];
+    try {
+      const stagedResponse = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
+        headers: { Authorization: `Bearer ${token.token}` },
+        data: {
+          requestKey: `agent-manual-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+          document: { title: `${target.title} revised`, contentText: "Revised manual body", contentHtml: "<p>Revised manual body</p>",
+            contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] },
+            governedMetadata: { ...metadata, confidentiality: "confidential" } },
+          reason: "Security update",
+        },
+      });
+      expect(stagedResponse.ok(), await stagedResponse.text()).toBe(true);
+      const staged = await stagedResponse.json();
+      tasks.push(staged.id);
+      expect(staged.skillContext).toMatchObject({ status: "resolved" });
+      const before = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
+      expect(before).toMatchObject({ contentText: "Base manual body", status: "draft", editRevision: target.editRevision });
+      // A project member without the owner/manager role cannot decide the candidate.
+      const qaApply = await qaApi.post(`${base()}/knowledge-base/document-proposals/${staged.id}/apply`, {
+        data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false,
+      });
+      expect(qaApply.status()).toBe(403);
+      // The generic draft editor is not the owner/manager decision surface either.
+      const genericDelete = await ownerApi.delete(`${base()}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false });
+      expect(genericDelete.status()).toBe(409);
+      expect((await genericDelete.json()).code).toBe("MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE");
+
+      const page = await open(browser, `/agents/tasks/${staged.id}`);
+      const panel = page.getByTestId("managed-document-proposal");
+      await expect(panel).toBeVisible();
+      await expect(panel).toContainText("Proposed governed manual");
+      await expect(panel).toContainText("Revised manual body");
+      await expect(panel).toContainText("Skill: current");
+      await page.getByTestId("managed-document-apply").click();
+      await expect(page.getByTestId("managed-document-apply-receipt")).toContainText("native Draft");
+      const applied = await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json();
+      expect(applied).toMatchObject({ contentText: "Revised manual body", status: "draft", reviewedVersionId: null });
+      expect(applied.governedMetadata).toMatchObject({ confidentiality: "confidential" });
+      // The full representation set is applied together, so every surface shows the same Draft.
+      expect(applied.contentHtml).toBe("<p>Revised manual body</p>");
+      expect(applied.contentJson).toEqual({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Revised manual body" }] }] });
+      await expect(panel).toContainText("Producer: api_token");
+
+      const staleResponse = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
+        headers: { Authorization: `Bearer ${token.token}` },
+        data: {
+          requestKey: `agent-manual-stale-${suffix}`, operation: "update", documentId: target.id,
+          expectedRevision: applied.editRevision,
+          document: { title: `${target.title} stale`, contentText: "Stale body", contentHtml: "<p>Stale body</p>",
+            contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Stale body" }] }] },
+            governedMetadata: metadata },
+        },
+      });
+      expect(staleResponse.ok(), await staleResponse.text()).toBe(true);
+      const stale = await staleResponse.json();
+      tasks.push(stale.id);
+      const revoked = await ownerApi.patch(`${base()}/skill-assignments/${skill.assignmentId}/deactivate`, { data: {} });
+      expect(revoked.ok(), await revoked.text()).toBe(true);
+      const stalePage = await open(browser, `/agents/tasks/${stale.id}`);
+      await expect(stalePage.getByTestId("managed-document-proposal")).toContainText("Skill: stale");
+      await expect(stalePage.getByTestId("managed-document-apply")).toBeDisabled();
+      await expect(stalePage.getByTestId("managed-document-proposal")).toContainText("Apply is blocked");
+      // The disabled button is not the boundary: a direct decision is refused server-side too.
+      const staleDecision = await ownerApi.post(`${base()}/knowledge-base/document-proposals/${stale.id}/apply`, {
+        data: { expectedProposalRevision: stale.proposalRevision }, failOnStatusCode: false,
+      });
+      expect(staleDecision.status()).toBe(409);
+      expect((await staleDecision.json()).code).toBe("DOCUMENT_PROPOSAL_SKILL_STALE");
+      expect((await (await ownerApi.get(`${base()}/knowledge-base/documents/${target.id}`)).json()).contentText).toBe("Revised manual body");
+    } finally {
+      for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await ownerApi.delete(`${base()}/apikeys/${token.id}`, { failOnStatusCode: false });
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(target.id)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(target.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await cleanupSkill(skill.documentId);
     }
   });
 });

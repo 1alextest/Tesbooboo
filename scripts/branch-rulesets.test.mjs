@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {REPO,CHECKS,WORKFLOW_SOURCES,exact,check,patch,run} from './branch-rulesets.mjs';
+import {REPO,CHECKS,WORKFLOW_SOURCES,SCANNER_TOOLS,exact,check,patch,run} from './branch-rulesets.mjs';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 function f(b='development'){return {id:42,name:'Protect '+b,source:REPO,target:'branch',enforcement:'active',bypass_actors:[],conditions:{ref_name:{include:['refs/heads/'+b],exclude:[]}},rules:[{type:'deletion'},{type:'non_fast_forward'},{type:'pull_request',parameters:{required_approving_review_count:0,dismiss_stale_reviews_on_push:false,require_last_push_approval:false,required_review_thread_resolution:true}},{type:'required_status_checks',parameters:{strict_required_status_checks_policy:false,required_status_checks:[]}}]};}
@@ -39,7 +39,7 @@ test('reviewed smoke pin includes BOTH tracing parity and WPA-01 KB denial selec
 });
 
 function installedFiles() {
-  return [...workflowFiles, ...publisherFiles].map(path => ({
+  return [...workflowFiles, ...publisherFiles, '.github/workflows/devskim.yml'].map(path => ({
     path, mode: '100644', type: 'blob', sha: blobHash(fileText(path)),
   }));
 }
@@ -105,10 +105,19 @@ function githubFixture() {
     if (path.startsWith('/actions/workflows/')) {
       const file = decodeURIComponent(path.slice('/actions/workflows/'.length));
       const workflowPath = '.github/workflows/' + file;
-      return workflowFiles.concat(publisherFiles[0]).includes(workflowPath)
+      return workflowFiles.concat(publisherFiles[0], '.github/workflows/devskim.yml').includes(workflowPath)
         ? reply({ id: 123, path: workflowPath,
           state: state.disabled.has(workflowPath) ? 'disabled_manually' : 'active' })
         : reply({}, 404);
+    }
+    if (path === '/code-scanning/analyses') {
+      const ref = parsed.searchParams.get('ref'), branch = ref.slice('refs/heads/'.length);
+      const tool = parsed.searchParams.get('tool_name');
+      assert.ok(SCANNER_TOOLS.includes(tool));
+      if (state.scanDenied === branch) return reply({}, 403);
+      const record = {ref, commit_sha: state.refs[branch], tool:{name:tool}, error:'', warning:'',
+        id: tool==='CodeQL'?101:102, rules_count:20, results_count:0};
+      return reply(state.scanMutation?.(record, branch, tool) ?? [record]);
     }
     // The old implementation checks only this mutable development presence. Keep the response
     // valid so negative cases demonstrate its actual write-through defect before the repair.
@@ -255,4 +264,59 @@ test('explicit administration authorization remains required before preflight', 
   const result = await command(state, ['--apply'], { TESBO_RULESET_APPLY_CONFIRM: undefined });
   assert.match(result.error.message, /explicit confirmation/);
   assert.equal(state.requests.length, 0);
+});
+
+
+test('finding phase requires strict native CodeQL and DevSkim rules and retains unrelated rules', () => {
+  const original=f();
+  original.rules.push({type:'code_scanning',parameters:{code_scanning_tools:[
+    {tool:'CodeQL',alerts_threshold:'errors',security_alerts_threshold:'critical'},
+    {tool:'Other',alerts_threshold:'all',security_alerts_threshold:'all'}]}});
+  assert.ok(check(original,'development','findings').some(x=>x.includes('scanner protection CodeQL')));
+  const updated={...original,...patch(original,'development','findings')};
+  assert.deepEqual(check(updated,'development','findings'),[]);
+  const entries=updated.rules.find(r=>r.type==='code_scanning').parameters.code_scanning_tools;
+  assert.deepEqual(entries.find(t=>t.tool==='Other'),original.rules.at(-1).parameters.code_scanning_tools[1]);
+  assert.deepEqual(patch(updated,'development','findings'),patch(original,'development','findings'));
+  assert.equal(original.rules.at(-1).parameters.code_scanning_tools[0].alerts_threshold,'errors');
+});
+test('duplicate or malformed scanner configurations refuse rather than replacing existing protection',()=>{
+  for(const entries of [[{tool:'CodeQL'}],Array.from({length:2},()=>({tool:'CodeQL',alerts_threshold:'all',security_alerts_threshold:'all'}))]){
+    const original=f();original.rules.push({type:'code_scanning',parameters:{code_scanning_tools:entries}});
+    assert.throws(()=>patch(original,'development','findings'),/Malformed or duplicate/);
+  }
+});
+test('findings activation requires exact-ref successful native scanner results for both branches',async()=>{
+  const state=githubFixture();
+  const result=await command(state,['--apply','--findings']);
+  assert.equal(result.error,undefined);
+  assert.equal(state.puts.length,2);
+  for(const branch of ['main','development'])assert.deepEqual(check(state.rules[branch],branch,'findings'),[]);
+});
+test('unavailable, stale, failed, skipped or wrong-producer scans prevent all ruleset writes',async()=>{
+  for(const mutate of [r=>[],r=>[{...r,commit_sha:'e'.repeat(40)}],r=>[{...r,error:'failed'}],
+    r=>[{...r,warning:'partial'}],r=>[{...r,rules_count:0}],r=>[{...r,tool:{name:'different'}}]]){
+    const state=githubFixture();state.scanMutation=mutate;
+    await refused(state,/Current successful scanner analysis unavailable/,['--apply','--findings']);
+  }
+  const denied=githubFixture();denied.scanDenied='main';
+  await refused(denied,/HTTP 403/,['--apply','--findings']);
+});
+test('newer failing scan cannot be masked by an older successful result',async()=>{
+  const state=githubFixture();state.scanMutation=r=>[{...r,error:'new failure'},r];
+  await refused(state,/Current successful scanner analysis unavailable/,['--apply','--findings']);
+});
+test('scanner evidence change during preflight refuses activation',async()=>{
+  const state=githubFixture();let count=0;
+  state.scanMutation=r=>[{...r,id:r.id+(++count>4?1:0)}];
+  await refused(state,/Scanner evidence changed/,['--apply','--findings']);
+});
+test('findings activation refuses missing scanner source or disabled workflow',async()=>{
+  const absent=githubFixture();absent.entries.main=absent.entries.main.filter(e=>e.path!=='.github/workflows/devskim.yml');
+  await refused(absent,/scanner source missing/,['--apply','--findings']);
+  const disabled=githubFixture();disabled.disabled.add('.github/workflows/devskim.yml');
+  await refused(disabled,/not active/,['--apply','--findings']);
+});
+test('conflicting activation arguments are refused before mutation',async()=>{
+  await refused(githubFixture(),/Invalid or conflicting/,['--apply','--findings','--assurance']);
 });
