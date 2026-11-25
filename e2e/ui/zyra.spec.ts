@@ -817,7 +817,7 @@ test.describe("zyra / agents (UI)", () => {
         WHERE c.project_id=${literal(projectId)} AND ci.testcase_id=${literal(caseId)};`))).toBe(0);
 
       const prepare = page.getByTestId("graph-review-run-" + historyId);
-      await prepare.locator("summary").click();
+      await prepare.locator(":scope > summary").click();
       const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
       await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
       const selectionIdentity = prepare.getByRole("region", { name: "Native case identity" });
@@ -886,7 +886,7 @@ test.describe("zyra / agents (UI)", () => {
       // canonical case must be idempotent through the native API.
       await page.reload();
       const reopened = page.getByTestId("graph-review-run-" + historyId);
-      await reopened.locator("summary").click();
+      await reopened.locator(":scope > summary").click();
       await reopened.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await reopened.getByRole("radio", { name: "Add to existing test run" }).check();
       await reopened.getByLabel("Existing open test run").selectOption(createdRunId);
