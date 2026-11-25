@@ -60,3 +60,48 @@ test("typed requirement operations are recognized even for an unusual provider",
   assert.equal(actual.operationCount, 2);
   assert.equal(actual.caseCandidates, 1);
 });
+
+
+test("manual/policy proposals are not test cases and require actual native apply receipts", () => {
+  const manual = {
+    provider: "external_document_proposal", generatedCount: 1, savedCount: 1,
+    taskStatus: "done", requirementBundle: undefined, requirementApplyReceipt: null,
+    managedDocumentProposal: { operation: "update", documentType: "user_manual", applyReceipt: null }
+  };
+  const before = summarizeZyraTaskOutput(manual);
+  assert.equal(before.isManagedDocumentProposal, true);
+  assert.equal(before.isRequirementBundle, false);
+  assert.equal(before.caseCandidates, 0);
+  assert.equal(before.createdDraftCases, 0);
+  assert.equal(before.nativeDocumentApplyReceipt, false);
+  assert.equal(before.primary, "1 user manual update proposal");
+  assert.equal(before.secondary, "No native document apply receipt");
+  assert.doesNotMatch(before.primary, /test case/);
+  const after = summarizeZyraTaskOutput({ ...manual, managedDocumentProposal: {
+    ...manual.managedDocumentProposal, applyReceipt: { document: { documentId: "doc-1", operation: "update" } }
+  } });
+  assert.equal(after.nativeDocumentApplyReceipt, true);
+  assert.equal(after.secondary, "Native document apply receipt recorded");
+});
+
+test("policy create, missing document data and conflicting type fail closed", () => {
+  const policy = summarizeZyraTaskOutput({
+    provider: "external_document_proposal", generatedCount: 1,
+    managedDocumentProposal: { operation: "create", documentType: "policy", applyReceipt: null }
+  });
+  assert.equal(policy.primary, "1 policy create proposal");
+  assert.equal(policy.operationCount, 1);
+  const missing = summarizeZyraTaskOutput({
+    provider: "external_document_proposal", generatedCount: 1, managedDocumentProposal: undefined
+  });
+  assert.equal(missing.statValue, "—");
+  assert.equal(missing.caseCandidates, null);
+  assert.equal(missing.nativeDocumentApplyReceipt, null);
+  const conflicting = summarizeZyraTaskOutput({
+    provider: "external_document_proposal", generatedCount: 3,
+    requirementBundle: [requirement], managedDocumentProposal: { operation: "create", documentType: "policy" }
+  });
+  assert.equal(conflicting.primary, "Conflicting proposal types");
+  assert.equal(conflicting.statValue, "—");
+  assert.equal(conflicting.isManagedDocumentProposal, true);
+});
