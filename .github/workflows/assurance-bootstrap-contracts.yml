@@ -1,0 +1,44 @@
+# Unprivileged PR-only bootstrap proof. This is NOT the enforcement publisher.
+name: Assurance bootstrap contracts
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assurance-bootstrap-contracts:
+    name: assurance-bootstrap-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Execute actual source, approval and status-publisher negative controls
+        run: node --test scripts/assurance-pr-gate.test.mjs scripts/publish-assurance-status.test.mjs
+      - name: Compare core source blobs with pinned development snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Source snapshot: abd093cc109c9080210e5dc98fc6410bc32a3b9a
+          while read -r expected file; do
+            actual="$(git hash-object "$file")"
+            if [ "$actual" != "$expected" ]; then
+              echo "Bootstrap source mismatch: $file" >&2
+              exit 1
+            fi
+          done <<'BLOBS'
+          b822b62cbcd19326714e44a0a3972c472dcc2612 scripts/assurance-pr-gate.mjs
+          f91ef52fc257408ae9bd07914006bd4af9c46821 scripts/assurance-pr-gate.test.mjs
+          856d664b0f6165ae6ffbfc75394866bd9c2379cf scripts/publish-assurance-status.mjs
+          6d41964ad5a847fc3d0459361bde0d87a72b1fbc scripts/publish-assurance-status.test.mjs
+          9b396e0aa7160b68453e99273a9ef285ea02f125 .github/assurance-policy.json
+          6455960cdc6bf9f194d671fba334329c0527a640 scripts/assurance-test-fixtures.mjs
+          3910a61102a8765876f5134475be1a2e1506da63 .github/workflows/assurance-pr-gate.yml
+          BLOBS

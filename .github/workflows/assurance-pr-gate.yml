@@ -1,0 +1,44 @@
+# Installed policy only: no PR/comment-triggered privileged workflow and no PR code execution.
+name: Specification assurance review gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number, or empty to refresh the bounded open-PR queue
+        required: false
+        type: string
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+
+permissions: {}
+
+# Serialize manual and scheduled publishers so an older evaluation cannot finish last.
+concurrency:
+  group: specification-assurance-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  assurance-policy-publisher:
+    name: assurance-policy-publisher
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Refresh exact-head coordinator-attested analytical evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: node scripts/publish-assurance-status.mjs
