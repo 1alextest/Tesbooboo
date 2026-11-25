@@ -34,6 +34,10 @@ A single agent may perform these activities or delegate to specialist agents. Th
 
 **Completion is not defined as "all seven domains were changed."** Each domain must be assessed. Applicability (`change_required|unchanged|not_applicable|undetermined`), each artifact operation’s review/apply state and work disposition (`active|blocked|deferred|resolved`) are separate; the canonical API contract defines their aggregation. Human labels such as “Updated”, “Awaiting review” and “Deferred” are derived from those facts. Never create a meaningless document or ticket to satisfy a checklist.
 
+### Multi-member MCP authoring
+
+The [team identity and contribution contract](mcp-team-attribution.md) and [Skill delivery and cross-member conformance contract](skills-governance.md#mandatory-skill-delivery-and-cross-member-authoring-conformance) specify how contributors can produce consistent artifacts under an approved project method and retain individual accountability. [PR change reconciliation](../../qa-orchestration/PR_CHANGE_RECONCILIATION_DRAFT.md) applies both to Tasks, Zyra, native review, Runs and downstream integrations.
+
 ## Source-backed reuse inventory (2026-11-18)
 
 | Area | Tesbo existing owner | Specific extension |
