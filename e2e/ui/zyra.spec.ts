@@ -733,6 +733,34 @@ test.describe("zyra / agents (UI)", () => {
       expect(humanReviewFirst).toBe(true);
       const link = page.getByRole("link", { name: "Open existing test case" });
       await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
+      const caseIdentity = page.getByRole("region", { name: "Native case identity" });
+      await expect(caseIdentity).toContainText("Its title, current approval and applicability have not been checked");
+      const currentCaseRead = page.waitForResponse(r =>
+        r.url().endsWith(`/api/projects/${projectId}/testcases/${caseId}`) &&
+        r.request().method() === "GET"
+      );
+      await caseIdentity.getByRole("button", { name: "Inspect case details" }).click();
+      const caseResponse = await currentCaseRead;
+      expect(caseResponse.status(), await caseResponse.text()).toBe(200);
+      await expect(caseIdentity).toContainText("E2E linked graph review");
+      await expect(caseIdentity).toContainText("At this read: Approved");
+      await expect(caseIdentity).toContainText("approval current");
+      await expect(caseIdentity).toContainText("Run attachment rechecks approval");
+
+      // An earlier authorized title must disappear when the subsequent read is denied.
+      // The failure response body must not be rendered as a case title or reviewer evidence.
+      const caseReadPath = `**/api/projects/${projectId}/testcases/${caseId}`;
+      const denyRead = async (route: import("@playwright/test").Route) =>
+        route.fulfill({ status: 403, json: { error: "Private provider detail" } });
+      await page.route(caseReadPath, denyRead);
+      try {
+        await caseIdentity.getByRole("button", { name: "Refresh case details" }).click();
+        await expect(caseIdentity).toContainText("Case details are unavailable or access has changed");
+        await expect(caseIdentity).not.toContainText("E2E linked graph review");
+        await expect(caseIdentity).not.toContainText("Private provider detail");
+      } finally {
+        await page.unroute(caseReadPath, denyRead);
+      }
       await expect(page.getByText("Review reason: case_changed")).toBeVisible();
       // The new read-only explanation stays within the existing QA review page,
       // using the actual persisted native receipt and authenticated project membership.
@@ -956,6 +984,11 @@ test.describe("zyra / agents (UI)", () => {
       const beforeDraft = Number(scalar("SELECT COUNT(*)::int FROM cycles WHERE project_id=" +
         literal(projectId) + " AND deleted_at IS NULL;"));
       await page.reload();
+      const changedIdentity = page.getByRole("region", { name: "Native case identity" });
+      await changedIdentity.getByRole("button", { name: "Inspect case details" }).click();
+      await expect(changedIdentity).toContainText("At this read: Draft");
+      await expect(changedIdentity).toContainText("not currently approved for a new run");
+      await expect(changedIdentity).not.toContainText("approval current");
       const rejected = page.getByTestId("graph-review-run-" + historyId);
       await rejected.locator("summary").click();
       await rejected.getByRole("checkbox", { name: "Select linked case 1" }).check();
