@@ -24,6 +24,8 @@ A full agent runtime is a later adapter decision. Keep the existing Zyra task as
 
 ### QA-specific harnesses and extension checks
 
+**First-authoring trial disposition, 25 November 2026.** Ordinary Zyra instructions and a short adaptation of QA Investigation Harness both scored 18/20 on a fresh ticket. All four authors missed the need to retry on the same booking. Preserve the existing authoring default. The pinned upstream generator handoff did distinguish current, stale and unapproved mappings on its own fixtures. It is a candidate for an optional Tesbo integration subject to native revision and human review checks. [Results, worked repair and runnable native replay](examples/zyra-proactive-authoring.md)
+
 **Pilot QA Investigation Harness first for Zyra’s assertion review.** It already has a reviewer for a common testing mistake: accepting a “Saved” message as evidence that a change persisted. A QA lead can edit the shared review method, and an engineer can adapt the evidence reader while retaining Tesbo’s existing runner. If the need is a programmable Node.js executor that team members can call over MCP, CodeceptJS is the strongest of the four candidates tested for that job. These decisions can be made independently.
 
 | QA project and pin | What a Tesbo team can change | What ran on 25 November 2026 and what remains open |

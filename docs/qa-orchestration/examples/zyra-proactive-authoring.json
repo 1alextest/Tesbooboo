@@ -1,0 +1,832 @@
+{
+  "study": "Shoreline Theatre S18 first-draft authoring, 25 November 2026",
+  "nativeSource": "https://github.com/1alextest/Tesbooboo/tree/6f7799383fc3277f6586df4d94cdcaa3bd7c13d4",
+  "methodSource": "https://github.com/QAtools-tech/qa-investigation-harness/tree/a468921c2bead820520a97df897168487b2b4985",
+  "upstreamFiles": [
+    "qa-harness/stages/02-model.md",
+    "qa-harness/stages/03-challenge.md",
+    "qa-harness/stages/review-plan.md"
+  ],
+  "scope": "Locally distilled authoring instructions. Upstream separates modeling, risk proposals, human risk/oracle approval and export. This trial evaluates unpublished drafts and imports no approved risk, plan or case.",
+  "protocol": "Four new assistant model sessions with no shared conversation history. Each received only its native provider messages. The nominal 1–10 project range was held constant and the brief requested five cases in 500 narrative words. Pairs were h1/h2 and h4/h3. Graders saw anonymous native normalized drafts before treatment assignment was disclosed.",
+  "transport": "The first loopback invocation captured native requests. Its processes closed at assistant handoff before delivery. A second local invocation verified the entire outgoing request and message bytes against the original, then returned the unedited first model answer to the native parser. Each subject produced one answer. No Tesbo project model allocation, source retrieval, database write, publication or test execution took place.",
+  "wireOptions": {
+    "model": "blind-author-subject",
+    "response_format": {
+      "type": "json_object"
+    },
+    "temperature": 0.2
+  },
+  "baseGenerationInput": {
+    "feedback": "",
+    "knowledge": [],
+    "jira": [],
+    "linear": [],
+    "notion": [],
+    "existingTestcases": [],
+    "requestedCount": 10,
+    "testcaseRange": "1-10",
+    "knowledgeConfidence": "none",
+    "language": "en",
+    "story": "Shoreline Theatre is releasing seat exchanges at the box office and a Call action on the standby desk. Write the release test cases for the team.",
+    "context": "Release S18. Box office QA handover, 25 November.\n\nTicket BOX-17. A cashier can prepare exchange offers for an existing booking at either sales desk and confirm an offer. An offer records its own reference, the booking, old/new seats and the service charge. BOX-17 screen copy lists two possible confirmations: Exchange complete and Refresh offer. The cashier can reopen a booking, including its assigned seat, from another desk.\n\nOPERATIONS 8.2 (in force). Issuing a replacement offer retires every earlier offer for the same booking. A retired offer cannot complete an exchange. The seats shown on the current booking change only upon completion. Finance reconciliation links one exchange receipt and one service-charge entry to each completed offer reference. Finance can look up a reference in either register even if it has no rows. There is no charge to obtain or replace an offer.\n\nTicket FOH-42. A steward selects a standby booking and presses Call. The list refreshes in place as new bookings arrive. It is sorted by membership tier and then arrival minute. The row position can move during a selection. Several patrons may use the same display name. The desk log and booking detail identify bookings by reference.\n\nFRONT OF HOUSE 4.1 (in force). Call is attached to the selected booking. Calling it moves that booking from Waiting to Called and writes a notice for its registered contact to the dispatch outbox. Other waiting bookings are left alone. The outbox can be read by booking reference and recipient. Calling again on an already Called booking is an acknowledgement and requests no further notification.\n\nRelease correspondence, still on the ticket. On the last available seat, the old venue handbook broke an exact tier-and-minute tie by surname. The new season's usher lead proposed customer check-in order; ticketing suggested a ballot. The S18 approval list covers the display sort and Call action. It contains no disposition for this tie. Ordinary, non-tied bookings and offer confirmations are available for testing.\n\nQA handoff: deliver five draft cases. Keep authored narrative within 500 words across all five, including titles, preconditions, action and expected text, test data, and summaries. Standard field names, tags, technique labels and source references are outside that count.",
+    "acceptanceCriteria": "A cashier can complete a current seat offer; the standby desk can call the selected booking and acknowledge an existing call. Use the S18 ticket and operating notes supplied with this request."
+  },
+  "candidateMethod": "Candidate QA planning method adapted from QA Investigation Harness. Before drafting, map the user's starting states, transitions, dependencies and results. For each plausible gap, ask what could break while the visible result still looked right, what the case assumes, and which accessible observation would distinguish success. Ground each expected result in the supplied evidence; mark an unresolved expectation as an open question with the decision or observation needed. Keep tests with established expectations usable. Use the requested native draft format; this is an isolated authoring exercise. Drafts and questions do not confer approval.",
+  "frozenDigests": {
+    "task.json": "sha256:986a28120c639f945a8cea9b5bf564c353121277128687de7c39a2d2802432c8",
+    "candidate-context.txt": "sha256:7021c873a9feb0d996e35f08b8922ef5eef2d573f48da6b7b4f7814c816de735",
+    "rubric.json": "sha256:3ff1d9f19644fd8acc3df84a5fea9cb548eeb3b76b1482d58febe9b091c33327"
+  },
+  "scoringRubric": {
+    "obligations": [
+      {
+        "id": "EX-retired",
+        "two": "Obtain an old offer and replace it, then confirm the old reference. Require Refresh/refusal; independently check that the prior booking seat remains and both finance registers contain zero matching receipt/charge rows for that old offer. Equivalent combined query proving both is acceptable.",
+        "one": "Exercises confirmation of the retired offer and checks refusal or any correct downstream preservation.",
+        "zero": "Does not exercise retired confirmation, or expects it to complete."
+      },
+      {
+        "id": "EX-current",
+        "two": "A current, unretired offer is confirmed successfully. Independently reopen the correct booking to see the new seat, and verify exactly one receipt and one matching service charge for that completed offer reference. No invented release blocker for this ordinary path.",
+        "one": "Concrete valid exchange and at least one correct expected result; incomplete independent effects.",
+        "zero": "No concrete positive exchange, marks it blocked, or declares correct completion impossible."
+      },
+      {
+        "id": "FOH-target",
+        "two": "Select a specific booking, cause an in-place reorder that actually moves it before pressing Call, then independently verify that original stable booking is Called and another identified waiting booking stayed Waiting. Equivalent reference-based verification in persistent detail or desk log is valid.",
+        "one": "Identifies reordering/duplicate names and checks the selected identity, but omits a decisive step or sibling control.",
+        "zero": "Checks only count, row position, displayed name, or a generic Call without reordering."
+      },
+      {
+        "id": "FOH-notice",
+        "two": "Exercise first Call and repeated Call of the same booking. Independently read its outbox and verify exactly one notice for that booking addressed to its own registered contact after both calls; a correct per-booking before/after count (0 → 1 → 1) also qualifies if recipient is checked.",
+        "one": "Checks duplicate notices for a repeated Call, or checks first Call outbox evidence for the correct booking/contact, but lacks the complete sequence or binding.",
+        "zero": "Only observes UI acknowledgements or omits notification effects."
+      },
+      {
+        "id": "FOH-tie",
+        "two": "Surface the unresolved exact tier-and-minute tie for the last seat, explicitly withhold the winner expectation and seek an authorized S18 decision. Naming what can be tested once resolved or two alternatives conditionally is valid. No obligation to propose a particular winner.",
+        "one": "Mentions the exact tie as unresolved or as a question but omits authority or withholds no definite expectation.",
+        "zero": "Omitted or presents an unapproved selection rule as the S18 winner. A generic fairness, sort or edge-case note does not earn credit."
+      }
+    ],
+    "grade": "Grade coverage across the whole submitted set; a case can address several obligations, and a jointly decisive sequence across cases is eligible if its links and setup are explicit. Equivalent observables and paraphrases count. Duplicates do not earn extra points. Assign 0–2 per obligation per submission, 10 maximum. Separately report invalid schema, number of drafts, ungrounded runtime claims, speculative rule represented as approved, total narrative words and other substantive incorrect behavior. Accept a clearly conditional/blocked question in any existing native field when a questions field is absent. Score gradeable raw coverage independently of schema and native importer retention; report normalized/retained coverage separately if available, including silently trimmed or changed cases.",
+    "availability": "Assigned before generation: 2 ordinary and 2 candidate. Pair 1 and pair 2, one independent fresh author per arm in each. Never substitute second answers after opening results. An absent/unreadable delivery is ungraded, counted as unavailable and earns zero in correct-point yield per 20 assigned; report scored/available alongside assigned. A readable wrong answer is scored zero on the affected row. Report repeats at arm level plus each author; no per-row independence or statistical confidence inference.",
+    "word_rule": "English narrative word limit of 500 per submission. Count title, preconditions, testData, expectedSummary and step action/expected values; if aliases used, count the equivalent narrative. Ignore field names, JSON escaping/punctuation and controlled metadata. Treat hyphenated compounds, embedded digits, technical IDs and amounts with decimal separators as single words. Report actual counts and any format/word violations separately; no sample removal.",
+    "advance": "Eligible for a larger native study only if all four assigned submissions are available, candidate scores at least 3 more of 20 assigned points than ordinary, neither candidate is below its paired comparator on total, both candidate outputs earn full credit for EX-current and FOH-tie, and both respect five-draft native shape and 500-word bound, with no invented approval or run result. Ties do not advance the candidate. No production adoption decision, no retroactive threshold revision; retain a disputed rubric item under its original score and show a symmetric sensitivity analysis."
+  },
+  "trials": [
+    {
+      "id": "h1",
+      "method": "ordinary",
+      "gradeAlias": "cedar",
+      "messagesDigest": "sha256:1dbe75814603a80003df6900d9b890a2d7a577be9d2510bc9f9b381de5527428",
+      "normalizedDigest": "sha256:02b5ede90afec93275d537f9e259c13ff90a77c9efa1839622e6129bfcf3acab",
+      "originalReply": {
+        "drafts": [
+          {
+            "title": "Complete the current replacement offer",
+            "preconditions": "Two cashiers can reopen booking E101. Finance registers are readable.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"At desk A offer B2. At desk B replace it with C3. Record both references and the replacement charge.\", \"expectedResult\": \"Distinct references identify E101, original seat A1, offered seats and charges.\"}, {\"stepNumber\": 2, \"action\": \"Reopen E101 at A and query both finance registers for each reference.\", \"expectedResult\": \"Seat remains A1. All four lookups yield zero rows.\"}, {\"stepNumber\": 3, \"action\": \"Confirm the replacement at B. Reopen E101 at A and repeat the finance lookups.\", \"expectedResult\": \"Exchange complete. Seat is C3. Only the replacement reference has rows: one exchange receipt and one service-charge entry for the quoted amount.\"}]",
+            "testData": "E101, A1 occupied, B2 and C3 available.",
+            "expectedSummary": "Booking and finance reconcile to the completed reference.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat Exchanges",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "state_testing",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Reject every retired offer across desks",
+            "preconditions": "Booking E202 has seat D1. Preserve open confirmations.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Issue offers for D2, D3 and D4 successively across desks A, B and A. Record their references.\", \"expectedResult\": \"D4 is current. All three offers identify E202.\"}, {\"stepNumber\": 2, \"action\": \"Attempt confirmation from each earlier open offer. After each attempt reopen E202 at the other desk and query both registers by the attempted reference.\", \"expectedResult\": \"Each attempt shows Refresh offer. Seat remains D1. Each retired reference has zero receipts and zero service-charge entries.\"}]",
+            "testData": "E202, available D2–D4.",
+            "expectedSummary": "Neither retired reference completes or posts a charge.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat Exchanges",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing"
+            ]
+          },
+          {
+            "title": "Call the selected booking after its row moves",
+            "preconditions": "All bookings start Waiting with empty outboxes. H outranks L.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Select S31. Insert S33 and allow the list to refresh before pressing Call.\", \"expectedResult\": \"Order becomes S33, S31, S32. S33 occupies the former selected position.\"}, {\"stepNumber\": 2, \"action\": \"Press Call without reselecting. Inspect booking details, desk log and outbox by reference and recipient.\", \"expectedResult\": \"Only S31 becomes Called and is logged as called. One notice addresses a@example.test for S31. S32 and S33 remain Waiting with zero notices.\"}]",
+            "testData": "S31/S32/S33 all Alex Lee. Tier/minute: L/10:01, L/10:02, H/10:03. Contacts respectively a/b/c@example.test.",
+            "expectedSummary": "The call follows the selected reference through refresh.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Standby Desk",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Acknowledge an existing call",
+            "preconditions": "S44 is Called with one recorded notice. S45 is Waiting.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Record both outboxes by reference and recipient. Select S44 and press Call again.\", \"expectedResult\": \"The desk acknowledges the existing call. S44 remains Called.\"}, {\"stepNumber\": 2, \"action\": \"Compare both outboxes and reopen S45.\", \"expectedResult\": \"S44 retains its single original notice. No additional dispatch is requested. S45 remains Waiting with zero notices.\"}]",
+            "testData": "S44/d@example.test, S45/e@example.test.",
+            "expectedSummary": "Acknowledgement leaves dispatch counts unchanged.",
+            "priority": "P1",
+            "severity": "Medium",
+            "component": "Standby Desk",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "decision_table"
+            ]
+          },
+          {
+            "title": "Hold the exact-tie last-seat allocation check",
+            "preconditions": "One seat remains. Two Waiting bookings share tier and arrival minute.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Check S18 approval for the rule deciding this tie before asserting a winner.\", \"expectedResult\": \"No approved disposition exists. Mark only the allocation assertion blocked and request a decision from the release owner.\"}, {\"stepNumber\": 2, \"action\": \"Record both references and the open decision in the handoff.\", \"expectedResult\": \"Surname, check-in order and ballot remain unapproved. Non-tied Call and exchange checks proceed.\"}]",
+            "testData": "T51 and T52, Gold, 19:05.",
+            "expectedSummary": "Resume the winner assertion once an approved rule exists.",
+            "priority": "P2",
+            "severity": "Medium",
+            "component": "Standby Desk",
+            "tags": [
+              "S18",
+              "blocked"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "Release correspondence"
+            ],
+            "techniques": [
+              "decision_table"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "h2",
+      "method": "candidate",
+      "gradeAlias": "ash",
+      "messagesDigest": "sha256:b7c6ac8a3f90768b1b6690d1469382a2623d4f22f50ed3c7f06be61232c6a4f0",
+      "normalizedDigest": "sha256:f6486744acfdf1c105f3e0a0150d65afe415c55a455d7fbb7ea2cdbf93f5b04b",
+      "originalReply": {
+        "drafts": [
+          {
+            "title": "Reject the retired offer at the original desk",
+            "preconditions": "Booking BX31 holds C4. Both desks can issue offers.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"At desk A, issue C4\\u2192D7 and leave confirmation open. At desk B, issue C4\\u2192E8. Record references A and B.\", \"expectedResult\": \"References differ. Reopening BX31 shows C4.\"}, {\"stepNumber\": 2, \"action\": \"Confirm A on its original screen.\", \"expectedResult\": \"Desk A displays Refresh offer. Reopen BX31 at desk B and verify C4.\"}, {\"stepNumber\": 3, \"action\": \"Search both finance registers separately for A and B.\", \"expectedResult\": \"Each reference has zero exchange receipts and zero service-charge entries.\"}]",
+            "testData": "BX31, C4, D7, E8",
+            "expectedSummary": "The stale screen cannot exchange the seat or post a charge.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat Exchanges",
+            "tags": [
+              "retirement",
+              "cross-desk"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing"
+            ]
+          },
+          {
+            "title": "Complete the replacement and reconcile its reference",
+            "preconditions": "Booking BX32 holds B2. Finance can search both registers.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Prepare B2\\u2192C3 at desk A, then B2\\u2192F9 at desk B. Record both references and the replacement charge.\", \"expectedResult\": \"BX32 still shows B2. Both registers return zero rows for both references.\"}, {\"stepNumber\": 2, \"action\": \"Confirm the replacement at desk B and reopen BX32 at desk A.\", \"expectedResult\": \"Desk B displays Exchange complete. BX32 now holds F9.\"}, {\"stepNumber\": 3, \"action\": \"Search each register by each offer reference.\", \"expectedResult\": \"Replacement has exactly one exchange receipt and one service-charge entry for its quoted amount. Earlier reference has zero of each.\"}]",
+            "testData": "BX32, B2, C3, F9",
+            "expectedSummary": "Only the completed reference accounts for the exchange.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat Exchanges",
+            "tags": [
+              "completion",
+              "finance"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "use_case_testing",
+              "state_testing"
+            ]
+          },
+          {
+            "title": "Call the selected booking after its row moves",
+            "preconditions": "W21 and W22 are Waiting, share display name Lee Park, and have distinct contacts. Neither has a notice.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Select W21. Admit higher-tier W23 so refresh puts W22 at W21\\u2019s former position. Keep the selection.\", \"expectedResult\": \"W21 has moved and W22 occupies the old position.\"}, {\"stepNumber\": 2, \"action\": \"Press Call. Inspect the desk log, booking details and outbox by reference and recipient.\", \"expectedResult\": \"Log identifies W21. W21 is Called with one notice to lee21@example.org. W22 and W23 remain Waiting with no notices.\"}]",
+            "testData": "Same tier: W22 10:01, W21 10:02. Contacts: lee21@example.org, lee22@example.org, lee23@example.org.",
+            "expectedSummary": "The call follows the selected reference through reordering.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Standby Desk",
+            "tags": [
+              "refresh",
+              "identity"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing"
+            ]
+          },
+          {
+            "title": "Acknowledge an existing call once more",
+            "preconditions": "W34 is Called. Record its existing notice, recipient and outbox count.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Select W34 and press Call again.\", \"expectedResult\": \"The desk acknowledges the existing call. Booking detail still shows W34 as Called.\"}, {\"stepNumber\": 2, \"action\": \"Read the outbox by W34 and its recipient.\", \"expectedResult\": \"The original notice remains the only one. Neither lookup shows a new notification request.\"}]",
+            "testData": "W34, steward34@example.org, one original notice",
+            "expectedSummary": "Acknowledgement preserves the dispatch count.",
+            "priority": "P1",
+            "severity": "Medium",
+            "component": "Standby Desk",
+            "tags": [
+              "acknowledgement"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "decision_table"
+            ]
+          },
+          {
+            "title": "Clarify precedence for the last seat",
+            "preconditions": "One seat remains. Two Waiting bookings have equal tier and arrival minute.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Record both references and request an S18 ruling from the release owner.\", \"expectedResult\": \"Open question: which booking gets precedence, and what approved rule determines it? Hold the tie-specific assertion pending that decision.\"}]",
+            "testData": "W51 Zane checked in first, W52 Adams second. Both Gold, 11:06.",
+            "expectedSummary": "The release correspondence leaves the exact tie unresolved.",
+            "priority": "P2",
+            "severity": "Medium",
+            "component": "Standby Desk",
+            "tags": [
+              "open-question"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "Release correspondence"
+            ],
+            "techniques": [
+              "decision_table"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "h3",
+      "method": "candidate",
+      "gradeAlias": "palm",
+      "messagesDigest": "sha256:b7c6ac8a3f90768b1b6690d1469382a2623d4f22f50ed3c7f06be61232c6a4f0",
+      "normalizedDigest": "sha256:7f4c417ef431d04515523cd9ee924f8f3a48f7f5ba44d6c86f68ee097bd51bcc",
+      "originalReply": {
+        "drafts": [
+          {
+            "title": "Reject superseded offers across desks",
+            "preconditions": "Booking B17 holds A1. Both desks can open it.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"At desk 1 issue O1 for A2, then O2 for A3. At desk 2 issue O3 for A4. Retain the earlier confirmations.\", \"expectedResult\": \"Each offer shows its distinct reference, B17, A1, proposed seat and service charge.\"}, {\"stepNumber\": 2, \"action\": \"At desk 1 attempt to confirm O1 and O2 separately. After each attempt reopen B17 at desk 2.\", \"expectedResult\": \"Each shows Refresh offer. B17 still holds A1.\"}, {\"stepNumber\": 3, \"action\": \"Query both finance registers separately for O1, O2 and O3.\", \"expectedResult\": \"Every reference has zero receipts and zero service-charge entries.\"}]",
+            "testData": "B17, A1–A4. Record actual offer references as O1–O3.",
+            "expectedSummary": "Replacing an offer retires every predecessor without moving the booking or charging it.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat exchanges",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "state_testing",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Complete the replacement and reconcile its reference",
+            "preconditions": "B18 holds C1. C2 and C3 are available.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Issue P1 for C2 at desk 1 and P2 for C3 at desk 2. Record P2\\u2019s quoted charge.\", \"expectedResult\": \"P2 identifies B18 and the C1-to-C3 exchange.\"}, {\"stepNumber\": 2, \"action\": \"Confirm P2, then reopen B18 at desk 1.\", \"expectedResult\": \"Desk 2 shows Exchange complete. Desk 1 shows C3.\"}, {\"stepNumber\": 3, \"action\": \"Look up P1 and P2 individually in both finance registers.\", \"expectedResult\": \"P2 has exactly one receipt and one service-charge entry for the quoted amount. P1 has zero of each.\"}]",
+            "testData": "B18, C1–C3. Use actual P1/P2 references.",
+            "expectedSummary": "The persisted seat and financial records agree with the completed offer.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat exchanges",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "use_case_testing",
+              "state_testing"
+            ]
+          },
+          {
+            "title": "Call the selected patron after rows move",
+            "preconditions": "W1 and W2 are Waiting, same tier and display name, with distinct contacts. Snapshot their outbox entries.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Select W2 in row 2. Before Call, add higher-ranked W3.\", \"expectedResult\": \"Refresh places W1 in W2\\u2019s former row. W2 moves.\"}, {\"stepNumber\": 2, \"action\": \"Press Call without reselecting. Check desk log and booking details by reference.\", \"expectedResult\": \"W2 is logged and Called. W1 and W3 remain Waiting.\"}, {\"stepNumber\": 3, \"action\": \"Inspect outbox changes by reference and recipient.\", \"expectedResult\": \"Exactly one new notice addresses W2\\u2019s registered contact for W2. W1 and W3 receive none.\"}]",
+            "testData": "W1/W2: Alex Lee, 10:01/10:02, contacts alex1@example.org/alex2@example.org. W3: Jo, jo@example.org.",
+            "expectedSummary": "Call follows the selection across refresh.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Standby desk",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing"
+            ]
+          },
+          {
+            "title": "Acknowledge an existing call",
+            "preconditions": "W4 is Called with its original dispatch notice. W5 is Waiting.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Record outbox entries for both references and contacts. Select W4 and press Call again.\", \"expectedResult\": \"Desk acknowledges the existing call. W4 stays Called and W5 stays Waiting.\"}, {\"stepNumber\": 2, \"action\": \"Compare the outbox with the snapshot by reference and recipient.\", \"expectedResult\": \"Original notice remains. Neither booking has a new notification request.\"}]",
+            "testData": "W4: kim@example.org. W5: pat@example.org.",
+            "expectedSummary": "Acknowledgement preserves dispatch history without requesting a second notice.",
+            "priority": "P1",
+            "severity": "Medium",
+            "component": "Standby desk",
+            "tags": [
+              "S18"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "decision_table"
+            ]
+          },
+          {
+            "title": "Resolve last-seat precedence for an exact tie",
+            "preconditions": "One seat remains. Two Waiting bookings share tier and arrival minute.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Record both references, surnames and check-in order. Request the S18 owner\\u2019s ruling before asserting a winner.\", \"expectedResult\": \"Open question: Which rule, if any, determines precedence? Obtain the approved rule and an observable acceptance criterion, including how to verify a ballot if chosen.\"}]",
+            "testData": "T1: Zane checked in first. T2: Adams checked in second. Both Gold, 11:20.",
+            "expectedSummary": "Last-seat winner remains undetermined pending approval. Ordinary Call scenarios can proceed.",
+            "priority": "P2",
+            "severity": "Medium",
+            "component": "Standby desk",
+            "tags": [
+              "S18",
+              "open-question"
+            ],
+            "sourceRefs": [
+              "FOH-42"
+            ],
+            "techniques": [
+              "decision_table"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "h4",
+      "method": "ordinary",
+      "gradeAlias": "plum",
+      "messagesDigest": "sha256:1dbe75814603a80003df6900d9b890a2d7a577be9d2510bc9f9b381de5527428",
+      "normalizedDigest": "sha256:54cbc84fd90ef74ed742a1ef1addad4d9a4a7d99c98a5ae15888706e0ac6097b",
+      "originalReply": {
+        "drafts": [
+          {
+            "title": "Replacement retires every earlier offer",
+            "preconditions": "Booking K17 holds A1. Two desks can open it.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"At desk A issue offers for B1 then C1. Keep both confirmations open in separate sessions. At desk B issue D1 for K17.\", \"expectedResult\": \"Three distinct references record K17, old seat A1, respective destinations and charges.\"}, {\"stepNumber\": 2, \"action\": \"Submit each earlier confirmation from its open screen.\", \"expectedResult\": \"Both show Refresh offer.\"}, {\"stepNumber\": 3, \"action\": \"Reopen K17 at desk B. Query both finance registers separately for all three references.\", \"expectedResult\": \"K17 still holds A1. Each reference has zero receipts and zero service-charge entries.\"}]",
+            "testData": "K17, A1, B1, C1, D1",
+            "expectedSummary": "Replaced offers cannot change seats or post charges.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat exchanges",
+            "tags": [
+              "replacement"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing"
+            ]
+          },
+          {
+            "title": "Current offer completes across desks",
+            "preconditions": "Booking K18 holds A2. E2 and F2 are available.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"At desk A offer E2. At desk B replace it with F2. Record both references and the quoted charge.\", \"expectedResult\": \"Current offer identifies K18 and A2 \\u2192 F2. Reopening K18 at desk A still shows A2.\"}, {\"stepNumber\": 2, \"action\": \"Confirm the current offer at desk B. Reopen K18 at desk A.\", \"expectedResult\": \"Exchange complete appears. K18 now holds F2.\"}, {\"stepNumber\": 3, \"action\": \"Look up both references separately in the receipt and service-charge registers.\", \"expectedResult\": \"Current reference has exactly one receipt and one entry matching its quoted charge. Earlier reference has zero of each.\"}]",
+            "testData": "K18, A2, E2, F2",
+            "expectedSummary": "Only the completed reference posts to finance.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Seat exchanges",
+            "tags": [
+              "completion"
+            ],
+            "sourceRefs": [
+              "BOX-17",
+              "OPERATIONS 8.2"
+            ],
+            "techniques": [
+              "use_case_testing",
+              "state_testing"
+            ]
+          },
+          {
+            "title": "Call follows the selected reference after refresh",
+            "preconditions": "Same-tier Waiting bookings W1 and W2 display Alex Lee. Their outboxes are empty.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Select W2 in row two. Insert higher-tier W3 and let the list refresh.\", \"expectedResult\": \"W1 occupies the former selection position. W2 has moved.\"}, {\"stepNumber\": 2, \"action\": \"Press Call without reselecting. Read desk log and booking details by reference.\", \"expectedResult\": \"Log identifies W2. W2 is Called. W1 and W3 remain Waiting.\"}, {\"stepNumber\": 3, \"action\": \"Inspect outboxes by reference and recipient.\", \"expectedResult\": \"Exactly one notice belongs to W2 for alex2@example.test. W1 and W3 have none.\"}]",
+            "testData": "W1 10:01 alex1@example.test, W2 10:02 alex2@example.test, W3 10:03 lee3@example.test",
+            "expectedSummary": "The selected patron alone receives the call.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Standby desk",
+            "tags": [
+              "refresh",
+              "identity"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "error_guessing",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Second Call acknowledges the existing call",
+            "preconditions": "W4 is Called. Record its existing outbox notice ID and recipient.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Reopen W4 by reference, select it and press Call again.\", \"expectedResult\": \"Desk acknowledges the existing call. W4 stays Called.\"}, {\"stepNumber\": 2, \"action\": \"Read the outbox for W4 and its registered recipient.\", \"expectedResult\": \"Only the original notice ID exists. No additional notice was requested.\"}]",
+            "testData": "W4, steward4@example.test",
+            "expectedSummary": "Acknowledgement preserves the original notification.",
+            "priority": "P1",
+            "severity": "Medium",
+            "component": "Standby desk",
+            "tags": [
+              "acknowledgement"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "FRONT OF HOUSE 4.1"
+            ],
+            "techniques": [
+              "state_testing",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Standby display sort and last-seat tie",
+            "preconditions": "One seat remains. Use two configured membership tiers.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Load H1 and H2 in the higher tier, L1 in the lower tier.\", \"expectedResult\": \"H1 precedes H2 by arrival minute. Both precede L1.\"}, {\"stepNumber\": 2, \"action\": \"Add H3 with H2\\u2019s tier and arrival minute. Inspect the displayed groups.\", \"expectedResult\": \"H2 and H3 share their sort position between H1 and L1. Record last-seat precedence as unresolved pending S18 approval.\"}]",
+            "testData": "H1 10:01, H2 10:02, H3 10:02, L1 09:59",
+            "expectedSummary": "Non-tied order is testable. Which booking receives the last seat on an exact tie requires a release decision.",
+            "priority": "P2",
+            "severity": "Medium",
+            "component": "Standby desk",
+            "tags": [
+              "sort",
+              "open-requirement"
+            ],
+            "sourceRefs": [
+              "FOH-42",
+              "Release correspondence"
+            ],
+            "techniques": [
+              "equivalence_partitioning"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "primaryBlindReview": {
+    "inputRepresentation": "Normalized drafts supplied to grader, all four available and gradable; no inference about raw wire delivery or treatment assignment.",
+    "wordRegex": "[\\w]+(?:[.@’'\\-:/–][\\w]+)*",
+    "wordPolicy": "Count authored fields and step action/expected strings only; internal apostrophes, decimal points, technical-ID/contact separators, hyphen and en-dash compound ranges are included within words. No assignment removed.",
+    "grades": {
+      "ash": {
+        "scores": {
+          "EX-retired": 2,
+          "EX-current": 2,
+          "FOH-target": 2,
+          "FOH-notice": 1,
+          "FOH-tie": 2
+        },
+        "total": 9,
+        "rationales": {
+          "EX-retired": "BX31: A retired by B, refusal and C4 verified from desk B, both finance registers queried by reference with zero rows.",
+          "EX-current": "BX32: reopen at other desk for F9; replacement reference has exactly one receipt and one charge at the quoted amount.",
+          "FOH-target": "W21 selected, moved by higher-tier W23; independently verify W21 Called while identified W22/W23 remain Waiting.",
+          "FOH-notice": "Initial Call/outbox verified for W21; repeat uses separately pre-seeded Called W34. They are different bookings.",
+          "FOH-tie": "W51/W52 share exact tier/minute on final seat; asks S18 release owner and holds winner assertion."
+        },
+        "drafts": 5,
+        "observableNormalizedShapeConsistent": true,
+        "words": 442,
+        "inventedApproval": false,
+        "claimedExecution": false
+      },
+      "cedar": {
+        "scores": {
+          "EX-retired": 2,
+          "EX-current": 2,
+          "FOH-target": 2,
+          "FOH-notice": 1,
+          "FOH-tie": 2
+        },
+        "total": 9,
+        "rationales": {
+          "EX-retired": "E202: D4 retires D2/D3, each prior confirmation refused; booking D1 reread and both finance registers empty per attempted reference.",
+          "EX-current": "E101: current offer yields C3 on reopen; replacement reference has one receipt and one matching charge.",
+          "FOH-target": "S31 selected then displaced by S33; check S31 Called and S32/S33 still Waiting by reference.",
+          "FOH-notice": "First-call recipient and count checked for S31; repeated Call uses an already Called, separately seeded S44.",
+          "FOH-tie": "T51/T52 final-seat tier/minute tie; request S18 decision and withhold allocation verdict."
+        },
+        "drafts": 5,
+        "observableNormalizedShapeConsistent": true,
+        "words": 459,
+        "inventedApproval": false,
+        "claimedExecution": false
+      },
+      "palm": {
+        "scores": {
+          "EX-retired": 2,
+          "EX-current": 2,
+          "FOH-target": 2,
+          "FOH-notice": 1,
+          "FOH-tie": 2
+        },
+        "total": 9,
+        "rationales": {
+          "EX-retired": "B17: O3 retires O1/O2, both refused and B17 still A1; each corresponding finance reference has zero receipts/charges.",
+          "EX-current": "B18: reopen correct booking for C3; P2 has one receipt and one matching charge.",
+          "FOH-target": "W2 moves after adding W3; log/details bind Called to W2; W1/W3 still Waiting.",
+          "FOH-notice": "First-call recipient/notice checked for W2; repeat starts from a separately seeded already Called W4.",
+          "FOH-tie": "T1/T2 final-seat tier/minute tie; no winner assumed, requests current owner ruling."
+        },
+        "drafts": 5,
+        "observableNormalizedShapeConsistent": true,
+        "words": 476,
+        "inventedApproval": false,
+        "claimedExecution": false
+      },
+      "plum": {
+        "scores": {
+          "EX-retired": 2,
+          "EX-current": 2,
+          "FOH-target": 2,
+          "FOH-notice": 1,
+          "FOH-tie": 2
+        },
+        "total": 9,
+        "rationales": {
+          "EX-retired": "K17: two stale submissions refused; cross-desk reread of A1 and independent zero receipt/charge entries for all references.",
+          "EX-current": "K18: current confirmation shows F2 on other desk; current reference has exactly one receipt and one quoted charge.",
+          "FOH-target": "W2 moves from row two; independent log/details for W2 Called and W1/W3 Waiting.",
+          "FOH-notice": "First Call yields one notice on W2; repeated Call verifies only original notice on a different pre-existing W4.",
+          "FOH-tie": "H2/H3 tie for final seat: keeps eligibility group testable, withholds winner and records decision pending S18 approval."
+        },
+        "drafts": 5,
+        "observableNormalizedShapeConsistent": true,
+        "words": 464,
+        "inventedApproval": false,
+        "claimedExecution": false
+      }
+    },
+    "ambiguity": "The first Call plus repeat for the same booking is explicit in the frozen FOH-notice full-credit rule. Each case set covers first-Call and already-Called transitions on different seeded references. That gives 1, even though each could be a useful separate regression. An alternative that accepts separate fixtures would symmetrically add 1 to every author.",
+    "otherObservations": "Fixture examples, future expected results and statements of scenario preconditions are appropriate. None claims a test was executed or a tie policy approved. Plum expected equivalent sort keys to share a sort position; interpreted as membership of a tied group (its explicit wording), not two rows occupying a single visible slot."
+  },
+  "independentBlindReview": {
+    "grading_basis": "Frozen raw-submission rubric, anonymous independent review. Did not inspect assignment mapping or importer. No authoritative native schema definition present in the permitted materials.",
+    "narrative_count_convention": "Count the named narrative fields including nested actions and expected results. Treat emails, times, decimal amounts, ASCII-hyphenated terms, apostrophes within terms and alphanumeric IDs as single units; slashes, en-dash ranges, arrows and other punctuation delimit units. Tokenization of punctuation-heavy synthetic test data can differ by counter.",
+    "results": {
+      "ash": {
+        "available": true,
+        "draft_count": 5,
+        "shape": "Five objects with consistent named fields, parseable nested step arrays and sequential step numbers. Native importer and retention not verified.",
+        "narrative_words": 442,
+        "narrative_words_by_draft": [
+          97,
+          107,
+          102,
+          68,
+          68
+        ],
+        "score": 9,
+        "obligations": {
+          "EX-retired": {
+            "score": 2,
+            "rationale": "After issuing A and B for BX31, submits the older A, expects Refresh offer, reopens BX31 on the other desk to see C4 and verifies zero receipt and charge rows for A."
+          },
+          "EX-current": {
+            "score": 2,
+            "rationale": "Confirms current replacement for BX32, sees Exchange complete, reopens BX32 at the other desk for F9 and reconciles one receipt and one entry for the recorded quoted charge."
+          },
+          "FOH-target": {
+            "score": 2,
+            "rationale": "Selects W21, inserts W23, verifies W22 took the former position, presses Call and independently checks that W21 is Called and W22 and W23 remain Waiting."
+          },
+          "FOH-notice": {
+            "score": 1,
+            "rationale": "First-call outbox check binds W21 to lee21@example.org. Repeat checks a seeded W34 notice and count. The first call on W34 is never exercised and W21 is never called again."
+          },
+          "FOH-tie": {
+            "score": 2,
+            "rationale": "Identifies the last-seat exact tie, holds the winner assertion and explicitly requests an S18 release-owner ruling."
+          }
+        },
+        "ungrounded_runtime_claims": [],
+        "speculative_winner_presented_as_approved": false,
+        "other_observations": []
+      },
+      "cedar": {
+        "available": true,
+        "draft_count": 5,
+        "shape": "Five objects with consistent named fields, parseable nested step arrays and sequential step numbers. Native importer and retention not verified.",
+        "narrative_words": 470,
+        "narrative_words_by_draft": [
+          117,
+          93,
+          107,
+          68,
+          85
+        ],
+        "score": 9,
+        "obligations": {
+          "EX-retired": {
+            "score": 2,
+            "rationale": "Creates three sequential E202 offers, tries both earlier confirmations and after each tests Refresh offer, reopened D1 and zero receipts and charge entries for that retired reference."
+          },
+          "EX-current": {
+            "score": 2,
+            "rationale": "Confirms the E101 replacement, reopens at the other desk for C3, requires Exchange complete and one receipt and one entry for that reference and quoted charge."
+          },
+          "FOH-target": {
+            "score": 2,
+            "rationale": "Selects S31, inserts S33, checks that S33 took the old row, then presses Call and checks log/details for S31 Called and S32 and S33 Waiting."
+          },
+          "FOH-notice": {
+            "score": 1,
+            "rationale": "First call and correct recipient are independently checked for S31. The repeat starts with S44 already Called. No common reference goes through both calls."
+          },
+          "FOH-tie": {
+            "score": 2,
+            "rationale": "Specifies an exact tie for the last seat, blocks only its allocation assertion, asks the release owner for a decision and recognizes that the proposals lack approval."
+          }
+        },
+        "ungrounded_runtime_claims": [],
+        "speculative_winner_presented_as_approved": false,
+        "other_observations": []
+      },
+      "palm": {
+        "available": true,
+        "draft_count": 5,
+        "shape": "Five objects with consistent named fields, parseable nested step arrays and sequential step numbers. Native importer and retention not verified.",
+        "narrative_words": 483,
+        "narrative_words_by_draft": [
+          117,
+          104,
+          105,
+          74,
+          83
+        ],
+        "score": 9,
+        "obligations": {
+          "EX-retired": {
+            "score": 2,
+            "rationale": "Creates three offers on B17, submits O1 and O2 after O3, checks Refresh offer and reopened seat A1 after each, and queries both registers for zero rows for the retired references."
+          },
+          "EX-current": {
+            "score": 2,
+            "rationale": "Confirms current P2, reopens B18 from desk 1 for C3 and matches one receipt and one charge for the recorded amount under P2."
+          },
+          "FOH-target": {
+            "score": 2,
+            "rationale": "Selects W2, inserts higher-ranked W3, observes W1 taking the old row, then checks the desk log and reopened details for W2 Called and W1 and W3 Waiting."
+          },
+          "FOH-notice": {
+            "score": 1,
+            "rationale": "Checks one new notice for W2 and its own contact, then separately checks no new notice after acknowledging pre-seeded Called W4. The same booking never undergoes both actions."
+          },
+          "FOH-tie": {
+            "score": 2,
+            "rationale": "Asks the S18 owner to settle the exact last-seat tie before an assertion and keeps the ballot conditional on that ruling."
+          }
+        },
+        "ungrounded_runtime_claims": [],
+        "speculative_winner_presented_as_approved": false,
+        "other_observations": []
+      },
+      "plum": {
+        "available": true,
+        "draft_count": 5,
+        "shape": "Five objects with consistent named fields, parseable nested step arrays and sequential step numbers. Native importer and retention not verified.",
+        "narrative_words": 464,
+        "narrative_words_by_draft": [
+          101,
+          108,
+          100,
+          62,
+          93
+        ],
+        "score": 8,
+        "obligations": {
+          "EX-retired": {
+            "score": 2,
+            "rationale": "Creates three offers for K17, submits the earlier two, requires Refresh offer, reopens K17 for A1 and looks up zero receipt and service-charge rows for each reference."
+          },
+          "EX-current": {
+            "score": 2,
+            "rationale": "Confirms the current offer with Exchange complete, reopens K18 on the other desk for F2 and verifies exactly one receipt and one entry matching its quoted charge for that reference."
+          },
+          "FOH-target": {
+            "score": 2,
+            "rationale": "Selects W2 in row two, inserts W3, verifies that W1 occupies the former row, then presses Call and checks by reference that W2 is Called and the other two remain Waiting."
+          },
+          "FOH-notice": {
+            "score": 1,
+            "rationale": "Reads exactly one notice for W2 and its own recipient after first Call. The repeat checks an existing notice on W4. No explicit first and repeat sequence on the same reference."
+          },
+          "FOH-tie": {
+            "score": 1,
+            "rationale": "Records the exact last-seat tie as unresolved pending S18 approval and says a release decision is required. Under a literal reading of the full-credit instruction to seek a decision, the steps stop at recording it. Treating the documented decision question as an implicit referral would earn 2."
+          }
+        },
+        "ungrounded_runtime_claims": [],
+        "speculative_winner_presented_as_approved": false,
+        "other_observations": [
+          "The tie case includes an earlier higher-priority H1 ahead of the H2/H3 pair. Good for display ordering, but the pair is not clearly the leading contenders if reused to test allocation after approval.",
+          "The statement that H2 and H3 share their sort position is sound as equal sort keys. Requiring the same visible row or displayed rank would be an unsupported assertion.",
+          "Recording a notice ID assumes a stable notice identifier is exposed. The handover expressly guarantees lookup by booking reference and recipient. Stable ID availability has not been established. This is a testability assumption, not a run result."
+        ]
+      }
+    },
+    "interpretation": {
+      "FOH-notice": "Per the frozen rule, two otherwise credible isolated transition tests on different references do not execute first Call and repeat Call on the same booking. Give 1 to every set. If provisionally accepting separate seeded branches, add 1 to all four scores; keep the official row intact.",
+      "FOH-tie": "Plum expressly recognizes S18 approval and withholds a winner. The disputed point is whether recording the open decision seeks it. On a symmetric documented-approval-dependency reading Plum alone gains 1, yielding 9/10 for every set; the other three already explicitly request a release-owner ruling."
+    }
+  },
+  "decision": {
+    "ordinaryPoints": 18,
+    "candidatePoints": 18,
+    "possiblePerMethod": 20,
+    "availableAuthorsPerMethod": 2,
+    "assignedAuthorsPerMethod": 2,
+    "perAuthor": [
+      9,
+      9,
+      9,
+      9
+    ],
+    "independentOrdinaryPoints": 17,
+    "independentCandidatePoints": 18,
+    "interpretation": "An independent reviewer scored one ordinary draft lower for recording an unresolved decision without explicitly requesting a ruling. Both observed differences fall below the predeclared three-point improvement. Separate first and repeated actions used different booking references in all four answers."
+  }
+}
