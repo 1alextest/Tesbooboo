@@ -1,6 +1,7 @@
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable, Logger } from "@nestjs/common";
 import { Queue } from "bullmq";
+import type { PoolClient, QueryResultRow } from "pg";
 import { DatabaseService } from "../database/database.service";
 import { notificationLinks, notificationMessages, type IntegrationProvider } from "../legacy/notification-events";
 import { writeNotifications } from "../legacy/notification-writer";
@@ -389,21 +390,25 @@ export class IntegrationSyncService {
    * Called from the run processor, so the folder only ever appears once a sync has actually
    * started rather than sitting empty in every project.
    */
-  async ensureProviderFolder(organizationId: string, projectId: string, provider: SyncProvider, userId: string | null): Promise<string> {
-    const rootId = await this.ensureRootFolder(organizationId, projectId, userId);
+  async ensureProviderFolder(organizationId: string, projectId: string, provider: SyncProvider, userId: string | null, client?: PoolClient): Promise<string> {
+    const query = <T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) =>
+      client ? client.query<T>(text, values) : this.db.query<T>(text, values);
+    const rootId = await this.ensureRootFolder(organizationId, projectId, userId, client);
     const name = PROVIDER_FOLDER_NAMES[provider] || provider;
 
     // Keyed by source_provider, not name: a user renaming this folder must still be found here on
     // the next sync, or a second "Jira"/"Linear" folder gets created alongside it — the same
     // discriminator the disconnect-cleanup path (legacy.service.ts's integrationDisconnect) uses,
-    // so the two never disagree about what identifies "the" provider folder.
-    const existing = await this.db.query<{ id: string }>(
+    // so the two never disagree about what identifies "the" provider folder. When a caller passes
+    // its transaction client it also holds the project mutation advisory lock, so a concurrent
+    // folder cascade cannot commit between these reads/inserts and the document write.
+    const existing = await query<{ id: string }>(
       "SELECT id FROM knowledge_folders WHERE project_id = $1 AND parent_folder_id = $2 AND source_provider = $3 AND is_deleted = false LIMIT 1",
       [projectId, rootId, provider]
     );
     if (existing.rows[0]) return existing.rows[0].id;
 
-    const inserted = await this.db.query<{ id: string; source_provider: string | null }>(
+    const inserted = await query<{ id: string; source_provider: string | null }>(
       `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, source_provider, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
        ON CONFLICT (project_id, parent_folder_id, name) WHERE is_deleted = false AND parent_folder_id IS NOT NULL
@@ -421,14 +426,16 @@ export class IntegrationSyncService {
     throw new Error(`A folder named "${name}" already exists under this project's Knowledge Base root and belongs to a different provider — rename it before syncing ${name}.`);
   }
 
-  private async ensureRootFolder(organizationId: string, projectId: string, userId: string | null): Promise<string> {
-    const existing = await this.db.query<{ id: string }>(
+  private async ensureRootFolder(organizationId: string, projectId: string, userId: string | null, client?: PoolClient): Promise<string> {
+    const query = <T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) =>
+      client ? client.query<T>(text, values) : this.db.query<T>(text, values);
+    const existing = await query<{ id: string }>(
       "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
       [projectId]
     );
     if (existing.rows[0]) return existing.rows[0].id;
 
-    const inserted = await this.db.query<{ id: string }>(
+    const inserted = await query<{ id: string }>(
       `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, is_root, created_by, updated_by)
        VALUES ($1, $2, NULL, 'Knowledge Base', true, $3, $3)
        ON CONFLICT (project_id) WHERE is_root = true AND is_deleted = false DO NOTHING
@@ -438,7 +445,7 @@ export class IntegrationSyncService {
     if (inserted.rows[0]) return inserted.rows[0].id;
 
     // DO NOTHING fired: another worker created the root between our SELECT and INSERT.
-    const raced = await this.db.query<{ id: string }>(
+    const raced = await query<{ id: string }>(
       "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
       [projectId]
     );

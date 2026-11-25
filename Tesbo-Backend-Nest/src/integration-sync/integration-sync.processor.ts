@@ -449,7 +449,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
   // ── Per-ticket: comments -> decisions -> Knowledge Base document ──
 
   private async processTicket(payload: SyncTicketJobPayload): Promise<void> {
-    const { runId, organizationId, projectId, provider, ticketId, issueId, folderId, triggeredBy } = payload;
+    const { runId, organizationId, projectId, provider, ticketId, issueId, triggeredBy } = payload;
     const c = TICKET_TABLES[provider];
 
     const ticketRes = await this.db.query<Row>(`SELECT * FROM ${c.table} WHERE id = $1 AND project_id = $2`, [ticketId, projectId]);
@@ -564,27 +564,34 @@ export class IntegrationSyncProcessor extends WorkerHost {
       return;
     }
 
-    const upserted = await this.db.query<{ id: string; inserted: boolean }>(
-      `INSERT INTO knowledge_documents (
-         organization_id, project_id, folder_id, title, content_text, content_html, document_type, status,
-         source_provider, source_external_id, source_role, source_url, source_synced_by, source_synced_at, is_read_only
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'requirement_note', 'published', $7, $8, 'mirror', $9, $10, now(), true)
-       ON CONFLICT (project_id, source_provider, source_external_id, source_role) WHERE source_provider IS NOT NULL AND is_deleted = false
-       DO UPDATE SET
-         title = EXCLUDED.title,
-         content_text = EXCLUDED.content_text,
-         content_html = EXCLUDED.content_html,
-         source_url = EXCLUDED.source_url,
-         source_synced_by = EXCLUDED.source_synced_by,
-         source_synced_at = now(),
-         is_read_only = true,
-         -- Re-parents documents mirrored into "Requirements" before V72 into the provider folder.
-         folder_id = EXCLUDED.folder_id,
-         updated_at = now()
-       RETURNING id, (xmax = 0) AS inserted`,
-      [organizationId, projectId, folderId, mirror.title, mirror.markdown, mirror.html, provider, ticket.issueId, ticket.url, triggeredBy]
-    );
+    const upserted = await this.db.transaction(async client => {
+      // The folder id came from the coordinator and may be stale by the time this job runs. Take
+      // the same project mutation lock as the KB folder deletion/move paths, re-resolve (or
+      // recreate) the provider folder under it, and write the mirror in the same transaction.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
+      const destinationFolderId = await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy, client);
+      return client.query<{ id: string; inserted: boolean }>(
+        `INSERT INTO knowledge_documents (
+           organization_id, project_id, folder_id, title, content_text, content_html, document_type, status,
+           source_provider, source_external_id, source_role, source_url, source_synced_by, source_synced_at, is_read_only
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, 'requirement_note', 'published', $7, $8, 'mirror', $9, $10, now(), true)
+         ON CONFLICT (project_id, source_provider, source_external_id, source_role) WHERE source_provider IS NOT NULL AND is_deleted = false
+         DO UPDATE SET
+           title = EXCLUDED.title,
+           content_text = EXCLUDED.content_text,
+           content_html = EXCLUDED.content_html,
+           source_url = EXCLUDED.source_url,
+           source_synced_by = EXCLUDED.source_synced_by,
+           source_synced_at = now(),
+           is_read_only = true,
+           -- Re-parents documents mirrored into "Requirements" before V72 into the provider folder.
+           folder_id = EXCLUDED.folder_id,
+           updated_at = now()
+         RETURNING id, (xmax = 0) AS inserted`,
+        [organizationId, projectId, destinationFolderId, mirror.title, mirror.markdown, mirror.html, provider, ticket.issueId, ticket.url, triggeredBy]
+      );
+    });
     // Human input on a synced ticket goes to the document's comment thread
     // (knowledge_document_comments, V73), not to a sibling document — comments live on the
     // document being discussed and survive the body being rewritten here.

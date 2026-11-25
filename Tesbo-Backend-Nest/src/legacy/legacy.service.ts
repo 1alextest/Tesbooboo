@@ -11640,27 +11640,43 @@ export class LegacyService implements OnModuleInit {
 
   async createKnowledgeFolder(projectId: string, userId: string | null | undefined, body: Body) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     const name = this.kbFolderName(body.name);
 
     let parentFolderId = body.parentFolderId ? String(body.parentFolderId) : null;
     if (parentFolderId) {
       await this.kbFolder(projectId, parentFolderId);
-    } else {
-      const root = await this.db.query<{ id: string }>(
-        "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true",
-        [projectId]
-      );
-      parentFolderId = root.rows[0]?.id || null;
     }
 
     try {
-      const res = await this.db.query(
-        `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *`,
-        [project.organization_id, projectId, parentFolderId, name, body.description || null, uid]
-      );
-      await this.logProjectActivity(projectId, uid, "created", "knowledge_folder", res.rows[0].id, name, {});
+      const res = await this.db.transaction(async client => {
+        // Match every other folder mutation: advisory first, then the parent row. A concurrent
+        // cascade must either see this new child or make this create refuse; it must not leave a
+        // live child under a soft-deleted parent.
+        await this.lockSkillAssignments(client, projectId);
+        if (!parentFolderId) {
+          const root = await client.query<{ id: string }>(
+            "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+            [projectId]
+          );
+          parentFolderId = root.rows[0]?.id || null;
+        } else {
+          const parent = await client.query(
+            "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",
+            [parentFolderId, projectId]
+          );
+          if (!parent.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        }
+        // The preflight access read may be stale after the waits; revalidate membership/archive.
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        const inserted = await client.query(
+          `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *`,
+          [authority.organization_id, projectId, parentFolderId, name, body.description || null, uid]
+        );
+        await this.logProjectActivity(projectId, uid, "created", "knowledge_folder", inserted.rows[0].id, name, {}, client);
+        return inserted;
+      });
       return toCamel(res.rows[0]);
     } catch (error) {
       if ((error as { code?: string }).code === "23505")
@@ -24079,51 +24095,69 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // read/written directly since Zyra is both its author and its only reader; it's stored
   // as a plain 'general' document (not 'ai_memory') so it never needs approval, just filed
   // under the project's AI Memory folder for visibility.
-  private async kbAiMemoryFolderId(projectId: string): Promise<string | null> {
-    const folder = await this.db.query<{ id: string }>(
+  private async kbAiMemoryFolderId(projectId: string, client?: PoolClient): Promise<string | null> {
+    const query = <T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) =>
+      client ? client.query<T>(text, values) : this.db.query<T>(text, values);
+    // Locked recheck: a folder cascade takes the same project mutation lock before the folder
+    // update, so this cannot observe a folder that is about to disappear. A missing AI Memory
+    // folder falls back to the (undeletable) root, preserving memory availability.
+    const folder = await query<{ id: string }>(
       `SELECT kf.id FROM knowledge_folders kf
        JOIN knowledge_folders root ON kf.parent_folder_id = root.id AND root.is_root = true AND root.project_id = $1
-       WHERE kf.project_id = $1 AND kf.name = 'AI Memory' AND kf.is_deleted = false LIMIT 1`,
+       WHERE kf.project_id = $1 AND kf.name = 'AI Memory' AND kf.is_deleted = false FOR SHARE OF kf LIMIT 1`,
       [projectId]
     );
     if (folder.rows[0]?.id) return folder.rows[0].id;
-    const root = await this.db.query<{ id: string }>("SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true LIMIT 1", [projectId]);
+    const root = await query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+      [projectId]
+    );
     return root.rows[0]?.id || null;
   }
 
   private async rememberZyraMemory(projectId: string, userId: string | null, entry: string) {
     const title = "Zyra AI Memory";
-    const folderId = await this.kbAiMemoryFolderId(projectId);
-    if (!folderId) return;
-
-    const existing = await this.db.query<{ id: string; content_text: string }>(
-      "SELECT id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = $2 AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
-      [projectId, title]
-    );
     const stampedEntry = `## ${new Date().toISOString()}\n${entry.trim()}`.slice(0, 2500);
-    const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
-    if (existing.rows[0]) {
-      const documentId = existing.rows[0].id;
-      // Same per-document lock writeZyraMemoryEntry holds, with the text re-read under it, so an
-      // owner's correction landing mid-append is neither lost nor overwritten.
-      await this.db.transaction(async (client) => {
+    const result = await this.db.transaction(async client => {
+      // Advisory first, matching folder deletion/moves. The folder and memory document are then
+      // resolved under that lock; a concurrent delete either wins (folder gone, fall back to root)
+      // or waits and later cascades the committed memory document.
+      await this.lockSkillAssignments(client, projectId);
+      const project = await client.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
+      if (!project.rows[0]) return null;
+      const folderId = await this.kbAiMemoryFolderId(projectId, client);
+      if (!folderId) return null;
+
+      const existing = await client.query<{ id: string; content_text: string | null }>(
+        "SELECT id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = $2 AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
+        [projectId, title]
+      );
+      if (existing.rows[0]) {
+        const documentId = existing.rows[0].id;
+        // Same per-document lock writeZyraMemoryEntry holds, with the text re-read under it, so an
+        // owner's correction landing mid-append is neither lost nor overwritten.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
-        const current = await client.query<{ content_text: string | null }>("SELECT content_text FROM knowledge_documents WHERE id = $1", [documentId]);
-        const content = [stampedEntry, String(current.rows[0]?.content_text || "")].filter(Boolean).join("\n\n").slice(0, 20000);
+        const current = await client.query<{ content_text: string | null }>("SELECT content_text FROM knowledge_documents WHERE id = $1 AND is_deleted = false", [documentId]);
+        if (!current.rows[0]) return null;
+        const content = [stampedEntry, String(current.rows[0].content_text || "")].filter(Boolean).join("\n\n").slice(0, 20000);
         await client.query(
-          "UPDATE knowledge_documents SET content_text = $2, content_html = $3, updated_at = now() WHERE id = $1",
+          "UPDATE knowledge_documents SET content_text = $2, content_html = $3, updated_at = now() WHERE id = $1 AND is_deleted = false",
           [documentId, content, `<pre>${escapeHtml(content)}</pre>`]
         );
-      });
-      this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "document", existing.rows[0].id, "updated");
-      return;
-    }
-    const inserted = await this.db.query<{ id: string }>(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_text, content_html, document_type, status, is_ai_generated, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, 'general', 'published', true, $7, $7) RETURNING id`,
-      [project.rows[0]?.organization_id, projectId, folderId, title, stampedEntry, `<pre>${escapeHtml(stampedEntry)}</pre>`, userId]
-    );
-    if (inserted.rows[0]?.id) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "document", inserted.rows[0].id, "created");
+        return { organizationId: project.rows[0].organization_id, documentId, operation: "updated" as const };
+      }
+
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_text, content_html, document_type, status, is_ai_generated, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'general', 'published', true, $7, $7) RETURNING id`,
+        [project.rows[0].organization_id, projectId, folderId, title, stampedEntry, `<pre>${escapeHtml(stampedEntry)}</pre>`, userId]
+      );
+      return inserted.rows[0]?.id
+        ? { organizationId: project.rows[0].organization_id, documentId: inserted.rows[0].id, operation: "created" as const }
+        : null;
+    });
+    // External effect only after a successful commit.
+    if (result) this.enqueueEmbedding(result.organizationId, projectId, "document", result.documentId, result.operation);
   }
 
   /**

@@ -499,3 +499,40 @@ The advisory-first fix is verified green at `2060ae82`
 (`actions/runs/45524121118`, 726 database tests). PR #263 merged into `development` as
 `551e7eab4906f11a67c4046c2a02ca2be80dc8ce`; the Railway deployment succeeded and production `/api/health`
 returns that exact SHA. Native execution remains UNRUN; native record update is blocked as in §9.2.
+
+### 10.2 Sibling destination writers (PR #268)
+
+Lifecycle and competing deletion paths:
+- `createKnowledgeFolder`: preflight parent read, plain INSERT. A folder delete/cascade could commit
+  after the preflight but before the insert, leaving a live child under a soft-deleted parent.
+- `rememberZyraMemory` insert branch: resolves the "AI Memory" folder (or root fallback), then inserts
+  the memory document. A concurrent delete of that folder/ancestor could strand a live memory document.
+- `integration-sync.processor` mirror upsert: the coordinator resolves the provider folder once and
+  passes its id to per-ticket jobs; a later job could write into a folder deleted after fan-out.
+
+All are now transaction-scoped:
+- `createKnowledgeFolder` takes the project mutation advisory lock first, rechecks the parent
+  `FOR SHARE` inside the transaction, revalidates membership/archive, and writes the audit row on the
+  same client. A delete wins → 404 with no child; create wins → the later cascade sees the child.
+- `rememberZyraMemory` takes the same advisory lock, resolves/locks the AI Memory folder
+  (`FOR SHARE`) inside the transaction with the root fallback, and keeps the per-document advisory for
+  appends. A deleted AI Memory folder falls back to the undeletable root; embedding enqueue stays
+  after commit.
+- The sync worker takes the advisory lock, re-resolves (or recreates) the provider folder under it,
+  and writes the mirror in the same transaction; the stale coordinator `folderId` is no longer used.
+  Post-commit sync-event/notification/embedding effects are unchanged.
+
+Evidence:
+- Failing-first tests-only head `1100ea3d` (`actions/runs/45539631646`): the folder-create race and the
+  Zyra-memory race both failed — the memory case reported `Expected: 0, Received: 1` live memory
+  document under the deleted folder; 726 tests passed.
+- The integration-worker defect was established from the coordinator→job folder-id lifecycle and is
+  pinned by a processor contract test that fails if the transaction, advisory lock or in-transaction
+  `ensureProviderFolder` call is removed; a deterministic queue/DB interleaving was not reproducible
+  in the DB suite.
+- Protected paths already covered by #263: move document/folder, duplicate, ordinary and ancestor
+  deletion, with observed advisory waits.
+- `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
+  folders.
+
+Native execution remains UNRUN; the native record update limitation is unchanged.
