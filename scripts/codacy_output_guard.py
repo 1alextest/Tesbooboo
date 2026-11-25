@@ -9,6 +9,12 @@ ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
 REJECTED_OUTPUT = re.compile(
     r"^\d\d/\d\d \d\d:\d\d:\d\d ERROR\s+CodacyPlugins:\d+ - Failed to parse output:"
 )
+ANALYZER_FAILURE = re.compile(
+    r"^\d\d/\d\d \d\d:\d\d:\d\d ERROR\s+c\.c\.a\.c\.a\.CodacyPluginsAnalyser:\d+ - Failed analysis for \S+"
+)
+UNREADABLE_FILE = re.compile(
+    r"^\d\d/\d\d \d\d:\d\d:\d\d ERROR\s+c\.c\.a\.core\.files\.FileCollector:\d+ - Could not read file "
+)
 DECODE_ERROR = re.compile(
     r'^Exception in thread "main" java\.nio\.charset\.MalformedInputException: Input length = \d+$'
 )
@@ -29,6 +35,8 @@ def stop_scanner(cidfile):
 
 def guard(lines, output, diagnostics, stop):
     rejected = 0
+    analyzer_failures = 0
+    unreadable_files = 0
     decoding_stack = False
     formatter_failed = False
 
@@ -37,6 +45,10 @@ def guard(lines, output, diagnostics, stop):
         message = ANSI_COLOR.sub("", line).rstrip("\r\n")
         if REJECTED_OUTPUT.match(message):
             rejected += 1
+        if ANALYZER_FAILURE.match(message):
+            analyzer_failures += 1
+        if UNREADABLE_FILE.match(message):
+            unreadable_files += 1
 
         if DECODE_ERROR.fullmatch(message):
             decoding_stack = True
@@ -54,7 +66,11 @@ def guard(lines, output, diagnostics, stop):
 
     if rejected:
         print(f"Codacy rejected {rejected} analyzer output record(s). Analysis is incomplete.", file=diagnostics)
-    return 1 if rejected or formatter_failed else 0
+    if analyzer_failures:
+        print(f"Codacy reported {analyzer_failures} analyzer failure(s). Analysis is incomplete.", file=diagnostics)
+    if unreadable_files:
+        print(f"Codacy reported {unreadable_files} unreadable file(s). Analysis is incomplete.", file=diagnostics)
+    return 1 if rejected or formatter_failed or analyzer_failures or unreadable_files else 0
 
 
 if __name__ == "__main__":
