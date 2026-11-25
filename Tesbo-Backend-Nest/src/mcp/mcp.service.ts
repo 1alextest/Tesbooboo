@@ -340,12 +340,14 @@ export class McpService {
     const consents = rows.rows.slice(0, 50).map(row => {
       let approved = false;
       let label: string = row.client_id;
+      let currentAllowedTools: string[] | null = null;
       try {
         const access = readMcpAccess(row.settings);
         const client = access.clients.find(c =>
           isOAuthMcpGrant(c) && c.oauthClientId === row.client_id);
         if (client && isOAuthMcpGrant(client)) {
           label = client.clientName;
+          currentAllowedTools = client.allowedTools;
           approved = access.enabled && access.revision === Number(row.approval_revision) &&
             client.scopes.length === 1 && client.scopes[0] === "read" &&
             (!client.expiresAt || Date.parse(client.expiresAt) > Date.now());
@@ -359,6 +361,8 @@ export class McpService {
         clientName: label,
         resource: row.resource as string,
         status,
+        // Null is unrestricted only while current consent exists; otherwise no permission.
+        currentAllowedTools: approved && !row.revoked_at ? currentAllowedTools : null,
         createdAt: new Date(row.created_at).toISOString(),
         revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null
       };
