@@ -36,7 +36,7 @@ No claim of node/edge/path coverage or source-to-test execution without actual g
 
 ## Additional acceptance and operational controls
 
-- CL-T16 (proposed): instrument permitted vs denied credential lifecycle decisions, expiry/rotation/revocation rate, reauth and unexpected failures using bounded non-secret labels. Trace exact project/credential ID only in appropriately protected audit. Never put token, digest, raw provider ID or PII into metrics. Induce outage and retry pressure; legitimate users recover; no misleading live-status display.
+- CL-T16 (proposed): Measure credential lifecycle decisions (allowed and denied), expiry, rotation, revocation, reauthentication and unexpected failures using bounded non-secret labels. Trace exact project/credential ID only in appropriately protected audit. Never put token, digest, raw provider ID or PII into metrics. Induce outage and retry pressure; legitimate users recover; no misleading live-status display.
 - CL-T17 (proposed): compare minimal PAT enhancement against full generic identity broker using actual user journeys, maintenance burden, migration risk and capability coverage. If existing model suffices, defer independent workload implementation. Do not optimize architecture completeness over real user outcomes.
 - CL-T18 (proposed): owner/manager vs QA engineer direct issue/list/revoke API and UI, including read-only and protected write, reconcile contradictory source observations. No broadened access unless authorized.
 - CL-T19 (proposed): actual credential issuer vs current member vs delegated executor vs reviewer; same person using two clients never satisfies independent review. Unknown legacy/shared bearer cannot satisfy named-attribution policy; preserve truthful historical evidence.
