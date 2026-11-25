@@ -449,5 +449,40 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 | `writer.needsReadback` blocked a decision retry after a failed decision | Fixed in #250: removed from the pre-decision guard; draft state still blocks a genuinely unsaved body. |
 | Ambiguous governed UPDATE acknowledgement | Confirmed follow-up: POST ambiguity is covered (KBU-73), but a PATCH that commits with a lost response still requires reload/readback. Not an authority or draft-loss defect. |
 | Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
-| Create-vs-folder-delete race | Fixed in #257 (`ca18d6c8`): document create rechecks the folder under `FOR SHARE` in the insert + audit transaction and revalidates authority after the wait; a delete either cascades the new document or makes the create 404. Regression race + audit-rollback tests run in `behavioral-quality`; deployment health returned the merge SHA. The same unlocked destination check remains for move/duplicate and the integration-sync/setup inserts — recorded as separate follow-ups, not closed here. |
+| Create-vs-folder-delete race | Fixed in #257 (`ca18d6c8`): document create rechecks the folder under `FOR SHARE` in the insert + audit transaction and revalidates authority after the wait; a delete either cascades the new document or makes the create 404. Regression race + audit-rollback tests run in `behavioral-quality`; deployment health returned the merge SHA. Move/duplicate destination integrity was re-investigated in #263 — see §10.1. |
 | Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |
+
+### 10.1 Move/duplicate destination integrity (PR #263)
+
+**Lock map.** `moveKnowledgeDocument`, `moveKnowledgeFolder` and `duplicateKnowledgeDocument` already take
+`pg_advisory_xact_lock('skill-assignments:<project>')` before any domain row lock. `deleteKnowledgeFolder`
+takes the same project lock before its `FOR UPDATE` and recursive cascade, and every folder soft-delete in the
+product goes through that transaction; integration disconnect deliberately leaves KB rows in place, and setup
+seeding has no concurrently deletable destination. Therefore ordinary deletion, subtree deletion, moves and
+duplicates in the same project are serialised:
+
+- Delete acquires first → the move/duplicate waits on the advisory lock, then reads the destination/source
+  after the delete committed and refuses with 404; no row is written.
+- Move/duplicate acquires first → the delete waits, then its cascade statement sees the newly moved/copied
+  row and soft-deletes it. No live row can point at a deleted folder.
+
+The new regressions observe that advisory wait in `pg_stat_activity`; the delete-wins and move-wins cases pass
+against the unchanged move/duplicate locking, so no extra destination lock was added.
+
+**Confirmed gaps fixed.** `duplicateKnowledgeDocument` did not revalidate membership/archive after its
+source-document wait; it now calls `requireCurrentProjectAuthority` under the transaction and inserts from the
+current authority row. Document/folder move and duplicate wrote their audit entry after commit (best-effort),
+so an audit failure left an unaudited mutation; all three now write it on the mutation transaction's client.
+External effects (duplicate embedding enqueue) remain after commit.
+
+**Sibling disposition (not changed).** `integration-sync.processor.ts` upserts provider mirrors with a
+`folder_id` resolved earlier, without the project mutation advisory lock or a locked folder recheck; a nightly
+sync racing a user-initiated deletion of its provider folder could insert/re-parent a mirror into a deleted
+folder. Owner: integration-sync; recorded as a follow-up rather than widened into this KB-owner repair.
+`setup.service.ts` seeds a document during project bootstrap, before the project is reachable, so no
+concurrent deletable destination exists. There is no hard-delete path for `knowledge_folders` in product code.
+
+**Evidence.** Failing-first run at tests-only head `6a415207`
+(`actions/runs/45513840933/job/138868072480`): 4 new regressions failed (duplicate resolved with `null`; the
+three audit cases resolved instead of rejecting); 721 existing tests passed. The fix commit flips them green
+in the same job. Native execution remains UNRUN; native record update is blocked as in §9.2.
