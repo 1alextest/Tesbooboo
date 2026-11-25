@@ -806,11 +806,11 @@ test.describe("zyra / agents (UI)", () => {
         WHERE dedupe_key = ${literal(`qa_change_review:${projectId}:${historyId}`)};`));
       expect(countNotifications()).toBe(0);
       await page.getByRole("button", { name: "Notify QA reviewers" }).click();
-      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      await expect(page.getByRole("status").filter({ hasText: /Reviewer notifications confirmed/ })).toContainText(/Reviewer notifications confirmed/);
       const delivered = countNotifications();
       expect(delivered).toBeGreaterThan(0);
       await page.getByRole("button", { name: "Notify QA reviewers" }).click();
-      await expect(page.getByRole("status")).toContainText(/Reviewer notifications confirmed/);
+      await expect(page.getByRole("status").filter({ hasText: /Reviewer notifications confirmed/ })).toContainText(/Reviewer notifications confirmed/);
       expect(countNotifications(), "repeat notification is idempotent").toBe(delivered);
       expect(Number(scalar(`SELECT COUNT(*)::int FROM executions e
         JOIN cycle_items ci ON ci.id=e.cycle_item_id JOIN cycles c ON c.id=ci.cycle_id
