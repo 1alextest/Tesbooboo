@@ -761,6 +761,23 @@ test.describe("zyra / agents (UI)", () => {
       } finally {
         await page.unroute(caseReadPath, denyRead);
       }
+      // A successful HTTP response carrying a different case ID is not evidence
+      // of identity. A malformed/mismatched result must not be presented as
+      // the current case even if its title and approval fields look legitimate.
+      const wrongIdentity = async (route: import("@playwright/test").Route) =>
+        route.fulfill({ status: 200, json: {
+          id: tenant!.secondProjectId, title: "Wrong-project private case",
+          status: "Approved", approvalCurrent: true, editRevision: "untrusted"
+        } });
+      await page.route(caseReadPath, wrongIdentity);
+      try {
+        await caseIdentity.getByRole("button", { name: "Inspect case details" }).click();
+        await expect(caseIdentity).toContainText("Case details are unavailable or access has changed");
+        await expect(caseIdentity).not.toContainText("Wrong-project private case");
+        await expect(caseIdentity).not.toContainText("approval current");
+      } finally {
+        await page.unroute(caseReadPath, wrongIdentity);
+      }
       await expect(page.getByText("Review reason: case_changed")).toBeVisible();
       // The new read-only explanation stays within the existing QA review page,
       // using the actual persisted native receipt and authenticated project membership.
