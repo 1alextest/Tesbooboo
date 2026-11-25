@@ -376,16 +376,27 @@ export class McpService {
       throw new NotFoundException({ error: "OAuth consent was not found" });
     }
     return this.db.transaction(async client => {
-      // The row and membership stay locked through audit commit. A revoked
-      // consent remains a tombstone even after the same client is reapproved.
-      const result = await client.query(
-        `SELECT b.client_id,b.revoked_at,p.organization_id
-           FROM mcp_oauth_grant_approval_bindings b
-           JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
+      // Match the existing owner-policy writer's global lock order:
+      // project/membership first, then the individual OAuth binding. Otherwise
+      // owner revoke (project -> binding) can deadlock with self revoke
+      // (binding -> project). The in-transaction membership check also closes
+      // a membership-removal race after the non-locking preflight.
+      const locked = await client.query(
+        `SELECT p.organization_id FROM projects p
            JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
            JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
+          WHERE p.id=$1 AND p.archived_at IS NULL
+          FOR SHARE OF p,pm,om`,
+        [projectId, req.userId]
+      );
+      if (!locked.rows[0]) {
+        throw new NotFoundException({ error: "OAuth consent was not found" });
+      }
+      const result = await client.query(
+        `SELECT client_id,revoked_at
+           FROM mcp_oauth_grant_approval_bindings b
           WHERE b.project_id=$1 AND b.account_id=$2 AND b.grant_fingerprint=$3
-          FOR UPDATE OF b FOR SHARE OF p,pm,om`,
+          FOR UPDATE OF b`,
         [projectId, req.userId, consentId]
       );
       const row = result.rows[0];
@@ -405,7 +416,7 @@ export class McpService {
                  'OAuth user consent revoked',$4::jsonb,$5)`,
         [projectId, req.userId, consentId,
           JSON.stringify({ clientId: row.client_id, revokedBy: "human_session" }),
-          row.organization_id]
+          locked.rows[0].organization_id]
       );
       return { id: consentId, status: "revoked", replayed: false };
     });
