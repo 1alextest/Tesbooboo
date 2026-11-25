@@ -820,6 +820,12 @@ test.describe("zyra / agents (UI)", () => {
       await prepare.locator("summary").click();
       const create = prepare.getByRole("button", { name: "Create run and add selected cases" });
       await expect(create).toBeDisabled(); // Explicit human selection, never automatic.
+      const selectionIdentity = prepare.getByRole("region", { name: "Native case identity" });
+      await selectionIdentity.getByRole("button", { name: "Inspect case details" }).click();
+      await expect(selectionIdentity).toContainText("E2E linked graph review");
+      // The inspection button must not toggle its adjacent checkbox.
+      await expect(prepare.getByRole("checkbox", { name: "Select linked case 1" })).not.toBeChecked();
+      await expect(create).toBeDisabled();
       await prepare.getByRole("checkbox", { name: "Select linked case 1" }).check();
       await expect(create).toBeDisabled(); // Environment is not fabricated from a source receipt.
       await prepare.getByLabel("Execution environment").fill("Disposable QA");
