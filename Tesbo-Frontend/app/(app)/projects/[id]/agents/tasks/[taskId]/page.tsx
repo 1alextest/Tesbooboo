@@ -671,7 +671,8 @@ export default function ZyraTaskDetailPage() {
     ])
   );
   const tabItems: Array<{ key: DetailTab; label: string; count?: number }> = [
-    { key: "testcases", label: t("task.tab.generated"), count: task.drafts.length },
+    { key: "testcases", label: isRequirementBundle || isManagedDocumentProposal ? "Proposal summary" : t("task.tab.generated"),
+      count: isRequirementBundle || isManagedDocumentProposal ? output.operationCount ?? undefined : task.drafts.length },
     { key: "feedback", label: t("task.tab.feedback"), count: feedbackActivities.length },
     { key: "activities", label: t("task.tab.activities"), count: task.activities.length },
     { key: "sources", label: t("task.tab.sources"), count: task.sources.length },
@@ -923,6 +924,17 @@ export default function ZyraTaskDetailPage() {
       </div>
 
       {activeTab === "testcases" && (
+        isRequirementBundle || isManagedDocumentProposal ? (
+          <Card className="p-4" data-testid="native-proposal-output-summary">
+            <h3 className="font-semibold text-[var(--foreground)]">{output.primary}</h3>
+            <p className="mt-2 text-sm text-[var(--muted)]">{output.secondary}</p>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              These are proposed artifact operations, not generated Test Cases.
+              The reviewed bundle or document panel above owns the authoritative
+              decision and native receipt. No test case can be saved from this summary.
+            </p>
+          </Card>
+        ) : (
         <div className="space-y-4">
           <Card className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3">
@@ -1021,6 +1033,7 @@ export default function ZyraTaskDetailPage() {
             </div>
           </Card>
         </div>
+        )
       )}
 
       {activeTab === "feedback" && (
