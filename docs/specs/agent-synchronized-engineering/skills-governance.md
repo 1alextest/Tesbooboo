@@ -412,6 +412,8 @@ For example, freeze a fictitious requirement that an expired invitation displays
 | Manuals, policies, tasks/issues and Skills | Use the actual document type, intended audience and operation. A draft manual does not make its instructions effective policy. Distinguish task-as-coordinator from authoring an issue/task artifact. Creating a Skill candidate uses the approved authoring method. Approval of a Skill, activation of a version, document submission and artifact approval have separate native owners and permissions. |
 | Files, evidence, tests already run and historical imports | New governed commentary or a test definition uses the applicable authoring gate. Capture independently authorized raw observations contemporaneously even if the authoring method changes. Preserve exact originals, access and retention. Historical items without evidence of governance keep unknown provenance. Applying a new authoring standard to an existing record produces an explicit new revision. |
 
+A clean merge can change the business meaning of a case. Revalidate the reconciled candidate and reviewer-selected destination against the full effective method, field rules and independent business oracle. Bind the result to the exact new basis. Preserve which contributor received which earlier Skill and which actor or controlled adapter received the current one when reconciling. The [two-member case exercise](mcp-change-workflow.md#one-case-two-agents-one-reviewer) verifies this rule even when the contributors edited different fields.
+
 ### Additional acceptance fixtures for existing proof owners
 
 | Fixture | Required observation |
