@@ -2112,8 +2112,10 @@ export async function listTestCases(
   });
 }
 
-export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
-  return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+export async function getTestCase(
+  projectId: string, testcaseId: string, signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}`, { signal });
 }
 
 export interface TestCaseRevisionBasis {

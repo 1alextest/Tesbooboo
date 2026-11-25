@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { CaseCandidateDetails } from "./CaseCandidateDetails";
 import { useRef, useState } from "react";
 import {
   addTestCasesToRun, createTestRun, getTestCase, listTestRuns, listZyraGraphReviewRunLinks,
@@ -308,16 +309,23 @@ export function ReviewCaseRunSetup({
         <>
       <fieldset className="mt-3 space-y-2">
         <legend className="font-medium">Select cases to verify ({selected.length} selected)</legend>
-        {cases.map((id, index) => (
-          <label key={id} className="flex items-start gap-2">
-            <input type="checkbox" checked={selected.includes(id)}
+        {cases.map((id, index) => {
+          const checkboxId = `graph-review-case-${receiptId}-${id}`;
+          return <div key={id} className="flex items-start gap-2">
+            <input id={checkboxId} type="checkbox" checked={selected.includes(id)}
               aria-label={"Select linked case " + (index + 1)}
               onChange={(event) => toggleCase(id, event.target.checked)} />
-            <span>
-              Linked case {index + 1}: <code className="break-all text-xs">{id}</code>
-            </span>
-          </label>
-        ))}
+            <div className="min-w-0 flex-1 space-y-1">
+              <label htmlFor={checkboxId}>Linked case {index + 1}</label>
+              <CaseCandidateDetails key={`${projectId}:${receiptId}:${id}`}
+                projectId={projectId} caseId={id} />
+              <details className="text-xs text-[var(--muted)]">
+                <summary className="cursor-pointer">Technical case reference</summary>
+                <code className="break-all">{id}</code>
+              </details>
+            </div>
+          </div>;
+        })}
       </fieldset>
       <fieldset className="mt-3 flex flex-wrap gap-4" disabled={!!pendingRunId}>
         <legend className="font-medium">Destination</legend>
