@@ -130,7 +130,9 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     const f = fixture();
     let inserted = 0;
     const query = jest.fn(async (sql: string) => {
-      if (sql.includes("SELECT p.settings")) return { rows: [{ settings: { externalMcpAccess: f.state } }] };
+      if (sql.includes("SELECT p.settings")) return { rows: [{ settings: { externalMcpAccess: f.state },
+        project_membership_id: "11111111-1111-4111-8111-111111111111",
+        organization_membership_id: "22222222-2222-4222-8222-222222222222" }] };
       if (sql.includes("INSERT INTO mcp_oauth_grant_approval_bindings")) {
         inserted++;
         return { rows: [{ grant_fingerprint: "x" }] };
@@ -144,6 +146,9 @@ describe("OAuth consent binding: same-client reapproval never revives old grant 
     await expect(bindOAuthGrantToApproval(db, GRANT, basis)).resolves.toBeUndefined();
     expect(inserted).toBe(1);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("FOR SHARE OF p,pm,om"), [PROJECT, ACCOUNT]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("project_membership_id,organization_membership_id"),
+      [expect.any(String), PROJECT, ACCOUNT, CLIENT, RESOURCE, 3,
+        "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]);
     f.state.revision = 4;
     await expect(bindOAuthGrantToApproval(db, "late-grant", basis)).rejects.toThrow(/changed/);
     expect(inserted).toBe(1);
