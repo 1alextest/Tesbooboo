@@ -83,7 +83,9 @@ export async function bindOAuthGrantToApproval(
         FOR SHARE OF p,pm,om`,
       [basis.projectId, basis.accountId]
     )).rows[0];
-    if (!row || !approved(row.settings, basis.clientId, basis.approvalRevision)) {
+    if (!row || typeof row.project_membership_id !== "string" ||
+        typeof row.organization_membership_id !== "string" ||
+        !approved(row.settings, basis.clientId, basis.approvalRevision)) {
       throw new Error("OAuth owner approval or project membership changed during consent");
     }
     const inserted = await client.query(
