@@ -24,7 +24,7 @@ function fixture() {
     grant_fingerprint: FINGERPRINT, client_id: CLIENT,
     resource: "https://tesbo.example/api/projects/" + PROJECT + "/mcp",
     approval_revision: 3, created_at: new Date("2026-11-20T10:00:00Z"),
-    revoked_at: null as Date | null, settings: settings(),
+    revoked_at: null as Date | null, membership_current: true, settings: settings(),
     organization_id: "org-ci"
   };
   const query = jest.fn(async (sql: string, _params?: unknown[]) => {
@@ -72,6 +72,7 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
       { settings: settings(4) },
       { settings: settings(3, false) },
       { settings: settings(3, true, []) },
+      { membership_current: false },
       { revoked_at: new Date("2026-11-21T10:00:00Z") }
     ]) {
       const f = fixture();
