@@ -160,9 +160,7 @@ export class McpOAuthServer {
   }
 
   /** Bind only a newly human-consented Grant to the locked current project-owner epoch. */
-  async bindIssuedGrant(grantId: string, basis: OAuthGrantBasis & {
-    projectMembershipId: string; organizationMembershipId: string
-  }): Promise<void> {
+  async bindIssuedGrant(grantId: string, basis: OAuthGrantBasis): Promise<void> {
     await bindOAuthGrantToApproval(this.db, grantId, basis);
   }
 
