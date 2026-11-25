@@ -5,6 +5,7 @@ import { ModelDraftPreview } from "./ModelDraftPreview";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { GraphConsequencePreview } from "./GraphConsequencePreview";
+import { CaseCandidateDetails } from "./CaseCandidateDetails";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -252,14 +253,24 @@ export default function ZyraChangeReviewPage() {
                       </details>
                     )}
                     {receipt.candidates.length > 0 ? <ul className="space-y-2 text-sm">
-                      {receipt.candidates.map((candidate) =>
-                        <li key={candidate.caseNodeId} className="rounded border border-[var(--border)] p-2">
-                          {canonicalReviewCaseId(candidate.caseNodeId, projectId) ? (
-                            <Link className="break-all text-sm underline"
-                              href={`/projects/${projectId}/testcases/${canonicalReviewCaseId(candidate.caseNodeId, projectId)}`}>
-                              Open existing test case
-                            </Link>
-                          ) : <code className="break-all">{candidate.caseNodeId}</code>}
+                      {receipt.candidates.map((candidate) => {
+                        const caseId = canonicalReviewCaseId(candidate.caseNodeId, projectId);
+                        return <li key={candidate.caseNodeId} className="rounded border border-[var(--border)] p-2">
+                          {caseId ? (
+                            <>
+                              <Link className="break-all text-sm underline"
+                                href={`/projects/${projectId}/testcases/${caseId}`}>
+                                Open existing test case
+                              </Link>
+                              <CaseCandidateDetails key={`${projectId}:${caseId}`}
+                                projectId={projectId} caseId={caseId} />
+                            </>
+                          ) : (
+                            <div className="space-y-1">
+                              <p className="text-xs">Noncanonical or foreign-project case reference; no native case read was attempted.</p>
+                              <code className="break-all text-xs">{candidate.caseNodeId}</code>
+                            </div>
+                          )}
                           <div className="text-xs text-[var(--muted)]">Review reason: {candidate.reasons.join(", ")}</div>
                           {candidate.requirementNodeIds.length > 0 && (
                             <details className="mt-2 text-xs">
@@ -268,7 +279,8 @@ export default function ZyraChangeReviewPage() {
                                 <li key={id} className="break-all"><code>{id}</code></li>)}</ul>
                             </details>
                           )}
-                        </li>)}
+                        </li>;
+                      })}
                     </ul> : <p className="text-sm text-[var(--muted)]">
                       No explicit case reference was identified. This does not establish that no tests are affected.
                     </p>}
