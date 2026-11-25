@@ -12,6 +12,8 @@ import {
 import { Button, Card, Field, FieldError, FieldLabel, Input, Select, StatusChip } from "@/components/ui";
 import { VersionContent } from "@/components/knowledge-base/GovernedVersionContent";
 import { ChangeHistoryList } from "@/components/knowledge-base/ChangeHistory";
+import { KnowledgeComparison } from "@/components/knowledge-base/KnowledgeComparison";
+import { compareDocuments, shortIdentity, type ComparableDocument } from "@/lib/kb-comparison";
 import { formatDateTime } from "@/lib/date";
 
 type Metadata = {
@@ -76,6 +78,10 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
   const [submittedVersion, setSubmittedVersion] = useState<KnowledgeDocumentVersion | null>(null);
   const [submittedDetail, setSubmittedDetail] = useState<KnowledgeDocumentVersionDetail | null>(null);
   const [openedVersion, setOpenedVersion] = useState<KnowledgeDocumentVersionDetail | null>(null);
+  const [comparisonVersionId, setComparisonVersionId] = useState("");
+  const [comparisonDetail, setComparisonDetail] = useState<KnowledgeDocumentVersionDetail | null>(null);
+  const [comparisonState, setComparisonState] = useState<{ loading: boolean; error: string | null; denied: boolean }>({ loading: false, error: null, denied: false });
+  const comparisonSeq = useRef(0);
   const [metadataDirty, setMetadataDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -132,6 +138,55 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
   }, [doc.id, governed, projectId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // The default historical comparison is the latest approved snapshot earlier than the submitted
+  // one; a reviewer can select another earlier immutable version. The current working revision is
+  // compared separately and is never labelled as an approval.
+  const earlierImmutableVersions = versions
+    .filter((version) => version.snapshotKind !== "autosave" && submittedVersion && version.versionNumber < submittedVersion.versionNumber)
+    .sort((left, right) => left.versionNumber - right.versionNumber);
+  useEffect(() => {
+    if (!submittedVersion) {
+      setComparisonVersionId("");
+      return;
+    }
+    const earlier = versions
+      .filter((version) => version.snapshotKind !== "autosave" && version.versionNumber < submittedVersion.versionNumber)
+      .sort((left, right) => left.versionNumber - right.versionNumber);
+    setComparisonVersionId((previous) => {
+      if (previous && earlier.some((version) => version.id === previous)) return previous;
+      const latestApproved = earlier.filter((version) => version.snapshotKind === "approved").at(-1)?.id;
+      return latestApproved || earlier.at(-1)?.id || "";
+    });
+  }, [submittedVersion, versions]);
+
+  const loadComparison = useCallback(async () => {
+    const seq = ++comparisonSeq.current;
+    if (!comparisonVersionId) {
+      setComparisonDetail(null);
+      setComparisonState({ loading: false, error: null, denied: false });
+      return;
+    }
+    setComparisonState({ loading: true, error: null, denied: false });
+    try {
+      const detail = await getKnowledgeDocumentVersion(projectId, doc.id, comparisonVersionId);
+      if (seq !== comparisonSeq.current || !mounted.current) return;
+      setComparisonDetail(detail);
+      setComparisonState({ loading: false, error: null, denied: false });
+    } catch (err) {
+      if (seq !== comparisonSeq.current || !mounted.current) return;
+      const denied = err instanceof ApiError && (err.status === 403 || err.status === 404);
+      setComparisonDetail(null);
+      setComparisonState({
+        loading: false,
+        denied,
+        error: denied ? "That exact version is not available in this project, or you no longer have access to it."
+          : err instanceof Error ? err.message : "The selected version could not be read."
+      });
+    }
+  }, [comparisonVersionId, doc.id, projectId]);
+
+  useEffect(() => { void loadComparison(); }, [loadComparison]);
 
   async function openVersion(version: KnowledgeDocumentVersion) {
     setError(null);
@@ -250,6 +305,35 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
     && doc.reviewedVersionId === decidedSnapshot.id
     && decidedSnapshot.snapshotMetadata?.sourceVersionId === submittedVersion.id);
 
+  const currentComparable: ComparableDocument = {
+    title: doc.title,
+    contentText: doc.contentText ?? null,
+    contentHtml: doc.contentHtml ?? null,
+    contentJson: doc.contentJson ?? null,
+    governedMetadata: doc.governedMetadata ?? {},
+  };
+  const submittedComparable: ComparableDocument | null = submittedDetail ? {
+    title: submittedDetail.title,
+    contentText: submittedDetail.contentText ?? null,
+    contentHtml: submittedDetail.contentHtml ?? null,
+    contentJson: submittedDetail.contentJson ?? null,
+    governedMetadata: (submittedDetail.snapshotMetadata?.governedMetadata as Record<string, unknown> | undefined) ?? {},
+  } : null;
+  const selectedComparisonVersion = versions.find((version) => version.id === comparisonVersionId);
+  const comparisonIsCurrentAuthority = Boolean(selectedComparisonVersion && doc.reviewedVersionId === selectedComparisonVersion.id
+    && doc.status === selectedComparisonVersion.snapshotKind
+    && (selectedComparisonVersion.snapshotKind === "approved" || selectedComparisonVersion.snapshotKind === "rejected"));
+  const historicalComparable: ComparableDocument | null = comparisonDetail ? {
+    title: comparisonDetail.title,
+    contentText: comparisonDetail.contentText ?? null,
+    contentHtml: comparisonDetail.contentHtml ?? null,
+    contentJson: comparisonDetail.contentJson ?? null,
+    governedMetadata: (comparisonDetail.snapshotMetadata?.governedMetadata as Record<string, unknown> | undefined) ?? {},
+  } : null;
+  const currentAuthorityLabel = doc.status === "approved" && doc.reviewedVersionId
+    ? `Current working revision · currently approved (${shortIdentity(doc.reviewedVersionId)})`
+    : `Current working revision · ${doc.status}`;
+
   return (
     <Card className="space-y-4 p-4" data-testid="governed-document-panel">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -296,6 +380,69 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
               </div>
             )}
             {submittedDetail && <div className="max-h-80 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-xs"><VersionContent detail={submittedDetail} /></div>}
+            {submittedDetail && submittedComparable && (
+              <div className="space-y-3" data-testid="governed-comparison">
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold">Historical comparison</p>
+                    <Select
+                      className="max-w-full"
+                      value={comparisonVersionId}
+                      onChange={(event) => setComparisonVersionId(event.target.value)}
+                      disabled={earlierImmutableVersions.length === 0 || comparisonState.loading}
+                      data-testid="governed-comparison-version"
+                    >
+                      {earlierImmutableVersions.length === 0 ? <option value="">First submission — no earlier version</option> : earlierImmutableVersions.map((version) => (
+                        <option key={version.id} value={version.id}>
+                          v{version.versionNumber} · {version.snapshotKind || "snapshot"} · {version.createdAt ? formatDateTime(version.createdAt) : "—"}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  {earlierImmutableVersions.length === 0 ? (
+                    <p className="mt-2 text-xs text-[var(--muted)]" data-testid="governed-comparison-first">This is the first submission; there is no earlier immutable version to compare, but the current working revision comparison below is still available.</p>
+                  ) : comparisonState.loading ? (
+                    <p className="mt-2 text-xs text-[var(--muted)]">Loading the exact selected version…</p>
+                  ) : comparisonState.error ? (
+                    <div className="mt-2 text-xs text-[var(--error-foreground)]" data-testid="governed-comparison-error">
+                      <p>{comparisonState.error}</p>
+                      <Button size="sm" variant="secondary" className="mt-2" onClick={() => void loadComparison()}>Retry comparison</Button>
+                    </div>
+                  ) : historicalComparable && selectedComparisonVersion ? (
+                    <div className="mt-2">
+                      <KnowledgeComparison
+                        testId="governed-historical-comparison"
+                        baseLabel={`v${selectedComparisonVersion.versionNumber} · ${selectedComparisonVersion.snapshotKind || "snapshot"}${comparisonIsCurrentAuthority ? " · current decision authority" : " · historical, not current authority"}`}
+                        baseIdentity={`${shortIdentity(selectedComparisonVersion.id)} · digest ${shortIdentity(String(selectedComparisonVersion.snapshotMetadata?.contentDigest || ""))}`}
+                        targetLabel={`Submitted v${submittedVersion.versionNumber}`}
+                        targetIdentity={`${shortIdentity(submittedVersion.id)} · digest ${shortIdentity(String(submittedVersion.snapshotMetadata?.contentDigest || ""))}`}
+                        result={compareDocuments(historicalComparable, submittedComparable)}
+                        onOpenBase={() => void openVersion(selectedComparisonVersion)}
+                        onOpenTarget={() => void openVersion(submittedVersion)}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-lg border border-[var(--border)] p-3">
+                  <p className="text-xs font-semibold">Current working revision comparison</p>
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    The submitted snapshot is compared with what is persisted now. A historical approval is shown above and does not replace the document&apos;s current decision binding.
+                  </p>
+                  <div className="mt-2">
+                    <KnowledgeComparison
+                      testId="governed-current-comparison"
+                      baseLabel={currentAuthorityLabel}
+                      baseIdentity={`edit revision ${shortIdentity(doc.editRevision)}`}
+                      targetLabel={`Submitted v${submittedVersion.versionNumber}`}
+                      targetIdentity={`${shortIdentity(submittedVersion.id)} · digest ${shortIdentity(String(submittedVersion.snapshotMetadata?.contentDigest || ""))}`}
+                      result={compareDocuments(currentComparable, submittedComparable)}
+                      onOpenTarget={() => void openVersion(submittedVersion)}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
             {decidedOnSubmitted ? (
               <p className="text-sm text-[var(--success-foreground)]" data-testid="governed-decision">This exact version is {currentDecision}.</p>
             ) : submittedSuperseded ? (

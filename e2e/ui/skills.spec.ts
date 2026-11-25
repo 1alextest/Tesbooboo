@@ -2641,4 +2641,93 @@ test.describe("governed skills operator journey (UI)", () => {
       await cleanupSkill(skill.documentId);
     }
   });
+
+  test("a proposal comparison distinguishes inherited, cleared and new-document fields", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const skill = await apiSkill("user_manuals", "internal", "manual_revision");
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const root = (await (await ownerApi.get(`${base()}/knowledge-base/folders/tree`)).json()).id;
+    const created = await ownerApi.post(`${base()}/knowledge-base/documents`, { data: {
+      title: `Comparison target ${suffix}`, folderId: root, documentType: "user_manual",
+      contentText: "Base compare text", contentHtml: "<p>Base compare text</p>",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base compare text" }] }] },
+      governedMetadata: metadata,
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const target = await created.json();
+    const issued = await ownerApi.post(`${base()}/apikeys`, { data: { name: `Comparison agent ${suffix}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json();
+    const tasks: string[] = [];
+    try {
+      const stage = async (body: Record<string, unknown>) => {
+        const response = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
+          headers: { Authorization: `Bearer ${token.token}` }, data: body,
+        });
+        expect(response.ok(), await response.text()).toBe(true);
+        const task = await response.json();
+        tasks.push(task.id);
+        return task;
+      };
+      // Omitted text/HTML/JSON: the pinned base is inherited, while title and metadata change.
+      const inherited = await stage({
+        requestKey: `cmp-inherited-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: `Inherited ${suffix}`, governedMetadata: { ...metadata, confidentiality: "confidential" } },
+      });
+      // Explicit nulls in all three representations are a clear, not an omission.
+      const cleared = await stage({
+        requestKey: `cmp-cleared-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: `Cleared ${suffix}`, contentText: null, contentHtml: null, contentJson: null, governedMetadata: metadata },
+      });
+      const newDocument = await stage({
+        requestKey: `cmp-create-${suffix}`, operation: "create", documentType: "user_manual", folderId: root,
+        document: { title: `New manual ${suffix}`, contentText: "New body", contentHtml: "<p>New body</p>",
+          contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "New body" }] }] },
+          governedMetadata: metadata },
+      });
+      const longText = `LONG-START ${"x".repeat(5000)} LONG-END`;
+      const longCandidate = await stage({
+        requestKey: `cmp-long-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: `Long ${suffix}`, contentText: longText, contentHtml: `<p>${longText}</p>`,
+          contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: longText }] }] },
+          governedMetadata: metadata },
+      });
+
+      const inheritedPage = await open(browser, `/agents/tasks/${inherited.id}`);
+      const inheritedComparison = inheritedPage.getByTestId("managed-document-comparison");
+      await expect(inheritedComparison).toBeVisible();
+      await expect(inheritedPage.getByTestId("managed-document-comparison-field-text")).toHaveAttribute("data-status", "inherited");
+      await expect(inheritedPage.getByTestId("managed-document-comparison-field-html")).toHaveAttribute("data-status", "inherited");
+      await expect(inheritedPage.getByTestId("managed-document-comparison-field-json")).toHaveAttribute("data-status", "inherited");
+      await expect(inheritedPage.getByTestId("managed-document-comparison-field-title")).toHaveAttribute("data-status", "changed");
+      await expect(inheritedPage.getByTestId("managed-document-comparison-field-metadata")).toHaveAttribute("data-status", "changed");
+      await expect(inheritedComparison).toContainText("Not supplied by the proposal; the pinned base value is retained on apply.");
+
+      const clearedPage = await open(browser, `/agents/tasks/${cleared.id}`);
+      await expect(clearedPage.getByTestId("managed-document-comparison-field-text")).toHaveAttribute("data-status", "cleared");
+      await expect(clearedPage.getByTestId("managed-document-comparison-field-html")).toHaveAttribute("data-status", "cleared");
+      await expect(clearedPage.getByTestId("managed-document-comparison-field-json")).toHaveAttribute("data-status", "cleared");
+
+      const createPage = await open(browser, `/agents/tasks/${newDocument.id}`);
+      const createComparison = createPage.getByTestId("managed-document-comparison");
+      await expect(createComparison).toContainText("New governed document");
+      await expect(createPage.getByTestId("managed-document-comparison-base-identity")).toHaveText("—");
+      await expect(createPage.getByTestId("managed-document-comparison-field-title")).toHaveAttribute("data-status", "added");
+      await expect(createPage.getByTestId("managed-document-comparison-field-text")).toHaveAttribute("data-status", "added");
+
+      const longPage = await open(browser, `/agents/tasks/${longCandidate.id}`);
+      await expect(longPage.getByTestId("managed-document-comparison-field-text")).toContainText("Excerpt bounded");
+      await expect(longPage.getByTestId("managed-document-comparison-new-text")).toContainText("LONG-END");
+    } finally {
+      for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await ownerApi.delete(`${base()}/apikeys/${token.id}`, { failOnStatusCode: false });
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(target.id)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(target.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await cleanupSkill(skill.documentId);
+    }
+  });
 });
