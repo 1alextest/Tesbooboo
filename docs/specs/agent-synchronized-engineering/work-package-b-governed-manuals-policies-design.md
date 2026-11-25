@@ -613,3 +613,10 @@ Review hardening: the list re-reads `target.applicability` in the reused detail 
 `q` is escaped for `ILIKE` and NUL bytes; page + count come from one windowed statement when rows exist; the
 member list not being loaded yet suppresses (rather than falsely shows) the role blocker; the client keys the
 list by project so a previous project's cards cannot paint under a new one.
+
+PR #279 merged into `development` as `e45675c76f079acdba0c6df09a17f20fc93d4be4`; the Railway deployment
+succeeded and production `/api/health` returned that exact SHA. The deployed MCP catalog advertises the
+preview tool set and `list_document_proposals` returns the new `{list,total,limit,offset,hasMore}` shape
+against the verified TESBOPROJECT connection. The automated Playwright API/UI checks were run in GitHub
+Actions and passed; **manual execution of the native case remains UNRUN**, and native task-evidence
+writing (execution results) is still unavailable through the exposed tools.
