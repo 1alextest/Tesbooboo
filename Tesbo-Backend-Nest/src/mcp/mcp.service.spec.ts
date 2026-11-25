@@ -184,6 +184,15 @@ describe("McpService", () => {
         "get_requirement_proposal_task"]) {
         expect(guidance).toContain(tool);
       }
+      // Proactive decision discovery reaches an external coding agent through MCP initialize;
+      // presentation of a question remains separate from discovering that one is needed.
+      expect(guidance).toContain("Independently generate potential missing consequential product decisions");
+      expect(guidance).toContain("ALREADY_DECIDED");
+      expect(guidance).toContain("DELEGATED");
+      expect(guidance).toContain("HUMAN_REQUIRED");
+      expect(guidance).toContain("EVIDENCE_BLOCKED");
+      expect(guidance).toContain("If this client cannot ask the user interactively");
+      expect(guidance).toContain("unpublished proposals are not approved requirements");
       expect(guidance).toContain("Only if stage_requirement_change_bundle is actually advertised");
       expect(guidance).toContain("A successful repository unit/E2E test does not mean a Tesbo Run executed");
       expect(guidance).toContain("re-approval of a changed definition is a separate human decision");
@@ -297,6 +306,38 @@ describe("McpService", () => {
       for (const t of res.result.tools) {
         expect(typeof t.description).toBe("string");
         expect(t.inputSchema).toBeDefined();
+      }
+    });
+
+    it("advertises decision-discovery guidance on both staging tools only when proposal preview is enabled", async () => {
+      const previous = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+      const stagingNames = ["stage_testcase_changes", "stage_requirement_change_bundle"];
+      try {
+        const { db } = makeDb();
+        const svc = new McpService(makeLegacy(), db, writableLimits);
+        const list = async () => {
+          const response: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+          return response.result.tools;
+        };
+
+        delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        const disabled = await list();
+        for (const name of stagingNames) {
+          expect(disabled.some((tool: any) => tool.name === name)).toBe(false);
+        }
+
+        process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = "1";
+        const enabled = await list();
+        for (const name of stagingNames) {
+          const entries = enabled.filter((tool: any) => tool.name === name);
+          expect(entries).toHaveLength(1);
+          expect(entries[0].description).toContain("independently");
+          expect(entries[0].description).toContain("staging");
+          expect(entries[0].description).toMatch(/(?:does not|cannot) certify/);
+        }
+      } finally {
+        if (previous === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = previous;
       }
     });
   });

@@ -11,6 +11,22 @@ import stat
 import subprocess
 
 
+def assert_clean_checkout(root, expected):
+    """Check event identity and persistent checkout changes without logging paths."""
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    if head != expected:
+        raise ValueError("Codacy checkout does not match the event commit")
+    status = subprocess.check_output([
+        "git", "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        "--ignored=matching", "--ignore-submodules=none",
+    ], cwd=root)
+    if status:
+        raise ValueError("Codacy checkout contains staged, modified, untracked or ignored files")
+    return head
+
+
 def index_entries(raw):
     for record in raw.split(b"\0"):
         if not record:
@@ -106,10 +122,13 @@ def correlate_issues(root, entries, results, output):
 if __name__ == "__main__":
     import sys
     root = Path.cwd()
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    if head != os.environ["GITHUB_SHA"]:
-        raise SystemExit("Codacy diagnostic checkout does not match the event commit")
-    print("Codacy diagnostic source commit: " + head)
+    try:
+        head = assert_clean_checkout(root, os.environ["GITHUB_SHA"])
+    except (ValueError, OSError, subprocess.SubprocessError):
+        raise SystemExit("Codacy checkout identity or clean-source verification failed") from None
+    print("Codacy diagnostic clean source commit: " + head)
+    if sys.argv[1:] == ["--verify-checkout"]:
+        sys.exit(0)
     entries = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=root)
     if len(sys.argv) == 3 and sys.argv[1] == "--correlate":
         # A killed scanner may have left a partial or invalid JSON report.

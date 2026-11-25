@@ -37,8 +37,6 @@ export interface SyncTicketJobPayload {
   /** Provider-side issue id, used as knowledge_documents.source_external_id. */
   issueId: string;
   issueKey: string;
-  /** Provider folder the run created up front, so every ticket job doesn't re-resolve it. */
-  folderId: string;
   triggeredBy: string | null;
 }
 

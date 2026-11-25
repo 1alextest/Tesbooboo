@@ -3,11 +3,47 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+import subprocess
 
-from codacy_input_diagnostics import classify, correlate_issues, diagnose, index_entries
+from codacy_input_diagnostics import assert_clean_checkout, classify, correlate_issues, diagnose, index_entries
 
 
 class CodacyInputDiagnosticsTest(unittest.TestCase):
+    def git(self, root, *args):
+        return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.DEVNULL).decode().strip()
+
+    def clean_repo(self, root):
+        self.git(root, "init", "-q")
+        (root / "source.txt").write_text("original", encoding="utf-8")
+        (root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+        self.git(root, "add", ".")
+        self.git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+        return self.git(root, "rev-parse", "HEAD")
+
+    def test_clean_checkout_requires_exact_commit(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            head = self.clean_repo(root)
+            self.assertEqual(assert_clean_checkout(root, head), head)
+            with self.assertRaisesRegex(ValueError, "event commit"):
+                assert_clean_checkout(root, "0" * 40)
+
+    def test_checkout_rejects_worktree_index_and_untracked_or_ignored_files(self):
+        for kind in ("modified", "staged", "untracked", "ignored"):
+            with self.subTest(kind=kind), TemporaryDirectory() as directory:
+                root = Path(directory)
+                head = self.clean_repo(root)
+                if kind in ("modified", "staged"):
+                    (root / "source.txt").write_text("changed", encoding="utf-8")
+                    if kind == "staged":
+                        self.git(root, "add", "source.txt")
+                else:
+                    name = "ignored.txt" if kind == "ignored" else "new.txt"
+                    (root / name).write_text("extra", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "checkout contains"):
+                    assert_clean_checkout(root, head)
+
     def test_strict_utf8_stream_handles_split_codepoint_and_rejects_truncated_tail(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

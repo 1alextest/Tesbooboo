@@ -53,6 +53,7 @@ jobs:
             echo 'Codacy checkout does not match the event commit' >&2
             exit 1
           fi
+          python3 -B scripts/codacy_input_diagnostics.py --verify-checkout
           echo "Codacy source commit: $scan_commit"
           # Same 7.10.4 image and analyzer defaults as the upstream action. Use its
           # published digest and Docker's container ID to supervise the formatter.
@@ -72,6 +73,10 @@ jobs:
           fi
           echo "Codacy JVM configured encoding: $encoding"
           cidfile="$RUNNER_TEMP/codacy-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.cid"
+          # Keep output outside the checkout so source integrity can be checked.
+          report_dir=$(mktemp -d "$RUNNER_TEMP/codacy-report.XXXXXXXX")
+          report="$report_dir/results.sarif"
+          cp scripts/codacy_input_diagnostics.py "$report_dir/verify_checkout.py"
           # Analyzer diagnostics can contain repository text. Keep workflow
           # command processing disabled while it is streamed to the job log.
           marker=$(cat /proc/sys/kernel/random/uuid)
@@ -82,13 +87,22 @@ jobs:
             --env JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 \
             --volume /var/run/docker.sock:/var/run/docker.sock \
             --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
+            --volume "$report_dir:$report_dir" \
             "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
-            --verbose --format sarif --output "$GITHUB_WORKSPACE/results.sarif" \
+            --verbose --format sarif --output "$report" \
             --gh-code-scanning-compat --fail-if-incomplete --max-allowed-issues 2147483647 \
             2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile"
+          # HEAD alone does not prove the workspace stayed unchanged. This checks
+          # persistent changes, not isolation from a scanner with Docker access.
+          python3 -B "$report_dir/verify_checkout.py" --verify-checkout
+          if [[ ! -f "$report" || -L "$report" || ! -s "$report" ]]; then
+            echo "Codacy did not produce a regular nonempty SARIF report" >&2
+            exit 1
+          fi
+          printf 'sarif_file=%s\n' "$report" >> "$GITHUB_OUTPUT"
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
         uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934
         with:
-          sarif_file: results.sarif
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}

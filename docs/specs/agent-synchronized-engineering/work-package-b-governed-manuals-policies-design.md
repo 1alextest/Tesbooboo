@@ -499,3 +499,66 @@ The advisory-first fix is verified green at `2060ae82`
 (`actions/runs/45524121118`, 726 database tests). PR #263 merged into `development` as
 `551e7eab4906f11a67c4046c2a02ca2be80dc8ce`; the Railway deployment succeeded and production `/api/health`
 returns that exact SHA. Native execution remains UNRUN; native record update is blocked as in §9.2.
+
+### 10.2 Sibling destination writers (PR #268)
+
+Lifecycle and competing deletion paths:
+- `createKnowledgeFolder`: preflight parent read, plain INSERT. A folder delete/cascade could commit
+  after the preflight but before the insert, leaving a live child under a soft-deleted parent.
+- `rememberZyraMemory` insert branch: resolves the "AI Memory" folder (or root fallback), then inserts
+  the memory document. A concurrent delete of that folder/ancestor could strand a live memory document.
+- `integration-sync.processor` mirror upsert: the coordinator resolves the provider folder once and
+  passes its id to per-ticket jobs; a later job could write into a folder deleted after fan-out.
+
+All are now transaction-scoped:
+- `createKnowledgeFolder` takes the project mutation advisory lock first, rechecks the parent
+  `FOR SHARE` inside the transaction, revalidates membership/archive, and writes the audit row on the
+  same client. A delete wins → 404 with no child; create wins → the later cascade sees the child.
+- `rememberZyraMemory` takes the same advisory lock, resolves/locks the AI Memory folder
+  (`FOR SHARE`) inside the transaction with the root fallback, and keeps the per-document advisory for
+  appends. A deleted AI Memory folder falls back to the undeletable root; embedding enqueue stays
+  after commit.
+- The sync worker takes the advisory lock, re-resolves the existing provider folder under it
+  (source_provider-tagged, or the untagged default-named folder the coordinator adopts), and writes
+  the mirror in the same transaction; the stale coordinator `folderId` is no longer carried in the job
+  payload. It never recreates a deleted folder: that ticket fails and the next sync's coordinator
+  recreates it, so a user deletion or disconnect is not resurrected by a late job.
+  Post-commit sync-event/notification/embedding effects are unchanged.
+
+Evidence:
+- Failing-first tests-only head `1100ea3d` (`actions/runs/45539631646`): the Zyra-memory race failed
+  with `Expected: 0, Received: 1` live memory document under the deleted folder; 726 tests passed.
+- The final folder-create regression was run tests-only at `827a20af`
+  (`actions/runs/45554682776`): the pre-fix create resolved (`Received has value: null`), i.e. a live
+  child was inserted under the folder the paused delete had already soft-deleted. The same test is
+  green with the fix (`e684b92f`, `actions/runs/45551136629`, 728 database tests).
+- The integration-worker defect was established from the coordinator→job folder-id lifecycle and is
+  pinned by a processor contract test that fails if the transaction, advisory lock or in-transaction
+  `ensureProviderFolder` call is removed; a deterministic queue/DB interleaving was not reproducible
+  in the DB suite.
+- Protected paths already covered by #263: move document/folder, duplicate, ordinary and ancestor
+  deletion, with observed advisory waits.
+- `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
+  folders.
+- Remaining same-class follow-up: `uploadKnowledgeFiles` and `moveKnowledgeFile` still insert/update
+  `knowledge_files.folder_id` without the project mutation lock or a locked destination recheck, so a
+  file upload/move can still be stranded under a deleted folder. The storage write precedes the row
+  write, so its repair needs a compensating delete and belongs to the files owner.
+- `restoreKnowledgeFolder` does not reject restoring a child under a still-deleted parent; the Trash
+  API marks it non-restorable, but the service can be called directly. Recorded, not a lock race.
+- Integration-sync recreation of a provider folder mid-run was deliberately removed; `folderId` is no
+  longer carried in per-ticket jobs.
+- Coverage note: this PR's deterministic proof is the observed-wait DB suite plus the processor
+  transaction contract; the existing `api/knowledge-base`/`api/integrations` Playwright specs were not
+  re-run in this PR, and no new e2e route/response changed.
+
+Native coverage was staged through the approved project-scoped MCP connection (origin
+`https://tesbooboo-production.up.railway.app`, verified project `df072dfe-e4d0-406a-9350-e0d022c6323f`):
+review task `1d615021-4c92-46df-bcef-2d9745ca557b`, proposal revision
+`24f89e425bca573b52a41e1aa3281a7dae818ccb49fd7af463cf96c9e47644cc`, containing one requirement
+revision, one Draft case and one explicit case link. Because the final sync policy re-resolves but does
+not recreate a deleted provider folder, a corrected proposal was staged as task
+`d2cae745-c550-4a58-b85e-6d000f28b472` (revision
+`3aff650be7f35792f0d49f06967ead360761688c1b110e9b06e52f635fa3842e`); the earlier task is left as
+history rather than deleted. Both remain `in_review`, **unassigned**, with no approved Skill
+assignment, so apply stays a human action; manual execution **UNRUN**.
