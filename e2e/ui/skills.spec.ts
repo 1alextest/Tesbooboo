@@ -2710,7 +2710,11 @@ test.describe("governed skills operator journey (UI)", () => {
       const clearedPage = await open(browser, `/agents/tasks/${cleared.id}`);
       await expect(clearedPage.getByTestId("managed-document-comparison-field-text")).toHaveAttribute("data-status", "cleared");
       await expect(clearedPage.getByTestId("managed-document-comparison-field-html")).toHaveAttribute("data-status", "cleared");
-      await expect(clearedPage.getByTestId("managed-document-comparison-field-json")).toHaveAttribute("data-status", "cleared");
+      const clearedJson = clearedPage.getByTestId("managed-document-comparison-field-json");
+      await expect(clearedJson).toHaveAttribute("data-status", "cleared");
+      await clearedJson.getByText("Complete exact values for Editor JSON", { exact: true }).click();
+      await expect(clearedPage.getByTestId("managed-document-comparison-old-json")).toContainText("Base compare text");
+      await expect(clearedPage.getByTestId("managed-document-comparison-new-json")).toHaveText("Not stored");
 
       const createPage = await open(browser, `/agents/tasks/${newDocument.id}`);
       const createComparison = createPage.getByTestId("managed-document-comparison");
@@ -2718,6 +2722,7 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(createPage.getByTestId("managed-document-comparison-base-identity")).toHaveText("—");
       await expect(createPage.getByTestId("managed-document-comparison-field-title")).toHaveAttribute("data-status", "added");
       await expect(createPage.getByTestId("managed-document-comparison-field-text")).toHaveAttribute("data-status", "added");
+      await expect(createPage.getByTestId("managed-document-comparison-field-json")).toHaveAttribute("data-status", "added");
 
       const longPage = await open(browser, `/agents/tasks/${longCandidate.id}`);
       await expect(longPage.getByTestId("managed-document-comparison-field-text")).toContainText("Excerpt bounded");

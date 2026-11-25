@@ -57,8 +57,10 @@ function asText(value: unknown): string | null {
 }
 
 function jsonText(value: unknown): string | null {
-  if (value === undefined) return null;
-  return JSON.stringify(value ?? null, null, 2);
+  // A top-level null means the editor representation was cleared. Nested
+  // nulls remain part of the stored JSON representation.
+  if (value === undefined || value === null) return null;
+  return JSON.stringify(value, null, 2);
 }
 
 function metadataText(value: Record<string, unknown> | null | undefined): string | null {
