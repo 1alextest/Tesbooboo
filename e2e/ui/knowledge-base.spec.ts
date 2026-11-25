@@ -2872,8 +2872,15 @@ test.describe("knowledge base (UI)", () => {
     const identicalJson = identicalComparison.getByTestId("governed-current-comparison-field-json");
     await expect(identicalJson).toHaveAttribute("data-status", "unchanged");
     await identicalJson.getByText("Complete exact values for Editor JSON", { exact: true }).click();
-    await expect(identicalJson.getByTestId("governed-current-comparison-old-json")).toBeVisible();
-    await expect(identicalJson.getByTestId("governed-current-comparison-new-json")).toHaveText(JSON.stringify(baseJson, null, 2));
+    const oldJson = identicalJson.getByTestId("governed-current-comparison-old-json");
+    const newJson = identicalJson.getByTestId("governed-current-comparison-new-json");
+    await expect(oldJson).toBeVisible();
+    await expect(newJson).toBeVisible();
+    // PostgreSQL JSONB need not preserve the request object's property order.
+    // Compare both stored values semantically and the two visible representations exactly.
+    expect(JSON.parse((await oldJson.textContent())!)).toEqual(baseJson);
+    expect(JSON.parse((await newJson.textContent())!)).toEqual(baseJson);
+    expect(await oldJson.textContent()).toBe(await newJson.textContent());
 
     // HTML/JSON-only change: text and metadata stay byte-identical, the representations change.
     const repEdit = await api.patch(kbUrl(`/documents/${documentId}`), {
