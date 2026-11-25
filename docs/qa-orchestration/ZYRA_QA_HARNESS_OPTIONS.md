@@ -20,6 +20,26 @@ The [builder comparison and exercised Playwright controls](reviews/zyra-harness-
 
 A full agent runtime is a later adapter decision. Keep the existing Zyra task as the durable record. If a pilot needs a worker to wait for new evidence, resume on a matching event, recheck the member and revision, and consume the pending action once.
 
+### Ready-made harness choices
+
+For a QA evaluation, try **Promptfoo** as the test runner. Start with recorded observations and a trusted deterministic grader. For a live comparison, its adapter should call ordinary Zyra or the candidate on the same frozen input, under the same role and budget. Keep unavailable evidence and deliberate fault detection distinct from an ordinary failing assertion. The existing Zyra service remains the baseline. [Recorded outputs](https://www.promptfoo.dev/docs/configuration/expected-outputs/) · [Custom providers](https://www.promptfoo.dev/docs/providers/custom-api/)
+
+For an **external worker**, start with **OpenCode**, the reference executor already named in the [product requirements](01_PRODUCT_REQUIREMENTS.md). It supplies the session and tool loop and supports MCP and Ollama. Verify one actual registered worker, model and grant can read the assigned draft, obtain its required Skill version, and return evidence or a permitted proposal. Attribute the action at the Tesbo service. [OpenCode SDK](https://opencode.ai/docs/build/sdk/) · [Ollama integration](https://docs.ollama.com/integrations/opencode)
+
+For an **embedded agent inside Zyra**, the first packaged candidate is LangChain’s **Deep Agents TypeScript SDK**. It already implements a tool loop, planning, Skill loading and subagents. It can be hosted inside a team-controlled process. Bind its permitted tools to Zyra’s existing readers and proposal services. Supply the approved Skill and required supporting material using the project’s effective version. Merely listing a Skill in the SDK catalog does not meet the mandatory-method rule. Start with a single read-only tool and one model, then compare against native Zyra on the same task. Select an embedded runtime only if it improves the measured outcome or demonstrably reduces the implementation and operating burden at equivalent quality. [Deep Agents SDK](https://docs.langchain.com/oss/javascript/deepagents/overview) · [Skill loading](https://docs.langchain.com/oss/javascript/deepagents/skills)
+
+**Package checks, 25 November 2026.** All three ran in isolated workspaces with synthetic inputs. The standalone checks used zero external model inference and did not write to a Tesbo project.
+
+| Released package | What ran | What the result establishes |
+| --- | --- | --- |
+| Deep Agents JS 1.17.1 | A scripted chat model requested a synthetic read tool. The SDK invoked it once, passed the observation back and completed the second model turn. | The packaged tool loop works in Node. The model’s next action and answer were scripted. The default SDK also offered built-in file and delegation tools. In separate controls, middleware exposed only the read tool, allowed it to run, and refused a scripted file write before dispatch. The selected Tesbo service must independently enforce member and object permissions. |
+| Promptfoo 0.126.0 | Four recorded stale-save outcomes and three deterministic JavaScript assertions. All returned HTTP 409. Component results identified one clean refusal, two observations with unintended writes, and one missing state readback. | The packaged CLI ran and exported the results with zero model tokens. Its overall one-pass/three-fail summary needs per-assertion interpretation to distinguish a detected fault from missing evidence. |
+| OpenCode 1.19.6 | A local server created and reread a session. A scripted provider requested an inert MCP read. OpenCode invoked it once and carried its unique result into a second provider call and the final reply. | The packaged external runtime handled the model-to-MCP round trip with controlled local endpoints. Real Ollama tool selection, access to the exact Tesbo grant, Skill retrieval and proposal submission require an integrated trial. |
+
+As a size control, LangChain 1.6.8’s simpler `createAgent` completed the same scripted one-tool task with only the supplied read tool in its model catalog. A single successful tool call alone gives no reason to migrate native Zyra to a larger SDK.
+
+These deployment choices are independent. An evaluator can exercise the current Zyra service by itself. A hosted SDK or an external worker can each serve a bounded task. Tesbo supplies the real member, grant, task, approved Skill and draft revision, applies authorized changes through the native writer, and preserves the human review decision. That is the integration boundary for any candidate.
+
 ## How a tester reaches review
 
 The harness is a bounded extension of Zyra’s existing decision loop. An evaluation uses controlled tasks to measure Zyra, a Skill/client combination, or a customer’s agent. A team can adopt an individual option without deploying a general agent platform.
