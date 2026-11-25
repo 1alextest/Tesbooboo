@@ -63,6 +63,10 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
     expect(f.requireProjectAccess).toHaveBeenCalledWith(USER, PROJECT);
     expect(f.query.mock.calls[0][1]).toEqual([PROJECT, USER]);
     expect(f.query.mock.calls[0][0]).toContain("b.account_id=$2");
+    expect(f.query.mock.calls[0][0]).toContain("JOIN project_members pm ON pm.project_id=b.project_id AND pm.user_id::text=b.account_id");
+    expect(f.query.mock.calls[0][0]).toContain("JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id::text=b.account_id");
+    expect(f.query.mock.calls[0][0]).not.toContain("LEFT JOIN");
+    expect(f.query.mock.calls[0][0]).toContain("pm.id=b.project_membership_id AND om.id=b.organization_membership_id");
     expect(JSON.stringify(result)).not.toContain("access_token");
     expect(JSON.stringify(result)).not.toContain("refresh_token");
   });
@@ -80,6 +84,14 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
       const result = await f.svc.listMyOAuthConsents(req(), PROJECT);
       expect(result.consents[0].status).toBe(change.revoked_at ? "revoked" : "reconsent_required");
     }
+  });
+
+  it("returns no consent evidence when membership is lost after preflight", async () => {
+    const f = fixture();
+    f.query.mockResolvedValueOnce({ rows: [] });
+    expect(await f.svc.listMyOAuthConsents(req(), PROJECT)).toEqual({ consents: [], truncated: false });
+    expect(f.requireProjectAccess).toHaveBeenCalledWith(USER, PROJECT);
+    expect(f.query).toHaveBeenCalledTimes(1);
   });
 
   it("refuses bearer credentials and anonymous callers before reading any identity", async () => {

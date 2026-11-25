@@ -327,17 +327,18 @@ export class McpService {
 
   async listMyOAuthConsents(req: AuthenticatedRequest, projectId: string) {
     await this.humanOAuthConsentOwner(req, projectId);
+    // Authorize disclosure at the history statement's snapshot, not only
+    // at the earlier preflight. Current membership admits the read; equality
+    // with the historical IDs independently determines consent freshness.
     // A binding is evidence of consent, NOT evidence that a client is online.
     const rows = await this.db.query(
       `SELECT b.grant_fingerprint,b.client_id,b.resource,b.approval_revision,
               b.created_at,b.revoked_at,p.settings,
-              (pm.id IS NOT NULL AND om.id IS NOT NULL) AS membership_current
+              (pm.id=b.project_membership_id AND om.id=b.organization_membership_id) AS membership_current
          FROM mcp_oauth_grant_approval_bindings b
          JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
-         LEFT JOIN project_members pm ON pm.id=b.project_membership_id
-           AND pm.project_id=b.project_id AND pm.user_id::text=b.account_id
-         LEFT JOIN organization_members om ON om.id=b.organization_membership_id
-           AND om.organization_id=p.organization_id AND om.user_id::text=b.account_id
+         JOIN project_members pm ON pm.project_id=b.project_id AND pm.user_id::text=b.account_id
+         JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id::text=b.account_id
         WHERE b.project_id=$1 AND b.account_id=$2
         ORDER BY b.created_at DESC,b.grant_fingerprint DESC LIMIT 51`,
       [projectId, req.userId]
