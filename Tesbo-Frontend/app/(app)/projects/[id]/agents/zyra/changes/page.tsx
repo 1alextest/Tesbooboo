@@ -173,8 +173,6 @@ export default function ZyraChangeReviewPage() {
           {capturing ? "Capturing…" : "Capture configured source"}
         </button>
       </div>
-      <SourceBindingSettings key={projectId} projectId={projectId} />
-      <ModelDraftPreview key={projectId} projectId={projectId} />
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>
         <p className="mt-1 text-[var(--muted)]">
@@ -211,6 +209,37 @@ export default function ZyraChangeReviewPage() {
                 <p className="text-xs text-[var(--muted)]">Revision: <code>{entry.revision.slice(0, 16)}</code></p>
                 {receipt ? (
                   <>
+                    <section aria-label="Human QA review focus" data-testid={`qa-review-focus-${entry.id}`}
+                      className="space-y-2 rounded-lg border border-[var(--border)] p-3 text-sm">
+                      <h3 className="font-semibold">
+                        {receipt.candidates.length
+                          ? "Decide which existing cases apply to this change"
+                          : "Identify affected behavior before selecting tests"}
+                      </h3>
+                      <p>
+                        The recorded source observation contains{" "}
+                        {(delta?.modifiedNodeIds.length ?? 0) + (delta?.addedNodeIds.length ?? 0) + (delta?.removedNodeIds.length ?? 0)}
+                        {" changed graph node(s) and "}
+                        {receipt.candidates.length} nominated existing case(s). These are investigation leads,
+                        not verified product outcomes or test coverage.
+                      </p>
+                      <p>
+                        <strong>Still unknown:</strong> whether each candidate reflects the applicable approved
+                        expectation, whether other behavior is affected, and whether any current build passed
+                        an actual execution. Source freshness is unverified.
+                      </p>
+                      <p>
+                        <strong>Next human action:</strong>{" "}
+                        {receipt.candidates.length
+                          ? "Inspect the linked cases and requirements, confirm applicability, then select approved cases for a native run below."
+                          : "Investigate the changed behavior and approved requirements, find or propose applicable cases, then prepare a native run."}
+                      </p>
+                      <p className="text-xs text-[var(--muted)]">
+                        Authority: this page can help prepare QA work and notify reviewers. It does not
+                        approve a requirement, test case, policy, execution result or release; each decision
+                        remains with its authorized native owner.
+                      </p>
+                    </section>
                     <p className="text-sm">
                       {receipt.candidates.length} linked case candidate(s) ·
                       {(delta?.modifiedNodeIds.length ?? 0) + (delta?.addedNodeIds.length ?? 0) + (delta?.removedNodeIds.length ?? 0)} changed node(s)
@@ -275,6 +304,15 @@ export default function ZyraChangeReviewPage() {
         className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">
         Older observations
       </button>}
+      <section aria-label="Source configuration and draft model inspection" className="space-y-3">
+        <h2 className="text-base font-semibold">Source setup and draft model inspection</h2>
+        <p className="text-sm text-[var(--muted)]">
+          Configure the observed source or inspect an unapproved model draft here.
+          Neither action verifies an expected behavior or records a test result.
+        </p>
+        <SourceBindingSettings key={projectId} projectId={projectId} />
+        <ModelDraftPreview key={projectId} projectId={projectId} />
+      </section>
     </main>
   );
 }
