@@ -819,16 +819,11 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       // committed. The create must queue behind the same project lock, then find the folder gone.
       const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, parent).then(() => null, (error) => error);
       await acquiring;
-      let settled = "pending";
       const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
-        .then((value) => { settled = value ? "resolved" : "empty"; return null; },
-          (error) => { settled = `error:${error?.status || error?.message || "unknown"}`; return error; });
+        .then(() => null, (error) => error);
+      // The create is either waiting on the project lock (fixed) or on the parent row lock
+      // (pre-fix); either way it has reached its wait before the delete is allowed to commit.
       await new Promise((resolve) => setTimeout(resolve, 300));
-      const debug = await setup.query(
-        "SELECT pid,state,wait_event_type,wait_event,left(query,90) AS q FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() ORDER BY pid"
-      );
-      console.log("FOLDER RACE DEBUG", settled, JSON.stringify(debug.rows));
-      await waitForAnyLockWait();
       release();
       expect(await deletion).toBeNull();
       expect(await create).toMatchObject({ status: 404 });
