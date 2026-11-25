@@ -13,9 +13,11 @@ export type ComparableDocument = {
   contentHtml: string | null;
   contentJson: unknown;
   governedMetadata: Record<string, unknown> | null;
+  /** Folder/type/source/is_read_only fields that the server digest binds. Optional for proposals. */
+  source?: Record<string, unknown> | null;
 };
 
-export type ComparisonFieldKey = "title" | "text" | "html" | "json" | "metadata";
+export type ComparisonFieldKey = "title" | "text" | "html" | "json" | "source" | "metadata";
 
 export type ComparisonField = {
   key: ComparisonFieldKey;
@@ -43,6 +45,7 @@ const LABELS: Record<ComparisonFieldKey, string> = {
   text: "Plain text",
   html: "Stored HTML (shown as text)",
   json: "Editor JSON",
+  source: "Source and placement",
   metadata: "Governance metadata",
 };
 
@@ -65,6 +68,12 @@ function jsonText(value: unknown): string | null {
 
 function metadataText(value: Record<string, unknown> | null | undefined): string | null {
   return JSON.stringify(value ?? {}, null, 2);
+}
+
+function sourceText(value: Record<string, unknown> | null | undefined): string | null {
+  if (!value) return null;
+  const keys = ["folderId", "documentType", "sourceProvider", "sourceExternalId", "sourceUrl", "sourceRole", "isReadOnly"];
+  return JSON.stringify(Object.fromEntries(keys.map((key) => [key, value[key] ?? null])), null, 2);
 }
 
 function boundedLines(lines: string[], start: number, end: number): { lines: string[]; truncated: boolean } {
@@ -130,6 +139,9 @@ export function compareDocuments(
     { key: "text", before: base ? asText(base.contentText) : null, after: asText(target.contentText) },
     { key: "html", before: base ? asText(base.contentHtml) : null, after: asText(target.contentHtml) },
     { key: "json", before: base ? jsonText(base.contentJson) : null, after: jsonText(target.contentJson) },
+    ...(base?.source || target.source
+      ? [{ key: "source" as const, before: sourceText(base?.source), after: sourceText(target.source) }]
+      : []),
     { key: "metadata", before: base ? metadataText(base.governedMetadata) : null, after: metadataText(target.governedMetadata) }
   ];
   const fields = values.map(({ key, before, after }) => {

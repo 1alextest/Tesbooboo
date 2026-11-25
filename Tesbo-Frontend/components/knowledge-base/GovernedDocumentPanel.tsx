@@ -310,12 +310,22 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
     && doc.reviewedVersionId === decidedSnapshot.id
     && decidedSnapshot.snapshotMetadata?.sourceVersionId === submittedVersion.id);
 
+  const sourceOf = (value: Record<string, unknown> | undefined | null) => ({
+    folderId: value?.folderId ?? null,
+    documentType: value?.documentType ?? null,
+    sourceProvider: value?.sourceProvider ?? null,
+    sourceExternalId: value?.sourceExternalId ?? null,
+    sourceUrl: value?.sourceUrl ?? null,
+    sourceRole: value?.sourceRole ?? null,
+    isReadOnly: value?.isReadOnly ?? false,
+  });
   const currentComparable: ComparableDocument = {
     title: doc.title,
     contentText: doc.contentText ?? null,
     contentHtml: doc.contentHtml ?? null,
     contentJson: doc.contentJson ?? null,
     governedMetadata: doc.governedMetadata ?? {},
+    source: sourceOf(doc as unknown as Record<string, unknown>),
   };
   const submittedComparable: ComparableDocument | null = submittedDetail ? {
     title: submittedDetail.title,
@@ -323,6 +333,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
     contentHtml: submittedDetail.contentHtml ?? null,
     contentJson: submittedDetail.contentJson ?? null,
     governedMetadata: (submittedDetail.snapshotMetadata?.governedMetadata as Record<string, unknown> | undefined) ?? {},
+    source: sourceOf(submittedDetail.snapshotMetadata),
   } : null;
   const selectedComparisonVersion = versions.find((version) => version.id === comparisonVersionId);
   const historicalComparable: ComparableDocument | null = comparisonDetail ? {
@@ -331,6 +342,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
     contentHtml: comparisonDetail.contentHtml ?? null,
     contentJson: comparisonDetail.contentJson ?? null,
     governedMetadata: (comparisonDetail.snapshotMetadata?.governedMetadata as Record<string, unknown> | undefined) ?? {},
+    source: sourceOf(comparisonDetail.snapshotMetadata),
   } : null;
   const currentAuthorityLabel = doc.status === "approved" && doc.reviewedVersionId
     ? `Current working revision · currently approved (${shortIdentity(doc.reviewedVersionId)})`

@@ -629,8 +629,7 @@ writing (execution results) is still unavailable through the exposed tools.
 (`target.base.editRevision` + `contentDigest`) and the effective proposed document. Omitted
 `contentText`/`contentHtml`/`contentJson` are labelled **inherited** and carry the pinned value; an explicit
 `null`/empty value is a **clear**. Create proposals are labelled **New governed document** with no base.
-Title, plain text, stored HTML (inert text), editor JSON and governance metadata are compared independently,
-with metadata-only and HTML/JSON representation-only badges.
+Title, plain text, stored HTML (inert text), editor JSON, governance metadata and the digest-bound source/placement fields (folder, document type, provider/source identity, read-only) are compared independently, with metadata-only and HTML/JSON representation-only badges.
 
 **Governed versions** extend `GovernedDocumentPanel` with two comparisons of the submitted snapshot:
 1. an earlier immutable version selected from the exact version list — defaulting to the latest approved
@@ -651,7 +650,7 @@ remain distinguishable from the current document binding (`reviewedVersionId`/st
 
 **Coverage.** `e2e/ui/skills.spec.ts` covers inherited vs cleared vs new-document proposals and a long
 document's bounded excerpt with full-value access. `e2e/ui/knowledge-base.spec.ts` KBU-79 covers first
-submission, current-identical, HTML/JSON-only, metadata-only and historical-base comparison with exact-version
-access. Native requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
+submission, current-identical, HTML/JSON-only, metadata-only, digest-bound folder placement, denied-version
+retry and historical-base comparison with exact-version access. Native requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
 `1c957dfea4cc767b14bfe7c8f49906256e8a1de5d8ba13db31dcd18ba596c037`, `in_review`, unassigned. Manual
 execution remains **UNRUN**; native execution-evidence writing remains unavailable.
