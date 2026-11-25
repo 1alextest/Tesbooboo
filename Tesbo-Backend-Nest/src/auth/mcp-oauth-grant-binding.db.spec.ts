@@ -192,6 +192,7 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
           [project, JSON.stringify(settings(revision))]);
         const family = `qa-rejoin-${membership}-${tag}`;
         const nextFamily = `${family}-new`;
+        const staleConsentFamily = `${family}-stale-consent`;
         const models = ["Grant", "AuthorizationCode", "RefreshToken", "AccessToken"] as const;
         const ids = (grantId: string) => models.map(model => model === "Grant" ? grantId : `${grantId}-${model}`);
         const adapters = models.map(issuerAdapter);
@@ -229,6 +230,16 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
           const oldBeforeFresh = await Promise.all([currentOAuthGrantBinding(db, family, basis), readFamily(family)]);
 
           const freshBasis = { ...basis, ...(await currentMembershipIds()) };
+          expect(freshBasis[membership === "project" ? "projectMembershipId" : "organizationMembershipId"])
+            .not.toBe(basis[membership === "project" ? "projectMembershipId" : "organizationMembershipId"]);
+
+          // The provider may save a new grant after page review but before the
+          // final binding transaction. Reusing the pre-rejoin review basis must
+          // not bind that new grant to the replacement membership generation.
+          await adapters[0].upsert(staleConsentFamily, { accountId: user, clientId: CLIENT });
+          await expect(bindOAuthGrantToApproval(db, staleConsentFamily, basis)).rejects.toThrow(/changed/);
+          expect(await currentOAuthGrantBinding(db, staleConsentFamily)).toBe(false);
+          expect(await adapters[0].find(staleConsentFamily)).toBeUndefined();
           await seedFamily(nextFamily);
           expect(await currentOAuthGrantBinding(db, nextFamily, freshBasis)).toBe(true);
           expect(await readFamily(nextFamily)).toEqual(models.map(() => expect.objectContaining({ accountId: user })));
@@ -237,7 +248,7 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
           expect([oldBeforeFresh, oldAfterFresh]).toEqual([denied, denied]);
         } finally {
           await restore();
-          for (const grantId of [family, nextFamily]) {
+          for (const grantId of [family, nextFamily, staleConsentFamily]) {
             for (let i = 0; i < models.length; i++) await adapters[i].destroy(ids(grantId)[i]);
           }
         }
