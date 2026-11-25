@@ -55,6 +55,7 @@ describe("human-owned OAuth consent evidence and self-revocation", () => {
       consents: [{
         id: FINGERPRINT, clientId: CLIENT, clientName: "Approved QA reader",
         resource: f.binding.resource, status: "consent_current",
+        currentAllowedTools: ["list_testcases"],
         createdAt: "2026-11-20T10:00:00.000Z", revokedAt: null
       }], truncated: false
     });
