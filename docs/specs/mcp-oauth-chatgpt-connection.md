@@ -114,6 +114,20 @@ No second MCP server, no parallel project client-grant system, no separate human
 
 References for standards validation: MCP Authorization spec and TypeScript SDK authorization guidance, OAuth RFC 9728/8414/7636/8707/9207/6750, and the MCP 2026-07-28 revision notice. Record exact spec date/version and live consumer behavior during implementation, rather than coding only against an undated blog example.
 
+### Self-service OAuth consent history — candidate slice (PR #269)
+
+The existing Tesbo API & MCP page must give a **signed-in project member** a separate, clearly identified view of that member's own OAuth consent records. This is independent of the project owner's named client preapproval list; ordinary members can revoke their own consent without being able to approve clients for the project.
+
+- **Read authority:** query `mcp_oauth_grant_approval_bindings` by both authenticated human `account_id` and route project ID, after the existing membership check. Never trust an account ID from the request body or disclose another member's records. Return a bounded history with a visible truncation indicator. Provider Grant IDs, bearer secrets, refresh secrets, signing material and raw encrypted payloads must never appear in responses.
+- **Human meaning:** classify rows as `consent_current` only when the recorded project approval revision and current owner read scope still agree, `reconsent_required` when a grant is no longer current, and `revoked` after a durable tombstone. **Consent history is not a current-connection probe**; a valid policy binding does not prove the client is online, the token is unexpired or that external-client capabilities have been verified. When currently approved, show the actual read-tool restriction, not an invented unrestricted connection.
+- **Self-revoke:** signed-in human only; select a grant by its non-reversible indexed fingerprint (not raw provider ID), under current project and member row locks. Persist `revoked_at` and an attributable audit event in **one database transaction**. A repeated revoke is an idempotent readback, never a second audit or new grant. Owner-managed `externalMcpAccess` stays unchanged. The existing strict issuer adapter and MCP resource authorization continue denying reads and refresh for a tombstoned binding, including after the same client identity is reapproved.
+- **Failure/concurrency:** browser cookie and machine bearer never combine identities; revoked membership, foreign user/project, malformed IDs and unavailable audit/storage refuse. After an ambiguous request, clear the UI's local state and require authoritative reload instead of claiming either success or failure. Changing the selected project invalidates pending reads and writes.
+- **Tests:** backend privacy and denial tests, actual disposable-PostgreSQL other-user/own-user revocation and audit assertions, and a selected MCP-P18 browser UX regression. CI evidence must be tied to its **exact final head**; synthetic fixtures do not replace authorized live TESBOPROJECT cases, true user identity or actual ChatGPT acceptance.
+
+This is a stacked, default-off-compatible user-control enhancement. No separate OAuth identity service, permission owner, or production activation is created. Later client-session telemetry and per-device disconnection would require separately reviewed evidence and purpose/retention decisions.
+
+---
+
 ## 4. Consent, policy and human outcomes
 
 **Connect:** user sees verified client name, identity, verified redirect origin, exact Tesbo workspace/project, read scope (default), optional write scope (separate explicit opt-in), allowed tool classes, grant expiry, material effects and revocation location. Consent is not inferred from logging in. Owner/manager authorization and existing per-project MCP access controls remain effective; decide whether ordinary project members may request read-only grants subject to owner policy. Consent requests that exceed the user's/project's effective permission must fail, not silently expand privilege.
