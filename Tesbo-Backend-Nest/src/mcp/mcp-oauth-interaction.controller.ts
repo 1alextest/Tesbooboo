@@ -85,9 +85,16 @@ export class McpOAuthInteractionController {
     const approved = await this.oauth.approvedClient(clientId, resource);
     if (!approved) throw new ForbiddenException({ error: "Project owner has not approved this OAuth client" });
     const project = await this.mcp.requireOAuthConsentProject(userId, projectId);
+    const projectMembershipId = project.project_membership_id;
+    const organizationMembershipId = project.organization_membership_id;
+    if (typeof projectMembershipId !== "string" || !projectMembershipId ||
+        typeof organizationMembershipId !== "string" || !organizationMembershipId) {
+      throw new ForbiddenException({ error: "Current membership identities are required to authorize this client" });
+    }
     const requestedScopes = scope.split(/\s+/);
     return { userId, clientId, projectId, resource, clientName: approved.clientName,
       projectName: project.name || project.key || projectId,
+      projectMembershipId, organizationMembershipId,
       refreshRequested: requestedScopes.includes("offline_access"), openidRequested: requestedScopes.includes("openid"),
       allowedTools: approved.allowedTools, expiresAt: approved.expiresAt, accessRevision: approved.accessRevision };
   }
@@ -192,7 +199,9 @@ export class McpOAuthInteractionController {
     try {
       await this.oauth.bindIssuedGrant(grantId, {
         accountId: userId, clientId: target.clientId, resource: target.resource,
-        projectId: target.projectId, approvalRevision: target.accessRevision
+        projectId: target.projectId, approvalRevision: target.accessRevision,
+        projectMembershipId: target.projectMembershipId,
+        organizationMembershipId: target.organizationMembershipId
       });
     } catch {
       // A revoked or modified approval must never complete an OAuth consent.
