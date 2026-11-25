@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import type { ZyraTask } from "@/lib/api";
 import { Button, Card, Field, FieldLabel, Input, StatusChip } from "@/components/ui";
+import { KnowledgeComparison } from "@/components/knowledge-base/KnowledgeComparison";
+import { compareDocuments, shortIdentity, type ComparableDocument, type ComparisonFieldKey } from "@/lib/kb-comparison";
 
 /**
  * Human review surface for an agent-authored manual/policy candidate. The candidate is inert
@@ -30,6 +32,32 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
   const metadata = proposal.proposed.governedMetadata || {};
   const authority = (metadata.sourceAuthority || {}) as Record<string, unknown>;
   const effectivity = (metadata.effectivity || {}) as Record<string, unknown>;
+  const pinnedBase = proposal.target?.base ?? null;
+  const baseDocument: ComparableDocument | null = pinnedBase ? {
+    title: pinnedBase.title,
+    contentText: pinnedBase.contentText ?? null,
+    contentHtml: pinnedBase.contentHtml ?? null,
+    contentJson: pinnedBase.contentJson ?? null,
+    governedMetadata: pinnedBase.governedMetadata ?? {},
+  } : null;
+  // Omitted representations inherit the pinned base; an explicit null/empty value is a proposed
+  // clear and must compare as a change, so only `undefined` is treated as omission.
+  const omitted = new Set<ComparisonFieldKey>();
+  // Only an update can inherit a base; a create's missing representations mean "the new document
+  // starts without it", not "the pinned base is retained".
+  if (pinnedBase) {
+    if (proposal.proposed.contentText === undefined) omitted.add("text");
+    if (proposal.proposed.contentHtml === undefined) omitted.add("html");
+    if (proposal.proposed.contentJson === undefined) omitted.add("json");
+  }
+  const effectiveDocument: ComparableDocument = {
+    title: proposal.proposed.title,
+    contentText: proposal.proposed.contentText !== undefined ? proposal.proposed.contentText ?? null : pinnedBase?.contentText ?? null,
+    contentHtml: proposal.proposed.contentHtml !== undefined ? proposal.proposed.contentHtml ?? null : pinnedBase?.contentHtml ?? null,
+    contentJson: proposal.proposed.contentJson !== undefined ? proposal.proposed.contentJson : pinnedBase?.contentJson ?? null,
+    governedMetadata: proposal.proposed.governedMetadata ?? {},
+  };
+  const comparison = compareDocuments(baseDocument, effectiveDocument, omitted);
 
   return (
     <Card className="space-y-4 p-4" data-testid="managed-document-proposal">
@@ -48,7 +76,7 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
         </StatusChip>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3">
         <div className="rounded-lg border border-[var(--border)] p-3 text-sm">
           <p className="font-medium">Proposed document</p>
           <p className="mt-1 font-semibold">{proposal.proposed.title}</p>
@@ -78,17 +106,18 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
           )}
           {proposal.reason && <p className="mt-2 text-xs">Reason: {proposal.reason}</p>}
         </div>
-        <div className="rounded-lg border border-[var(--border)] p-3 text-sm" data-testid="managed-document-diff">
-          <p className="font-medium">Comparison with base</p>
-          <p className="mt-1 text-xs text-[var(--muted)]">{proposal.diff?.summary || "No textual change detected."}</p>
-          {proposal.diff?.fields?.length ? proposal.diff.fields.map((field, index) => (
-            <div key={`${field.label}-${index}`} className="mt-2 rounded border border-[var(--border)] p-2 text-xs">
-              <p className="font-medium">{field.label}</p>
-              <p className="mt-1 whitespace-pre-wrap text-[var(--muted)]">− {field.oldExcerpt}</p>
-              <p className="mt-1 whitespace-pre-wrap">+ {field.newExcerpt}</p>
-            </div>
-          )) : null}
-        </div>
+      </div>
+
+      <div data-testid="managed-document-diff">
+        <KnowledgeComparison
+          testId="managed-document-comparison"
+          newDocument={proposal.operation === "create"}
+          baseLabel={pinnedBase ? `${proposal.operation === "create" ? "New document" : "Pinned base"} · ${pinnedBase.title} · ${pinnedBase.status}` : "New document (no base)"}
+          baseIdentity={pinnedBase ? `${shortIdentity(pinnedBase.editRevision)} · digest ${shortIdentity(pinnedBase.contentDigest)}` : "—"}
+          targetLabel="Effective proposed document"
+          targetIdentity={task.proposalRevision ? `revision ${shortIdentity(task.proposalRevision)}` : "revision unavailable"}
+          result={comparison}
+        />
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 text-sm" data-testid="managed-document-content">
