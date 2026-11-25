@@ -449,5 +449,52 @@ provider `external_document_proposal`. The candidate is not a knowledge document
 | `writer.needsReadback` blocked a decision retry after a failed decision | Fixed in #250: removed from the pre-decision guard; draft state still blocks a genuinely unsaved body. |
 | Ambiguous governed UPDATE acknowledgement | Confirmed follow-up: POST ambiguity is covered (KBU-73), but a PATCH that commits with a lost response still requires reload/readback. Not an authority or draft-loss defect. |
 | Reload-persistent submission key | Confirmed follow-up/product decision: a lost POST plus reload can create a second identical submitted snapshot; server-side identical resubmission is intentional. |
-| Create-vs-folder-delete race | Fixed in #257 (`ca18d6c8`): document create rechecks the folder under `FOR SHARE` in the insert + audit transaction and revalidates authority after the wait; a delete either cascades the new document or makes the create 404. Regression race + audit-rollback tests run in `behavioral-quality`; deployment health returned the merge SHA. The same unlocked destination check remains for move/duplicate and the integration-sync/setup inserts — recorded as separate follow-ups, not closed here. |
+| Create-vs-folder-delete race | Fixed in #257 (`ca18d6c8`): document create rechecks the folder under `FOR SHARE` in the insert + audit transaction and revalidates authority after the wait; a delete either cascades the new document or makes the create 404. Regression race + audit-rollback tests run in `behavioral-quality`; deployment health returned the merge SHA. Move/duplicate destination integrity was re-investigated in #263 — see §10.1. |
 | Native record cannot be updated by the available native tools | Recorded; evidence is retained in the PR/CI, and native execution remains UNRUN. |
+
+### 10.1 Move/duplicate destination integrity (PR #263)
+
+**Lock map.** `moveKnowledgeDocument` and `moveKnowledgeFolder` take
+`pg_advisory_xact_lock('skill-assignments:<project>')` before any domain row lock. `duplicateKnowledgeDocument`
+did not; it now takes the same lock as its first transaction statement, before the source `FOR SHARE` (taking
+it after would invert the order against `deleteKnowledgeFolder` and can deadlock). `deleteKnowledgeFolder`
+takes the project lock before its `FOR UPDATE` and recursive cascade. Therefore ordinary deletion, subtree
+deletion, moves and duplicates in the same project are serialised:
+
+- Delete acquires first → the move/duplicate waits on the advisory lock, then reads the destination/source
+  after the delete committed and refuses with 404; no row is written.
+- Move/duplicate acquires first → the delete waits, then its cascade statement sees the newly moved/copied
+  row and soft-deletes it. No live row can point at a deleted folder.
+
+The move regressions observe that advisory wait in `pg_stat_activity`; the duplicate orphan regression was
+red before the advisory-first fix and green after it. No extra destination row lock was added: the project
+lock is the ordering boundary, and adding a folder lock after the source-document wait would reintroduce the
+deadlock it prevents.
+
+**Confirmed gaps fixed.** `duplicateKnowledgeDocument` did not revalidate membership/archive after its
+source-document wait; it now calls `requireCurrentProjectAuthority` under the transaction and inserts from the
+current authority row. Document/folder move and duplicate wrote their audit entry after commit (best-effort),
+so an audit failure left an unaudited mutation; all three now write it on the mutation transaction's client.
+External effects (duplicate embedding enqueue) remain after commit.
+
+**Sibling disposition (not changed).** These are the same unlocked-destination shape but belong to different
+owners; they are recorded, not widened into this KB move/duplicate repair:
+- `integration-sync.processor.ts` upserts provider mirrors with a `folder_id` resolved earlier, without the
+  project mutation advisory lock or a locked recheck. Owner: integration-sync.
+- `createKnowledgeFolder` (`legacy.service.ts`) checks the parent in a preflight and inserts without the
+  advisory lock or a locked parent recheck. Owner: KB folder writes; follow-up.
+- `rememberZyraMemory` (`legacy.service.ts`) resolves the AI Memory folder unlocked, then inserts the memory
+  document; an ancestor delete in that window can strand it. Owner: Zyra memory; follow-up.
+- `setup.service.ts` seeds a document during project bootstrap inside the project-creation transaction,
+  before the project is reachable, so no concurrent deletable destination exists.
+There is no hard-delete path for `knowledge_folders` in product code.
+
+**Evidence.** Two failing-first runs against tests-only heads:
+- `6a415207` (`actions/runs/45513840933/job/138868072480`): 4 new regressions failed (duplicate resolved with
+  `null`; the three audit cases resolved instead of rejecting); 721 existing tests passed.
+- `5214acf9` (`actions/runs/45522403393`): the new duplicate/ancestor-delete regression failed with `Expected:
+  0, Received: 1` live copies under the deleted folder; 725 existing tests passed.
+
+The advisory-first fix is verified green at `2060ae82`
+(`actions/runs/45524121118`, 726 database tests). Native execution remains UNRUN; native record update is
+blocked as in §9.2.
