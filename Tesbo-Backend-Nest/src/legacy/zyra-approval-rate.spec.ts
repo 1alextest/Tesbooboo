@@ -30,7 +30,7 @@ function setup(records: Row[]) {
       const excludeNonTestcase = sql.includes("provider IS DISTINCT FROM 'external_requirement_proposal'") &&
         sql.includes("provider IS DISTINCT FROM 'external_document_proposal'");
       const caseRows = excludeNonTestcase
-        ? closed.filter(record => !["external_requirement_proposal", "external_document_proposal"].includes(record.provider))
+        ? closed.filter(record => record.provider !== "external_requirement_proposal" && record.provider !== "external_document_proposal")
         : closed;
       return { rows: [{ saved: String(caseRows.reduce((sum, row) => sum + row.saved_count, 0)),
         generated: String(caseRows.reduce((sum, row) => sum + row.generated_count, 0)) }] };
