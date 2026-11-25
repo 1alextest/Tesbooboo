@@ -61,7 +61,7 @@ function MyOAuthConsentHistory({ projectId, refreshKey }: { projectId: string; r
       if (!generation.active || generationRef.current !== generation) return;
       if (result.status !== "revoked" || result.id !== consent.id) throw Error("Revocation result did not match this consent.");
       setRows(current => current?.map(row => row.id === consent.id ?
-        { ...row, status: "revoked" } : row) ?? null);
+        { ...row, status: "revoked" as const, currentAllowedTools: null } : row) ?? null);
       setNotice("This consent has been revoked. The previously issued OAuth grant cannot be used again.");
     } catch (reason) {
       if (!generation.active || generationRef.current !== generation) return;
