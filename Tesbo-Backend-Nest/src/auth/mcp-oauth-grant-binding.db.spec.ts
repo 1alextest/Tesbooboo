@@ -73,6 +73,67 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
       }
     });
 
+    it("lets a human revoke one consent without changing owner grants or another member's consent", async () => {
+      const ownGrant = "self-consent-" + tag;
+      const otherGrant = "other-consent-" + tag;
+      const grants = issuerAdapter("Grant");
+      const projectApproval = settings(10);
+      await db.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",
+        [project, JSON.stringify(projectApproval)]);
+      const otherUser = (await db.query(
+        "INSERT INTO users(email,name) VALUES ($1,'Other OAuth member') RETURNING id",
+        ["oauth-other-" + tag + "@tesbo.invalid"])).rows[0].id as string;
+      await db.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'member')",
+        [org, otherUser]);
+      await db.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
+        [project, otherUser]);
+      await grants.upsert(ownGrant, { accountId: user, clientId: CLIENT });
+      await grants.upsert(otherGrant, { accountId: otherUser, clientId: CLIENT });
+      await bindOAuthGrantToApproval(db, ownGrant, {
+        projectId: project, accountId: user, clientId: CLIENT,
+        resource: resource(), approvalRevision: 10
+      });
+      await bindOAuthGrantToApproval(db, otherGrant, {
+        projectId: project, accountId: otherUser, clientId: CLIENT,
+        resource: resource(), approvalRevision: 10
+      });
+      const index = (id: string) => oauthReferenceFingerprint("oauth:Grant:id", id);
+      const svc = new McpService(
+        { requireProjectAccess: jest.fn().mockResolvedValue({ organization_id: org }) } as unknown as LegacyService,
+        db,
+        { assertProjectWritable: jest.fn() } as unknown as PlanLimitsService
+      );
+      const self = { userId: user, headers: {}, apiToken: null, oauthAccess: null } as any;
+      const other = { userId: otherUser, headers: {}, apiToken: null, oauthAccess: null } as any;
+      try {
+        const mine = await svc.listMyOAuthConsents(self, project);
+        expect(mine.consents.map(c => c.id)).toContain(index(ownGrant));
+        expect(mine.consents.map(c => c.id)).not.toContain(index(otherGrant));
+        expect(mine.consents.find(c => c.id === index(ownGrant))?.status).toBe("consent_current");
+        await expect(svc.revokeMyOAuthConsent(self, project, index(otherGrant)))
+          .rejects.toThrow();
+        expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(true);
+        const result = await svc.revokeMyOAuthConsent(self, project, index(ownGrant));
+        expect(result).toEqual({ id: index(ownGrant), status: "revoked", replayed: false });
+        expect(await currentOAuthGrantBinding(db, ownGrant)).toBe(false);
+        expect(await grants.find(ownGrant)).toBeUndefined();
+        expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(true);
+        expect(await grants.find(otherGrant)).toBeDefined();
+        const replay = await svc.revokeMyOAuthConsent(self, project, index(ownGrant));
+        expect(replay.replayed).toBe(true);
+        const audit = await db.query(
+          "SELECT actor_id,entity_id FROM audit_logs WHERE project_id=$1 AND action='mcp_oauth_user_consent_revoked'",
+          [project]
+        );
+        expect(audit.rows).toEqual([{ actor_id: user, entity_id: index(ownGrant) }]);
+        const otherHistory = await svc.listMyOAuthConsents(other, project);
+        expect(otherHistory.consents.map(c => c.id)).toContain(index(otherGrant));
+        expect(otherHistory.consents.map(c => c.id)).not.toContain(index(ownGrant));
+      } finally {
+        await Promise.allSettled([grants.destroy(ownGrant), grants.destroy(otherGrant)]);
+      }
+    });
+
     it("revokes old Grant and RefreshToken without resurrecting them on identical-client reapproval", async () => {
       const basis = (revision: number) => ({
         projectId: project, accountId: user, clientId: CLIENT, resource: resource(), approvalRevision: revision
