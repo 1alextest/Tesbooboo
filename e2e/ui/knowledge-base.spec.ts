@@ -2852,6 +2852,8 @@ test.describe("knowledge base (UI)", () => {
     const firstVersion = await firstSubmission.json();
     const firstApproval = await api.post(kbUrl(`/documents/${documentId}/governed-approval`), { data: { versionId: firstVersion.id } });
     expect(firstApproval.status(), await firstApproval.text()).toBe(201);
+    const firstApprovalBody = await firstApproval.json();
+    const approvedSnapshotId = firstApprovalBody.reviewedVersionId || firstApprovalBody.decidedVersionId;
     const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
 
     const page = await openDocument(browser, documentId);
@@ -2875,7 +2877,16 @@ test.describe("knowledge base (UI)", () => {
       data: { expectedRevision: repRevision.editRevision, submissionKey: crypto.randomUUID() },
     });
     expect(repSubmission.status(), await repSubmission.text()).toBe(201);
+    // A denied exact version is an explicit retryable state, not a stale or empty comparison.
+    let deniedOnce = false;
+    await page.route(new RegExp(`/versions/${approvedSnapshotId}$`), async (route) => {
+      if (deniedOnce) return route.continue();
+      deniedOnce = true;
+      await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "E2E denied comparison version" }) });
+    });
     await page.reload();
+    await expect(page.getByTestId("governed-comparison-error")).toBeVisible();
+    await page.getByRole("button", { name: "Retry comparison" }).click();
     await expect(page.getByTestId("governed-historical-comparison")).toBeVisible();
     await expect(page.getByTestId("governed-historical-comparison")).toContainText("historical, not current authority");
     await expect(page.getByTestId("governed-historical-comparison")).toContainText("Representation only (HTML/JSON)");
@@ -2895,6 +2906,15 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.getByTestId("governed-current-comparison")).toContainText("Metadata only");
     await expect(page.getByTestId("governed-current-comparison-field-metadata")).toHaveAttribute("data-status", "changed");
     await expect(page.getByTestId("governed-current-comparison-field-text")).toHaveAttribute("data-status", "unchanged");
+
+    // Folder placement is part of the approval digest even when the body/metadata are equal.
+    const destination = await api.post(kbUrl("/folders"), { data: { name: stamp("Comparison folder") } });
+    expect(destination.status(), await destination.text()).toBe(201);
+    const moved = await api.patch(kbUrl(`/documents/${documentId}/move`), { data: { folderId: (await destination.json()).id } });
+    expect(moved.status(), await moved.text()).toBe(200);
+    await page.reload();
+    await expect(page.getByTestId("governed-current-comparison")).not.toContainText("Identical");
+    await expect(page.getByTestId("governed-current-comparison-field-source")).toHaveAttribute("data-status", "changed");
   });
 
   test("KBU-71 a governed policy carries enforcement references through submit, decision and history", async ({ browser }) => {
