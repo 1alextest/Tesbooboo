@@ -479,6 +479,60 @@ test("MCP-P18 UI approves a named credential, shows stale conflicts, and revokes
   }
 });
 
+test("MCP-P18 human consent history does not claim live connection and revokes only selected record", async ({ page }) => {
+  const api = await apiContext();
+  let projectId: string | undefined;
+  const consentId = "a".repeat(64);
+  const otherId = "b".repeat(64);
+  const clientId = "https://chatgpt.com/oauth/client.json";
+  const records = [
+    { id: consentId, clientId, clientName: "Existing QA reader",
+      resource: "https://tesbo.example/api/projects/test/mcp",
+      status: "consent_current", currentAllowedTools: ["list_testcases"], createdAt: "2026-11-20T10:00:00.000Z", revokedAt: null },
+    { id: otherId, clientId: "https://example.test/old-client.json",
+      clientName: "Older revoked connection", resource: "https://tesbo.example/api/projects/test/mcp",
+      status: "revoked", currentAllowedTools: null, createdAt: "2026-11-19T10:00:00.000Z",
+      revokedAt: "2026-11-21T10:00:00.000Z" }
+  ];
+  const deletes: string[] = [];
+  try {
+    const suffix = Date.now().toString().slice(-8);
+    const result = await api.post("/api/projects", {
+      data: { name: "Consent UI " + suffix, key: "CONUI" + suffix }
+    });
+    expect(result.ok(), await result.text()).toBe(true);
+    projectId = (await result.json()).id;
+    await page.route("**/api/projects/" + projectId + "/mcp-oauth-consents**", async route => {
+      if (route.request().method() === "DELETE") {
+        deletes.push(route.request().url());
+        records[0].status = "revoked";
+        await route.fulfill({ status: 200, json: {
+          id: consentId, status: "revoked", replayed: false
+        } });
+      } else {
+        await route.fulfill({ status: 200, json: { consents: records, truncated: false } });
+      }
+    });
+    await page.goto("/projects/" + projectId + "/settings?tab=apiTokens");
+    const history = page.locator('[aria-labelledby="my-oauth-consents-title"]');
+    await expect(history.getByText("Existing QA reader", { exact: true })).toBeVisible();
+    await expect(history.getByText("Consent recorded (not live status)")).toBeVisible();
+    await expect(history.getByText("Read-only tools: list_testcases")).toBeVisible();
+    await expect(history.getByText("Older revoked connection", { exact: true })).toBeVisible();
+    await expect(history.getByText("State: Revoked", { exact: true })).toBeVisible();
+    await expect(history.getByRole("button", { name: "Revoke my consent" })).toHaveCount(1);
+    await history.getByRole("button", { name: "Revoke my consent" }).click();
+    await expect(history.getByText("This consent has been revoked.")).toBeVisible();
+    await expect(history.getByRole("button", { name: "Revoke my consent" })).toHaveCount(0);
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]).toContain("/mcp-oauth-consents/" + consentId);
+    expect(deletes[0]).not.toContain(otherId);
+  } finally {
+    if (projectId) await api.delete("/api/projects/" + projectId, { failOnStatusCode: false });
+    await api.dispose();
+  }
+});
+
 test("MCP-P18 delayed save and failed project reload never expose another project's editable grants", async ({ page }) => {
   test.slow();
   const api = await apiContext();

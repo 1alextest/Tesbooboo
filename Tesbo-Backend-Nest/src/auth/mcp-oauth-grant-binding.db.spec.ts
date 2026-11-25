@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
+import { oauthReferenceFingerprint } from "../common/crypto.util";
 import { LegacyService } from "../legacy/legacy.service";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { McpService } from "../mcp/mcp.service";
@@ -37,13 +38,13 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
     const resource = () => `https://tesbo.example/api/projects/${project}/mcp`;
     const issuerAdapter = (model: string) => new (createMcpOAuthPostgresAdapter(db,
       { requireLiveGrantBinding: true }))(model);
-    const currentMembershipIds = async () => {
+    const currentMembershipIds = async (accountId = user) => {
       const row = (await db.query(
         `SELECT pm.id AS project_membership_id, om.id AS organization_membership_id
            FROM project_members pm
            JOIN organization_members om ON om.organization_id=$2 AND om.user_id=$3
           WHERE pm.project_id=$1 AND pm.user_id=$3`,
-        [project, org, user]
+        [project, org, accountId]
       )).rows[0];
       if (typeof row?.project_membership_id !== "string" ||
           typeof row?.organization_membership_id !== "string") {
@@ -85,6 +86,130 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
         if (priorKey === undefined) delete process.env.SECRETS_ENCRYPTION_KEY;
         else process.env.SECRETS_ENCRYPTION_KEY = priorKey;
         await pool?.end();
+      }
+    });
+
+    it("lets a human revoke one consent without changing owner grants or another member's consent", async () => {
+      const ownGrant = "self-consent-" + tag;
+      const otherGrant = "other-consent-" + tag;
+      const grants = issuerAdapter("Grant");
+      const projectApproval = settings(10);
+      await db.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",
+        [project, JSON.stringify(projectApproval)]);
+      const otherUser = (await db.query(
+        "INSERT INTO users(email,name) VALUES ($1,'Other OAuth member') RETURNING id",
+        ["oauth-other-" + tag + "@tesbo.invalid"])).rows[0].id as string;
+      await db.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'member')",
+        [org, otherUser]);
+      await db.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')",
+        [project, otherUser]);
+      await grants.upsert(ownGrant, { accountId: user, clientId: CLIENT });
+      await grants.upsert(otherGrant, { accountId: otherUser, clientId: CLIENT });
+      await bindOAuthGrantToApproval(db, ownGrant, {
+        projectId: project, accountId: user, clientId: CLIENT,
+        resource: resource(), approvalRevision: 10, ...await currentMembershipIds()
+      });
+      await bindOAuthGrantToApproval(db, otherGrant, {
+        projectId: project, accountId: otherUser, clientId: CLIENT,
+        resource: resource(), approvalRevision: 10, ...await currentMembershipIds(otherUser)
+      });
+      const index = (id: string) => oauthReferenceFingerprint("oauth:Grant:id", id);
+      const svc = new McpService(
+        { requireProjectAccess: jest.fn().mockResolvedValue({ organization_id: org }) } as unknown as LegacyService,
+        db,
+        { assertProjectWritable: jest.fn() } as unknown as PlanLimitsService
+      );
+      const self = { userId: user, headers: {}, apiToken: null, oauthAccess: null } as any;
+      const other = { userId: otherUser, headers: {}, apiToken: null, oauthAccess: null } as any;
+      try {
+        const mine = await svc.listMyOAuthConsents(self, project);
+        expect(mine.consents.map(c => c.id)).toContain(index(ownGrant));
+        expect(mine.consents.map(c => c.id)).not.toContain(index(otherGrant));
+        expect(mine.consents.find(c => c.id === index(ownGrant))?.status).toBe("consent_current");
+        await expect(svc.revokeMyOAuthConsent(self, project, index(otherGrant)))
+          .rejects.toThrow();
+        expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(true);
+        const result = await svc.revokeMyOAuthConsent(self, project, index(ownGrant));
+        expect(result).toEqual({ id: index(ownGrant), status: "revoked", replayed: false });
+        expect(await currentOAuthGrantBinding(db, ownGrant)).toBe(false);
+        expect(await grants.find(ownGrant)).toBeUndefined();
+        expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(true);
+        expect(await grants.find(otherGrant)).toBeDefined();
+        const replay = await svc.revokeMyOAuthConsent(self, project, index(ownGrant));
+        expect(replay.replayed).toBe(true);
+        const audit = await db.query(
+          "SELECT actor_id,entity_id FROM audit_logs WHERE project_id=$1 AND action='mcp_oauth_user_consent_revoked'",
+          [project]
+        );
+        expect(audit.rows).toEqual([{ actor_id: user, entity_id: index(ownGrant) }]);
+        const otherHistory = await svc.listMyOAuthConsents(other, project);
+        expect(otherHistory.consents.map(c => c.id)).toContain(index(otherGrant));
+        expect(otherHistory.consents.map(c => c.id)).not.toContain(index(ownGrant));
+        // A stale successful preflight must not authorize a later history read.
+        // The service's existing mocked preflight above deliberately remains
+        // successful; only the real database membership is removed here.
+        const historyWhileRemoved: Array<{ membership: string; disclosed: string[] }> = [];
+        for (const membership of ["organization", "project"] as const) {
+          const removed = membership === "project"
+            ? await db.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id", [project, otherUser])
+            : await db.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING id", [org, otherUser]);
+          expect(removed.rows).toHaveLength(1);
+          try {
+            const disclosed = await svc.listMyOAuthConsents(other, project).then(
+              result => result.consents.map(c => c.id),
+              (error: unknown) => {
+                if (typeof (error as { getStatus?: unknown })?.getStatus !== "function") throw error;
+                expect([403, 404]).toContain((error as { getStatus(): number }).getStatus());
+                return [] as string[];
+              }
+            );
+            historyWhileRemoved.push({ membership, disclosed });
+            await expect(svc.revokeMyOAuthConsent(other, project, index(otherGrant))).rejects.toThrow();
+          } finally {
+            await db.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING",
+              [org, otherUser]);
+            await db.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer') ON CONFLICT DO NOTHING",
+              [project, otherUser]);
+          }
+        }
+        // The previous generation remains invalid, but a currently authorized
+        // rejoined member may read their own historical consent.
+        const rejoinedHistory = await svc.listMyOAuthConsents(other, project);
+        expect(rejoinedHistory.consents.find(c => c.id === index(otherGrant))?.status).toBe("reconsent_required");
+        expect(historyWhileRemoved).toEqual([
+          { membership: "organization", disclosed: [] },
+          { membership: "project", disclosed: [] }
+        ]);
+
+        // The same client and owner policy can survive a membership delete/rejoin,
+        // but the OLD binding must be rejected and shown as requiring new consent.
+        const priorMembership = (await db.query(
+          "SELECT id FROM project_members WHERE project_id=$1 AND user_id=$2",
+          [project, otherUser])).rows[0].id as string;
+        try {
+          await db.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2",
+            [project, otherUser]);
+          expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(false);
+        } finally {
+          await db.query(
+            "INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer') ON CONFLICT DO NOTHING",
+            [project, otherUser]);
+        }
+        const nextMembership = (await db.query(
+          "SELECT id FROM project_members WHERE project_id=$1 AND user_id=$2",
+          [project, otherUser])).rows[0].id as string;
+        expect(nextMembership).not.toBe(priorMembership);
+        expect(await currentOAuthGrantBinding(db, otherGrant)).toBe(false);
+        const afterRejoin = await svc.listMyOAuthConsents(other, project);
+        const oldConsent = afterRejoin.consents.find(c => c.id === index(otherGrant));
+        expect(oldConsent?.status).toBe("reconsent_required");
+        expect(oldConsent?.currentAllowedTools).toBeNull();
+
+      } finally {
+        await Promise.allSettled([grants.destroy(ownGrant), grants.destroy(otherGrant)]);
+        // Restore the disposable fixture basis for the existing OA-T18 journey.
+        await db.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",
+          [project, JSON.stringify(settings(1))]);
       }
     });
 

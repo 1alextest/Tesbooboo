@@ -332,6 +332,120 @@ export class McpService {
       organization_membership_id: membership.organization_membership_id };
   }
 
+  /** A member may inspect/revoke ONLY their own OAuth consent records.
+   * This is not the owner-managed client allowlist and does not grant access.
+   * Read-only history remains available while OAuth issuance is disabled. */
+  private async humanOAuthConsentOwner(req: AuthenticatedRequest, projectId: string) {
+    if (!req.userId || req.apiToken || req.oauthAccess || req.headers?.authorization) {
+      throw new ForbiddenException({ error: "OAuth consents require a human Tesbo browser session" });
+    }
+    return this.legacy.requireProjectAccess(req.userId, projectId);
+  }
+
+  async listMyOAuthConsents(req: AuthenticatedRequest, projectId: string) {
+    await this.humanOAuthConsentOwner(req, projectId);
+    // Authorize disclosure at the history statement's snapshot, not only
+    // at the earlier preflight. Current membership admits the read; equality
+    // with the historical IDs independently determines consent freshness.
+    // A binding is evidence of consent, NOT evidence that a client is online.
+    const rows = await this.db.query(
+      `SELECT b.grant_fingerprint,b.client_id,b.resource,b.approval_revision,
+              b.created_at,b.revoked_at,p.settings,
+              (pm.id=b.project_membership_id AND om.id=b.organization_membership_id) AS membership_current
+         FROM mcp_oauth_grant_approval_bindings b
+         JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
+         JOIN project_members pm ON pm.project_id=b.project_id AND pm.user_id::text=b.account_id
+         JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id::text=b.account_id
+        WHERE b.project_id=$1 AND b.account_id=$2
+        ORDER BY b.created_at DESC,b.grant_fingerprint DESC LIMIT 51`,
+      [projectId, req.userId]
+    );
+    const consents = rows.rows.slice(0, 50).map(row => {
+      let approved = false;
+      let label: string = row.client_id;
+      let currentAllowedTools: string[] | null = null;
+      try {
+        const access = readMcpAccess(row.settings);
+        const client = access.clients.find(c =>
+          isOAuthMcpGrant(c) && c.oauthClientId === row.client_id);
+        if (client && isOAuthMcpGrant(client)) {
+          label = client.clientName;
+          currentAllowedTools = client.allowedTools;
+          approved = row.membership_current === true && access.enabled &&
+            access.revision === Number(row.approval_revision) &&
+            client.scopes.length === 1 && client.scopes[0] === "read" &&
+            (!client.expiresAt || Date.parse(client.expiresAt) > Date.now());
+        }
+      } catch { /* Corrupt or unavailable policy must not appear authorized. */ }
+      const status = row.revoked_at ? "revoked" :
+        approved ? "consent_current" : "reconsent_required";
+      return {
+        id: row.grant_fingerprint as string,
+        clientId: row.client_id as string,
+        clientName: label,
+        resource: row.resource as string,
+        status,
+        // Null is unrestricted only while current consent exists; otherwise no permission.
+        currentAllowedTools: approved && !row.revoked_at ? currentAllowedTools : null,
+        createdAt: new Date(row.created_at).toISOString(),
+        revokedAt: row.revoked_at ? new Date(row.revoked_at).toISOString() : null
+      };
+    });
+    return { consents, truncated: rows.rows.length > 50 };
+  }
+
+  async revokeMyOAuthConsent(req: AuthenticatedRequest, projectId: string, consentId: string) {
+    await this.humanOAuthConsentOwner(req, projectId);
+    if (!/^[a-f0-9]{64}$/.test(consentId)) {
+      throw new NotFoundException({ error: "OAuth consent was not found" });
+    }
+    return this.db.transaction(async client => {
+      // Match the existing owner-policy writer's global lock order:
+      // project/membership first, then the individual OAuth binding. Otherwise
+      // owner revoke (project -> binding) can deadlock with self revoke
+      // (binding -> project). The in-transaction membership check also closes
+      // a membership-removal race after the non-locking preflight.
+      const locked = await client.query(
+        `SELECT p.organization_id FROM projects p
+           JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
+           JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
+          WHERE p.id=$1 AND p.archived_at IS NULL
+          FOR SHARE OF p,pm,om`,
+        [projectId, req.userId]
+      );
+      if (!locked.rows[0]) {
+        throw new NotFoundException({ error: "OAuth consent was not found" });
+      }
+      const result = await client.query(
+        `SELECT client_id,revoked_at
+           FROM mcp_oauth_grant_approval_bindings b
+          WHERE b.project_id=$1 AND b.account_id=$2 AND b.grant_fingerprint=$3
+          FOR UPDATE OF b`,
+        [projectId, req.userId, consentId]
+      );
+      const row = result.rows[0];
+      if (!row) throw new NotFoundException({ error: "OAuth consent was not found" });
+      if (row.revoked_at) return { id: consentId, status: "revoked", replayed: true };
+      await client.query(
+        `UPDATE mcp_oauth_grant_approval_bindings
+            SET revoked_at=clock_timestamp()
+          WHERE grant_fingerprint=$1 AND revoked_at IS NULL`,
+        [consentId]
+      );
+      // Audit failure rolls back the revocation and its receipt together.
+      await client.query(
+        `INSERT INTO audit_logs
+           (project_id,actor_id,action,entity_type,entity_id,entity_name,diff,organization_id)
+         VALUES ($1,$2,'mcp_oauth_user_consent_revoked','oauth_consent',$3,
+                 'OAuth user consent revoked',$4::jsonb,$5)`,
+        [projectId, req.userId, consentId,
+          JSON.stringify({ clientId: row.client_id, revokedBy: "human_session" }),
+          locked.rows[0].organization_id]
+      );
+      return { id: consentId, status: "revoked", replayed: false };
+    });
+  }
+
   private async humanProjectManager(req: AuthenticatedRequest, projectId: string) {
     if (!req.userId || req.apiToken || req.oauthAccess) throw new ForbiddenException({ error: "An authenticated human session is required to manage external MCP access" });
     const project = await this.legacy.requireProjectAccess(req.userId, projectId);

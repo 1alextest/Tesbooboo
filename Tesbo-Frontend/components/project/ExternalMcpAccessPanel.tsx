@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type ApiMcpClientGrant, type McpClientGrant, type OAuthMcpClientGrant, type ProjectMcpAccess } from "@/lib/api";
+import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type ApiMcpClientGrant, type McpClientGrant, type OAuthMcpClientGrant, type ProjectMcpAccess, type MyMcpOAuthConsent, listMyMcpOAuthConsents, revokeMyMcpOAuthConsent } from "@/lib/api";
 import { Button, Card, Field, FieldLabel, Input } from "@/components/ui";
 
 function clientGrantIdentity(client: McpClientGrant): string {
@@ -12,7 +12,102 @@ type ExternalMcpAccessPanelProps = { projectId: string; canManage: boolean; refr
 
 export function ExternalMcpAccessPanel(props: ExternalMcpAccessPanelProps) {
   // A project change must not reuse credentials, pending form input, notices or a save from another project.
-  return <ProjectMcpAccessPanel key={props.projectId} {...props} />;
+  return <div key={props.projectId} className="space-y-4"><MyOAuthConsentHistory projectId={props.projectId} refreshKey={props.refreshKey ?? 0} /><ProjectMcpAccessPanel {...props} /></div>;
+}
+
+/**
+ * Individual user's consent records. The server returns only the authenticated
+ * session owner's rows; client labels are never used as authority.
+ * No stored consent is evidence of a currently running external application.
+ */
+function MyOAuthConsentHistory({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
+  const [rows, setRows] = useState<MyMcpOAuthConsent[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const generationRef = useRef<{ active: boolean } | null>(null);
+  const pendingRef = useRef(false);
+
+  useEffect(() => {
+    const generation = { active: true };
+    generationRef.current = generation;
+    pendingRef.current = false;
+    setRows(null); setTruncated(false); setLoading(true);
+    setBusyId(null); setError(null); setNotice(null);
+    listMyMcpOAuthConsents(projectId).then(result => {
+      if (!generation.active || generationRef.current !== generation) return;
+      setRows(result.consents); setTruncated(result.truncated);
+    }).catch(reason => {
+      if (generation.active && generationRef.current === generation) {
+        setError(reason instanceof Error ? reason.message : "Consent history could not be loaded.");
+      }
+    }).finally(() => {
+      if (generation.active && generationRef.current === generation) setLoading(false);
+    });
+    return () => { generation.active = false; };
+  }, [projectId, refreshKey, reload]);
+
+  async function disconnect(consent: MyMcpOAuthConsent) {
+    if (pendingRef.current || loading || !rows) return;
+    const generation = generationRef.current;
+    if (!generation?.active) return;
+    pendingRef.current = true;
+    setBusyId(consent.id); setError(null); setNotice(null);
+    try {
+      const result = await revokeMyMcpOAuthConsent(projectId, consent.id);
+      if (!generation.active || generationRef.current !== generation) return;
+      if (result.status !== "revoked" || result.id !== consent.id) throw Error("Revocation result did not match this consent.");
+      setRows(current => current?.map(row => row.id === consent.id ?
+        { ...row, status: "revoked" as const, currentAllowedTools: null } : row) ?? null);
+      setNotice("This consent has been revoked. The previously issued OAuth grant cannot be used again.");
+    } catch (reason) {
+      if (!generation.active || generationRef.current !== generation) return;
+      // A failed response may hide a committed revoke; do not claim either state.
+      setRows(null);
+      setError(reason instanceof Error ? reason.message : "Could not confirm the outcome. Reload to verify.");
+    } finally {
+      if (generation.active && generationRef.current === generation) {
+        pendingRef.current = false; setBusyId(null);
+      }
+    }
+  }
+
+  return <Card className="space-y-3 p-4" aria-labelledby="my-oauth-consents-title">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h3 id="my-oauth-consents-title" className="font-semibold">Your OAuth consent history</h3>
+        <p className="text-sm text-[var(--muted)]">These are consent records for your Tesbo account in this project, not proof that an app is online. You can revoke your own consent without changing the project owner&apos;s client approval.</p>
+      </div>
+      <Button variant="secondary" disabled={loading || busyId !== null}
+        onClick={() => setReload(x => x + 1)}>Reload history</Button>
+    </div>
+    {loading && <p role="status">Loading your OAuth consent history…</p>}
+    {error && <p role="alert" className="text-sm text-[var(--error-foreground)]">{error}</p>}
+    {notice && <p role="status" className="text-sm">{notice}</p>}
+    {rows && rows.length === 0 && <p className="text-sm text-[var(--muted)]">You have not authorized an OAuth client for this project.</p>}
+    {rows && rows.length > 0 && <ul className="space-y-2" aria-label="Your OAuth consent records">
+      {rows.map(consent => {
+        const stateLabel = consent.status === "revoked" ? "Revoked" :
+          consent.status === "reconsent_required" ? "Reauthorization required" : "Consent recorded (not live status)";
+        return <li key={consent.id} className="space-y-1 rounded-lg border border-[var(--border)] p-3 text-sm">
+          <p className="font-medium break-words">{consent.clientName}</p>
+          <p className="break-all text-[var(--muted)]">{consent.clientId}</p>
+          <p>State: {stateLabel}</p>
+          <p>{consent.status === "consent_current" ? "Read-only tools: " + (consent.currentAllowedTools ? consent.currentAllowedTools.join(", ") : "all currently permitted read tools") : "This consent has no current access."}</p>
+          <p className="text-[var(--muted)]">Approved resource: {consent.resource}</p>
+          <p className="text-[var(--muted)]">Consent recorded: {new Date(consent.createdAt).toLocaleString()}</p>
+          {consent.status !== "revoked" && <Button variant="secondary" disabled={busyId !== null}
+            onClick={() => void disconnect(consent)}>
+            {busyId === consent.id ? "Revoking…" : "Revoke my consent"}
+          </Button>}
+        </li>;
+      })}
+    </ul>}
+    {truncated && <p className="text-sm text-[var(--muted)]">Only the 50 most recent consent records are shown. Older history is retained but not displayed here.</p>}
+  </Card>;
 }
 
 function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: ExternalMcpAccessPanelProps) {
