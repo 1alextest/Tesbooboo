@@ -2,7 +2,7 @@ import { LegacyService } from "./legacy.service";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const USER = "22222222-2222-4222-8222-222222222222";
-type Row = { provider: string; generated_count: number; saved_count: number; task_status: string };
+type Row = { provider: string | null; generated_count: number; saved_count: number; task_status: string };
 
 /**
  * Exercise the actual Zyra dashboard read and inspect the SQL submitted to DB.
@@ -27,7 +27,8 @@ function setup(records: Row[]) {
       const closed = records.filter(record => record.task_status === "done");
       // Reflect the exact artifact type restriction in the submitted aggregate:
       // without the SQL exclusion these fixtures MUST contaminate the result.
-      const excludeNonTestcase = sql.includes("provider NOT IN ('external_requirement_proposal', 'external_document_proposal')");
+      const excludeNonTestcase = sql.includes("provider IS DISTINCT FROM 'external_requirement_proposal'") &&
+        sql.includes("provider IS DISTINCT FROM 'external_document_proposal'");
       const caseRows = excludeNonTestcase
         ? closed.filter(record => !["external_requirement_proposal", "external_document_proposal"].includes(record.provider))
         : closed;
@@ -54,7 +55,20 @@ describe("Zyra approval-rate artifact classification", () => {
     const response = await svc.zyraAgent(PROJECT, USER);
     expect(response.approvalRate).toBe(47); // 7 approved / 15 decided case drafts
     expect(sqls.find(sql => sql.includes("SUM(saved_count)"))).toContain(
-      "provider NOT IN ('external_requirement_proposal', 'external_document_proposal')"
+      "provider IS DISTINCT FROM 'external_requirement_proposal'"
+    );
+  });
+
+  it("preserves legacy case batches with no provider value instead of silently omitting them", async () => {
+    const { svc, sqls } = setup([
+      { provider: null, generated_count: 5, saved_count: 5, task_status: "done" },
+      { provider: "zyra_chat", generated_count: 5, saved_count: 3, task_status: "done" },
+      { provider: "external_document_proposal", generated_count: 10, saved_count: 0, task_status: "done" }
+    ]);
+    const response = await svc.zyraAgent(PROJECT, USER);
+    expect(response.approvalRate).toBe(80); // 8 accepted / 10 case drafts, not 8 / 20
+    expect(sqls.find(sql => sql.includes("SUM(saved_count)"))).toContain(
+      "provider IS DISTINCT FROM 'external_document_proposal'"
     );
   });
 
