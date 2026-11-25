@@ -102,6 +102,8 @@ A companion `ZYR-P07` regression exercises the MCP credential boundary in Tesboâ
 
 The comparison ran on the assistant surface. The workspace exposed neither a configured Tesbo MCP connection nor a running native Zyra or local-model service. The authenticated local coding CLI stopped before inference. The successful sessions received their method in the input. Native method retrieval, inference through the project model allocation and cross-client enforcement are still unverified. The [audit record](zyra-review-pilot.json) contains the shared worksheet, frozen rubric, method provenance and both answers. The [Playwright inventory](../../../e2e/README.md#inventory-at-development-commit-399b1803) records the product tests available to serve as independent references.
 
+The [first-authoring pilot](zyra-proactive-authoring.md) follows this review comparison with a fresh feature request and 20 native-normalized draft cases.
+
 ## What a team can change
 
 - **QA method.** A QA lead can propose a version of the shared review instructions with a new obligation, such as checking that an existing case was preserved. Qualify it on new positive and faulty controls before changing the effective Skill for the team.
