@@ -800,27 +800,39 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       [orgId, projectId, `Folder race parent ${randomUUID()}`, folderId]
     )).rows[0].id;
     const childName = `Folder race child ${randomUUID()}`;
-    const blocker = new Client({ connectionString: url });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /UPDATE knowledge_folders SET is_deleted = true/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const deleting = service(observed);
     const f = realService();
-    await blocker.connect();
     try {
-      await blocker.query("BEGIN");
-      await blocker.query("SELECT id FROM knowledge_folders WHERE id = $1 FOR UPDATE", [parent]);
+      // The delete has already soft-deleted the parent folder inside its transaction but has not
+      // committed. The create must queue behind the same project lock, then find the folder gone.
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, parent).then(() => null, (error) => error);
+      await acquiring;
       const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
         .then(() => null, (error) => error);
       await waitForAnyLockWait();
-      await blocker.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [parent]);
-      await blocker.query("COMMIT");
+      release();
+      expect(await deletion).toBeNull();
       expect(await create).toMatchObject({ status: 404 });
       expect((await setup.query(
         "SELECT COUNT(*)::int AS n FROM knowledge_folders WHERE project_id = $1 AND name = $2 AND is_deleted = false",
         [projectId, childName]
       )).rows[0].n).toBe(0);
     } finally {
-      await blocker.query("ROLLBACK").catch(() => undefined);
-      await blocker.end();
+      release();
+      await observed.end();
       await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND name = $2", [projectId, childName]);
-      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [parent]);
     }
   }, 30000);
 
