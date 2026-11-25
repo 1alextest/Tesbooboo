@@ -33,8 +33,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Test Codacy output guard
-        run: python3 -B -m unittest discover -s scripts -p 'test_codacy_output_guard.py'
+      - name: Test Codacy diagnostic and output guards
+        run: python3 -B -m unittest discover -s scripts -p 'test_codacy_*.py'
+
+      - name: Inventory Codacy input encoding and aliases
+        run: python3 -B scripts/codacy_input_diagnostics.py
 
       - name: Run Codacy Analysis CLI
         shell: bash
