@@ -9,6 +9,17 @@
 | Skill and client regression | Does a candidate Skill preserve the required output and behavior across our team’s clients? | Compare active and candidate versions on the same tasks in two independently capable clients. |
 | Customer-agent evaluation | Did our agent achieve the authorized outcome and stop where it should? | Observe one repeatable task in a customer-authorized disposable environment. |
 
+## What to reuse before building
+
+The [builder comparison and exercised Playwright controls](reviews/zyra-harness-prior-art.md) establish the starting point for each option.
+
+- **Assertion adequacy** starts with the existing versioned proposal reader and two independently graded controls. Stryker is already configured for a different code path. A fault-specific fixture must earn its own evidence.
+- **Run analysis** starts with a stock Playwright JSON report. It already preserves individual retries, errors and attachments. A two-project control demonstrated that case ID plus retry number collides. Map the CI run, reporter project, test, attempt and native case revision before attributing a result. Treat a healer’s proposed skip or assertion change as a draft edit requiring review.
+- **Skill regression** can use Promptfoo as an external trial driver once representative clients and comparable tasks are available. Compare against the native fixture and evaluate an existing Langfuse destination only where its incremental value and data handling justify it. A direct model call is insufficient evidence of client conformance.
+- **Customer-agent evaluation** can reuse independent state and action grading, as demonstrated in Sierra’s τ²-bench. Customer-approved rules or reference actions establish the expected state. An independently authorized reader observes what the agent actually changed. Actions requiring review receive their own checks even when a refused action leaves the same final state.
+
+A full agent runtime is a later adapter decision. Keep the existing Zyra task as the durable record. If a pilot needs a worker to wait for new evidence, resume on a matching event, recheck the member and revision, and consume the pending action once.
+
 ## How a tester reaches review
 
 The harness is a bounded extension of Zyra’s existing decision loop. An evaluation uses controlled tasks to measure Zyra, a Skill/client combination, or a customer’s agent. A team can adopt an individual option without deploying a general agent platform.
