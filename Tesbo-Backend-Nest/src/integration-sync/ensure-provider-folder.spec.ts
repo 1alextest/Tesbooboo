@@ -82,3 +82,46 @@ describe("IntegrationSyncService#ensureProviderFolder", () => {
     await expect(svc.ensureProviderFolder("org-1", "proj-1", "jira", "user-1")).rejects.toThrow(/different provider/i);
   });
 });
+
+describe("IntegrationSyncService#findProviderFolderForWrite", () => {
+  function makeClient(routes: Route[]) {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const query = jest.fn((sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      for (const route of routes) {
+        if (sql.includes(route.match)) return Promise.resolve({ rows: route.rows ?? [] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    return { client: { query } as unknown as Parameters<IntegrationSyncService["findProviderFolderForWrite"]>[2], calls };
+  }
+
+  it("finds the source_provider-tagged folder under the root", async () => {
+    const svc = makeService({} as DatabaseService);
+    const { client, calls } = makeClient([
+      rootFolderRoute(),
+      { match: "AND source_provider = $3", rows: [{ id: "tagged-folder-1" }] }
+    ]);
+    expect(await svc.findProviderFolderForWrite("proj-1", "jira", client)).toBe("tagged-folder-1");
+    expect(calls.some((call) => call.sql.includes("source_provider IS NULL"))).toBe(false);
+  });
+
+  it("sees the untagged default-named folder the coordinator adopted, so tickets are not failed after a successful adoption", async () => {
+    const svc = makeService({} as DatabaseService);
+    const { client, calls } = makeClient([
+      rootFolderRoute(),
+      { match: "AND source_provider = $3", rows: [] },
+      { match: "AND name = $3 AND source_provider IS NULL", rows: [{ id: "adopted-folder-1" }] }
+    ]);
+    expect(await svc.findProviderFolderForWrite("proj-1", "jira", client)).toBe("adopted-folder-1");
+    const adopted = calls.find((call) => call.sql.includes("source_provider IS NULL"));
+    expect(adopted!.params).toEqual(["proj-1", "root-1", "Jira"]);
+  });
+
+  it("returns null when the provider folder is gone, without creating one", async () => {
+    const svc = makeService({} as DatabaseService);
+    const { client, calls } = makeClient([rootFolderRoute()]);
+    expect(await svc.findProviderFolderForWrite("proj-1", "linear", client)).toBeNull();
+    expect(calls.some((call) => call.sql.includes("INSERT INTO knowledge_folders"))).toBe(false);
+  });
+});

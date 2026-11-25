@@ -567,13 +567,14 @@ export class IntegrationSyncProcessor extends WorkerHost {
     }
 
     const upserted = await this.db.transaction(async client => {
-      // The folder id came from the coordinator and may be stale by the time this job runs. Take
-      // the same project mutation lock as the KB folder deletion/move paths, re-resolve (or
-      // recreate) the provider folder under it, and write the mirror in the same transaction.
+      // The coordinator's folder id may be stale by the time this job runs. Take the same project
+      // mutation lock as the KB folder deletion/move paths, resolve the provider folder (tagged or
+      // adopted by name) under it, and write the mirror in the same transaction. A deleted folder
+      // is not recreated here: that ticket fails and the next sync resolves/recreates it.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
       const destinationFolderId = await this.runs.findProviderFolderForWrite(projectId, provider, client);
       if (!destinationFolderId) {
-        throw new Error(`The ${PROVIDER_FOLDER_NAMES[provider]} folder was deleted during the run; the next sync will recreate it.`);
+        throw new Error(`The ${PROVIDER_FOLDER_NAMES[provider]} folder was deleted or moved during the run; the next sync will resolve it.`);
       }
       return client.query<{ id: string; inserted: boolean }>(
         `INSERT INTO knowledge_documents (

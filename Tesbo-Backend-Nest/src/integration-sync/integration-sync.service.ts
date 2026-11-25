@@ -438,7 +438,15 @@ export class IntegrationSyncService {
       "SELECT id FROM knowledge_folders WHERE project_id = $1 AND parent_folder_id = $2 AND source_provider = $3 AND is_deleted = false LIMIT 1",
       [projectId, root.rows[0].id, provider]
     );
-    return folder.rows[0]?.id || null;
+    if (folder.rows[0]) return folder.rows[0].id;
+    // Match ensureProviderFolder's historical name-slot reuse: a pre-existing user folder named
+    // exactly "Jira"/"Linear"/"Notion" is adopted by the coordinator without being tagged, so the
+    // worker must see the same folder or every ticket would fail after a successful adoption.
+    const adopted = await client.query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND parent_folder_id = $2 AND name = $3 AND source_provider IS NULL AND is_deleted = false LIMIT 1",
+      [projectId, root.rows[0].id, PROVIDER_FOLDER_NAMES[provider] || provider]
+    );
+    return adopted.rows[0]?.id || null;
   }
 
   private async ensureRootFolder(organizationId: string, projectId: string, userId: string | null): Promise<string> {

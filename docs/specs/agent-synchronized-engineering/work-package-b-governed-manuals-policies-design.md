@@ -518,10 +518,11 @@ All are now transaction-scoped:
   (`FOR SHARE`) inside the transaction with the root fallback, and keeps the per-document advisory for
   appends. A deleted AI Memory folder falls back to the undeletable root; embedding enqueue stays
   after commit.
-- The sync worker takes the advisory lock, re-resolves the existing provider folder under it, and
-  writes the mirror in the same transaction; the stale coordinator `folderId` is no longer carried in
-  the job payload. It never recreates a deleted folder: that ticket fails and the next sync's
-  coordinator recreates it, so a user deletion or disconnect is not resurrected by a late job.
+- The sync worker takes the advisory lock, re-resolves the existing provider folder under it
+  (source_provider-tagged, or the untagged default-named folder the coordinator adopts), and writes
+  the mirror in the same transaction; the stale coordinator `folderId` is no longer carried in the job
+  payload. It never recreates a deleted folder: that ticket fails and the next sync's coordinator
+  recreates it, so a user deletion or disconnect is not resurrected by a late job.
   Post-commit sync-event/notification/embedding effects are unchanged.
 
 Evidence:
