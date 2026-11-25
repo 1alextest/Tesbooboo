@@ -78,6 +78,10 @@ function boundedLines(lines: string[], start: number, end: number): { lines: str
       break;
     }
   }
+  if (cutoff === 0 && selected.length > 0 && selected[0].length > 0) {
+    // A single over-long line (a minified JSON body) still gets a bounded slice.
+    return { lines: [selected[0].slice(0, EXCERPT_CHARS)], truncated: true };
+  }
   return { lines: selected.slice(0, cutoff), truncated: cutoff < selected.length };
 }
 
@@ -131,23 +135,31 @@ export function compareDocuments(
   const fields = values.map(({ key, before, after }) => {
     const inherited = omittedKeys.has(key);
     const effectiveAfter = inherited ? before : after;
+    const status = inherited ? "inherited" : !base && (effectiveAfter ?? "") !== "" ? "added" : statusOf(before, effectiveAfter, false);
     const diff = diffLines(before, effectiveAfter);
+    // A cleared value has no "added" side, an added value has no "removed" side; without this the
+    // empty string representation would render as a second, confusing +/- line.
+    const removedLines = status === "added" ? [] : diff.removedLines;
+    const addedLines = status === "cleared" ? [] : diff.addedLines;
     return {
       key,
       label: LABELS[key],
-      status: !base && !inherited && (effectiveAfter ?? "") !== "" ? "added" : statusOf(before, effectiveAfter, inherited),
+      status,
       oldValue: before,
       newValue: effectiveAfter,
       oldLength: before?.length ?? 0,
       newLength: effectiveAfter?.length ?? 0,
-      ...diff
+      removedLines,
+      addedLines,
+      truncated: diff.truncated
     };
   });
-  const changedFields = fields.filter((field) => field.status !== "unchanged");
+  // Inherited fields are preserved, not changed: they must not inflate the count, the metadata-only
+  // badge, or the identical state.
+  const changedFields = fields.filter((field) => field.status !== "unchanged" && field.status !== "inherited");
   const changedKeys = new Set(changedFields.map((field) => field.key));
-  const contentKeys: ComparisonFieldKey[] = ["text", "html", "json"];
-  const representationOnly = changedFields.length > 0 && changedKeys.size > 0
-    && [...changedKeys].every((key) => contentKeys.includes(key))
+  const representationOnly = changedFields.length > 0
+    && [...changedKeys].every((key) => key === "html" || key === "json")
     && (changedKeys.has("html") || changedKeys.has("json"));
   return {
     fields,
@@ -160,7 +172,7 @@ export function compareDocuments(
 
 /** Stable display ordering: changed fields first, then the stored order. */
 export function orderedComparisonFields(result: ComparisonResult): ComparisonField[] {
-  return [...result.changedFields, ...result.fields.filter((field) => field.status === "unchanged")];
+  return [...result.changedFields, ...result.fields.filter((field) => field.status === "unchanged" || field.status === "inherited")];
 }
 
 /** A short exact identity for labels/buttons; never used as document content. */

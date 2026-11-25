@@ -2696,6 +2696,14 @@ test.describe("governed skills operator journey (UI)", () => {
           contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: longText }] }] },
           governedMetadata: metadata },
       });
+      const metadataOnly = await stage({
+        requestKey: `cmp-metadata-${suffix}`, operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: target.title, governedMetadata: { ...metadata, distribution: "external" } },
+      });
+      const emptyCreate = await stage({
+        requestKey: `cmp-empty-create-${suffix}`, operation: "create", documentType: "user_manual", folderId: root,
+        document: { title: `Empty new manual ${suffix}`, governedMetadata: metadata },
+      });
 
       const inheritedPage = await open(browser, `/agents/tasks/${inherited.id}`);
       const inheritedComparison = inheritedPage.getByTestId("managed-document-comparison");
@@ -2727,6 +2735,18 @@ test.describe("governed skills operator journey (UI)", () => {
       const longPage = await open(browser, `/agents/tasks/${longCandidate.id}`);
       await expect(longPage.getByTestId("managed-document-comparison-field-text")).toContainText("Excerpt bounded");
       await expect(longPage.getByTestId("managed-document-comparison-new-text")).toContainText("LONG-END");
+      await expect(longPage.getByTestId("managed-document-comparison-field-text")).not.toContainText("without a visible line difference");
+
+      const metadataPage = await open(browser, `/agents/tasks/${metadataOnly.id}`);
+      await expect(metadataPage.getByTestId("managed-document-comparison-summary")).toContainText("Metadata only");
+      await expect(metadataPage.getByTestId("managed-document-comparison-summary")).toContainText("1 changed field");
+      await expect(metadataPage.getByTestId("managed-document-comparison-field-text")).toHaveAttribute("data-status", "inherited");
+
+      const emptyCreatePage = await open(browser, `/agents/tasks/${emptyCreate.id}`);
+      await expect(emptyCreatePage.getByTestId("managed-document-comparison-base-identity")).toHaveText("—");
+      await expect(emptyCreatePage.getByTestId("managed-document-comparison-field-text")).not.toHaveAttribute("data-status", "inherited");
+      await expect(emptyCreatePage.getByTestId("managed-document-comparison-field-html")).not.toHaveAttribute("data-status", "inherited");
+      await expect(emptyCreatePage.getByTestId("managed-document-comparison-field-json")).not.toHaveAttribute("data-status", "inherited");
     } finally {
       for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
       await ownerApi.delete(`${base()}/apikeys/${token.id}`, { failOnStatusCode: false });

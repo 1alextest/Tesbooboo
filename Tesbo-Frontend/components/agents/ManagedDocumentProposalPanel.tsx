@@ -43,9 +43,13 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
   // Omitted representations inherit the pinned base; an explicit null/empty value is a proposed
   // clear and must compare as a change, so only `undefined` is treated as omission.
   const omitted = new Set<ComparisonFieldKey>();
-  if (proposal.proposed.contentText === undefined) omitted.add("text");
-  if (proposal.proposed.contentHtml === undefined) omitted.add("html");
-  if (proposal.proposed.contentJson === undefined) omitted.add("json");
+  // Only an update can inherit a base; a create's missing representations mean "the new document
+  // starts without it", not "the pinned base is retained".
+  if (pinnedBase) {
+    if (proposal.proposed.contentText === undefined) omitted.add("text");
+    if (proposal.proposed.contentHtml === undefined) omitted.add("html");
+    if (proposal.proposed.contentJson === undefined) omitted.add("json");
+  }
   const effectiveDocument: ComparableDocument = {
     title: proposal.proposed.title,
     contentText: proposal.proposed.contentText !== undefined ? proposal.proposed.contentText ?? null : pinnedBase?.contentText ?? null,

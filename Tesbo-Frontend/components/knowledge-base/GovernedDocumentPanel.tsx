@@ -80,6 +80,7 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
   const [openedVersion, setOpenedVersion] = useState<KnowledgeDocumentVersionDetail | null>(null);
   const [comparisonVersionId, setComparisonVersionId] = useState("");
   const [comparisonDetail, setComparisonDetail] = useState<KnowledgeDocumentVersionDetail | null>(null);
+  const [comparisonLoadedId, setComparisonLoadedId] = useState("");
   const [comparisonState, setComparisonState] = useState<{ loading: boolean; error: string | null; denied: boolean }>({ loading: false, error: null, denied: false });
   const comparisonSeq = useRef(0);
   const [metadataDirty, setMetadataDirty] = useState(false);
@@ -164,14 +165,18 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
     const seq = ++comparisonSeq.current;
     if (!comparisonVersionId) {
       setComparisonDetail(null);
+      setComparisonLoadedId("");
       setComparisonState({ loading: false, error: null, denied: false });
       return;
     }
+    setComparisonDetail(null);
+    setComparisonLoadedId("");
     setComparisonState({ loading: true, error: null, denied: false });
     try {
       const detail = await getKnowledgeDocumentVersion(projectId, doc.id, comparisonVersionId);
       if (seq !== comparisonSeq.current || !mounted.current) return;
       setComparisonDetail(detail);
+      setComparisonLoadedId(comparisonVersionId);
       setComparisonState({ loading: false, error: null, denied: false });
     } catch (err) {
       if (seq !== comparisonSeq.current || !mounted.current) return;
@@ -320,9 +325,6 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
     governedMetadata: (submittedDetail.snapshotMetadata?.governedMetadata as Record<string, unknown> | undefined) ?? {},
   } : null;
   const selectedComparisonVersion = versions.find((version) => version.id === comparisonVersionId);
-  const comparisonIsCurrentAuthority = Boolean(selectedComparisonVersion && doc.reviewedVersionId === selectedComparisonVersion.id
-    && doc.status === selectedComparisonVersion.snapshotKind
-    && (selectedComparisonVersion.snapshotKind === "approved" || selectedComparisonVersion.snapshotKind === "rejected"));
   const historicalComparable: ComparableDocument | null = comparisonDetail ? {
     title: comparisonDetail.title,
     contentText: comparisonDetail.contentText ?? null,
@@ -388,7 +390,12 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
                     <Select
                       className="max-w-full"
                       value={comparisonVersionId}
-                      onChange={(event) => setComparisonVersionId(event.target.value)}
+                      onChange={(event) => {
+                        setComparisonVersionId(event.target.value);
+                        setComparisonDetail(null);
+                        setComparisonLoadedId("");
+                        setComparisonState({ loading: true, error: null, denied: false });
+                      }}
                       disabled={earlierImmutableVersions.length === 0 || comparisonState.loading}
                       data-testid="governed-comparison-version"
                     >
@@ -408,11 +415,11 @@ export function GovernedDocumentPanel({ projectId, doc, canManage, onChanged, on
                       <p>{comparisonState.error}</p>
                       <Button size="sm" variant="secondary" className="mt-2" onClick={() => void loadComparison()}>Retry comparison</Button>
                     </div>
-                  ) : historicalComparable && selectedComparisonVersion ? (
+                  ) : historicalComparable && selectedComparisonVersion && comparisonLoadedId === comparisonVersionId ? (
                     <div className="mt-2">
                       <KnowledgeComparison
                         testId="governed-historical-comparison"
-                        baseLabel={`v${selectedComparisonVersion.versionNumber} · ${selectedComparisonVersion.snapshotKind || "snapshot"}${comparisonIsCurrentAuthority ? " · current decision authority" : " · historical, not current authority"}`}
+                        baseLabel={`v${selectedComparisonVersion.versionNumber} · ${selectedComparisonVersion.snapshotKind || "snapshot"} · historical, not current authority`}
                         baseIdentity={`${shortIdentity(selectedComparisonVersion.id)} · digest ${shortIdentity(String(selectedComparisonVersion.snapshotMetadata?.contentDigest || ""))}`}
                         targetLabel={`Submitted v${submittedVersion.versionNumber}`}
                         targetIdentity={`${shortIdentity(submittedVersion.id)} · digest ${shortIdentity(String(submittedVersion.snapshotMetadata?.contentDigest || ""))}`}

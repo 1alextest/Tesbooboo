@@ -2850,7 +2850,7 @@ test.describe("knowledge base (UI)", () => {
     });
     expect(firstSubmission.status(), await firstSubmission.text()).toBe(201);
     const firstVersion = await firstSubmission.json();
-    const firstApproval = await api.patch(kbUrl(`/documents/${documentId}/governed-approval`), { data: { versionId: firstVersion.id } });
+    const firstApproval = await api.post(kbUrl(`/documents/${documentId}/governed-approval`), { data: { versionId: firstVersion.id } });
     expect(firstApproval.status(), await firstApproval.text()).toBe(201);
     const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
 

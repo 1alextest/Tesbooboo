@@ -100,7 +100,7 @@ export function KnowledgeComparison({
                 <div className="mt-2 space-y-1.5">
                   <Lines lines={field.removedLines} marker="−" toneClass="border-[var(--error)]/25 bg-[var(--error-soft)] text-[var(--error-foreground)]" />
                   <Lines lines={field.addedLines} marker="+" toneClass="border-[var(--success)]/25 bg-[var(--success-soft)] text-[var(--success-foreground)]" />
-                  {!field.removedLines.length && !field.addedLines.length && (
+                  {!field.removedLines.length && !field.addedLines.length && !field.truncated && (
                     <p className="text-xs text-[var(--muted)]">
                       {field.status === "cleared" ? "This value is explicitly empty in the compared revision." : "The stored length changed without a visible line difference."}
                     </p>
