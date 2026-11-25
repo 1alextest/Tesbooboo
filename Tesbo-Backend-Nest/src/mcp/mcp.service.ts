@@ -330,9 +330,14 @@ export class McpService {
     // A binding is evidence of consent, NOT evidence that a client is online.
     const rows = await this.db.query(
       `SELECT b.grant_fingerprint,b.client_id,b.resource,b.approval_revision,
-              b.created_at,b.revoked_at,p.settings
+              b.created_at,b.revoked_at,p.settings,
+              (pm.id IS NOT NULL AND om.id IS NOT NULL) AS membership_current
          FROM mcp_oauth_grant_approval_bindings b
          JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
+         LEFT JOIN project_members pm ON pm.id=b.project_membership_id
+           AND pm.project_id=b.project_id AND pm.user_id::text=b.account_id
+         LEFT JOIN organization_members om ON om.id=b.organization_membership_id
+           AND om.organization_id=p.organization_id AND om.user_id::text=b.account_id
         WHERE b.project_id=$1 AND b.account_id=$2
         ORDER BY b.created_at DESC,b.grant_fingerprint DESC LIMIT 51`,
       [projectId, req.userId]
@@ -348,7 +353,8 @@ export class McpService {
         if (client && isOAuthMcpGrant(client)) {
           label = client.clientName;
           currentAllowedTools = client.allowedTools;
-          approved = access.enabled && access.revision === Number(row.approval_revision) &&
+          approved = row.membership_current === true && access.enabled &&
+            access.revision === Number(row.approval_revision) &&
             client.scopes.length === 1 && client.scopes[0] === "read" &&
             (!client.expiresAt || Date.parse(client.expiresAt) > Date.now());
         }
