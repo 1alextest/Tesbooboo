@@ -1,15 +1,5 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-# This workflow checks out code, performs a Codacy security scan
-# and integrates the results with the
-# GitHub Advanced Security code scanning feature.  For more information on
-# the Codacy security scan action usage and parameters, see
-# https://github.com/codacy/codacy-analysis-cli-action.
-# For more information on Codacy Analysis CLI in general, see
-# https://github.com/codacy/codacy-analysis-cli.
+# Docker invocation follows the Codacy 7.10.4 wrapper:
+# https://github.com/codacy/codacy-analysis-cli/blob/dd61b2eef7c1ca8302f6223ee28bba68e2527a8d/bin/codacy-analysis-cli.sh
 
 name: Codacy Security Scan
 
@@ -41,26 +31,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      # Execute Codacy Analysis CLI and generate a SARIF output with the security issues identified during the analysis
+      - name: Test Codacy output guard
+        run: python3 -B -m unittest discover -s scripts -p 'test_codacy_output_guard.py'
+
       - name: Run Codacy Analysis CLI
-        # Pinned compatibility candidate: upstream CLI 7.10.4 (newer Docker client).
-        uses: codacy/codacy-analysis-cli-action@6f415a0d3790c227a9cff580098545188e0f4e5a
-        with:
-          # Check https://github.com/codacy/codacy-analysis-cli#project-token to get your project token from your Codacy repository
-          # You can also omit the token and run the tools that support default configurations
-          project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          verbose: true
-          output: results.sarif
-          format: sarif
-          # Adjust severity of non-security issues
-          gh-code-scanning-compat: true
-          # Findings are adjudicated by GitHub code scanning; execution failures are not findings.
-          # Never upload an incomplete analysis as a successful scan.
-          fail-if-incomplete: true
-          run-docker-tools: true
-          upload: false
-          allow-network: false
-          max-allowed-issues: 2147483647
+        shell: bash
+        env:
+          CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          SCAN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          # Same 7.10.4 image and analyzer defaults as the upstream action. Use its
+          # published digest and Docker's container ID to supervise the formatter.
+          image=codacy/codacy-analysis-cli:7.10.4@sha256:2ae34a48ca2a70b221dd51f470edca878db01d3f7186f34e397595bef287978a
+          cidfile="$RUNNER_TEMP/codacy-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.cid"
+          # Analyzer diagnostics can contain repository text. Keep workflow
+          # command processing disabled while it is streamed to the job log.
+          marker=$(cat /proc/sys/kernel/random/uuid)
+          echo "::stop-commands::$marker"
+          trap 'echo "::$marker::"' EXIT
+          docker run --rm --cidfile "$cidfile" \
+            --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
+            "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$SCAN_COMMIT" \
+            --verbose --format sarif --output "$GITHUB_WORKSPACE/results.sarif" \
+            --gh-code-scanning-compat --fail-if-incomplete --max-allowed-issues 2147483647 \
+            2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile"
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
