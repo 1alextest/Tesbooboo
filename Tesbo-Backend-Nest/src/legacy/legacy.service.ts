@@ -16015,7 +16015,8 @@ export class LegacyService implements OnModuleInit {
             -- Only completed testcase proposal batches are eligible. Requirement
             -- bundles count revision/link operations; managed document requests
             -- count documents. Neither is a generated testcase denominator.
-            AND provider NOT IN ('external_requirement_proposal', 'external_document_proposal')`,
+            AND provider IS DISTINCT FROM 'external_requirement_proposal'
+            AND provider IS DISTINCT FROM 'external_document_proposal'`,
         [projectId, ZYRA_AGENT_NAMES]
       )
     ]);
