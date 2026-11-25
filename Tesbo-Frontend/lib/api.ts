@@ -2105,8 +2105,12 @@ export interface TestCaseRevisionBasis {
 }
 
 /** The exact case revisions a requirement link must be activated against. */
-export async function getTestCaseRevisionBasis(projectId: string, testcaseId: string): Promise<TestCaseRevisionBasis> {
-  const data = await api<Record<string, unknown>>(`/api/projects/${projectId}/testcases/${testcaseId}`);
+export async function getTestCaseRevisionBasis(
+  projectId: string, testcaseId: string, signal?: AbortSignal
+): Promise<TestCaseRevisionBasis> {
+  const data = await api<Record<string, unknown>>(
+    `/api/projects/${projectId}/testcases/${testcaseId}`, { signal }
+  );
   return {
     id: String(data.id ?? testcaseId),
     title: String(data.title ?? ""),
