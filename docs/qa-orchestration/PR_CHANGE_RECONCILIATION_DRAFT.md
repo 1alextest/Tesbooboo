@@ -59,7 +59,7 @@ For the FR-124 pilot, require the reviewer to name the decision at stake, the te
 
 ## Concurrent work on a governed artifact
 
-Use a scoped proposal as the working copy, a native artifact revision as its base and an exact human decision for publication. A member can fetch, draft, compare, reconcile and submit through supported MCP capabilities. Opening a change or completing a task does not move the official artifact revision. The [versioned collaboration contract](../specs/agent-synchronized-engineering/mcp-change-workflow.md) specifies the two-author/one-reviewer workflow, typed conflict rules, reversal, method and authorization checks, and eight acceptance exercises. It applies to native and external entry points and preserves the separate provider-PR and release decisions.
+For case work, the existing Zyra task or chat review batch is the working copy. Continue an explicitly shared draft by its existing ID across permitted clients. Distinguish its draft revision from the official case revision used as its base. The current selected-save writer remains the publication owner. A member can fetch, draft, compare, reconcile and submit through supported MCP capabilities. Opening a change or completing a task does not move the official artifact revision. The [versioned collaboration contract](../specs/agent-synchronized-engineering/mcp-change-workflow.md) specifies the two-author/one-reviewer workflow, typed conflict rules, reversal, method and authorization checks, and eight acceptance exercises. It applies to native and external entry points and preserves the separate provider-PR and release decisions.
 
 ## Required sequence
 
