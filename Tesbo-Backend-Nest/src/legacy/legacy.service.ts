@@ -12858,6 +12858,10 @@ export class LegacyService implements OnModuleInit {
     const doc = await this.kbDocument(projectId, documentId);
     this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const res = await this.db.transaction(async client => {
+      // Match deleteKnowledgeFolder/move paths: advisory first, then domain rows. Without this the
+      // source-document lock and the folder cascade can deadlock, or the copy can be inserted into
+      // a folder whose ancestor delete already took its document snapshot.
+      await this.lockSkillAssignments(client, projectId);
       // Pin the source while copying. A token duplicate that waited here must not copy a document
       // that became governed in the meantime, and a later conversion must see the copy commit first.
       const source = (await client.query(
