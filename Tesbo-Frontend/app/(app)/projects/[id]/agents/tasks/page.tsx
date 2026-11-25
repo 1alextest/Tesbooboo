@@ -18,7 +18,9 @@ import { Button, Field, FieldLabel, Modal, PageLoader, Select, StatusChip, Texta
 import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
 import TaskQuickViewPanel, { JIRA_BADGE_CLASS, latestFailureDetail, normalizeTaskStatus as normalizeStatus, taskStatusLabel, taskStatusTone as tone } from "@/components/agents/TaskQuickViewPanel";
 import ReviewBoard from "@/components/agents/ReviewBoard";
+import ManagedDocumentProposalList from "@/components/agents/ManagedDocumentProposalList";
 import { markdownToPlainText, renderMarkdown } from "@/lib/markdown";
+import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
@@ -36,7 +38,7 @@ const columns = [
   { key: "done", label: "Done", dot: "var(--success)" },
 ] as const;
 
-type TaskView = "tasks" | "kanban" | "review";
+type TaskView = "tasks" | "kanban" | "review" | "documents";
 
 const PLAIN_TEXT_BLOCK_TAGS = new Set([
   "P", "DIV", "LI", "UL", "OL", "H1", "H2", "H3", "H4", "H5", "H6",
@@ -118,8 +120,11 @@ export default function ZyraTasksPage() {
   const router = useRouter();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
-  const { project } = useProjectData();
+  const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
+  const canApproveDocuments = projectMembers.length === 0
+    ? null
+    : isKnowledgeOwnerOrManager(projectMembers.find((member) => member.userId === currentUser?.userId)?.role);
   const cacheKey = `agents-tasks:${projectId}`;
   const cached = getPageCache<AgentsTasksPageData>(cacheKey);
   const [state, setState] = useState<ZyraAgentState | null>(cached?.state ?? null);
@@ -341,6 +346,7 @@ export default function ZyraTasksPage() {
             { key: "tasks" as const, label: "Task window" },
             { key: "kanban" as const, label: "Kanban board" },
             { key: "review" as const, label: "Review Board" },
+            { key: "documents" as const, label: "Document proposals" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -414,6 +420,8 @@ export default function ZyraTasksPage() {
         </section>
       ) : activeView === "review" ? (
         <ReviewBoard projectId={projectId} />
+      ) : activeView === "documents" ? (
+        <ManagedDocumentProposalList key={projectId} projectId={projectId} canApprove={canApproveDocuments} members={projectMembers} />
       ) : (
         <div className="grid gap-4 xl:grid-cols-5">
           {columns.map((column) => {
