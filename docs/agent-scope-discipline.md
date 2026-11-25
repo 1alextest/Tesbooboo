@@ -48,6 +48,12 @@ behavior-graph / Model Studio work follows MBT-001 in [FEATURE_DOCUMENTATION.md]
 and the `docs/reviews/*` assurance records. Do not add a new MCP tool, graph surface, store or schema
 outside the increment under review.
 
+## Show the application journey in the existing review record
+
+For a specification or change that affects a user journey, apply engineering principle 2 in [AGENTS.md](../AGENTS.md) to the ordinary entry point and materially different writers, principals and side effects. In the existing PR review record, connect the actor's goal, actual starting state and input to the real handler, authority check, data read, writer and any jobs or external effects. Follow the same record through a fresh read and the next eligible person's decision. Pin the source revision and locations for each link. For a proposed link, give the owner, expected before/after and proof still needed. A UI label, role roster or passing component test alone cannot close a missing link.
+
+Blue identifies the actual entry and owner. Grey walks the journey. Green verifies the handoffs and downstream consumers. QA challenges one discriminating failure and a valid neighboring case for each material mechanism. Security and Red challenge identity and authority where they cross a boundary. Purple checks that the screen describes what the next person can actually decide. Graph links existing obligations and evidence. White reconciles the joins, each role's attributable evidence, residual unknowns and the scope of the conclusion. Record other applicable challenges in the same review and retain their existing responsibilities. Recheck affected links when the candidate, governing rules, permissions or integration changes. A bounded source finding can inform design while runtime acceptance remains open. For a worked example, see the [PR #264 application journey review](qa-orchestration/reviews/PR264-application-journey-review.md).
+
 ## Independent finding reconciliation
 
 Operational contract for engineering principle 18 in [AGENTS.md](../AGENTS.md). Applies to every PR, release and other acceptance decision with applicable automated or human findings, including CodeQL, DevSkim, Codacy, Snyk, dependency advisories, secret detection, quality checks and independent reviewers. The same reasoning applies outside software: distinguish an assessment completing from its findings being reconciled.

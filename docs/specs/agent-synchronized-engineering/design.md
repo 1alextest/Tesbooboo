@@ -196,6 +196,10 @@ Design isn't ready until library version lineage, composition conflict, root-met
 
 No implementation or current deployment claim is implied by this section.
 
+### 10.6 Shared authoring across MCP clients
+
+Use the existing T-422 method resolver and each artifact’s native proposal, revision and approval owners for [mandatory Skill delivery and cross-member conformance](skills-governance.md#mandatory-skill-delivery-and-cross-member-authoring-conformance). Bind the method-delivery receipt to the authenticated actor, target and operation. Record generation order only when a controlled path observes it. At staging and publication, check the applicable permissions, Skill, input revisions and validation result. The [MCP team attribution contract](mcp-team-attribution.md) defines the evidence that lets a project member distinguish a colleague’s proposal, a reviewer’s selection and a later service write in the same history.
+
 ## 11. Hybrid source-change detection and reconciliation — Kiro precedent, Tesbo implementation
 **Source-owner reuse:** The existing project source binding, current-cache graph capture/history, `GraphChangeReviewController`, native notification writers and Zyra review feed remain the canonical Tesbo sources. Integration adapters supply observations only; no second repository record system.
 
