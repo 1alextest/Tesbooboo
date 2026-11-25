@@ -100,6 +100,16 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
     throw new Error(`No PostgreSQL writer waited behind ${pid}`);
   }
+  async function waitForAnyLockWait() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if ((await setup.query(
+        "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+      )).rowCount) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error("No PostgreSQL writer entered a lock wait");
+  }
   async function waitForAdvisoryWait() {
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
@@ -734,6 +744,53 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     } finally {
       await observed.end();
       await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = $2", [projectId, `${title} (copy)`]);
+    }
+  });
+
+  it("does not strand a duplicate copy when an ancestor folder is deleted during the copy", async () => {
+    const ancestor = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Duplicate ancestor ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const destination = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Duplicate destination ${randomUUID()}`, ancestor]
+    )).rows[0].id;
+    const title = `Duplicate orphan ${randomUUID()}`;
+    await setup.query("UPDATE knowledge_documents SET title = $2, folder_id = $3 WHERE id = $1", [documentId, title, destination]);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let pausedSignal!: () => void;
+    const paused = new Promise<void>((resolve) => { pausedSignal = resolve; });
+    let held = false;
+    const observed = observedPool(async (sql) => {
+      if (!held && /FROM projects p JOIN project_members/.test(sql)) {
+        held = true;
+        pausedSignal();
+        await released;
+      }
+    });
+    const duplicating = realService(observed);
+    const deleting = service();
+    try {
+      // Hold the duplicate after its source/authority reads. A delete that starts now either
+      // waits on the same project advisory lock (fixed) or races the copy insert (pre-fix).
+      const duplicate = duplicating.duplicateKnowledgeDocument(projectId, actor, documentId).then(() => null, (error) => error);
+      await paused;
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, ancestor).then(() => null, (error) => error);
+      await waitForAnyLockWait();
+      release();
+      expect(await deletion).toBeNull();
+      expect(await duplicate).toBeNull();
+      expect((await setup.query(
+        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1 AND is_deleted = false",
+        [destination]
+      )).rows[0].n).toBe(0);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_documents WHERE folder_id = $1", [destination]);
+      await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[destination, ancestor]]);
     }
   });
 });
