@@ -523,9 +523,12 @@ All are now transaction-scoped:
   Post-commit sync-event/notification/embedding effects are unchanged.
 
 Evidence:
-- Failing-first tests-only head `1100ea3d` (`actions/runs/45539631646`): the folder-create race and the
-  Zyra-memory race both failed — the memory case reported `Expected: 0, Received: 1` live memory
-  document under the deleted folder; 726 tests passed.
+- Failing-first tests-only head `1100ea3d` (`actions/runs/45539631646`): the Zyra-memory race failed
+  with `Expected: 0, Received: 1` live memory document under the deleted folder; 726 tests passed.
+- The final folder-create regression was run tests-only at `827a20af`
+  (`actions/runs/45554682776`): the pre-fix create resolved (`Received has value: null`), i.e. a live
+  child was inserted under the folder the paused delete had already soft-deleted. The same test is
+  green with the fix (`e684b92f`, `actions/runs/45551136629`, 728 database tests).
 - The integration-worker defect was established from the coordinator→job folder-id lifecycle and is
   pinned by a processor contract test that fails if the transaction, advisory lock or in-transaction
   `ensureProviderFolder` call is removed; a deterministic queue/DB interleaving was not reproducible
@@ -535,4 +538,9 @@ Evidence:
 - `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
   folders.
 
-Native execution remains UNRUN; the native record update limitation is unchanged.
+Native coverage was staged through the approved project-scoped MCP connection (origin
+`https://tesbooboo-production.up.railway.app`, verified project `df072dfe-e4d0-406a-9350-e0d022c6323f`):
+review task `1d615021-4c92-46df-bcef-2d9745ca557b`, proposal revision
+`24f89e425bca573b52a41e1aa3281a7dae818ccb49fd7af463cf96c9e47644cc`, containing one requirement
+revision, one Draft case and one explicit case link. It remains `in_review` with no approved Skill
+assignment, so apply stays a human action; manual execution **UNRUN**.
