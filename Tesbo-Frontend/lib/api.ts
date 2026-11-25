@@ -1928,6 +1928,28 @@ export async function updateProjectMcpAccess(projectId: string, access: ProjectM
   return api(`/api/projects/${projectId}/mcp-access`, { method: "PUT", body: access });
 }
 
+/** A human consent record, not proof that the client is currently online. */
+export type MyMcpOAuthConsent = {
+  id: string; // Opaque binding ID; never the bearer or provider Grant ID.
+  clientId: string;
+  clientName: string;
+  resource: string;
+  status: "consent_current" | "reconsent_required" | "revoked";
+  createdAt: string;
+  revokedAt: string | null;
+};
+export async function listMyMcpOAuthConsents(projectId: string): Promise<{
+  consents: MyMcpOAuthConsent[]; truncated: boolean;
+}> {
+  return api("/api/projects/" + projectId + "/mcp-oauth-consents");
+}
+export async function revokeMyMcpOAuthConsent(projectId: string, consentId: string): Promise<{
+  id: string; status: "revoked"; replayed: boolean;
+}> {
+  return api("/api/projects/" + projectId + "/mcp-oauth-consents/" + encodeURIComponent(consentId),
+    { method: "DELETE" });
+}
+
 export interface ApiToken {
   id: string;
   name: string;
