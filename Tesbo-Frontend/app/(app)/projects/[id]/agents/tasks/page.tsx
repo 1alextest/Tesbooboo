@@ -19,6 +19,7 @@ import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workfl
 import TaskQuickViewPanel, { JIRA_BADGE_CLASS, latestFailureDetail, normalizeTaskStatus as normalizeStatus, taskStatusLabel, taskStatusTone as tone } from "@/components/agents/TaskQuickViewPanel";
 import ReviewBoard from "@/components/agents/ReviewBoard";
 import { markdownToPlainText, renderMarkdown } from "@/lib/markdown";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
@@ -111,6 +112,15 @@ function splitAcceptanceCriteria(text: string): { body: string; acceptanceCriter
 
   const body = [...lines.slice(0, markerIndex), ...lines.slice(endIndex)].join("\n").trim();
   return { body, acceptanceCriteria };
+}
+
+/** Counts proposal operations and native Draft-case receipts separately, never as testcases. */
+function TaskOutputCount({ task }: { task: ZyraTask }) {
+  const summary = summarizeZyraTaskOutput(task);
+  return <span className="block text-sm text-[var(--foreground)]">
+    <span className="block">{summary.primary}</span>
+    {summary.secondary && <span className="block text-xs text-[var(--muted)]">{summary.secondary}</span>}
+  </span>;
 }
 
 export default function ZyraTasksPage() {
@@ -378,7 +388,7 @@ export default function ZyraTasksPage() {
             <span>Task</span>
             <span>Status</span>
             <span>Jira</span>
-            <span>Generated</span>
+            <span>Output</span>
             <span>Tokens</span>
           </div>
           <div className="divide-y divide-[var(--border)]">
@@ -405,7 +415,7 @@ export default function ZyraTasksPage() {
                   {zyraTaskTicketKeys(task).length === 0 && <span className="text-xs text-[var(--muted)]">No tickets</span>}
                   {zyraTaskTicketKeys(task).length > 2 && <span className="text-xs text-[var(--muted)]">+{zyraTaskTicketKeys(task).length - 2}</span>}
                 </div>
-                <span className="text-sm text-[var(--foreground)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"}</span>
+                <TaskOutputCount task={task} />
                 <span className="font-mono text-sm text-[var(--muted)]">{task.tokenUsage.total}</span>
               </button>
             ))}
@@ -454,7 +464,7 @@ export default function ZyraTasksPage() {
                           )}
                         </div>
                       )}
-                      <p className="mt-2 text-xs text-[var(--muted)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"} generated - {task.tokenUsage.total} tokens</p>
+                      <div className="mt-2 text-xs text-[var(--muted)]"><TaskOutputCount task={task} /><span className="block mt-1">{task.tokenUsage.total} tokens</span></div>
                     </button>
                   ))}
                   {columnTasks.length === 0 && <div className="rounded-lg border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--muted)]">No tasks</div>}
