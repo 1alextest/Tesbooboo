@@ -58,6 +58,51 @@ def diagnose(root, entries, output):
     return counts
 
 
+def correlate_issues(root, entries, results, output):
+    """Match issue filenames only against the Git index; never open reported paths.
+
+    The pinned JSON formatter serializes a sealed Result type. Other variants
+    (metrics and clones) are not issue locations. A partial result is only a clue,
+    even if an issue points to a file the SARIF formatter cannot decode.
+    """
+    if not isinstance(results, list):
+        raise ValueError("Expected a Codacy JSON result array")
+    tracked = {path: mode for mode, path in entries}
+    matched = set()
+    counts = {"issues": 0, "unmatched": 0, "non-issue-records": 0}
+    for result in results:
+        issue = result.get("Issue") if isinstance(result, dict) else None
+        if not isinstance(issue, dict):
+            counts["non-issue-records"] += 1
+            continue
+        counts["issues"] += 1
+        filename = issue.get("filename")
+        if not isinstance(filename, str):
+            counts["unmatched"] += 1
+            continue
+        # No path normalization or filesystem access based on analyzer input.
+        # Accept only exact tracked paths, optionally with the checkout prefix.
+        if filename.startswith(str(root) + "/"):
+            filename = filename[len(str(root)) + 1:]
+        if filename.startswith("./"):
+            filename = filename[2:]
+        if filename not in tracked:
+            counts["unmatched"] += 1
+            continue
+        matched.add(filename)
+    candidates = 0
+    for path in sorted(matched):
+        status = classify(root, tracked[path], path)
+        if status != "utf8":
+            candidates += 1
+            print("Codacy issue encoding candidate: " + json.dumps(
+                {"path": path, "status": status}, ensure_ascii=True), file=output)
+    counts["distinct-tracked-paths"] = len(matched)
+    counts["encoding-or-access-candidates"] = candidates
+    print("Codacy issue correlation (diagnostic only): " + json.dumps(counts, sort_keys=True), file=output)
+    return counts
+
+
 if __name__ == "__main__":
     import sys
     root = Path.cwd()
@@ -66,4 +111,19 @@ if __name__ == "__main__":
         raise SystemExit("Codacy diagnostic checkout does not match the event commit")
     print("Codacy diagnostic source commit: " + head)
     entries = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=root)
-    diagnose(root, index_entries(entries), sys.stdout)
+    if len(sys.argv) == 3 and sys.argv[1] == "--correlate":
+        # A killed scanner may have left a partial or invalid JSON report.
+        # Never print parser exception text or raw data.
+        try:
+            report = Path(sys.argv[2])
+            if report.stat().st_size > 64 * 1024 * 1024:
+                raise ValueError("Diagnostic size limit exceeded")
+            with report.open("r", encoding="utf-8") as stream:
+                results = json.load(stream)
+            correlate_issues(root, index_entries(entries), results, sys.stdout)
+        except (OSError, ValueError, RecursionError):
+            raise SystemExit("Codacy JSON diagnostic unavailable or invalid; no correlation established") from None
+    elif len(sys.argv) == 1:
+        diagnose(root, index_entries(entries), sys.stdout)
+    else:
+        raise SystemExit("Unexpected diagnostic arguments")

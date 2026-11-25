@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from codacy_input_diagnostics import classify, diagnose, index_entries
+from codacy_input_diagnostics import classify, correlate_issues, diagnose, index_entries
 
 
 class CodacyInputDiagnosticsTest(unittest.TestCase):
@@ -43,3 +43,26 @@ class CodacyInputDiagnosticsTest(unittest.TestCase):
     def test_unmerged_index_refuses_ambiguous_inventory(self):
         with self.assertRaises(ValueError):
             list(index_entries(b"100644 abc 2\tconflict\0"))
+
+    def test_issue_correlation_uses_only_tracked_paths_and_prints_no_source_or_messages(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "valid").write_text("ordinary", encoding="utf-8")
+            (root / "binary").write_bytes(b"private-source" + b"\xff")
+            output = io.StringIO()
+            results = [
+                {"Issue": {"filename": "valid", "message": "private-message"}},
+                {"Issue": {"filename": str(root / "binary")}},
+                {"Issue": {"filename": "./binary"}},
+                {"Issue": {"filename": "../private-outside"}},
+                {"FileMetrics": {"filename": "binary"}},
+            ]
+            counts = correlate_issues(root, [(b"100644", "valid"), (b"100644", "binary")], results, output)
+            self.assertEqual(counts, {"issues": 4, "unmatched": 1, "non-issue-records": 1,
+                                      "distinct-tracked-paths": 2, "encoding-or-access-candidates": 1})
+            self.assertIn('"path": "binary"', output.getvalue())
+            self.assertNotIn("private-", output.getvalue())
+
+    def test_issue_correlation_rejects_wrong_report_shape(self):
+        with self.assertRaises(ValueError):
+            correlate_issues(Path("."), [], {"issues": []}, io.StringIO())

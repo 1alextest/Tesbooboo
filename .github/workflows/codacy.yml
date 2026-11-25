@@ -40,6 +40,7 @@ jobs:
         run: python3 -B scripts/codacy_input_diagnostics.py
 
       - name: Run Codacy Analysis CLI
+        id: scan
         shell: bash
         env:
           CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
@@ -70,6 +71,45 @@ jobs:
             --verbose --format sarif --output "$GITHUB_WORKSPACE/results.sarif" \
             --gh-code-scanning-compat --fail-if-incomplete --max-allowed-issues 2147483647 \
             2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile"
+
+      # Temporary diagnostic experiment on this PR only. The failed primary
+      # SARIF scan remains failed. Never upload this partial analysis.
+      - name: Correlate raw analyzer issue paths with encoding candidates
+        if: ${{ failure() && steps.scan.outcome == 'failure' && github.event_name == 'pull_request' && github.event.pull_request.number == 240 }}
+        timeout-minutes: 30
+        shell: bash
+        env:
+          CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        run: |
+          set -euo pipefail
+          scan_commit=$(git rev-parse HEAD)
+          [[ "$scan_commit" == "$GITHUB_SHA" ]]
+          diagnostic_dir=$(mktemp -d /tmp/codacy-json.XXXXXXXX)
+          cidfile="$diagnostic_dir/cli.cid"
+          cleanup() {
+            if [[ -f "$cidfile" ]]; then
+              id=$(cat "$cidfile")
+              if [[ "$id" =~ ^[0-9a-f]{64}$ ]]; then
+                docker kill "$id" >/dev/null 2>&1 || true
+              fi
+            fi
+            rm -rf -- "$diagnostic_dir"
+          }
+          trap cleanup EXIT
+          image=codacy/codacy-analysis-cli:7.10.4@sha256:2ae34a48ca2a70b221dd51f470edca878db01d3f7186f34e397595bef287978a
+          status=0
+          # Same revision, image, tools and settings. Change only the formatter.
+          # Raw reports/logs can contain sensitive source; never stream or upload them.
+          timeout 25m docker run --rm --cidfile "$cidfile" \
+            --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
+            "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
+            --verbose --format json --output "$diagnostic_dir/results.json" \
+            --fail-if-incomplete --max-allowed-issues 2147483647 \
+            >"$diagnostic_dir/cli.log" 2>&1 || status=$?
+          echo "Codacy JSON diagnostic exit status: $status (not acceptance)"
+          python3 -B scripts/codacy_input_diagnostics.py --correlate "$diagnostic_dir/results.json"
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
