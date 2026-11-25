@@ -2091,8 +2091,10 @@ export async function listTestCases(
   });
 }
 
-export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
-  return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+export async function getTestCase(
+  projectId: string, testcaseId: string, signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}`, { signal });
 }
 
 export interface TestCaseRevisionBasis {
@@ -2105,12 +2107,8 @@ export interface TestCaseRevisionBasis {
 }
 
 /** The exact case revisions a requirement link must be activated against. */
-export async function getTestCaseRevisionBasis(
-  projectId: string, testcaseId: string, signal?: AbortSignal
-): Promise<TestCaseRevisionBasis> {
-  const data = await api<Record<string, unknown>>(
-    `/api/projects/${projectId}/testcases/${testcaseId}`, { signal }
-  );
+export async function getTestCaseRevisionBasis(projectId: string, testcaseId: string): Promise<TestCaseRevisionBasis> {
+  const data = await api<Record<string, unknown>>(`/api/projects/${projectId}/testcases/${testcaseId}`);
   return {
     id: String(data.id ?? testcaseId),
     title: String(data.title ?? ""),
