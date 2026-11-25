@@ -38,6 +38,21 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
     const resource = () => `https://tesbo.example/api/projects/${project}/mcp`;
     const issuerAdapter = (model: string) => new (createMcpOAuthPostgresAdapter(db,
       { requireLiveGrantBinding: true }))(model);
+    const currentMembershipIds = async (accountId = user) => {
+      const row = (await db.query(
+        `SELECT pm.id AS project_membership_id, om.id AS organization_membership_id
+           FROM project_members pm
+           JOIN organization_members om ON om.organization_id=$2 AND om.user_id=$3
+          WHERE pm.project_id=$1 AND pm.user_id=$3`,
+        [project, org, accountId]
+      )).rows[0];
+      if (typeof row?.project_membership_id !== "string" ||
+          typeof row?.organization_membership_id !== "string") {
+        throw new Error("Disposable OAuth membership identity missing");
+      }
+      return { projectMembershipId: row.project_membership_id as string,
+        organizationMembershipId: row.organization_membership_id as string };
+    };
 
     beforeAll(async () => {
       process.env.SECRETS_ENCRYPTION_KEY ||= randomBytes(32).toString("base64");
@@ -92,11 +107,11 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
       await grants.upsert(otherGrant, { accountId: otherUser, clientId: CLIENT });
       await bindOAuthGrantToApproval(db, ownGrant, {
         projectId: project, accountId: user, clientId: CLIENT,
-        resource: resource(), approvalRevision: 10
+        resource: resource(), approvalRevision: 10, ...await currentMembershipIds()
       });
       await bindOAuthGrantToApproval(db, otherGrant, {
         projectId: project, accountId: otherUser, clientId: CLIENT,
-        resource: resource(), approvalRevision: 10
+        resource: resource(), approvalRevision: 10, ...await currentMembershipIds(otherUser)
       });
       const index = (id: string) => oauthReferenceFingerprint("oauth:Grant:id", id);
       const svc = new McpService(
@@ -199,8 +214,10 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
     });
 
     it("revokes old Grant and RefreshToken without resurrecting them on identical-client reapproval", async () => {
+      const generation = await currentMembershipIds();
       const basis = (revision: number) => ({
-        projectId: project, accountId: user, clientId: CLIENT, resource: resource(), approvalRevision: revision
+        projectId: project, accountId: user, clientId: CLIENT, resource: resource(),
+        approvalRevision: revision, ...generation
       });
       const grants = issuerAdapter("Grant"), refresh = issuerAdapter("RefreshToken");
       await grants.upsert(oldGrant, { accountId: user, clientId: CLIENT });
@@ -257,7 +274,7 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
         const ids = models.map(model => model === "Grant" ? family : `${family}-${model}`);
         const adapters = models.map(issuerAdapter);
         const basis = { projectId: project, accountId: user, clientId: CLIENT,
-          resource: resource(), approvalRevision: revision };
+          resource: resource(), approvalRevision: revision, ...(await currentMembershipIds()) };
         const readFamily = () => Promise.all(adapters.map((adapter, i) => adapter.find(ids[i])));
         try {
           await adapters[0].upsert(ids[0], { accountId: user, clientId: CLIENT });
@@ -300,11 +317,12 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
           [project, JSON.stringify(settings(revision))]);
         const family = `qa-rejoin-${membership}-${tag}`;
         const nextFamily = `${family}-new`;
+        const staleConsentFamily = `${family}-stale-consent`;
         const models = ["Grant", "AuthorizationCode", "RefreshToken", "AccessToken"] as const;
         const ids = (grantId: string) => models.map(model => model === "Grant" ? grantId : `${grantId}-${model}`);
         const adapters = models.map(issuerAdapter);
         const basis = { projectId: project, accountId: user, clientId: CLIENT,
-          resource: resource(), approvalRevision: revision };
+          resource: resource(), approvalRevision: revision, ...(await currentMembershipIds()) };
         const restore = async () => {
           await db.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING", [org,user]);
           await db.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING", [project,user]);
@@ -312,7 +330,7 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
         const seedFamily = async (grantId: string) => {
           const refs = ids(grantId);
           await adapters[0].upsert(refs[0], { accountId: user, clientId: CLIENT });
-          await bindOAuthGrantToApproval(db, grantId, basis);
+          await bindOAuthGrantToApproval(db, grantId, { ...basis, ...(await currentMembershipIds()) });
           for (let i = 1; i < models.length; i++) {
             await adapters[i].upsert(refs[i], { grantId, accountId: user, clientId: CLIENT }, 900);
           }
@@ -336,15 +354,26 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
           expect(stillApproved.rows[0].settings.externalMcpAccess).toEqual(settings(revision).externalMcpAccess);
           const oldBeforeFresh = await Promise.all([currentOAuthGrantBinding(db, family, basis), readFamily(family)]);
 
+          const freshBasis = { ...basis, ...(await currentMembershipIds()) };
+          expect(freshBasis[membership === "project" ? "projectMembershipId" : "organizationMembershipId"])
+            .not.toBe(basis[membership === "project" ? "projectMembershipId" : "organizationMembershipId"]);
+
+          // The provider may save a new grant after page review but before the
+          // final binding transaction. Reusing the pre-rejoin review basis must
+          // not bind that new grant to the replacement membership generation.
+          await adapters[0].upsert(staleConsentFamily, { accountId: user, clientId: CLIENT });
+          await expect(bindOAuthGrantToApproval(db, staleConsentFamily, basis)).rejects.toThrow(/changed/);
+          expect(await currentOAuthGrantBinding(db, staleConsentFamily)).toBe(false);
+          expect(await adapters[0].find(staleConsentFamily)).toBeUndefined();
           await seedFamily(nextFamily);
-          expect(await currentOAuthGrantBinding(db, nextFamily, basis)).toBe(true);
+          expect(await currentOAuthGrantBinding(db, nextFamily, freshBasis)).toBe(true);
           expect(await readFamily(nextFamily)).toEqual(models.map(() => expect.objectContaining({ accountId: user })));
           const oldAfterFresh = await Promise.all([currentOAuthGrantBinding(db, family, basis), readFamily(family)]);
           const denied = [false, models.map(() => undefined)];
           expect([oldBeforeFresh, oldAfterFresh]).toEqual([denied, denied]);
         } finally {
           await restore();
-          for (const grantId of [family, nextFamily]) {
+          for (const grantId of [family, nextFamily, staleConsentFamily]) {
             for (let i = 0; i < models.length; i++) await adapters[i].destroy(ids(grantId)[i]);
           }
         }

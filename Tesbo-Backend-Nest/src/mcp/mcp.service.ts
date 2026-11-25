@@ -311,9 +311,26 @@ export class McpService {
 
   /** Consent uses the existing MCP project access boundary, not a new LegacyService consumer. */
   async requireOAuthConsentProject(userId: string, projectId: string) {
-    return this.legacy.requireProjectAccess(userId, projectId);
+    // The member's current row identities are the consent generation. Roles and
+    // display names alone do not distinguish a removed-and-rejoined member.
+    const project = await this.legacy.requireProjectAccess(userId, projectId);
+    const rows = (await this.db.query(
+      `SELECT p.name, p.key, pm.id AS project_membership_id, om.id AS organization_membership_id
+         FROM projects p
+         JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
+         JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
+        WHERE p.id=$1 AND p.archived_at IS NULL`,
+      [projectId, userId]
+    )).rows;
+    const membership = rows[0];
+    if (typeof membership?.project_membership_id !== "string" ||
+        typeof membership?.organization_membership_id !== "string") {
+      throw new ForbiddenException({ error: "Project membership changed; review consent again" });
+    }
+    return { ...project, name: membership.name, key: membership.key,
+      project_membership_id: membership.project_membership_id,
+      organization_membership_id: membership.organization_membership_id };
   }
-
 
   /** A member may inspect/revoke ONLY their own OAuth consent records.
    * This is not the owner-managed client allowlist and does not grant access.

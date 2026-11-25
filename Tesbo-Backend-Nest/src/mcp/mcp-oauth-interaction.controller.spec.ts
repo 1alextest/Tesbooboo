@@ -55,7 +55,11 @@ function fixture() {
     })
   };
   const mcp = {
-    requireOAuthConsentProject: jest.fn().mockResolvedValue({ name: "QA Project", key: "QA" })
+    requireOAuthConsentProject: jest.fn().mockResolvedValue({
+      name: "QA Project", key: "QA",
+      project_membership_id: "11111111-1111-4111-8111-111111111111",
+      organization_membership_id: "22222222-2222-4222-8222-222222222222"
+    })
   };
   const req = {
     userId: USER, apiToken: null, oauthAccess: null, headers: {},
@@ -197,7 +201,9 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     expect(f.save).toHaveBeenCalledTimes(1);
     expect(f.oauth.bindIssuedGrant).toHaveBeenCalledWith("retained-consent-grant", {
       accountId: USER, clientId: CLIENT, projectId: PROJECT,
-      resource: RESOURCE, approvalRevision: 1
+      resource: RESOURCE, approvalRevision: 1,
+      projectMembershipId: "11111111-1111-4111-8111-111111111111",
+      organizationMembershipId: "22222222-2222-4222-8222-222222222222"
     });
     expect(f.provider.interactionFinished).toHaveBeenCalledWith(f.req, f.res,
       { consent: { grantId: "retained-consent-grant" } }, { mergeWithLastSubmission: false });
@@ -224,6 +230,38 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
       expect(f.save).not.toHaveBeenCalled();
       expect(f.provider.interactionFinished).not.toHaveBeenCalled();
     }
+  });
+
+  it.each(["project", "organization"])("refuses consent when authoritative %s membership identity is missing", async membership => {
+    const f = fixture();
+    const project = await f.mcp.requireOAuthConsentProject();
+    delete project[membership === "project" ? "project_membership_id" : "organization_membership_id"];
+    f.mcp.requireOAuthConsentProject.mockResolvedValue(project);
+    await expect(f.ctrl.consentPage(f.req, f.res as unknown as Response, UID))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.res.send).not.toHaveBeenCalled();
+    expect(f.save).not.toHaveBeenCalled();
+  });
+
+  it.each(["project", "organization"])("refuses stale review after membership replacement: %s", async membership => {
+    const f = fixture();
+    // The existing membership rows are the authority generation. A remove/rejoin
+    // can leave all visible project/client facts and the owner revision identical.
+    const original = { name: "QA Project", key: "QA",
+      project_membership_id: "11111111-1111-4111-8111-111111111111",
+      organization_membership_id: "22222222-2222-4222-8222-222222222222" };
+    f.mcp.requireOAuthConsentProject.mockResolvedValue(original);
+    const { csrf, review } = await f.tokenFromPage();
+    f.mcp.requireOAuthConsentProject.mockResolvedValue({
+      ...original,
+      [membership === "project" ? "project_membership_id" : "organization_membership_id"]:
+        "33333333-3333-4333-8333-333333333333"
+    });
+    await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+      { action: "approve", csrf, review })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.save).not.toHaveBeenCalled();
+    expect(f.oauth.bindIssuedGrant).not.toHaveBeenCalled();
+    expect(f.provider.interactionFinished).not.toHaveBeenCalled();
   });
 
   it("requires a review proof for approval but permits cancellation after revocation", async () => {
