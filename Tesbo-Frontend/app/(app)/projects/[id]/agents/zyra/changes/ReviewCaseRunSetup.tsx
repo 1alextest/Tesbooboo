@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { CaseCandidateDetails } from "./CaseCandidateDetails";
 import { useRef, useState } from "react";
 import {
   addTestCasesToRun, createTestRun, getTestCase, listTestRuns, listZyraGraphReviewRunLinks,
@@ -313,9 +314,15 @@ export function ReviewCaseRunSetup({
             <input type="checkbox" checked={selected.includes(id)}
               aria-label={"Select linked case " + (index + 1)}
               onChange={(event) => toggleCase(id, event.target.checked)} />
-            <span>
-              Linked case {index + 1}: <code className="break-all text-xs">{id}</code>
-            </span>
+            <div className="min-w-0 flex-1 space-y-1">
+              <span>Linked case {index + 1}</span>
+              <CaseCandidateDetails key={`${projectId}:${receiptId}:${id}`}
+                projectId={projectId} caseId={id} />
+              <details className="text-xs text-[var(--muted)]">
+                <summary className="cursor-pointer">Technical case reference</summary>
+                <code className="break-all">{id}</code>
+              </details>
+            </div>
           </label>
         ))}
       </fieldset>
