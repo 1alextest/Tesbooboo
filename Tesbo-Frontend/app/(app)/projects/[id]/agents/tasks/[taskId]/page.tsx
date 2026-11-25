@@ -1170,7 +1170,8 @@ export default function ZyraTaskDetailPage() {
             )}
             {!canGiveFeedback && (
               <p className="text-xs text-[var(--muted)]">
-                {isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
+                {isManagedDocumentProposal ? "Document proposals are reviewed through their dedicated panel above. Use its Apply or Reject action on the exact proposal instead of case-generation feedback."
+                  : isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
                   : taskStatusNow === "in_progress" || taskStatusNow === "todo"
                   ? t("task.feedbackLocked")
                   : t("task.feedbackClosed")}
