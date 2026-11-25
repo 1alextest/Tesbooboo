@@ -103,6 +103,19 @@ export class McpController {
     return this.mcp.updateAccessSettings(req, projectId, body);
   }
 
+  /** Self-service consent history: independent of project-owner client approval.
+   * No machine bearer can list another human's grants or revoke one. */
+  @Get("/api/projects/:projectId/mcp-oauth-consents")
+  listMyOAuthConsents(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.mcp.listMyOAuthConsents(req, projectId);
+  }
+
+  @Delete("/api/projects/:projectId/mcp-oauth-consents/:consentId")
+  revokeMyOAuthConsent(@Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string, @Param("consentId") consentId: string) {
+    return this.mcp.revokeMyOAuthConsent(req, projectId, consentId);
+  }
+
   // Two handlers, not two decorators on one: Nest keeps a single route-method per handler.
   @Get(["/api/mcp", "/api/projects/:projectId/mcp"])
   async getNotAllowed(@Req() req: AuthenticatedRequest, @Res() res: Response) {
