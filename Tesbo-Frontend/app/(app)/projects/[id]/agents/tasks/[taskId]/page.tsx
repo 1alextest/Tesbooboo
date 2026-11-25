@@ -50,6 +50,7 @@ import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPane
 import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 
@@ -630,8 +631,9 @@ export default function ZyraTaskDetailPage() {
   // Mirrors the backend guard in zyraFeedback: feedback only makes sense once there's something
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
-  const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
-  const isManagedDocumentProposal = task.provider === "external_document_proposal" || Boolean(task.managedDocumentProposal);
+  const output = summarizeZyraTaskOutput(task);
+  const isRequirementBundle = output.isRequirementBundle;
+  const isManagedDocumentProposal = output.isManagedDocumentProposal;
   const requirementApplyReceipt = task.requirementApplyReceipt;
   // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
   const requirementApplied = done && Boolean(requirementApplyReceipt);
@@ -702,12 +704,14 @@ export default function ZyraTaskDetailPage() {
               </p>
             )}
             <p className="mt-2 text-sm text-[var(--muted)]">
-              {t("task.summary", {
-                generated: task.generatedCount,
-                saved: task.savedCount,
-                tokens: task.tokenUsage.total,
-                date: formatDateTime(task.updatedAt, t.locale),
-              })}
+              {isRequirementBundle || isManagedDocumentProposal
+                ? `${output.primary} · ${output.secondary} · ${task.tokenUsage.total} tokens · ${formatDateTime(task.updatedAt, t.locale)}`
+                : t("task.summary", {
+                  generated: task.generatedCount,
+                  saved: task.savedCount,
+                  tokens: task.tokenUsage.total,
+                  date: formatDateTime(task.updatedAt, t.locale),
+                })}
             </p>
             {zyraTaskTicketKeys(task).length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
