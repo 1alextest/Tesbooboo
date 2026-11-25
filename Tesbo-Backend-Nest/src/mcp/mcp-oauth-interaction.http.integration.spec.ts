@@ -96,7 +96,11 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     jest.clearAllMocks();
     resolveSession.mockImplementation(async token => token === SESSION ? "test-member" : null);
     authenticate.mockResolvedValue(null);
-    members.mockResolvedValue({ name: "Existing project", key: "TES" });
+    members.mockResolvedValue({
+      name: "Existing project", key: "TES",
+      project_membership_id: "11111111-1111-4111-8111-111111111111",
+      organization_membership_id: "22222222-2222-4222-8222-222222222222"
+    });
     approvedClient.mockResolvedValue({
       kind: "oauth_client", clientName: "QA approved browser client",
       scopes: ["read"], allowedTools: ["list_testcases"], expiresAt: null, accessRevision: 1
@@ -209,6 +213,38 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     expect(save).not.toHaveBeenCalled();
     expect(finish).not.toHaveBeenCalled();
   });
+
+  it.each(["project", "organization"] as const)(
+    "refuses an HTTP approval after the %s membership generation changes", async membership => {
+      const page = await request(UID);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(html)?.[1];
+      const review = /name="review" value="([a-f0-9]{64})"/.exec(html)?.[1];
+      expect(csrf).toBeDefined();
+      expect(review).toBeDefined();
+      // Unchanged names, scope and owner revision must not authenticate a
+      // browser's stale review when membership was removed and recreated.
+      members.mockResolvedValue({
+        name: "Existing project", key: "TES",
+        project_membership_id: membership === "project"
+          ? "33333333-3333-4333-8333-333333333333"
+          : "11111111-1111-4111-8111-111111111111",
+        organization_membership_id: membership === "organization"
+          ? "33333333-3333-4333-8333-333333333333"
+          : "22222222-2222-4222-8222-222222222222"
+      });
+      const post = await request(UID, {
+        method: "POST",
+        headers: { Origin: "https://tesbo.example",
+          "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ action: "approve", csrf: csrf!, review: review! })
+      });
+      expect(post.status).toBe(403);
+      expect(save).not.toHaveBeenCalled();
+      expect(finish).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     ["no session", false, undefined, undefined],

@@ -140,8 +140,14 @@ async function main() {
       grant.addOIDCScope("openid offline_access");
       const jti = await grant.save();
       retainedGrants.push(jti);
+      // Exercise the production membership-generation reader in the real
+      // oidc-provider/PostgreSQL ABI, not a hand-assembled consent basis.
+      const member = await ownerService.requireOAuthConsentProject(accountId, projectId);
+      assert.ok(member.project_membership_id && member.organization_membership_id);
       await authorityA.bindIssuedGrant(jti, { accountId, projectId, resource, clientId: id,
-        approvalRevision: approval.accessRevision });
+        approvalRevision: approval.accessRevision,
+        projectMembershipId: member.project_membership_id,
+        organizationMembershipId: member.organization_membership_id });
       return jti;
     }
     const grantId = await createReviewedGrant(clientId);

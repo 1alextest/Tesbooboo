@@ -16,6 +16,9 @@ export type OAuthGrantBasis = {
   clientId: string;
   resource: string;
   approvalRevision: number;
+  /** The exact human membership generation approved on the consent page. */
+  projectMembershipId: string;
+  organizationMembershipId: string;
 };
 
 function fingerprint(grantId: string): string {
@@ -37,7 +40,8 @@ export async function currentOAuthGrantBinding(
 ): Promise<boolean> {
   try {
     const row = (await db.query(
-      `SELECT b.project_id,b.account_id,b.client_id,b.resource,b.approval_revision,p.settings
+      `SELECT b.project_id,b.account_id,b.client_id,b.resource,b.approval_revision,
+              b.project_membership_id,b.organization_membership_id,p.settings
          FROM mcp_oauth_grant_approval_bindings b
          JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
          JOIN project_members pm ON pm.project_id=b.project_id AND pm.user_id::text=b.account_id
@@ -52,7 +56,9 @@ export async function currentOAuthGrantBinding(
         (expected?.accountId !== undefined && row.account_id !== expected.accountId) ||
         (expected?.clientId !== undefined && row.client_id !== expected.clientId) ||
         (expected?.resource !== undefined && row.resource !== expected.resource) ||
-        (expected?.approvalRevision !== undefined && Number(row.approval_revision) !== expected.approvalRevision)) return false;
+        (expected?.approvalRevision !== undefined && Number(row.approval_revision) !== expected.approvalRevision) ||
+        (expected?.projectMembershipId !== undefined && row.project_membership_id !== expected.projectMembershipId) ||
+        (expected?.organizationMembershipId !== undefined && row.organization_membership_id !== expected.organizationMembershipId)) return false;
     return approved(row.settings, String(row.client_id), Number(row.approval_revision));
   } catch {
     // Missing storage, disabled projects, invalid secrets and database outages
@@ -70,7 +76,8 @@ export async function bindOAuthGrantToApproval(
   db: Pick<DatabaseService, "transaction">, grantId: string, basis: OAuthGrantBasis
 ): Promise<void> {
   if (!Number.isSafeInteger(basis.approvalRevision) || basis.approvalRevision < 0 ||
-      !basis.accountId || !basis.clientId || !basis.projectId || !basis.resource) {
+      !basis.accountId || !basis.clientId || !basis.projectId || !basis.resource ||
+      !basis.projectMembershipId || !basis.organizationMembershipId) {
     throw new Error("Incomplete OAuth consent approval basis");
   }
   const grantFingerprint = fingerprint(grantId);
@@ -85,6 +92,8 @@ export async function bindOAuthGrantToApproval(
     )).rows[0];
     if (!row || typeof row.project_membership_id !== "string" ||
         typeof row.organization_membership_id !== "string" ||
+        row.project_membership_id !== basis.projectMembershipId ||
+        row.organization_membership_id !== basis.organizationMembershipId ||
         !approved(row.settings, basis.clientId, basis.approvalRevision)) {
       throw new Error("OAuth owner approval or project membership changed during consent");
     }
