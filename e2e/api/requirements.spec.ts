@@ -1028,10 +1028,37 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
       proposalRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
       managedDocumentProposal: {
         operation: "update", documentType: "user_manual",
-        target: { documentId: target.id, editRevision: target.editRevision },
+        target: { documentId: target.id, editRevision: target.editRevision, applicability: "current" },
         skillApplicability: { status: "current" },
       },
     });
+    const extraResponse = await machine.post(`${base}/knowledge-base/document-proposals`, {
+      data: {
+        requestKey: randomUUID(), operation: "update", documentId: target.id, expectedRevision: target.editRevision,
+        document: { title: `${target.title} extra`, governedMetadata: metadata },
+      }, failOnStatusCode: false,
+    });
+    expect(extraResponse.status(), await extraResponse.text()).toBe(201);
+    taskIds.push((await extraResponse.json()).id);
+    const search = encodeURIComponent(`E2E agent manual ${suffix}`);
+    const discovery = await request.get(
+      `${base}/knowledge-base/document-proposals?limit=1&offset=0&status=in_review&documentType=user_manual&q=${search}`
+    );
+    expect(discovery.status(), await discovery.text()).toBe(200);
+    expect(await discovery.json()).toMatchObject({ total: 2, limit: 1, offset: 0, hasMore: true });
+    const lastPage = await request.get(
+      `${base}/knowledge-base/document-proposals?limit=1&offset=1&status=in_review&documentType=user_manual&q=${search}`
+    );
+    expect(await lastPage.json()).toMatchObject({ total: 2, offset: 1, hasMore: false });
+    expect((await (await request.get(
+      `${base}/knowledge-base/document-proposals?q=${search}&documentType=policy`
+    )).json()).total).toBe(0);
+    expect((await (await request.get(
+      `${base}/knowledge-base/document-proposals?q=${search}&operation=create`
+    )).json()).total).toBe(0);
+    expect((await request.get(`${base}/knowledge-base/document-proposals?documentType=general`, { failOnStatusCode: false })).status()).toBe(400);
+    expect((await request.get(`${base}/knowledge-base/document-proposals?status=other`, { failOnStatusCode: false })).status()).toBe(400);
+    expect((await request.get(`/api/projects/${randomUUID()}/knowledge-base/document-proposals`, { failOnStatusCode: false })).status()).toBe(404);
     const replay = await machine.post(`${base}/knowledge-base/document-proposals`, { data: payload, failOnStatusCode: false });
     expect(replay.status()).toBe(201);
     expect((await replay.json()).id).toBe(staged.id);

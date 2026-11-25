@@ -16506,6 +16506,18 @@ export class LegacyService implements OnModuleInit {
     const applicability = classifySkillResolution(pinned, current);
     const base = operation.target?.base || null;
     const proposed = operation.document;
+    // The base revision was pinned when the candidate was staged. A later edit to the target makes
+    // apply refuse even when the Skill basis is current, so the reviewer must see that before opening.
+    let targetApplicability: "current" | "changed" | "missing" | null = null;
+    if (operation.operation === "update" && operation.target?.documentId) {
+      const target = await this.db.query<{ edit_revision: string | null }>(
+        `SELECT ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision FROM knowledge_documents
+          WHERE id=$1 AND project_id=$2 AND is_deleted=false`,
+        [operation.target.documentId, projectId]
+      );
+      targetApplicability = !target.rows[0] ? "missing"
+        : target.rows[0].edit_revision === operation.target.targetEditRevision ? "current" : "changed";
+    }
     // Omitted representations are preserved on apply, so the comparison must show the effective
     // value too. Diffing an omitted contentText as "" would claim the body is being erased.
     const effective = (key: string) => proposed?.[key] !== undefined ? proposed[key] : base?.[key] ?? null;
@@ -16532,6 +16544,7 @@ export class LegacyService implements OnModuleInit {
         operation: operation.operation, documentType: operation.documentType,
         target: operation.target ? {
           documentId: operation.target.documentId, editRevision: operation.target.targetEditRevision,
+          applicability: targetApplicability,
           base: base ? { ...base, governedMetadata: base.governedMetadata } : null
         } : null,
         folderId: operation.folderId,
@@ -16551,13 +16564,49 @@ export class LegacyService implements OnModuleInit {
     this.requireManagedDocumentProposalPreview();
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    const rows = await this.db.query(
-      `SELECT id FROM ai_generation_requests
-        WHERE project_id=$1 AND provider='external_document_proposal' AND task_status IN ('in_review','failed')
-        ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
-      [projectId, limit, offset]
+    const documentType = query.documentType == null || query.documentType === "" ? null : String(query.documentType);
+    if (documentType && !isGovernedDocumentType(documentType)) {
+      throw new BadRequestException({ error: "documentType must be user_manual or policy" });
+    }
+    const status = query.status == null || query.status === "" ? "pending" : String(query.status);
+    if (!["pending", "in_review", "failed"].includes(status)) {
+      throw new BadRequestException({ error: "status must be pending, in_review or failed" });
+    }
+    const operation = query.operation == null || query.operation === "" ? null : String(query.operation);
+    if (operation && operation !== "create" && operation !== "update") {
+      throw new BadRequestException({ error: "operation must be create or update" });
+    }
+    const search = typeof query.q === "string" ? query.q.trim().slice(0, 200) : "";
+    const conditions = ["project_id=$1", "provider='external_document_proposal'"];
+    const params: unknown[] = [projectId];
+    const bind = (value: unknown) => { params.push(value); return `$${params.length}`; };
+    conditions.push(status === "pending" ? "task_status IN ('in_review','failed')" : `task_status=${bind(status)}`);
+    if (documentType) conditions.push(`generated_payload->0->>'documentType'=${bind(documentType)}`);
+    if (operation) conditions.push(`generated_payload->0->>'operation'=${bind(operation)}`);
+    if (search) {
+      // Treat the query as literal text: % and _ are wildcards in ILIKE, and PostgreSQL rejects a
+      // NUL byte. Project members only, but a 500 on a pasted title is still wrong.
+      const escaped = search.replace(/ /g, "").replace(/[\\%_]/g, (char) => `\\${char}`);
+      conditions.push(`user_story ILIKE ${bind(`%${escaped}%`)} ESCAPE '\\'`);
+    }
+    const where = conditions.join(" AND ");
+    // One statement for page and count keeps total/hasMore consistent with the rows under
+    // concurrent staging. An out-of-range page returns no row, so only then fall back to a count
+    // (the caller uses it to clamp the offset and reload).
+    const rows = await this.db.query<{ id: string; total: string }>(
+      `SELECT id, COUNT(*) OVER() AS total FROM ai_generation_requests WHERE ${where}
+        ORDER BY updated_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
     );
-    return { list: await Promise.all(rows.rows.map(row => this.managedDocumentProposalTask(projectId, userId, String(row.id)))) };
+    const total = rows.rows.length
+      ? Number(rows.rows[0].total)
+      : Number((await this.db.query<{ total: string }>(
+        `SELECT COUNT(*)::int AS total FROM ai_generation_requests WHERE ${where}`, params
+      )).rows[0]?.total || 0);
+    return {
+      list: await Promise.all(rows.rows.map(row => this.managedDocumentProposalTask(projectId, userId, String(row.id)))),
+      total, limit, offset, hasMore: offset + rows.rows.length < total
+    };
   }
 
   /** Protected human apply. Publishes a native Draft only; submission/approval remain separate. */

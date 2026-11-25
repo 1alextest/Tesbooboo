@@ -2529,4 +2529,116 @@ test.describe("governed skills operator journey (UI)", () => {
       await cleanupSkill(skill.documentId);
     }
   });
+
+  test("an owner discovers, pages, opens and applies pending document proposals from Tasks", async ({ browser }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const skill = await apiSkill("user_manuals", "internal", "manual_revision");
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const created = await ownerApi.post(`${base()}/knowledge-base/documents`, { data: {
+      title: `Discovery manual ${suffix}`, folderId: (await (await ownerApi.get(`${base()}/knowledge-base/folders/tree`)).json()).id,
+      documentType: "user_manual", contentText: "Base discovery body", contentHtml: "<p>Base discovery body</p>",
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Base discovery body" }] }] },
+      governedMetadata: metadata,
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const target = await created.json();
+    const issued = await ownerApi.post(`${base()}/apikeys`, { data: { name: `Discovery agent ${suffix}`, scopes: ["read", "write"] } });
+    expect(issued.ok(), await issued.text()).toBe(true);
+    const token = await issued.json();
+    const tasks: string[] = [];
+    try {
+      for (let index = 0; index < 11; index++) {
+        const staged = await ownerApi.post(`${base()}/knowledge-base/document-proposals`, {
+          headers: { Authorization: `Bearer ${token.token}` },
+          data: {
+            requestKey: `discovery-${suffix}-${index}`, operation: "update", documentId: target.id,
+            expectedRevision: target.editRevision,
+            document: { title: `Discovery ${suffix} v${index}`, governedMetadata: metadata },
+            reason: `Discovery candidate ${index}`,
+          },
+        });
+        expect(staged.ok(), await staged.text()).toBe(true);
+        tasks.push((await staged.json()).id);
+      }
+
+      const page = await open(browser, "/agents/tasks");
+      await page.getByRole("tab", { name: "Document proposals" }).click();
+      await expect(page.getByTestId("managed-document-proposals")).toBeVisible();
+      await page.getByTestId("managed-document-search").fill(suffix);
+      await page.getByTestId("managed-document-search-submit").click();
+      await expect(page.getByTestId("managed-document-range")).toContainText("Showing 1–10 of 11");
+      // A limited page is labelled as such and the next page is reachable.
+      await page.getByTestId("managed-document-next").click();
+      await expect(page.getByTestId("managed-document-range")).toContainText("Showing 11–11 of 11");
+      await expect(page.getByTestId("managed-document-next")).toBeDisabled();
+      await page.getByTestId("managed-document-prev").click();
+      await expect(page.getByTestId("managed-document-range")).toContainText("Showing 1–10 of 11");
+
+      await page.getByTestId("managed-document-type-filter").selectOption("policy");
+      await expect(page.getByTestId("managed-document-empty")).toBeVisible();
+      await page.getByTestId("managed-document-type-filter").selectOption("");
+      await page.getByTestId("managed-document-operation-filter").selectOption("create");
+      await expect(page.getByTestId("managed-document-empty")).toBeVisible();
+      await page.getByTestId("managed-document-operation-filter").selectOption("");
+      await page.getByTestId("managed-document-status-filter").selectOption("failed");
+      await expect(page.getByTestId("managed-document-empty")).toBeVisible();
+      await page.getByTestId("managed-document-status-filter").selectOption("pending");
+      await expect(page.getByTestId("managed-document-range")).toContainText("Showing 1–10 of 11");
+
+      const firstCard = page.getByTestId("managed-document-card").first();
+      await expect(firstCard).toContainText("Manual");
+      await expect(firstCard).toContainText("Update");
+      await expect(firstCard).toContainText("API token");
+      // The owner positive branch: no authority blocker while Skill and target are current.
+      await expect(firstCard).toContainText("Apply is currently permitted");
+      await firstCard.getByTestId("managed-document-open").click();
+      await expect(page.getByTestId("managed-document-proposal")).toBeVisible();
+      await expect(page.getByTestId("managed-document-proposal")).toContainText("Proposed governed manual");
+      await page.getByTestId("managed-document-apply").click();
+      await expect(page.getByTestId("managed-document-apply-receipt")).toContainText("native Draft");
+      await expect(page.getByTestId("managed-document-apply-receipt").getByRole("link")).toHaveAttribute("href", /knowledge-base\/documents\//);
+
+      // Returning re-reads the pending set: the applied candidate is gone, and the remaining
+      // candidates are visibly based on the pre-apply target revision.
+      await page.goto(`/projects/${tenant!.mainProjectId}/agents/tasks`);
+      await page.getByRole("tab", { name: "Document proposals" }).click();
+      await page.getByTestId("managed-document-search").fill(suffix);
+      await page.getByTestId("managed-document-search-submit").click();
+      await expect(page.getByTestId("managed-document-range")).toContainText("Showing 1–10 of 10");
+      await expect(page.getByTestId("managed-document-card").first().getByTestId("managed-document-blockers")).toContainText("Target document changed since staging");
+      // The detail surface agrees and refuses the doomed apply before the server does.
+      await page.getByTestId("managed-document-card").first().getByTestId("managed-document-open").click();
+      await expect(page.getByTestId("managed-document-target-blocker")).toContainText("target document changed");
+      await expect(page.getByTestId("managed-document-apply")).toBeDisabled();
+      await page.goto(`/projects/${tenant!.mainProjectId}/agents/tasks`);
+      await page.getByRole("tab", { name: "Document proposals" }).click();
+      await page.getByTestId("managed-document-search").fill(suffix);
+      await page.getByTestId("managed-document-search-submit").click();
+      await expect(page.getByTestId("managed-document-card").first().getByTestId("managed-document-blockers")).toContainText("Target document changed since staging");
+
+      // A deactivated Skill basis is surfaced as an explicit blocker.
+      const revoked = await ownerApi.patch(`${base()}/skill-assignments/${skill.assignmentId}/deactivate`, { data: {} });
+      expect(revoked.ok(), await revoked.text()).toBe(true);
+      await page.getByTestId("managed-document-refresh").click();
+      await expect(page.getByTestId("managed-document-card").first()).toContainText("Skill: stale");
+      await expect(page.getByTestId("managed-document-card").first().getByTestId("managed-document-blockers")).toContainText("Skill basis is stale");
+
+      // A project member without the owner/manager role sees the authority blocker on the same cards.
+      const qaPage = await open(browser, "/agents/tasks", "qa");
+      await qaPage.getByRole("tab", { name: "Document proposals" }).click();
+      await qaPage.getByTestId("managed-document-search").fill(suffix);
+      await qaPage.getByTestId("managed-document-search-submit").click();
+      await expect(qaPage.getByTestId("managed-document-card").first().getByTestId("managed-document-blockers")).toContainText("Only a project owner or manager");
+    } finally {
+      for (const id of tasks) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await ownerApi.delete(`${base()}/apikeys/${token.id}`, { failOnStatusCode: false });
+      exec(`UPDATE knowledge_documents SET reviewed_version_id=NULL WHERE id=${literal(target.id)};`);
+      exec(`DELETE FROM knowledge_documents WHERE id=${literal(target.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
+      await cleanupSkill(skill.documentId);
+    }
+  });
 });

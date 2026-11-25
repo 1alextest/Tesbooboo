@@ -23,6 +23,8 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
   if (!proposal) return null;
   const current = proposal.skillApplicability?.current;
   const applicability = proposal.skillApplicability?.status || "unavailable";
+  const targetApplicability = proposal.target?.applicability;
+  const targetBlocked = targetApplicability === "changed" || targetApplicability === "missing";
   const decided = task.taskStatus === "done" || Boolean(proposal.applyReceipt);
   const isPolicy = proposal.documentType === "policy";
   const metadata = proposal.proposed.governedMetadata || {};
@@ -148,11 +150,18 @@ export function ManagedDocumentProposalPanel({ projectId, task, canApprove, work
         <div className="space-y-3" data-testid="managed-document-actions">
           <Button
             onClick={onApply}
-            disabled={working || applicability !== "current" || !task.proposalRevision}
+            disabled={working || applicability !== "current" || targetBlocked || !task.proposalRevision}
             data-testid="managed-document-apply"
           >
             Apply reviewed candidate as Draft
           </Button>
+          {targetBlocked && (
+            <p className="text-xs text-[var(--error-foreground)]" data-testid="managed-document-target-blocker">
+              {targetApplicability === "missing"
+                ? "Apply is blocked because the target document no longer exists. Stage a refreshed candidate against a current target."
+                : "Apply is blocked because the target document changed after this candidate was staged. Stage a refreshed candidate against the current revision."}
+            </p>
+          )}
           {applicability !== "current" && (
             <p className="text-xs text-[var(--error-foreground)]">
               Apply is blocked until the exact approved Skill basis is current. Submit a refreshed candidate after the assignment/version changes.

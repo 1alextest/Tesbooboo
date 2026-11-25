@@ -568,3 +568,48 @@ deployment succeeded and production `/api/health` returned that exact SHA. The a
 binding was created beside the existing project token as `tesbo-approved-origin` (exact origin,
 regular file, ACL restricted to the owning Windows principal), and the connection was verified as
 project `df072dfe-e4d0-406a-9350-e0d022c6323f` before staging.
+
+---
+
+## 11. Human discovery of pending governable candidates
+
+The owner journey reuses the existing Zyra Tasks navigation: a fourth tab, **Document proposals**,
+lists pending `external_document_proposal` tasks from
+`GET /knowledge-base/document-proposals`. The existing duplicate-test-case Review Board stays a
+separate tab with its own contract and pricing behaviour; this list does not import or alter it.
+
+**API.** The dedicated list now returns `{ list, total, limit, offset, hasMore }` and accepts
+`limit`, `offset`, `q` (proposal title), `documentType`, `operation` and `status`
+(`pending`/`in_review`/`failed`). The count uses the same filtered predicate as the page, so a
+limited page is never presented as the whole set; invalid filters are 400 and another project is 404.
+Each item is the existing managed-proposal view, so content, metadata, diff, provenance, pinned Skill
+identity/digest, apply receipt and exact target/base revision stay available for review. The view
+adds `target.applicability` (`current`/`changed`/`missing`) so a candidate whose target moved after
+staging shows that blocker before apply.
+
+**UI.** Cards show title, manual/policy type, create/update intent, target/base identity, proposer
+(human or token), updated date, changes and diff summary. Blockers list missing/conflicting/stale
+Skill assignment, target drift, failed staging, missing review revision and the owner/manager role
+requirement. Opening a card goes to the existing exact task review surface; the list itself has no
+apply/reject controls, so submission and approval keep their separate controls. After returning, a
+refresh re-reads the filtered set and total.
+
+**States and safety.** Loading, successful-empty, preview-unavailable (501), denied (403/404) and
+generic retry are distinct. A request sequence number fences late responses after a project switch or
+filter change. The tab can be opened by any project member; the API still enforces project access and
+the preview gate, and a disabled preview keeps the existing redaction/confidentiality behaviour.
+
+**Coverage.** UI journey `e2e/ui/skills.spec.ts` stages eleven candidates, checks pagination ranges,
+filters, target drift after apply, stale Skill and the QA role blocker. API assertions in
+`e2e/api/requirements.spec.ts` pin the filtered total/limit/offset/hasMore, document-type filter,
+invalid filter 400 and cross-project 404. Native requirement/case staging: task
+`d15e29fc-b5c4-44e2-9d2c-fbf481c2084f`, revision
+`a290d99fd0a86f56683940a5322d913a0f2d9759afb869d03e70299c0cfe92ae`, `in_review`, unassigned.
+Manual execution remains **UNRUN**; native task-evidence writing is unavailable through the exposed
+tools.
+
+Review hardening: the list re-reads `target.applicability` in the reused detail panel and disables Apply for
+`changed`/`missing`; an out-of-range offset after a concurrent apply clamps to the last real page and reloads;
+`q` is escaped for `ILIKE` and NUL bytes; page + count come from one windowed statement when rows exist; the
+member list not being loaded yet suppresses (rather than falsely shows) the role blocker; the client keys the
+list by project so a previous project's cards cannot paint under a new one.
