@@ -41,7 +41,9 @@ export async function currentOAuthGrantBinding(
          FROM mcp_oauth_grant_approval_bindings b
          JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
          JOIN project_members pm ON pm.project_id=b.project_id AND pm.user_id::text=b.account_id
+            AND pm.id=b.project_membership_id
          JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id::text=b.account_id
+            AND om.id=b.organization_membership_id
         WHERE b.grant_fingerprint=$1 AND b.revoked_at IS NULL`,
       [fingerprint(grantId)]
     )).rows[0];
@@ -74,7 +76,7 @@ export async function bindOAuthGrantToApproval(
   const grantFingerprint = fingerprint(grantId);
   await db.transaction(async client => {
     const row = (await client.query(
-      `SELECT p.settings FROM projects p
+      `SELECT p.settings,pm.id AS project_membership_id,om.id AS organization_membership_id FROM projects p
          JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
          JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
         WHERE p.id=$1 AND p.archived_at IS NULL
@@ -86,9 +88,11 @@ export async function bindOAuthGrantToApproval(
     }
     const inserted = await client.query(
       `INSERT INTO mcp_oauth_grant_approval_bindings
-         (grant_fingerprint,project_id,account_id,client_id,resource,approval_revision)
-       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING grant_fingerprint`,
-      [grantFingerprint,basis.projectId,basis.accountId,basis.clientId,basis.resource,basis.approvalRevision]
+         (grant_fingerprint,project_id,account_id,client_id,resource,approval_revision,
+          project_membership_id,organization_membership_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING grant_fingerprint`,
+      [grantFingerprint,basis.projectId,basis.accountId,basis.clientId,basis.resource,basis.approvalRevision,
+       row.project_membership_id,row.organization_membership_id]
     );
     if (inserted.rows.length !== 1) throw new Error("OAuth consent grant identity already bound");
   });
