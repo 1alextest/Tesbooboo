@@ -259,16 +259,6 @@ describe("McpService", () => {
       const svc = new McpService(makeLegacy(), db, writableLimits);
       const res: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
       const names = res.result.tools.map((t: any) => t.name);
-      // Staging tools are a second decision point beyond initialize; they must
-      // surface discovery guidance without claiming to enforce a policy gate.
-      for (const name of ["stage_testcase_changes", "stage_requirement_change_bundle"]) {
-        const entry = res.result.tools.find((t: any) => t.name === name);
-        if (entry) {
-          expect(entry.description).toContain("independently");
-          expect(entry.description).toContain("staging");
-        }
-      }
-
       expect(names).toEqual(
         expect.arrayContaining([
           "preview_behavior_model_draft",
@@ -316,6 +306,38 @@ describe("McpService", () => {
       for (const t of res.result.tools) {
         expect(typeof t.description).toBe("string");
         expect(t.inputSchema).toBeDefined();
+      }
+    });
+
+    it("advertises decision-discovery guidance on both staging tools only when proposal preview is enabled", async () => {
+      const previous = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+      const stagingNames = ["stage_testcase_changes", "stage_requirement_change_bundle"];
+      try {
+        const { db } = makeDb();
+        const svc = new McpService(makeLegacy(), db, writableLimits);
+        const list = async () => {
+          const response: any = await svc.handleRequest(rpc("tools/list"), principal(), "proj-1");
+          return response.result.tools;
+        };
+
+        delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        const disabled = await list();
+        for (const name of stagingNames) {
+          expect(disabled.some((tool: any) => tool.name === name)).toBe(false);
+        }
+
+        process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = "1";
+        const enabled = await list();
+        for (const name of stagingNames) {
+          const entries = enabled.filter((tool: any) => tool.name === name);
+          expect(entries).toHaveLength(1);
+          expect(entries[0].description).toContain("independently");
+          expect(entries[0].description).toContain("staging");
+          expect(entries[0].description).toContain("cannot certify");
+        }
+      } finally {
+        if (previous === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+        else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = previous;
       }
     });
   });
