@@ -16586,7 +16586,7 @@ export class LegacyService implements OnModuleInit {
     if (search) {
       // Treat the query as literal text: % and _ are wildcards in ILIKE, and PostgreSQL rejects a
       // NUL byte. Project members only, but a 500 on a pasted title is still wrong.
-      const escaped = search.replace(/ /g, "").replace(/[\\%_]/g, (char) => `\\${char}`);
+      const escaped = search.split("\u0000").join("").replace(/[\\%_]/g, (char) => "\\" + char);
       conditions.push(`user_story ILIKE ${bind(`%${escaped}%`)} ESCAPE '\\'`);
     }
     const where = conditions.join(" AND ");
