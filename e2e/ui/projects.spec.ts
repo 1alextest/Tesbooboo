@@ -514,7 +514,7 @@ test("MCP-P18 human consent history does not claim live connection and revokes o
       }
     });
     await page.goto("/projects/" + projectId + "/settings?tab=apiTokens");
-    const history = page.getByRole("heading", { name: "Your OAuth consent history" }).locator("..").locator("..");
+    const history = page.locator('[aria-labelledby="my-oauth-consents-title"]');
     await expect(history.getByText("Existing QA reader", { exact: true })).toBeVisible();
     await expect(history.getByText("Consent recorded (not live status)")).toBeVisible();
     await expect(history.getByText("Read-only tools: list_testcases")).toBeVisible();
