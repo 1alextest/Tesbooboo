@@ -826,6 +826,9 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
   });
 
   it("keeps Zyra memory out of a folder deleted between resolution and insert", async () => {
+    // Earlier fixtures in this shared project may already hold a "Zyra AI Memory" document, which
+    // would route this call into the append branch instead of the insert this regression targets.
+    await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory'", [projectId]);
     const memoryFolder = (await setup.query<{ id: string }>(
       "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,'AI Memory',$3) RETURNING id",
       [orgId, projectId, folderId]
