@@ -79,7 +79,7 @@ function MyOAuthConsentHistory({ projectId, refreshKey }: { projectId: string; r
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 id="my-oauth-consents-title" className="font-semibold">Your OAuth consent history</h3>
-        <p className="text-sm text-[var(--muted)]">These are consent records for your Tesbo account in this project, not proof that an app is online. You can revoke your own consent without changing the project owner's client approval.</p>
+        <p className="text-sm text-[var(--muted)]">These are consent records for your Tesbo account in this project, not proof that an app is online. You can revoke your own consent without changing the project owner&apos;s client approval.</p>
       </div>
       <Button variant="secondary" disabled={loading || busyId !== null}
         onClick={() => setReload(x => x + 1)}>Reload history</Button>
