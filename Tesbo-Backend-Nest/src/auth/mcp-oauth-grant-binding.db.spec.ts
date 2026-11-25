@@ -130,6 +130,42 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
         const otherHistory = await svc.listMyOAuthConsents(other, project);
         expect(otherHistory.consents.map(c => c.id)).toContain(index(otherGrant));
         expect(otherHistory.consents.map(c => c.id)).not.toContain(index(ownGrant));
+        // A stale successful preflight must not authorize a later history read.
+        // The service's existing mocked preflight above deliberately remains
+        // successful; only the real database membership is removed here.
+        const historyWhileRemoved: Array<{ membership: string; disclosed: string[] }> = [];
+        for (const membership of ["organization", "project"] as const) {
+          const removed = membership === "project"
+            ? await db.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id", [project, otherUser])
+            : await db.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING id", [org, otherUser]);
+          expect(removed.rows).toHaveLength(1);
+          try {
+            const disclosed = await svc.listMyOAuthConsents(other, project).then(
+              result => result.consents.map(c => c.id),
+              (error: unknown) => {
+                if (typeof (error as { getStatus?: unknown })?.getStatus !== "function") throw error;
+                expect([403, 404]).toContain((error as { getStatus(): number }).getStatus());
+                return [] as string[];
+              }
+            );
+            historyWhileRemoved.push({ membership, disclosed });
+            await expect(svc.revokeMyOAuthConsent(other, project, index(otherGrant))).rejects.toThrow();
+          } finally {
+            await db.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'member') ON CONFLICT DO NOTHING",
+              [org, otherUser]);
+            await db.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer') ON CONFLICT DO NOTHING",
+              [project, otherUser]);
+          }
+        }
+        // The previous generation remains invalid, but a currently authorized
+        // rejoined member may read their own historical consent.
+        const rejoinedHistory = await svc.listMyOAuthConsents(other, project);
+        expect(rejoinedHistory.consents.find(c => c.id === index(otherGrant))?.status).toBe("reconsent_required");
+        expect(historyWhileRemoved).toEqual([
+          { membership: "organization", disclosed: [] },
+          { membership: "project", disclosed: [] }
+        ]);
+
         // The same client and owner policy can survive a membership delete/rejoin,
         // but the OLD binding must be rejected and shown as requiring new consent.
         const priorMembership = (await db.query(
