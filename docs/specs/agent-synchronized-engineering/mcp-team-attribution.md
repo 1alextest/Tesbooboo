@@ -49,7 +49,7 @@ P0: characterize PAT project/org removal and rejoin through actual routes, all m
 
 **Open decisions (owner/White disposition before affected implementation):** CL-D1 legacy generation/expiry transition and rollback; CL-D2 member own-create/list/revoke vs owner oversight, read/write/stage eligibility; CL-D3 finite TTL and rotation overlap/lost response; CL-D4 suspend/archive/role/deactivate and restored eligibility; CL-D5 PAT MCP reapproval vs underlying REST token; CL-D6 workload ownership and historical retention. The user's authorization to develop this direction is not blanket authorization of specific production defaults.
 
-**UI human outcomes:** expose project, permitted operations, expiration and safe next action before technical metadata. Distinguish own delegated access, app authorizations, owner policy, historical activity and future workload authority. Truthful loading, empty, revoked, expired, stale, permission-changed, ambiguous response and reauthorization states. Never label a consent or last-used timestamp as proof of online status. Keyboard, focus, screen-reader, zoom and error recovery need actual browser and human evaluation. Reuse the existing screen and preserve current role policy until reconciled.
+**UI human outcomes:** expose project, permitted operations, expiration and safe next action before technical metadata. Distinguish own delegated access, app authorizations, owner policy, historical activity and future workload authority. Truthful loading, empty, revoked, expired, stale, permission-changed, ambiguous response and reauthorization states. Never label a consent or last-used timestamp as proof of online status. Keyboard, focus, screen-reader, zoom and error recovery need actual browser and human evaluation. Reuse the existing screen and preserve current role policy until reconciled. Do not expose inert future workload controls or suggest borrowing a manager's credential. Operationally, baseline affected clients, record bounded denial/expiry/revocation metrics and protected audit reason codes, rate-limit abusive retries, and document safe reissue and rollback. No raw token, digest, provider Grant ID or PII in metrics.
 
 ### Acceptance obligations (candidate, NOT RUN)
 
@@ -70,6 +70,11 @@ P0: characterize PAT project/org removal and rejoin through actual routes, all m
 | CL-T13 | Real pinned OAuth code exchange, refresh/revoke/rejoin, stale review and #269 history; actual ChatGPT read acceptance separate. |
 | CL-T14 | Future workload survives installer departure only if explicitly independent; explicit workload revoke denies; maintainer not human author. Deferred. |
 | CL-T15 | DB outage, lock waits, audit rollback, retries, multiple replicas and safe telemetry: deny uncertainty; preserve unrelated legitimate work. |
+
+| CL-T16 | Bounded non-secret telemetry for denial/expiry/revoke, outage/retry and recovery; protected audit only; no false online status. |
+| CL-T17 | Compare minimal token enhancement with generic broker on real user outcomes, migration risk and maintenance cost; defer needless architecture. |
+| CL-T18 | Actual backend and UI role matrix resolves conflicting issuance observations; do not expand privileges implicitly. |
+| CL-T19 | Distinguish issuer, executor, client, reviewer; multiple credentials of one member cannot satisfy independent approval; unknown bearer fails named-attribution policy. |
 
 Review and traceability: [full-roster coordinator challenge](../../qa-orchestration/reviews/PR264-credential-lifecycle-challenge.md). Map proposed cases to native requirements/cases and actual evidence when a trusted writer is available. No fabricated native IDs, team receipts, independent Graph coverage, White freeze or execution.
 
