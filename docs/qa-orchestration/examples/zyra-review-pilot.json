@@ -125,5 +125,53 @@
       "graded_incorrect": 0,
       "ungraded": 0
     }
+  },
+  "transfer": {
+    "request": "Natural release plan review, four new synthetic cases. One fresh session per method; same 250-word cap.",
+    "input_sha256": {
+      "baseline.txt": "f13c93f7bf6ff601587bd3139ea3a346e7363983984382a0146d5d11b37b5805",
+      "candidate.txt": "f0d160676831571ec55f7293a3b0cf586285bc4b9c4e93f787ee6205af0e6831",
+      "worksheet.txt": "f13c93f7bf6ff601587bd3139ea3a346e7363983984382a0146d5d11b37b5805",
+      "rubric.json": "0777687df7b7d98bba83d41895b3968b7fa7080a09ea592f0bbe496abc9319c0"
+    },
+    "worksheet": "For release H16, review the lab's specimen-processing test plan and leave the comment you would give the team on its change request. Use only the supplied change-request files. Return your comment in at most 250 words. No execution, commands, file edits, tools, or outside lookup.\n\nChange request CR-884, one investigation. The team needs release-review comments on the four plan rows. Synthetic specimen labels and quantities below are test data.\n\nregistry.md\nL1 The decision register associates a named authority, effective version and source with each lab release rule. H16 risk set is g8.\nL2 R-12 rev3, effective H16/g8. Authorized by lab operations lead decision OP-100: each accepted input aliquot yields exactly one matching ledger entry. A quarantined input yields none and gets its own withheld status. Retrying a partially acknowledged batch preserves those per-input outcomes.\nL3 R-40 rev2, effective H16/g8. Authorized by calibration lead decision CL-48: the same unrounded calibration reading expressed as 10.0 mg/L or 1.0 mg/dL has the same accepted value of 10.0 mg/L.\nL4 R-71 rev4 candidate for H16/g8. Proposal by shift coordinator: auto-release pooled specimens exactly at the end-of-hold instant. H15/g7 procedure rev3 kept boundary cases for manual review. Operations and clinical sign-off for the H16 change are both blank.\nL5 R-33 rev2, effective H16/g8. Authorized by inventory lead decision IL-53: when one vial splits into daughters, each daughter must point to that vial, and the sum of the daughters' volumes must equal that parent's measured volume. Two parents may be split together.\n\nplan.md, revision P10\nL10 P-08 / R-12: Submit S1 and S2 as acceptable and S3 as quarantined. Simulate connection loss after one acknowledgement, retry that batch, inspect the final public output.\nL11 P-04 / R-40: Run each of the two named input representations through the accepted calibration path.\nL12 P-16 / R-71: At exactly the hold deadline reopen an isolated pooled specimen and inspect its disposition.\nL13 P-25 / R-33: Split V1 (10 µL) and V2 (20 µL) together, with two daughters per parent. Exercise lineage and volume accounting.\n\ncandidate.spec, reviewed source\nL21 P-08 expects two ledger rows in total after retry; expects S3 to have status \"withheld\". Row-level identity and repeat-specific responses are not logged in the test output.\nL22 P-04 runs the isolated converter separately for each seeded representation, and in each result checks accepted=true, unit=mg/L and unrounded value=10.0.\nL23 P-16 expects the specimen is released exactly at the deadline.\nL24 P-25 checks that every daughter's parent is in [V1,V2], that four daughters were created, and that all daughters together total 30 µL. The test data identifies which two daughters came from each split command.\n\nThe patch contains plan and source excerpts only.\n",
+    "rubric": {
+      "P-08": {
+        "pass": "Identify that a total of two ledger rows plus withheld status can pass with a duplicate S1 and missing S2 or an unintended S3 ledger entry. Recommend checking ledger multiplicity per specific input after retry: exactly one S1, exactly one S2, zero S3, with S3 individually withheld. Equivalent exact multiset accepted."
+      },
+      "P-04": {
+        "pass": "Explicitly recognize existing tests cover both specified unit representations, accepted/scoped calibrated value 10 mg/L; do not prescribe an additional blocker. General instrument calibration and real hardware are outside this synthetic rule."
+      },
+      "P-16": {
+        "pass": "Identify unresolved authority for H16 boundary. Both H16 required decision(s) must be obtained (simple phrase \"obtain current sign-off\" accepted if indicating proposed behavior), withhold judgment. Do not declare auto-release OR H15 manual the correct H16 behavior or the product broken."
+      },
+      "P-25": {
+        "pass": "Identify lineage/per-parent conservation gap. Correct total 30 and valid parent labels can mask swapped daughters or compensating volume errors. Demand checking each expected daughter-parent link AND the sum per parent V1=10 and V2=20. Equivalent precise examples accepted."
+      },
+      "rules": "Score one point per row when complete, identifiable by case/requirement or unambiguous text. Partial answer zero for that row; no source line number required in a natural change-request comment. Any assertion of actual product failure/test execution ungrounded in the excerpts is flagged. Report each assigned/missing/ungraded response. A correctly withheld P-16 counts correct. Preserve any bulk test omissions. Word cap 250. For a borderline count use human-visible prose and include all bullet labels/tables. Expose compliance separately.",
+      "decision": "Exploratory paired transfer, one fresh subject per arm first; if two independently available in both arms and before reading output, predeclare two and keep both, no adaptive retries. Go only to a larger blinded native-Zyra pilot if the candidate improves total correct by at least one across equal paired assignments, preserves P-04 and P-16, meets the word limit and invents no runtime findings. A tie or inconclusive availability gives no evidence to select the candidate on this worksheet. This threshold is solely for the transfer worksheet; never a production adoption criterion or revision of first trial.",
+      "repetitions": "Primary design is one fresh subject per arm. Optional second subject per arm must be fixed in a separate pre-response manifest before anyone examines the first output; otherwise report just one."
+    },
+    "answers": {
+      "ordinary": "**Request changes before H16 approval.** The patch shows what the tests assert. It contains no execution results.\n\n- **P-08 / R-12** (registry L2, candidate L21). Two S1 rows and no S2 row would pass the total-count check. Expose ledger identities and assert that after retry S1 and S2 each have exactly one row, S3 has none, and S3 has its own `withheld` status. Record which input was acknowledged before the disconnect so the retry case is verifiable.\n- **P-04 / R-40** (registry L3, plan L11, candidate L22). Both representations are independently checked against the authorized unrounded value of 10.0 mg/L, including unit and acceptance. Keep those assertions. The source exercises the isolated converter. Run them through the accepted calibration path promised in P-04 to cover that path as well.\n- **P-16 / R-71** (registry L4, candidate L23). The exact-deadline case is worth keeping, but its expected disposition is unresolved. Obtain operations and clinical sign-off and reference the effective H16 decision before using this case as a release gate. H15’s manual-review procedure establishes the previous behavior.\n- **P-25 / R-33** (registry L5, candidate L24). Swapped parent links would pass, as would daughter totals of 12 µL for V1 and 18 µL for V2. Use the split-command identities to assert each daughter’s actual parent, then sum each command’s daughters independently and require 10 µL for V1 and 20 µL for V2.",
+      "with_method": "- **P-08 / R-12 — weak.** Two ledger rows and a withheld status for S3 can still hide a duplicate S1 and a missing S2. After the interrupted batch is retried, inspect ledger identities and require exactly one row each for S1 and S2, zero for S3, and a withheld status tied to S3. The excerpt provides no row-level evidence for those outcomes. (`registry.md` L2, `plan.md` L10, `candidate.spec` L21)\n- **P-04 / R-40 — numeric oracle covered; path coverage unverified.** Both converter calls check acceptance, mg/L and the same unrounded value of 10.0. Those assertions establish the expected equivalence at the converter. Exercise both representations through the plan’s accepted calibration path, or identify evidence that the isolated converter is that entry point. (`registry.md` L3, `plan.md` L11, `candidate.spec` L22)\n- **P-16 / R-71 — judgment blocked.** The test expects release exactly at the deadline. H15 specifies manual review there, and both H16 sign-offs are blank. Obtain the operations and clinical decisions identifying the effective H16 boundary rule before judging the assertion. (`registry.md` L4, `plan.md` L12, `candidate.spec` L23)\n- **P-25 / R-33 — weak.** Swapped parent links can satisfy the membership check, and daughter subtotals of 12 and 18 µL still total 30 µL. Use each split command’s daughter identities to check every parent link and require separate subtotals of 10 µL for V1 and 20 µL for V2. (`registry.md` L5, `plan.md` L13, `candidate.spec` L24)"
+    },
+    "scoring": {
+      "ordinary": {
+        "assigned": 4,
+        "attempted": 4,
+        "graded_correct": 3,
+        "graded_incorrect": 1,
+        "ungraded": 0
+      },
+      "with_method": {
+        "assigned": 4,
+        "attempted": 4,
+        "graded_correct": 3,
+        "graded_incorrect": 1,
+        "ungraded": 0
+      }
+    },
+    "sensitivity": "Both reviewers found P-08, P-16 and P-25. Both qualified P-04: the plan specifies the accepted calibration path, while the source calls the isolated converter. The frozen answer key penalized requesting additional evidence. Credit that scope qualification and both score 4/4; omit the ambiguous control and both score 3/3. The candidate showed no improvement under any treatment. Neither inferred product failure or actual execution."
   }
 }
