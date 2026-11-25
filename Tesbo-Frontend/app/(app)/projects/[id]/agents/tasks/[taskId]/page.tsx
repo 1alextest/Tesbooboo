@@ -633,7 +633,7 @@ export default function ZyraTaskDetailPage() {
   // pointless round trip that the server would reject with a 409 anyway.
   const output = summarizeZyraTaskOutput(task);
   const isRequirementBundle = output.isRequirementBundle;
-  const isManagedDocumentProposal = task.provider === "external_document_proposal" || Boolean(task.managedDocumentProposal);
+  const isManagedDocumentProposal = output.isManagedDocumentProposal;
   const requirementApplyReceipt = task.requirementApplyReceipt;
   // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
   const requirementApplied = done && Boolean(requirementApplyReceipt);
@@ -704,7 +704,7 @@ export default function ZyraTaskDetailPage() {
               </p>
             )}
             <p className="mt-2 text-sm text-[var(--muted)]">
-              {isRequirementBundle
+              {isRequirementBundle || isManagedDocumentProposal
                 ? `${output.primary} · ${output.secondary} · ${task.tokenUsage.total} tokens · ${formatDateTime(task.updatedAt, t.locale)}`
                 : t("task.summary", {
                   generated: task.generatedCount,
