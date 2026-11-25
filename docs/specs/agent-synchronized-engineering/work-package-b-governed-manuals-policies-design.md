@@ -620,3 +620,37 @@ preview tool set and `list_document_proposals` returns the new `{list,total,limi
 against the verified TESBOPROJECT connection. The automated Playwright API/UI checks were run in GitHub
 Actions and passed; **manual execution of the native case remains UNRUN**, and native task-evidence
 writing (execution results) is still unavailable through the exposed tools.
+
+---
+
+## 12. Exact comparison journey
+
+**Agent proposals** reuse `ManagedDocumentProposalPanel`. The comparison is between the exact pinned base
+(`target.base.editRevision` + `contentDigest`) and the effective proposed document. Omitted
+`contentText`/`contentHtml`/`contentJson` are labelled **inherited** and carry the pinned value; an explicit
+`null`/empty value is a **clear**. Create proposals are labelled **New governed document** with no base.
+Title, plain text, stored HTML (inert text), editor JSON, governance metadata and the digest-bound source/placement fields (folder, document type, provider/source identity, read-only) are compared independently, with metadata-only and HTML/JSON representation-only badges.
+
+**Governed versions** extend `GovernedDocumentPanel` with two comparisons of the submitted snapshot:
+1. an earlier immutable version selected from the exact version list — defaulting to the latest approved
+   snapshot earlier than the submission — labelled "historical, not current authority" unless it is the
+   document's current decision binding; and
+2. the current persisted working revision, labelled with its status/edit revision and never described as an
+   approval.
+
+Both bases expose exact version ids/numbers, content digests and edit revisions, and "Open exact version"
+reuses the existing read-only version detail. First submission (no earlier immutable version) says so;
+identical states say so; missing/denied version reads and load failures show an explicit retry. Comparison
+fetching is read-only and sequence-fenced across project/document/selection changes; it never resets the
+metadata draft or editor state.
+
+Excerpts are bounded (line/character caps), while every field keeps complete old/new values behind an explicit
+disclosure. Stored HTML is rendered only as `pre` text; interface labels sit outside content. History decisions
+remain distinguishable from the current document binding (`reviewedVersionId`/status).
+
+**Coverage.** `e2e/ui/skills.spec.ts` covers inherited vs cleared vs new-document proposals and a long
+document's bounded excerpt with full-value access. `e2e/ui/knowledge-base.spec.ts` KBU-79 covers first
+submission, current-identical, HTML/JSON-only, metadata-only, digest-bound folder placement, denied-version
+retry and historical-base comparison with exact-version access. Native requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
+`1c957dfea4cc767b14bfe7c8f49906256e8a1de5d8ba13db31dcd18ba596c037`, `in_review`, unassigned. Manual
+execution remains **UNRUN**; native execution-evidence writing remains unavailable.
