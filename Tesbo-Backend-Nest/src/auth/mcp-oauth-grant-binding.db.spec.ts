@@ -120,5 +120,47 @@ if (process.env.GITHUB_JOB === "real-provider-persistence" && !disposableCI) {
           ORDER BY revision`, [project, user]);
       expect(receipts.rows.map(row => row.revision)).toEqual([2, 3]);
     });
+
+    it.each(["project", "organization"] as const)(
+      "refuses all provider credential models while %s membership is absent",
+      async membership => {
+        const revision = membership === "project" ? 101 : 102;
+        await db.query("UPDATE projects SET settings=$2::jsonb WHERE id=$1",
+          [project, JSON.stringify(settings(revision))]);
+        const family = `qa-membership-${membership}-${tag}`;
+        const models = ["Grant", "AuthorizationCode", "RefreshToken", "AccessToken"] as const;
+        const ids = models.map(model => model === "Grant" ? family : `${family}-${model}`);
+        const adapters = models.map(issuerAdapter);
+        const basis = { projectId: project, accountId: user, clientId: CLIENT,
+          resource: resource(), approvalRevision: revision };
+        const readFamily = () => Promise.all(adapters.map((adapter, i) => adapter.find(ids[i])));
+        try {
+          await adapters[0].upsert(ids[0], { accountId: user, clientId: CLIENT });
+          await bindOAuthGrantToApproval(db, family, basis);
+          for (let i = 1; i < models.length; i++) {
+            await adapters[i].upsert(ids[i], { grantId: family, accountId: user, clientId: CLIENT }, 900);
+          }
+          expect(await currentOAuthGrantBinding(db, family, basis)).toBe(true);
+          expect(await readFamily()).toEqual(models.map(() => expect.objectContaining({ accountId: user })));
+
+          // Isolate the live membership predicate from the owner policy revision.
+          // Direct fixture deletion is deliberate; it is not a test of a membership API.
+          const removed = membership === "project"
+            ? await db.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING user_id", [project,user])
+            : await db.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING user_id", [org,user]);
+          expect(removed.rows).toHaveLength(1);
+          const stillApproved = await db.query("SELECT settings FROM projects WHERE id=$1", [project]);
+          expect(stillApproved.rows[0].settings.externalMcpAccess).toEqual(settings(revision).externalMcpAccess);
+          const actual = await Promise.all([currentOAuthGrantBinding(db, family, basis), readFamily()]);
+          expect(actual).toEqual([false, models.map(() => undefined)]);
+        } finally {
+          // Restore fixture membership only after destroying this family's artifacts;
+          // restoration/reconsent semantics are a separate, unresolved policy decision.
+          for (let i = 0; i < models.length; i++) await adapters[i].destroy(ids[i]);
+          await db.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING", [org,user]);
+          await db.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING", [project,user]);
+        }
+      }
+    );
   }
 );
