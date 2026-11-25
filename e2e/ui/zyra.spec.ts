@@ -714,6 +714,22 @@ test.describe("zyra / agents (UI)", () => {
 
       const page = await open(browser, "/agents/zyra/changes", "qa");
       await expect(page.getByRole("heading", { name: "Change impact review" })).toBeVisible();
+      // The first visible meaning is the human decision, not raw graph ids or a model draft.
+      // The evidence is the persisted native receipt seeded above, not a fabricated UI outcome.
+      const reviewFocus = page.getByTestId("qa-review-focus-" + historyId);
+      await expect(reviewFocus.getByRole("heading", { name: "Decide which existing cases apply to this change" })).toBeVisible();
+      await expect(reviewFocus).toContainText("1 changed graph node(s) and 1 nominated existing case(s)");
+      await expect(reviewFocus).toContainText("Still unknown:");
+      await expect(reviewFocus).toContainText("Source freshness is unverified");
+      await expect(reviewFocus).toContainText("Next human action:");
+      await expect(reviewFocus).toContainText("It does not approve a requirement, test case, policy, execution result or release");
+      const humanReviewFirst = await page.evaluate(() => {
+        const history = document.querySelector('section[aria-label="Graph change history"]');
+        const sourceTools = document.querySelector('section[aria-label="Source configuration and draft model inspection"]');
+        return !!history && !!sourceTools &&
+          !!(history.compareDocumentPosition(sourceTools) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+      expect(humanReviewFirst).toBe(true);
       const link = page.getByRole("link", { name: "Open existing test case" });
       await expect(link).toHaveAttribute("href", `/projects/${projectId}/testcases/${caseId}`);
       await expect(page.getByText("Review reason: case_changed")).toBeVisible();
@@ -963,6 +979,12 @@ test.describe("zyra / agents (UI)", () => {
           ${literal(JSON.stringify(sourceOnlyReceipt))}::jsonb) RETURNING id;`);
       await page.goto("/projects/" + projectId + "/agents/zyra/changes");
       const sourceOnly = page.getByTestId("graph-review-run-" + sourceOnlyHistoryId);
+      const sourceOnlyFocus = page.getByTestId("qa-review-focus-" + sourceOnlyHistoryId);
+      await expect(sourceOnlyFocus.getByRole("heading", {
+        name: "Identify affected behavior before selecting tests"
+      })).toBeVisible();
+      await expect(sourceOnlyFocus).toContainText("0 nominated existing case(s)");
+      await expect(sourceOnlyFocus).toContainText("Investigate the changed behavior and approved requirements");
       await expect(sourceOnly.getByText("Review source-only QA gaps")).toBeVisible();
       await sourceOnly.locator("summary").click();
       const sourceGaps = sourceOnly.getByRole("region", { name: "QA verification gaps" });
