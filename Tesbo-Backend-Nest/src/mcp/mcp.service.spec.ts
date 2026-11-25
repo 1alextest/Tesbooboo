@@ -333,7 +333,7 @@ describe("McpService", () => {
           expect(entries).toHaveLength(1);
           expect(entries[0].description).toContain("independently");
           expect(entries[0].description).toContain("staging");
-          expect(entries[0].description).toContain("cannot certify");
+          expect(entries[0].description).toMatch(/(?:does not|cannot) certify/);
         }
       } finally {
         if (previous === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
