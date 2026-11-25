@@ -40,6 +40,8 @@ export async function currentOAuthGrantBinding(
       `SELECT b.project_id,b.account_id,b.client_id,b.resource,b.approval_revision,p.settings
          FROM mcp_oauth_grant_approval_bindings b
          JOIN projects p ON p.id=b.project_id AND p.archived_at IS NULL
+         JOIN project_members pm ON pm.project_id=b.project_id AND pm.user_id::text=b.account_id
+         JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id::text=b.account_id
         WHERE b.grant_fingerprint=$1 AND b.revoked_at IS NULL`,
       [fingerprint(grantId)]
     )).rows[0];
