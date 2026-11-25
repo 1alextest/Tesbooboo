@@ -43,6 +43,7 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
   const currentGrantRows = (sql: string) => ({
     rows: sql.includes("pm.id AS project_membership_id")
       ? memberActive ? [{
+        name: "Existing QA project", key: "TES",
         project_membership_id: P, organization_membership_id: OTHER
       }] : []
       : sql.includes("mcp_oauth_grant_approval_bindings")
