@@ -1026,6 +1026,28 @@ test.describe("zyra / agents (UI)", () => {
       await expect(sourceGaps).toContainText("Changed graph nodes have no nominated cases");
       await expect(sourceOnly.getByRole("button", { name: "Create run and add selected cases" })).toHaveCount(0);
 
+      // A graph reference from a different project is not an authorized native
+      // case lookup. The source receipt is intentionally misleading; this page
+      // must show an unverified reference, not a cross-project identity/link.
+      const foreignRevision = "e2e-graph-foreign-" + stamp;
+      const foreignNode = JSON.stringify(["test_case", tenant!.secondProjectId, caseId]);
+      const foreignReceipt = {
+        ...receipt, id: "e2e-foreign-" + stamp,
+        changed: { ...receipt.changed, modifiedNodeIds: [foreignNode] },
+        candidates: [{ caseNodeId: foreignNode, reasons: ["foreign_reference"], requirementNodeIds: [] }]
+      };
+      const foreignHistoryId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, 'e2e-native-graph-v1', 'e2e-local-source',
+          ${literal(foreignRevision)}, ${literal(capture(foreignRevision))}::jsonb,
+          ${literal(JSON.stringify(foreignReceipt))}::jsonb) RETURNING id;`);
+      await page.goto("/projects/" + projectId + "/agents/zyra/changes");
+      const foreignArticle = page.locator('section[aria-label="Graph change history"] article')
+        .filter({ has: page.getByTestId("qa-review-focus-" + foreignHistoryId) });
+      await expect(foreignArticle).toContainText("Noncanonical or foreign-project case reference");
+      await expect(foreignArticle.getByRole("link", { name: "Open existing test case" })).toHaveCount(0);
+      await expect(foreignArticle.getByRole("region", { name: "Native case identity" })).toHaveCount(0);
+
       const resolvedResponse = await api.get("/api/route-resolve", { params: { project: projectId, testcase: caseId } });
       expect(resolvedResponse.ok()).toBeTruthy();
       const resolved = await resolvedResponse.json();
@@ -1058,7 +1080,7 @@ test.describe("zyra / agents (UI)", () => {
            FROM graph_capture_history
           WHERE project_id=${literal(projectId)} AND revision=${literal(reviewRevision)});`);
       exec(`DELETE FROM graph_capture_history WHERE project_id = ${literal(projectId)}
-         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(sourceOnlyRevision)});`);
+         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(sourceOnlyRevision)},${literal("e2e-graph-foreign-" + stamp)});`);
       if (caseId) exec(`DELETE FROM testcases WHERE id = ${literal(caseId)};`);
     }
   });
