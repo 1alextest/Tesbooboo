@@ -810,6 +810,13 @@ from filenames or content alone.
   would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
   acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
 
+Evidence on exact head `9ce408bb`: database-integrity job `139835627562` passed all 747 tests in 18
+suites; backend-quality job `139835627756`, frontend-quality job `139835627898`, CodeQL and the smoke
+run `45798607609` all passed. The smoke log shows KBF-A-81 (558 ms), KBF-A-82 (465 ms), KBF-A-83
+(391 ms), KBF-A-84 (302 ms), KBF-A-85 (379 ms) and KBU-80 (1.6 s) passing, and the updated ci-smoke
+transport test passing with the same-key replay assertion. These are CI results, not native manual
+execution; every native linked case remains **UNRUN**.
+
 **Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
 than mandatory; requiring them would give every client automatic retry safety but breaks existing
 integrations until all callers send one. Replay returns the original rows rather than a `202`-style
