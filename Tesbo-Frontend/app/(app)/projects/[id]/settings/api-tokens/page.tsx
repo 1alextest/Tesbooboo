@@ -143,13 +143,20 @@ const MCP_TOOL_GROUPS: Array<{ category: string; tools: Array<{ name: string; bl
 
 export default function ApiTokensPage() {
   const params = useParams();
+  const { currentUser } = useAppData();
+  // A credential reveal or delayed list from another project/account must not survive navigation.
+  return <ApiTokensPageContent key={JSON.stringify([params.id, currentUser?.userId])} />;
+}
+
+function ApiTokensPageContent() {
+  const params = useParams();
   const router = useRouter();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
   const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
 
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const listRequest = useRef(0);
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [tokensLoading, setTokensLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -166,14 +173,19 @@ export default function ApiTokensPage() {
   const [connectTab, setConnectTab] = useState<ConnectTab>("claudeCode");
 
   const loadTokens = useCallback(async () => {
+    const request = ++listRequest.current;
+    setTokensLoading(true);
     try {
       const list = await listApiKeys(projectId);
+      if (request !== listRequest.current) return;
       setTokens(list);
       setListError(null);
     } catch {
+      if (request !== listRequest.current) return;
+      setTokens([]);
       setListError("Failed to load API tokens.");
     } finally {
-      setTokensLoading(false);
+      if (request === listRequest.current) setTokensLoading(false);
     }
   }, [projectId]);
 
@@ -182,14 +194,14 @@ export default function ApiTokensPage() {
       router.replace("/login");
       return;
     }
-    setCurrentUserId(currentUser.userId);
     loadTokens().catch(() => {});
+    return () => { listRequest.current++; };
   }, [loadTokens, projectId, router, currentUser]);
 
-  const currentUserRole = currentUserId
-    ? normalizeRole(projectMembers.find((m) => m.userId === currentUserId)?.role ?? "qa_engineer")
-    : "qa_engineer";
+  const currentMember = projectMembers.find((m) => m.userId === currentUser?.userId);
+  const currentUserRole = currentMember ? normalizeRole(currentMember.role) : null;
   const canManageApiTokens = currentUserRole === "owner" || currentUserRole === "manager";
+  const canCreateApiTokens = !!currentMember && !tokensLoading && !listError;
 
   function openCreateModal() {
     setNewTokenName("");
@@ -202,7 +214,11 @@ export default function ApiTokensPage() {
 
   async function handleCreateToken(e: FormEvent) {
     e.preventDefault();
-    if (creating) return;
+    if (creating || !canCreateApiTokens) return;
+    if (newTokenScopes.write && !canManageApiTokens) {
+      setCreateError("Your current role cannot issue write-scoped tokens.");
+      return;
+    }
     const name = newTokenName.trim();
     if (!name) {
       setCreateError("Name is required.");
@@ -228,25 +244,32 @@ export default function ApiTokensPage() {
         tokenPrefix: result.tokenPrefix,
         lastUsedAt: result.lastUsedAt,
         createdAt: result.createdAt,
+        canRevoke: result.canRevoke,
       };
       setTokens((prev) => [publicToken, ...prev]);
       setRevealedToken(result);
       setCreateStep("reveal");
+      void loadTokens();
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create token.");
+      // A lost response may have created an unrecoverable secret. Refresh the list before retry.
+      void loadTokens();
     } finally {
       setCreating(false);
     }
   }
 
   async function handleRevoke(tokenId: string) {
+    if (tokensLoading || listError || revokingId || !currentMember || !tokens.some(t => t.id === tokenId && t.canRevoke === true)) return;
     setRevokingId(tokenId);
     try {
       await revokeApiKey(projectId, tokenId);
       setTokens((prev) => prev.filter((t) => t.id !== tokenId));
       setRevealedToken((prev) => (prev?.id === tokenId ? null : prev));
+      await loadTokens();
     } catch {
-      setListError("Failed to revoke token.");
+      await loadTokens();
+      setListError("Revocation could not be confirmed. Reload the token list before retrying.");
     } finally {
       setRevokingId(null);
     }
@@ -370,20 +393,20 @@ export default defineConfig({
       {!canManageApiTokens && (
         <Card className="p-4">
           <p className="text-sm text-[var(--muted)]">
-            Only project managers and owners can create or revoke API tokens.
+            Project members can create read-only tokens and revoke their own tokens. Owners and managers approve MCP clients and manage write-scoped or other members’ credentials.
           </p>
         </Card>
       )}
 
-      {canManageApiTokens && (
+      {currentMember && (
         <div>
-          <Button type="button" onClick={openCreateModal}>
+          <Button type="button" onClick={openCreateModal} disabled={!canCreateApiTokens || !!revokingId}>
             Create token
           </Button>
         </div>
       )}
 
-      {listError && <p className="text-sm text-[var(--error-foreground)]">{listError}</p>}
+      {listError && <div className="flex items-center gap-2"><p role="alert" className="text-sm text-[var(--error-foreground)]">{listError}</p><Button type="button" variant="secondary" onClick={() => void loadTokens()} disabled={tokensLoading}>Reload tokens</Button></div>}
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -395,7 +418,7 @@ export default defineConfig({
                 <th className="px-4 py-3 font-medium">Scopes</th>
                 <th className="px-4 py-3 font-medium">Last used</th>
                 <th className="px-4 py-3 font-medium">Created</th>
-                {canManageApiTokens && <th className="px-4 py-3 font-medium text-right">Action</th>}
+                <th className="px-4 py-3 font-medium text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -410,30 +433,30 @@ export default defineConfig({
                   </td>
                   <td className="px-4 py-3 text-[var(--muted)]">{formatDate(token.lastUsedAt)}</td>
                   <td className="px-4 py-3 text-[var(--muted)]">{formatDate(token.createdAt)}</td>
-                  {canManageApiTokens && (
-                    <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right">
+                    {currentMember && token.canRevoke === true ? (
                       <button
                         type="button"
                         onClick={() => handleRevoke(token.id)}
-                        disabled={revokingId === token.id}
+                        disabled={tokensLoading || !!listError || revokingId !== null}
                         className="text-[var(--error-foreground)] hover:underline disabled:opacity-50"
                       >
                         {revokingId === token.id ? "Revoking…" : "Revoke"}
                       </button>
-                    </td>
-                  )}
+                    ) : <span className="text-[var(--muted)]">—</span>}
+                  </td>
                 </tr>
               ))}
               {!tokensLoading && tokens.length === 0 && (
                 <tr>
-                  <td colSpan={canManageApiTokens ? 6 : 5} className="px-4 py-6 text-center text-[var(--muted)]">
+                  <td colSpan={6} className="px-4 py-6 text-center text-[var(--muted)]">
                     No API tokens yet.
                   </td>
                 </tr>
               )}
               {tokensLoading && (
                 <tr>
-                  <td colSpan={canManageApiTokens ? 6 : 5} className="px-4 py-6 text-center text-[var(--muted)]">
+                  <td colSpan={6} className="px-4 py-6 text-center text-[var(--muted)]">
                     Loading tokens…
                   </td>
                 </tr>
@@ -719,8 +742,7 @@ export default defineConfig({
             </Field>
             <p className="text-xs text-[var(--muted)]">
               Project: <strong>{projectName || projectId}</strong>. Read is selected by default.
-              Enable Write only for agents or reporters that need to change data.
-              Automated Playwright reporting needs Read and Write.
+              {canManageApiTokens ? "Enable Write only for agents or reporters that need to change data. Automated Playwright reporting needs Read and Write." : "Your role can issue Read tokens. Ask an owner or manager to authorize a suitable integration if Write is needed."}
             </p>
             <div className="space-y-3">
               <label className="flex items-start gap-3 cursor-pointer">
@@ -744,7 +766,7 @@ export default defineConfig({
                   checked={newTokenScopes.write}
                   onChange={(e) => setNewTokenScopes((prev) => ({ ...prev, write: e.target.checked }))}
                   className="mt-0.5"
-                  disabled={creating}
+                  disabled={creating || !canManageApiTokens}
                 />
                 <div>
                   <span className="text-sm font-medium text-[var(--foreground)]">Write</span>
@@ -759,7 +781,7 @@ export default defineConfig({
               <Button type="button" variant="secondary" onClick={closeCreateModal} disabled={creating}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={creating}>
+              <Button type="submit" disabled={creating || !canCreateApiTokens || (newTokenScopes.write && !canManageApiTokens)}>
                 {creating ? "Creating…" : "Create token"}
               </Button>
             </div>
