@@ -45,7 +45,7 @@ import {
   ZYRA_RU_STAGED_AWAITING,
   ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
-import { ApiTokenService, normalizeApiTokenScopes } from "../auth/api-token.service";
+import { API_TOKEN_CURRENT_GENERATION_SQL, ApiTokenService, normalizeApiTokenScopes } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
@@ -18269,7 +18269,7 @@ export class LegacyService implements OnModuleInit {
       throw new ForbiddenException({ error: "A current authoring role is required" });
     }
     if (principal.kind !== "api_token") return;
-    const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId, projectId, uid]);
+    const token = await client.query(`SELECT t.scopes FROM api_tokens t WHERE t.id=$1 AND t.project_id=$2 AND t.user_id=$3 AND ${API_TOKEN_CURRENT_GENERATION_SQL} FOR SHARE OF t`, [principal.tokenId, projectId, uid]);
     if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) {
       throw new ForbiddenException({ error: "A current write-scoped project token is required" });
     }
