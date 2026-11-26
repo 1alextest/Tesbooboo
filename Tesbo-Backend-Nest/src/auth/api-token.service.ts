@@ -22,6 +22,15 @@ export interface ApiTokenSummary {
   tokenPrefix: string;
   lastUsedAt: string | null;
   createdAt: string;
+  /** Advisory, caller-specific management capability; revoke still rechecks authority. */
+  canRevoke?: boolean;
+}
+
+export type ApiTokenManager = { userId: string; canManage: boolean };
+
+/** One policy for the management projection and the actual revoke decision. */
+export function canRevokeApiToken(caller: ApiTokenManager, issuerId: string | null | undefined): boolean {
+  return caller.canManage || (!!caller.userId && issuerId === caller.userId);
 }
 
 const TOKEN_PREFIX = "tsbo_";
@@ -107,13 +116,16 @@ export class ApiTokenService {
     };
   }
 
-  async listTokens(projectId: string): Promise<ApiTokenSummary[]> {
+  async listTokens(projectId: string, caller?: ApiTokenManager): Promise<ApiTokenSummary[]> {
     const res = await this.db.query(
-      `SELECT id, name, scopes, token_hash, last_used_at, created_at
+      `SELECT id, name, scopes, token_hash, last_used_at, created_at, user_id
        FROM api_tokens WHERE project_id = $1 ORDER BY created_at DESC`,
       [projectId]
     );
-    return res.rows.map((row) => this.toSummary(row as never));
+    return res.rows.map((row) => ({
+      ...this.toSummary(row as never),
+      ...(caller ? { canRevoke: canRevokeApiToken(caller, row.user_id) } : {})
+    }));
   }
 
   /**
