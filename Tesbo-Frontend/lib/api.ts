@@ -1941,6 +1941,8 @@ export async function updateProjectMcpAccess(projectId: string, access: ProjectM
 export interface ApiToken {
   id: string;
   name: string;
+  /** Advisory capability returned by the current server for the signed-in caller. */
+  canRevoke?: boolean;
   scopes: string[];
   tokenPrefix: string;
   lastUsedAt: string | null;

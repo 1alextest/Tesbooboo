@@ -45,7 +45,7 @@ import {
   ZYRA_RU_STAGED_AWAITING,
   ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
-import { API_TOKEN_CURRENT_GENERATION_SQL, ApiTokenService, normalizeApiTokenScopes } from "../auth/api-token.service";
+import { API_TOKEN_CURRENT_GENERATION_SQL, ApiTokenService, canRevokeApiToken, normalizeApiTokenScopes } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
@@ -1716,8 +1716,10 @@ export class LegacyService implements OnModuleInit {
   // same project-membership check used across the rest of the API.
 
   async listApiKeys(userId: string | null | undefined, projectId: string) {
-    await this.requireProjectAccess(userId, projectId);
-    return this.apiTokens.listTokens(projectId);
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    return this.apiTokens.listTokens(projectId, { userId: uid, canManage: role === "owner" || role === "manager" });
   }
 
   async createApiKey(userId: string | null | undefined, projectId: string, body: Body) {
@@ -1741,6 +1743,7 @@ export class LegacyService implements OnModuleInit {
     // workspace or MCP path the one-time secret belongs to.
     return {
       ...issued,
+      canRevoke: true,
       projectId,
       projectName: String(project.name || ""),
       organizationId: String(project.organization_id || ""),
@@ -1750,19 +1753,22 @@ export class LegacyService implements OnModuleInit {
 
   async revokeApiKey(userId: string | null | undefined, projectId: string, keyId: string) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     if (!isUuid(keyId)) throw new NotFoundException({ error: "API key not found" });
-    const token = await this.apiTokens.issuerOf(projectId, keyId);
-    if (!token.exists) throw new NotFoundException({ error: "API key not found" });
-    const role = this.normalizeRole(String(project.caller_role || ""));
-    // A member may revoke their own token; revoking someone else's project credential is an
-    // owner/manager action. Otherwise any member could disable the project's machine integrations.
-    if (role !== "owner" && role !== "manager" && token.userId !== uid) {
-      throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
-    }
-    const removed = await this.apiTokens.revokeToken(projectId, keyId);
-    if (!removed) throw new NotFoundException({ error: "API key not found" });
-    return { ok: true };
+    return this.db.transaction(async (client) => {
+      // Lock current project/workspace authority before the credential, as on native proposal
+      // writes. A cached preflight cannot authorize a delete after a concurrent role change.
+      const project = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const token = await this.apiTokens.issuerOf(projectId, keyId, client);
+      if (!token.exists) throw new NotFoundException({ error: "API key not found" });
+      const role = this.normalizeRole(String(project.caller_role || ""));
+      if (!canRevokeApiToken({ userId: uid, canManage: role === "owner" || role === "manager" }, token.userId)) {
+        throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
+      }
+      const removed = await this.apiTokens.revokeToken(projectId, keyId, client);
+      if (!removed) throw new NotFoundException({ error: "API key not found" });
+      return { ok: true };
+    });
   }
 
   // --- Saved repository views ----------------------------------------------
