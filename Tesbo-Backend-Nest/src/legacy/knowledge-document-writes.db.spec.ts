@@ -1003,7 +1003,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
   });
 
   it("refuses a waiting folder create after a project owner archives the project", async () => {
-    const name = `Folder after archive ${randomUUID()}`;
+    const name = `Archive ${randomUUID()}`;
     const before = await readFolders();
     const archiver = makeLegacy(new DatabaseService(pool));
     try {
