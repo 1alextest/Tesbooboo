@@ -1,58 +1,79 @@
 {
-  "package": "Tesbo_Specifications_v1.4.45.zip",
-  "package_revision": "1.4.45",
+  "package": "Tesbo_Specifications_v1.4.46.zip",
+  "package_revision": "1.4.46",
   "status": "NOT FROZEN",
-  "archive_bytes": 632297,
-  "archive_sha256": "bb06fb5b4080b81fd521f77ea4cc26a39b823a873d2cf221a182d984a6a088aa",
-  "scope": "Exact publication of the eight owner-supplied canonical Markdown originals. Historical headers and review scopes are preserved. Publication is not implementation, acceptance, deployment or a package freeze.",
+  "archive_bytes": 665420,
+  "archive_sha256": "4c889b321e654c5caf5dc691dcd65b538187bc9065f9aace720f13cd89196a09",
+  "scope": "User-authorized proposed amendment of the same eight canonical Markdown identities. Historical content and owner-saved decision-basis additions are preserved; publication is not implementation, acceptance, deployment, active Skill change or freeze.",
+  "source_commit": "b28c17386ecc2e88f550b3c4a641143ede339255",
+  "parents": [
+    {
+      "kind": "repository_publication",
+      "commit": "b28c17386ecc2e88f550b3c4a641143ede339255",
+      "package_revision": "1.4.45",
+      "archive_bytes": 632297,
+      "archive_sha256": "bb06fb5b4080b81fd521f77ea4cc26a39b823a873d2cf221a182d984a6a088aa"
+    },
+    {
+      "kind": "owner_saved_canonical",
+      "package_revision": "1.4.45",
+      "version": 26,
+      "archive_bytes": 635694,
+      "archive_sha256": "d4db29b98d4b7daa881770795287a2e920873b3875cce50a3353cf341f785a8f",
+      "preserved_deltas": [
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+      ]
+    }
+  ],
   "files": [
     {
       "path": "00_README.md",
-      "bytes": 168706,
-      "sha256": "c912ba92de2ac04cb0e7906627ab5baf2d7e8a9973770830cc2de92727071372",
-      "git_blob": "4b142f9332fa7a1f651a223be99f2493153c0fc5"
+      "bytes": 175788,
+      "sha256": "7034c08c15ea02bfb7b0e117915b00ec056c460571839c0a92b2b437a4c7c6bd",
+      "git_blob": "1801acd7fd99cc9eb26c69f9b7221b2c2c54c6b5"
     },
     {
       "path": "01_PRODUCT_REQUIREMENTS.md",
-      "bytes": 228764,
-      "sha256": "25063479d835c0f0945c38cb3b2c5a34357f61e68dd4bfcce89f08f4cb6ea40b",
-      "git_blob": "3ded987c73fd59d1ba34ca5e55dfb7fc623ea67f"
+      "bytes": 239019,
+      "sha256": "533cb4259d280f3f76b1c5e20d2c69a8163d732c9347a207fc2af8732bec0db4",
+      "git_blob": "903a12aefaba54474696f4e23832c7f9ac3ccca7"
     },
     {
       "path": "02_WORKFLOW_AND_UX_SPEC.md",
-      "bytes": 143881,
-      "sha256": "0fa13560dde06ca331061f27a65307b6c55f9766cd666c35c6d4e4b24fbe7fbf",
-      "git_blob": "f1da967acaf81ea52fac13c08661bb7702012405"
+      "bytes": 154510,
+      "sha256": "48408416064d127cb11841079ffc0b4cfa47808b41058e5d068bd8fadf5e96fc",
+      "git_blob": "79fa13bd5e01982753cafec7087e2d0e46349f95"
     },
     {
       "path": "03_TECHNICAL_DESIGN.md",
-      "bytes": 410261,
-      "sha256": "277c8b115ca23904df521ee56df211766217e2b8f09ff488773450978a6ccf9e",
-      "git_blob": "a89b385c1241ff72217420a24849377cdba70a81"
+      "bytes": 428288,
+      "sha256": "f5006da52db31a71eff58b4337c30af8b77a5d901e71cd7e98ea8a25a45d81ee",
+      "git_blob": "03184ff4de51f650bc92e19d7f07a349f308cb13"
     },
     {
       "path": "04_MCP_API_CONTRACTS.md",
-      "bytes": 188593,
-      "sha256": "fbe715ec8dc8f21a668d0c8dadfc25b374991a949892d123c17ecbfe218cbfbd",
-      "git_blob": "fcb0f56c1b4fb7c7c6d8388df6bbe6c9f75316f7"
+      "bytes": 200720,
+      "sha256": "c95778aa63f6f16dadaf8c765f8db3a4229153bc8e3113607fd9fc4d40f73d7a",
+      "git_blob": "074c6d4ecf8360bc0482051ba4021bc47206c14f"
     },
     {
       "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
-      "bytes": 396832,
-      "sha256": "cfda859a2e5216dce4091e65364878d01a052c046cc4a17de5be327357ad0e8e",
-      "git_blob": "0fe385bc1790eaadc112ec2efb3c42c2d311565f"
+      "bytes": 417309,
+      "sha256": "0ec38aebc9afd40206c1b11ebfa05038c284f24fb8a85653bbe30f4378e74d5d",
+      "git_blob": "f5468819138dceba90bd68d50660847f2fb49ee3"
     },
     {
       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
-      "bytes": 154591,
-      "sha256": "8f66240db406d8b2fc700aed54f075590f64054059ab07deaa55470b90d063e2",
-      "git_blob": "46a705782dea2549fb513b48f0c75fcd4fa4cc04"
+      "bytes": 163354,
+      "sha256": "df0b2306872afc6a72c3a2e1eb19e4fce4be24d3240661e360bcc4166bed7c3f",
+      "git_blob": "65856cc9ebd7bd805a144d4519a2ac81cb0f1fe7"
     },
     {
       "path": "07_UI_DESIGN_TASKS.md",
-      "bytes": 149169,
-      "sha256": "11fe6d5d9c5fa9a9e960dd247e0ae9cb735e5f72c6a429ef398549e72ebc76d1",
-      "git_blob": "1bbb188cd9d785819ba9b219623c5dfc628dfaf9"
+      "bytes": 158594,
+      "sha256": "560e1d8054f59b5d60732630fc2212398c9f625c5d81541224c6bc2b4882284d",
+      "git_blob": "cc9cf56cc45725339e38909ac310e3a3d948d28e"
     }
   ]
 }
