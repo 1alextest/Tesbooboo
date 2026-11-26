@@ -74,6 +74,14 @@ The phrase “do not leave debug code in production” is a *contextual rule*, n
 4. If harmless by evidence, reply to the exact finding with the code path, negative assertion and environment scope. Resolve only with traceable rationale, preserving the scanner. If evidence is incomplete, leave it unresolved as **investigation needed**.
 5. Trace siblings: logging, stack traces, tokens, test credentials, environment defaults, feature flags, bypass headers, local endpoints, source maps, development dependencies, permissive CORS, admin consoles, verbose errors and hardcoded diagnostic origins. Scope sibling changes carefully.
 
+### Finding disposition continuity — SEC-P06/P10 refinement (provisional)
+
+A warning is an observation, a classification is a technical conclusion, and closure is an authorized state transition. Preserve these separately across repeated observations and candidate changes. The transferable mechanism is that evidence, decision authority and the state of the assessed object must remain correlated; a change in any one can invalidate a conclusion without erasing its history.
+
+Use the existing [finding reconciliation procedure](../../agent-scope-discipline.md#evidence-bound-disposition-and-closure-candidate-refinement) for the record, occurrence mapping and acceptance criteria. Do not build a separate Security Skill approval mechanism. Challenge with a harmless-looking test that performs a real external action, an unchanged guard whose caller now bypasses it, a repeated scanner alert with changed semantics, and a correctly accepted disposition whose remote closure operation fails. Distinguish scanner execution failures from false positives. Require evidence that would falsify the proposed harmless interpretation, not just a filename or reassuring comment.
+
+Origin: OAuth #246 alerts 3332–3338 and the inspected e3e8027 source; four candidate mechanisms, not seven independently accepted dispositions. The case study and regression oracles in the reconciliation procedure are proposed, not executed by this Skill revision. No native Skill approval or assignment change is implied.
+
 ## Required security review probes
 
 For every change, proportionate to its scope, examine:
