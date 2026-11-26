@@ -840,11 +840,16 @@ manual re-upload remains the recovery path. The owner may still choose mandatory
 reopening after deletion, an explicit reconciliation endpoint, or automatic bounded retries for
 provider failures.
 
-**Separate dispositions (unchanged, not silently fixed here).** Filename uniqueness is still computed
-outside the insert lock; per-file batch atomicity still permits committed prefixes before a later file
-fails (resume now makes that state recoverable but does not make the batch all-or-nothing); storage
-deletion is still best-effort with no retry queue; rows stranded by the pre-V166 code receive no
-one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
+**Upload filename allocation (fixed).** The displayed-name suffix used to be computed before the
+transaction, so concurrent uploads of the same name could both choose the unsuffixed one. It is now
+allocated on the transaction's own client after the project mutation advisory lock, so the second
+writer observes the first committed row and takes the next suffix. No new unique index or second
+naming owner is introduced; the upload writer is the only path using this allocation.
+
+**Separate dispositions (unchanged, not silently fixed here).** Per-file batch atomicity still
+permits committed prefixes before a later file fails (resume now makes that state recoverable but
+does not make the batch all-or-nothing); storage deletion is still best-effort with no retry queue;
+rows stranded by the pre-V166 code receive no one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
 a share lock on `knowledge_files` during deployment; that is the repository's established migration
 pattern, not a change in this PR. The global sweep still sees every tenant, matching the existing
 embedding sweep; a local backend booted against shared infrastructure can therefore recover another

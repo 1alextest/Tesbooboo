@@ -88,13 +88,20 @@ Mixed versions and mixed modes are still unsafe to treat casually:
 - Not proven here: a deployed Redis timer with the new mode, production approval, latency/SLO,
   alerting, or a connected source-to-QA acceptance journey.
 
-## Filename concurrency (separate, unowned)
+**E2E disposition.** This change has no HTTP route, UI, or default-deployment behaviour change; it
+only chooses which existing worker may run when a new environment variable is deliberately set. The
+Playwright suite cannot restart the backend with a different mode because it does not own the server
+process. The applicable executable coverage is therefore the processor/module registration tests
+plus the existing migrated-PostgreSQL project-filter test. A deployed mode switch remains unexecuted
+and is a rollout step, not something this PR claims to have tested end to end.
 
-The upload work explicitly left filename uniqueness outside the insert lock. No open PR owns that
-correction. It is not changed by this proposal. A future bounded change must serialize the
-folder/name allocation with the insert, preserve deliberate same-name uploads under a new request
-key, and prove two concurrent uploads cannot claim the same displayed name. That work is not started
-here.
+## Filename concurrency (separate, now covered)
+
+The upload work had left filename uniqueness outside the insert lock, and no open PR owned it. A
+bounded correction now allocates the displayed name inside the upload transaction after the project
+advisory lock, preserving deliberate same-name uploads under a new request key. The concurrency
+regression is KBF-A-87; the storage layer, delete retries and historical repair are unchanged. See
+§13.1 of [the Work Package B design](work-package-b-governed-manuals-policies-design.md).
 
 ## Native coverage record
 

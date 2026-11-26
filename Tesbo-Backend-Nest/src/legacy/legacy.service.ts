@@ -13745,10 +13745,15 @@ export class LegacyService implements OnModuleInit {
     return res.rows[0];
   }
 
-  private async kbUniqueFileName(folderId: string, desiredName: string): Promise<string> {
+  /**
+   * Name allocation belongs inside the upload transaction, after the project advisory lock: two
+   * concurrent uploads of the same name must observe each other's committed row rather than both
+   * choosing the unsuffixed name. It deliberately reuses the caller's client, not the pool.
+   */
+  private async kbUniqueFileName(client: PoolClient, folderId: string, desiredName: string): Promise<string> {
     const ext = path.extname(desiredName);
     const base = path.basename(desiredName, ext);
-    const existing = await this.db.query<{ original_file_name: string }>(
+    const existing = await client.query<{ original_file_name: string }>(
       "SELECT original_file_name FROM knowledge_files WHERE folder_id = $1 AND is_deleted = false",
       [folderId]
     );
@@ -13853,7 +13858,6 @@ export class LegacyService implements OnModuleInit {
         continue;
       }
       const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const originalFileName = await this.kbUniqueFileName(folderId, file.originalname);
       const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
       // Audio/video transcription is slow (calls an external AI provider) and shouldn't block
       // the upload response — it's kicked off after insert, below, and fills in extracted_text
@@ -13879,6 +13883,9 @@ export class LegacyService implements OnModuleInit {
             throw new NotFoundException({ error: "Folder not found" });
           }
           const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+          // Allocate the displayed name under the same project lock as the insert. Moving this
+          // outside the transaction let concurrent uploads choose the same unsuffixed name.
+          const originalFileName = await this.kbUniqueFileName(client, folderId, file.originalname);
           const inserted = await client.query(
             `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status, upload_request_key, upload_request_file_index, upload_request_digest)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
@@ -13958,7 +13965,7 @@ export class LegacyService implements OnModuleInit {
       if (isTranscribable) {
         // Embedding is enqueued once the transcript lands (transcribeKnowledgeFile), not here —
         // there's no content yet for audio/video at upload time.
-        void this.transcribeKnowledgeFile(projectId, res.rows[0].id, file.buffer, ext, file.mimetype, originalFileName).catch(() => undefined);
+        void this.transcribeKnowledgeFile(projectId, res.rows[0].id, file.buffer, ext, file.mimetype, String(res.rows[0].original_file_name || file.originalname)).catch(() => undefined);
       } else {
         this.enqueueEmbedding(project.organization_id, projectId, "file", res.rows[0].id, "created");
       }
