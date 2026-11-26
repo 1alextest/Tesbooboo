@@ -43,6 +43,8 @@ describe("ApiTokenService", () => {
       expect(sql).toContain("INSERT INTO api_tokens");
       expect(sql).toContain("project_membership_id, organization_membership_id");
       expect(sql).toContain("pm.id, om.id");
+      // Bind scopes as text consistently in the INSERT projection and the role predicate.
+      expect(sql).toContain("SELECT $1, $2, $3, $4, $5::text, pm.id, om.id");
       expect(sql).toContain("FOR SHARE OF p, pm, om");
       expect(sql).toContain("NOT ('write' = ANY(string_to_array($5::text, ',')))");
       expect(sql).toContain("IN ('owner', 'manager', 'admin', 'test_manager')");
