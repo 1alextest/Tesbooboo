@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
 
 /**
@@ -22,6 +23,15 @@ export interface ApiTokenSummary {
   tokenPrefix: string;
   lastUsedAt: string | null;
   createdAt: string;
+  /** Advisory, caller-specific management capability; revoke still rechecks authority. */
+  canRevoke?: boolean;
+}
+
+export type ApiTokenManager = { userId: string; canManage: boolean };
+
+/** One policy for the management projection and the actual revoke decision. */
+export function canRevokeApiToken(caller: ApiTokenManager, issuerId: string | null | undefined): boolean {
+  return caller.canManage || (!!caller.userId && issuerId === caller.userId);
 }
 
 const TOKEN_PREFIX = "tsbo_";
@@ -82,8 +92,11 @@ export class ApiTokenService {
    * created before the issuer was always recorded). Existence and issuer are separate answers so a
    * null issuer is not mistaken for "token not found".
    */
-  async issuerOf(projectId: string, tokenId: string): Promise<{ exists: boolean; userId: string | null }> {
-    const res = await this.db.query("SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2", [tokenId, projectId]);
+  async issuerOf(projectId: string, tokenId: string, client?: PoolClient): Promise<{ exists: boolean; userId: string | null }> {
+    // With a transaction client, retain the issuer/target lock through the authorized delete.
+    const sql = `SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2${client ? " FOR UPDATE" : ""}`;
+    const params = [tokenId, projectId];
+    const res = client ? await client.query(sql, params) : await this.db.query(sql, params);
     const row = res.rows[0] as { user_id: string | null } | undefined;
     return { exists: Boolean(row), userId: row?.user_id ?? null };
   }
@@ -107,13 +120,16 @@ export class ApiTokenService {
     };
   }
 
-  async listTokens(projectId: string): Promise<ApiTokenSummary[]> {
+  async listTokens(projectId: string, caller?: ApiTokenManager): Promise<ApiTokenSummary[]> {
     const res = await this.db.query(
-      `SELECT id, name, scopes, token_hash, last_used_at, created_at
+      `SELECT id, name, scopes, token_hash, last_used_at, created_at, user_id
        FROM api_tokens WHERE project_id = $1 ORDER BY created_at DESC`,
       [projectId]
     );
-    return res.rows.map((row) => this.toSummary(row as never));
+    return res.rows.map((row) => ({
+      ...this.toSummary(row as never),
+      ...(caller ? { canRevoke: canRevokeApiToken(caller, row.user_id) } : {})
+    }));
   }
 
   /**
@@ -139,11 +155,10 @@ export class ApiTokenService {
   }
 
   /** Deletes a token belonging to the given project. Returns whether a row was removed. */
-  async revokeToken(projectId: string, tokenId: string): Promise<boolean> {
-    const res = await this.db.query(
-      `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`,
-      [tokenId, projectId]
-    );
+  async revokeToken(projectId: string, tokenId: string, client?: PoolClient): Promise<boolean> {
+    const sql = `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`;
+    const params = [tokenId, projectId];
+    const res = client ? await client.query(sql, params) : await this.db.query(sql, params);
     return (res.rowCount ?? 0) > 0;
   }
 

@@ -45,7 +45,7 @@ import {
   ZYRA_RU_STAGED_AWAITING,
   ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
-import { ApiTokenService, normalizeApiTokenScopes } from "../auth/api-token.service";
+import { ApiTokenService, canRevokeApiToken, normalizeApiTokenScopes } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
@@ -1716,8 +1716,10 @@ export class LegacyService implements OnModuleInit {
   // same project-membership check used across the rest of the API.
 
   async listApiKeys(userId: string | null | undefined, projectId: string) {
-    await this.requireProjectAccess(userId, projectId);
-    return this.apiTokens.listTokens(projectId);
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    return this.apiTokens.listTokens(projectId, { userId: uid, canManage: role === "owner" || role === "manager" });
   }
 
   async createApiKey(userId: string | null | undefined, projectId: string, body: Body) {
@@ -1741,6 +1743,7 @@ export class LegacyService implements OnModuleInit {
     // workspace or MCP path the one-time secret belongs to.
     return {
       ...issued,
+      canRevoke: true,
       projectId,
       projectName: String(project.name || ""),
       organizationId: String(project.organization_id || ""),
@@ -1750,19 +1753,22 @@ export class LegacyService implements OnModuleInit {
 
   async revokeApiKey(userId: string | null | undefined, projectId: string, keyId: string) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     if (!isUuid(keyId)) throw new NotFoundException({ error: "API key not found" });
-    const token = await this.apiTokens.issuerOf(projectId, keyId);
-    if (!token.exists) throw new NotFoundException({ error: "API key not found" });
-    const role = this.normalizeRole(String(project.caller_role || ""));
-    // A member may revoke their own token; revoking someone else's project credential is an
-    // owner/manager action. Otherwise any member could disable the project's machine integrations.
-    if (role !== "owner" && role !== "manager" && token.userId !== uid) {
-      throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
-    }
-    const removed = await this.apiTokens.revokeToken(projectId, keyId);
-    if (!removed) throw new NotFoundException({ error: "API key not found" });
-    return { ok: true };
+    return this.db.transaction(async (client) => {
+      // Lock current project/workspace authority before the credential, as on native proposal
+      // writes. A cached preflight cannot authorize a delete after a concurrent role change.
+      const project = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const token = await this.apiTokens.issuerOf(projectId, keyId, client);
+      if (!token.exists) throw new NotFoundException({ error: "API key not found" });
+      const role = this.normalizeRole(String(project.caller_role || ""));
+      if (!canRevokeApiToken({ userId: uid, canManage: role === "owner" || role === "manager" }, token.userId)) {
+        throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
+      }
+      const removed = await this.apiTokens.revokeToken(projectId, keyId, client);
+      if (!removed) throw new NotFoundException({ error: "API key not found" });
+      return { ok: true };
+    });
   }
 
   // --- Saved repository views ----------------------------------------------
@@ -2532,6 +2538,17 @@ export class LegacyService implements OnModuleInit {
     this.resumeInterruptedZyraChatPlans().catch((err) => {
       this.logger.warn(`Failed to resume Zyra chat plans on startup: ${err instanceof Error ? err.message : err}`);
     });
+    this.resumeInterruptedKnowledgeTranscriptions().catch((err) => {
+      this.logger.warn(`Failed to resume knowledge transcripts on startup: ${err instanceof Error ? err.message : err}`);
+    });
+    // A claim abandoned after boot (worker death, deploy) has no boot event to notice it. Re-running
+    // the same claim-guarded sweep periodically makes the lease meaningful without a second restart.
+    const transcriptionSweep = setInterval(() => {
+      void this.resumeInterruptedKnowledgeTranscriptions().catch((err) => {
+        this.logger.warn(`Failed to resume knowledge transcripts: ${err instanceof Error ? err.message : err}`);
+      });
+    }, 5 * 60 * 1000);
+    transcriptionSweep.unref?.();
   }
 
   // A backend restart kills any in-flight continueZyraChatPlan loop instantly — it's an
@@ -13474,22 +13491,163 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
+  // A transcription is an external, potentially minutes-long operation. The claim makes the row's
+  // owner explicit so a retry (upload re-send, boot sweep, or a second process) cannot dispatch a
+  // second provider request for the same file. A claim older than the lease is treated as abandoned:
+  // the process that held it is assumed dead, which is exactly what a backend restart leaves behind.
+  private async claimKnowledgeTranscription(fileId: string): Promise<string | null> {
+    const token = randomUUID();
+    const claimed = await this.db.query<{ extraction_claim_token: string | null }>(
+      `UPDATE knowledge_files kf
+          SET extraction_status = 'processing', extraction_claimed_at = now(),
+              extraction_claim_token = $2, updated_at = now()
+         FROM projects p
+        WHERE kf.id = $1 AND p.id = kf.project_id AND p.archived_at IS NULL AND kf.is_deleted = false
+          AND (kf.extraction_status = 'pending'
+               OR (kf.extraction_status = 'processing'
+                   AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
+        RETURNING kf.extraction_claim_token`,
+      [fileId, token]
+    );
+    return claimed.rows[0]?.extraction_claim_token ?? null;
+  }
+
+  // Recover transcriptions abandoned by a restart. Upload fires transcription without waiting, so
+  // a process that dies between COMMIT and dispatch (or mid-provider-call) leaves the row pending or
+  // stale-processing and the content is silently never embedded. Embedding recovery only covers
+  // rows that already have extracted_text; it cannot invent a transcript, so this sweep is separate.
+  // Claims happen before dispatch, one at a time, so re-entering this sweep (or a still-live worker)
+  // cannot double-charge the provider for the same file.
+  private async resumeInterruptedKnowledgeTranscriptions(projectIdFilter?: string): Promise<void> {
+    const res = await this.db.query<Body>(
+      `SELECT kf.id, kf.project_id, kf.storage_key, kf.file_extension, kf.mime_type, kf.original_file_name
+         FROM knowledge_files kf
+         JOIN projects p ON p.id = kf.project_id
+        WHERE kf.is_deleted = false AND p.archived_at IS NULL
+          AND ($1::uuid IS NULL OR kf.project_id = $1)
+          AND (kf.extraction_status = 'pending'
+               OR (kf.extraction_status = 'processing'
+                   AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
+        ORDER BY kf.extraction_claimed_at NULLS FIRST, kf.created_at
+        LIMIT 25`,
+      [projectIdFilter ?? null]
+    ).catch((err) => {
+      this.logger.warn(`Could not scan for interrupted knowledge transcripts: ${err instanceof Error ? err.message : err}`);
+      return { rows: [] as Body[] };
+    });
+    for (const row of res.rows) {
+      const projectId = String(row.project_id);
+      const fileId = String(row.id);
+      const storageKey = String(row.storage_key || "");
+      const claimToken = await this.claimKnowledgeTranscription(fileId).catch(() => null);
+      if (!claimToken) continue;
+      if (!storageKey) {
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+        continue;
+      }
+      // Reading the object can itself be slow (large video, object-store retry). Renew the same
+      // claim while it runs so another sweep cannot take it over before the provider call starts.
+      const keepAlive = setInterval(() => {
+        void this.db.query(
+          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing'",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+      }, 60 * 1000);
+      keepAlive.unref?.();
+      try {
+        let readTimeout: NodeJS.Timeout | undefined;
+        const buffer = await Promise.race([
+          this.storage.getBuffer(storageKey),
+          new Promise<never>((_resolve, reject) => {
+            readTimeout = setTimeout(() => reject(new Error("storage read timed out")), 60 * 1000);
+            readTimeout.unref?.();
+          })
+        ]);
+        if (readTimeout) clearTimeout(readTimeout);
+        clearInterval(keepAlive);
+        const ext = String(row.file_extension || path.extname(String(row.original_file_name || "")).replace(/^\./, "")).toLowerCase();
+        void this.transcribeKnowledgeFile(
+          projectId,
+          fileId,
+          buffer,
+          ext,
+          String(row.mime_type || ""),
+          String(row.original_file_name || ""),
+          true,
+          claimToken
+        ).catch(() => undefined);
+      } catch (err) {
+        clearInterval(keepAlive);
+        this.logger.warn(`Could not reload knowledge file ${fileId} for transcription recovery: ${err instanceof Error ? err.message : err}`);
+        // A missing object is permanent. Anything else (timeout, object-store 5xx, credentials)
+        // is treated as transient: release the claim so the next sweep retries instead of losing
+        // the transcript forever.
+        const code = String((err as { code?: unknown })?.code || (err as { name?: unknown })?.name || "");
+        const message = err instanceof Error ? err.message : String(err);
+        const missing = ["ENOENT", "NoSuchKey", "NotFound"].includes(code)
+          || /NoSuchKey|not found|does not exist|specified key does not exist/i.test(message);
+        // A release records when it was attempted, so the sweep's least-recently-tried ordering
+        // cannot keep the same broken rows at the head of every batch.
+        await this.db.query(
+          `UPDATE knowledge_files
+              SET extraction_status = $3, extraction_claimed_at = $4,
+                  extraction_claim_token = NULL, updated_at = now()
+            WHERE id = $1 AND extraction_claim_token = $2`,
+          [fileId, claimToken, missing ? "failed" : "pending", missing ? null : new Date()]
+        ).catch((releaseError) => {
+          this.logger.warn(`Could not release knowledge transcription ${fileId}: ${releaseError instanceof Error ? releaseError.message : releaseError}`);
+        });
+      }
+    }
+  }
+
   // Async speech-to-text for uploaded audio/video files, fired-and-forgotten from
   // uploadKnowledgeFiles (mirrors the processZyraTask pattern used for AI task generation)
   // so a multi-minute meeting recording doesn't block the upload HTTP response. Only attempted
   // when the project has an OpenAI key allocated — no other provider offers a compatible
   // transcription endpoint we can safely assume the shape of.
-  private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<void> {
+  private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string, alreadyClaimed = false, claimTokenInput?: string | null): Promise<void> {
     const traceSeed = `knowledge:transcription:${fileId}`;
     // File names belong in masked input, never in unmasked observation metadata.
     const traceMeta = { projectId, fileId, ext };
     let requestAttempted = false;
+    // Keep the lease alive for the duration of the provider call, so a slow but healthy
+    // transcription is never mistaken for an abandoned one and dispatched twice.
+    let heartbeat: NodeJS.Timeout | undefined;
+    let claimToken: string | null = null;
     try {
-      const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
+      claimToken = alreadyClaimed ? claimTokenInput ?? null : await this.claimKnowledgeTranscription(fileId);
+      if (!claimToken) return;
+      heartbeat = setInterval(() => {
+        void this.db.query(
+          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing' AND is_deleted = false",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+      }, 60 * 1000);
+      heartbeat.unref?.();
+      const project = await this.db.query<{ organization_id: string }>(
+        "SELECT organization_id FROM projects WHERE id = $1 AND archived_at IS NULL",
+        [projectId]
+      );
+      if (!project.rows[0]) {
+        // Archived/deleted between claim and dispatch: release rather than terminalise, so an
+        // unarchived project can still recover it on the next sweep.
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'pending', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+        return;
+      }
       const allocation = await this.zyraAiAllocation(projectId);
       const key = allocation.key;
       if (!key || String(key.provider || "").toLowerCase() !== "openai") {
-        await this.db.query("UPDATE knowledge_files SET extraction_status = 'unsupported' WHERE id = $1", [fileId]);
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'unsupported', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        );
         // No model request occurred; do not invent a generation observation.
         return;
       }
@@ -13514,25 +13672,32 @@ export class LegacyService implements OnModuleInit {
       }
       const data = await this.readAiProviderJson("openai", res);
       const text = String(data.text || "").trim().slice(0, LegacyService.KB_EXTRACTED_TEXT_LIMIT);
-      await this.db.query(
-        "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', updated_at = now() WHERE id = $1",
-        [fileId, text || null]
+      const saved = await this.db.query(
+        "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $3 AND extraction_status = 'processing' AND is_deleted = false RETURNING id",
+        [fileId, text || null, claimToken]
       );
-      if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
-      void recordStandaloneGeneration({
-        traceSeed,
-        name: "knowledge.transcription",
-        provider: "openai",
-        model: "whisper-1",
-        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
-        output: { status: "ready", transcriptChars: text.length },
-        metadata: traceMeta
-      });
+      if (saved.rows[0]) {
+        if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+        // A stale owner's provider call is real, but its result was fenced out; recording it as a
+        // successful generation would double-count one persisted transcript in observability.
+        void recordStandaloneGeneration({
+          traceSeed,
+          name: "knowledge.transcription",
+          provider: "openai",
+          model: "whisper-1",
+          input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+          output: { status: "ready", transcriptChars: text.length },
+          metadata: traceMeta
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
-      await this.db.query("UPDATE knowledge_files SET extraction_status = 'failed', updated_at = now() WHERE id = $1", [fileId]).catch(() => undefined);
-      if (requestAttempted) void recordStandaloneGeneration({
+      const failed = await this.db.query(
+        "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing' RETURNING id",
+        [fileId, claimToken]
+      ).catch(() => null);
+      if (requestAttempted && failed?.rows[0]) void recordStandaloneGeneration({
         traceSeed,
         name: "knowledge.transcription",
         provider: "openai",
@@ -13541,6 +13706,8 @@ export class LegacyService implements OnModuleInit {
         errorMessage: message,
         metadata: traceMeta
       });
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
     }
   }
 
@@ -13558,6 +13725,13 @@ export class LegacyService implements OnModuleInit {
     const camelled = toCamel(row);
     delete camelled.storageKey;
     delete camelled.fileName;
+    // Upload identity and transcription ownership are internal coordination state, not client data.
+    // The digest in particular is a content fingerprint and has no reason to leave the service.
+    delete camelled.uploadRequestKey;
+    delete camelled.uploadRequestFileIndex;
+    delete camelled.uploadRequestDigest;
+    delete camelled.extractionClaimedAt;
+    delete camelled.extractionClaimToken;
     return camelled;
   }
 
@@ -13589,28 +13763,95 @@ export class LegacyService implements OnModuleInit {
     projectId: string,
     userId: string | null | undefined,
     folderId: string,
-    files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>
+    files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>,
+    requestKeyInput?: string | null
   ) {
+    // The multipart interceptor normally supplies an array, but an HTTP field can arrive in other
+    // shapes; normalize once so every later array operation has a real array, not a tainted value.
+    const batchFiles = Array.isArray(files) ? files : [];
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
-    await this.kbFolder(projectId, folderId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
-    await this.planLimits.assertStorageAvailable(
-      project.organization_id,
-      files.reduce((sum, file) => sum + file.size, 0)
-    );
+    if (batchFiles.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    const rawRequestKey = typeof requestKeyInput === "string" ? requestKeyInput.trim() : "";
+    // An explicitly supplied empty key is a client mistake, not "no key": silently treating it as
+    // absent would promise retry safety the caller does not actually get.
+    if (requestKeyInput != null && rawRequestKey.length === 0) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    if (rawRequestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    // Optional for backward compatibility: clients that do not send one keep the old
+    // fire-and-forget semantics. A client that wants an uncertain upload to be safely retryable
+    // sends the same key for the same logical batch.
+    const requestKey = rawRequestKey || null;
+    // Identity is the caller's request key plus batch position. The digest binds that slot to the
+    // exact request (destination and ordered file manifest), so reusing a key for different content
+    // is a conflict, while two different files that happen to share a name remain distinct requests.
+    const requestDigest = requestKey
+      ? createHash("sha256").update(JSON.stringify({
+          folderId,
+          files: batchFiles.map((file, index) => ({
+            index,
+            name: file.originalname,
+            size: file.size,
+            mimeType: file.mimetype,
+            sha256: createHash("sha256").update(file.buffer).digest("hex")
+          }))
+        })).digest("hex")
+      : null;
 
     // Files are held in memory (never touch disk) until the whole batch passes validation,
     // so a single unsupported file rejects the batch atomically with nothing left behind —
     // this holds regardless of storage backend (local disk or S3-compatible).
-    const invalid = files.find((file) => !LegacyService.KB_ALLOWED_EXTENSIONS.has(path.extname(file.originalname).replace(/^\./, "").toLowerCase()));
+    const invalid = batchFiles.find((file) => !LegacyService.KB_ALLOWED_EXTENSIONS.has(path.extname(file.originalname).replace(/^\./, "").toLowerCase()));
     if (invalid) {
       throw new BadRequestException({ error: `This file type is not supported: ${invalid.originalname}` });
     }
 
+    // A fully committed request is answered from its rows without writing storage again. A partial
+    // one resumes only the missing positions: the committed rows are already authoritative.
+    const existingByIndex = new Map<number, Body>();
+    if (requestKey) {
+      const prior = await this.db.query<Body>(
+        "SELECT * FROM knowledge_files WHERE project_id = $1 AND uploaded_by = $2 AND upload_request_key = $3 ORDER BY upload_request_file_index",
+        [projectId, uid, requestKey]
+      );
+      for (const row of prior.rows) {
+        const index = Number(row.upload_request_file_index);
+        if (!Number.isInteger(index) || index < 0 || index >= batchFiles.length || row.upload_request_digest !== requestDigest) {
+          throw new ConflictException({ code: "UPLOAD_REQUEST_CONFLICT", error: "This requestKey already belongs to a different upload" });
+        }
+        if (row.is_deleted) {
+          throw new ConflictException({ code: "UPLOAD_REQUEST_CLOSED", error: "This upload request was completed, but its file has since been deleted" });
+        }
+        existingByIndex.set(index, row);
+      }
+      if (existingByIndex.size === batchFiles.length) {
+        return {
+          list: batchFiles.map((_, index) => this.kbFileView(existingByIndex.get(index) as Body)),
+          total: batchFiles.length,
+          replayed: true
+        };
+      }
+    }
+
+    // A full replay is answered above without requiring the original folder to still exist. Only a
+    // request that still has positions to write needs a live destination.
+    await this.kbFolder(projectId, folderId);
+    const missing = batchFiles.filter((_, index) => !existingByIndex.has(index));
+    await this.planLimits.assertStorageAvailable(
+      project.organization_id,
+      missing.reduce((sum, file) => sum + file.size, 0)
+    );
+
     const created: Body[] = [];
-    for (const file of files) {
+    let wroteNew = false;
+    let adoptedReplay = false;
+    for (let index = 0; index < batchFiles.length; index += 1) {
+      const file = batchFiles[index];
+      const prior = existingByIndex.get(index);
+      if (prior) {
+        created.push(this.kbFileView(prior));
+        continue;
+      }
       const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
       const originalFileName = await this.kbUniqueFileName(folderId, file.originalname);
       const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
@@ -13639,9 +13880,9 @@ export class LegacyService implements OnModuleInit {
           }
           const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
           const inserted = await client.query(
-            `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-            [authority.organization_id, projectId, folderId, path.basename(storageKey), originalFileName, file.mimetype, ext, file.size, storageKey, uid, extractedText, extractionStatus]
+            `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status, upload_request_key, upload_request_file_index, upload_request_digest)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+            [authority.organization_id, projectId, folderId, path.basename(storageKey), originalFileName, file.mimetype, ext, file.size, storageKey, uid, extractedText, extractionStatus, requestKey, requestKey ? index : null, requestDigest]
           );
           await this.logProjectActivity(projectId, uid, "uploaded", "knowledge_file", inserted.rows[0].id, originalFileName, {}, client);
           return inserted;
@@ -13657,12 +13898,37 @@ export class LegacyService implements OnModuleInit {
         const commitUncertain = Boolean(error && typeof error === "object" && (error as { commitUncertain?: boolean }).commitUncertain);
         if (!commitUncertain) {
           let persisted: boolean | null = null;
+          let replay: Body | null = null;
+          let conflict = false;
+          let closed = false;
           try {
-            const row = await this.db.query<{ id: string }>(
-              "SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
-              [projectId, storageKey]
-            );
-            persisted = Boolean(row.rows[0]);
+            if (requestKey) {
+              // A concurrent retry with the same key can make this INSERT lose the unique index
+              // race after the winner committed. The winner's row is the authoritative outcome.
+              const row = await this.db.query<Body>(
+                "SELECT * FROM knowledge_files WHERE project_id = $1 AND uploaded_by = $2 AND upload_request_key = $3 AND upload_request_file_index = $4",
+                [projectId, uid, requestKey, index]
+              );
+              if (row.rows[0]) {
+                if (row.rows[0].upload_request_digest !== requestDigest) {
+                  persisted = false;
+                  conflict = true;
+                } else if (row.rows[0].is_deleted) {
+                  persisted = false;
+                  closed = true;
+                } else {
+                  replay = row.rows[0];
+                  persisted = true;
+                }
+              }
+            }
+            if (persisted === null) {
+              const row = await this.db.query<{ id: string }>(
+                "SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
+                [projectId, storageKey]
+              );
+              persisted = Boolean(row.rows[0]);
+            }
           } catch (reconcileError) {
             this.logger.warn(`Could not reconcile upload ${storageKey} after failure: ${reconcileError}`);
           }
@@ -13670,9 +13936,24 @@ export class LegacyService implements OnModuleInit {
             await this.storage.delete(storageKey).catch((storageError) =>
               this.logger.warn(`Failed to compensate storage object ${storageKey}: ${storageError}`));
           }
+          if (closed) {
+            throw new ConflictException({ code: "UPLOAD_REQUEST_CLOSED", error: "This upload request was completed, but its file has since been deleted" });
+          }
+          if (conflict) {
+            throw new ConflictException({ code: "UPLOAD_REQUEST_CONFLICT", error: "This requestKey already belongs to a different upload" });
+          }
+          if (replay && persisted) {
+            // This attempt's object is unreferenced; the prior row owns a different object.
+            await this.storage.delete(storageKey).catch((storageError) =>
+              this.logger.warn(`Failed to compensate duplicate upload object ${storageKey}: ${storageError}`));
+            adoptedReplay = true;
+            created.push(this.kbFileView(replay));
+            continue;
+          }
         }
         throw error;
       }
+      wroteNew = true;
       created.push(this.kbFileView(res.rows[0]));
       if (isTranscribable) {
         // Embedding is enqueued once the transcript lands (transcribeKnowledgeFile), not here —
@@ -13682,7 +13963,11 @@ export class LegacyService implements OnModuleInit {
         this.enqueueEmbedding(project.organization_id, projectId, "file", res.rows[0].id, "created");
       }
     }
-    return { list: created, total: created.length };
+    return {
+      list: created,
+      total: created.length,
+      replayed: !wroteNew && (existingByIndex.size > 0 || adoptedReplay)
+    };
   }
 
   async getKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string) {
@@ -24435,7 +24720,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
 
   private knowledgeFileFallbackContent(fileExtension: string | null, extractionStatus: string | null): string {
     const ext = fileExtension || "file";
-    if (extractionStatus === "pending") {
+    if (extractionStatus === "pending" || extractionStatus === "processing") {
       return `Uploaded file (.${ext}) — transcription is still in progress; mention it exists but do not invent its contents yet.`;
     }
     if (extractionStatus === "failed") {

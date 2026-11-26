@@ -294,6 +294,57 @@ test.describe("project settings controls by role (UI)", () => {
     return { name: project.name, description: project.description ?? "", settings };
   }
 
+  test("MCP-P18 QA members manage personal read tokens without owner privileges", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const qa = await loginAs(tenant!.qa);
+    const endpoint = `/api/projects/${projectId}/apikeys`;
+    const label = `QA personal ${Date.now()}`;
+    const ownerIssued = await ownerApi.post(endpoint, { data: { name: label + " owner", scopes: ["read"] } });
+    expect(ownerIssued.ok()).toBeTruthy();
+    const ownerToken = await ownerIssued.json();
+    let personalId: string | undefined;
+    try {
+      const page = await settingsAs(browser, "qa");
+      await page.goto(`/projects/${projectId}/settings/api-tokens`);
+      await expect(page.getByRole("button", { name: "Create token", exact: true })).toBeEnabled();
+      const ownerRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: label + " owner", exact: true }) });
+      await expect(ownerRow).toBeVisible();
+      await expect(ownerRow.getByRole("button", { name: "Revoke", exact: true })).toHaveCount(0);
+      expect((await qa.delete(`${endpoint}/${ownerToken.id}`, { failOnStatusCode: false })).status()).toBe(403);
+
+      await page.getByRole("button", { name: "Create token", exact: true }).click();
+      const form = page.locator("form").filter({ has: page.getByRole("button", { name: "Create token", exact: true }) });
+      await expect(form.getByRole("checkbox", { name: /^Write/ })).toBeDisabled();
+      await expect(form.getByRole("checkbox", { name: /^Read/ })).toBeChecked();
+      await form.getByRole("textbox").fill(label);
+      await form.getByRole("button", { name: "Create token", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Copy your new token" })).toBeVisible();
+      await page.getByRole("button", { name: "Done", exact: true }).click();
+      const list = await qa.get(endpoint);
+      expect(list.ok()).toBeTruthy();
+      const tokens = await list.json();
+      const personal = tokens.find((entry: { name: string }) => entry.name === label);
+      personalId = personal?.id;
+      expect(personal).toMatchObject({ scopes: ["read"], canRevoke: true });
+      expect(tokens.find((entry: { id: string }) => entry.id === ownerToken.id)).toMatchObject({ canRevoke: false });
+      const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: label, exact: true }) });
+      await expect(row.getByRole("button", { name: "Revoke", exact: true })).toBeEnabled();
+      await row.getByRole("button", { name: "Revoke", exact: true }).click();
+      await expect(row).toHaveCount(0);
+      const after = await qa.get(endpoint);
+      expect(after.ok()).toBeTruthy();
+      const remaining = await after.json();
+      expect(remaining.some((entry: { id: string }) => entry.id === personalId)).toBe(false);
+      expect(remaining.some((entry: { id: string }) => entry.id === ownerToken.id)).toBe(true);
+    } finally {
+      const list = await ownerApi.get(endpoint);
+      if (list.ok()) for (const item of await list.json()) {
+        if (item.name === label || item.id === ownerToken.id) await ownerApi.delete(`${endpoint}/${item.id}`, { failOnStatusCode: false });
+      }
+      await qa.dispose();
+    }
+  });
+
   test("PSU-01 a QA engineer sees General read-only: inputs, Save and Delete project disabled, with a notice", async ({ browser }) => {
     const before = await projectSnapshot();
     const page = await settingsAs(browser, "qa");
@@ -439,6 +490,33 @@ test("MCP-P18 UI approves a named credential, shows stale conflicts, and revokes
       expect(response.ok(), await response.text()).toBeTruthy();
       return response.json();
     };
+    await page.goto(`/projects/${projectId}/settings?tab=apiTokens`);
+    await page.getByRole("link", { name: "Manage API tokens", exact: true }).click();
+    await expect(page).toHaveURL(/\/settings\/api-tokens(?:\?.*)?$/);
+    const setup = page.getByRole("heading", { name: "Connect an MCP client" }).locator("../..");
+    await expect(setup).toBeVisible();
+    await setup.getByRole("button", { name: "Claude Code", exact: true }).click();
+    await expect(setup.locator("pre").first()).toContainText("claude mcp add --transport http --scope user");
+    await expect(setup.locator("pre").first()).toContainText("Bearer ${TESBO_API_TOKEN}");
+    const claude = JSON.parse(await setup.locator("pre").nth(1).innerText());
+    expect(claude.mcpServers.tesbo).toMatchObject({ type: "http", headers: { Authorization: "Bearer ${TESBO_API_TOKEN}" } });
+    expect(claude.mcpServers.tesbo.url).toContain(projectId!);
+    await setup.getByRole("button", { name: "Claude Desktop", exact: true }).click();
+    await expect(setup).toContainText("Organization-wide fixed headers are shared credentials");
+    await expect(setup.locator("pre").first()).toContainText(projectId!);
+    await expect(setup.locator("pre").nth(1)).toContainText("Authorization: Bearer <YOUR_API_TOKEN>");
+    await setup.getByRole("button", { name: "OpenCode", exact: true }).click();
+    const openCode = JSON.parse(await setup.locator("pre").first().innerText());
+    expect(openCode.mcp.servers.tesbo).toMatchObject({ type: "remote", oauth: false,
+      headers: { Authorization: "Bearer {env:TESBO_API_TOKEN}" } });
+    expect(openCode.mcp.servers.tesbo.url).toBe(claude.mcpServers.tesbo.url);
+    await setup.getByRole("button", { name: "Other / curl", exact: true }).click();
+    await expect(setup.locator("pre").first()).toContainText("Bearer $TESBO_API_TOKEN");
+    await expect(setup.locator("pre").nth(1)).toContainText("Bearer $env:TESBO_API_TOKEN");
+    await expect(setup).toContainText("Inspect the JSON-RPC error as well as the HTTP status");
+    // Do not put the fixture's actual secret in test failure diagnostics.
+    expect((await setup.innerText()).includes(credential.token), "setup snippets must never expose the raw token").toBe(false);
+    // Keep the existing settings-tab consent journey, separate from the dedicated setup route.
     await page.goto(`/projects/${projectId}/settings?tab=apiTokens`);
     const panel = page.getByRole("heading", { name: "External AI & MCP Access" }).locator("..").locator("..");
     await expect(panel.getByText("External MCP: Off", { exact: true })).toBeVisible();
