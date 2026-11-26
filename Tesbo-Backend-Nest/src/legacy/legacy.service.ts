@@ -13696,7 +13696,7 @@ export class LegacyService implements OnModuleInit {
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
     await this.kbFolder(projectId, folderId);
     if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
-    const rawRequestKey = requestKeyInput == null ? "" : String(requestKeyInput).trim();
+    const rawRequestKey = typeof requestKeyInput === "string" ? requestKeyInput.trim() : "";
     if (rawRequestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     // Optional for backward compatibility: clients that do not send one keep the old
     // fire-and-forget semantics. A client that wants an uncertain upload to be safely retryable

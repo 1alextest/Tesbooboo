@@ -288,6 +288,7 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
 
   it("does not report a transcription generation when allocation rejects before fetch", async () => {
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one" }] });
     const internal = svc as unknown as Internals;
     jest.spyOn(internal, "zyraAiAllocation").mockRejectedValue(new Error("synthetic allocation failure"));
     mockResponse({});
@@ -299,6 +300,7 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
 
   it.each(["success", "network failure"])("does record transcription after a real request attempt: %s", async (outcome) => {
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one" }] });
     const internal = svc as unknown as Internals;
     jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key: openAiKey });
     if (outcome === "success") mockResponse({ text: "" });
@@ -485,6 +487,8 @@ describe("knowledge transcription provider ingress", () => {
 
   it.each(["HTTP", "transport", "JSON", "api_key", "auth_header_name", "auth_scheme"])("keeps a failed %s transcription out of logs and observations", async (kind) => {
     const svc = makeLegacy();
+    // The claim UPDATE must succeed before the provider call is attempted.
+    (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one" }] });
     const key: Record<string, unknown> = { ...openAiKey };
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
     const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
