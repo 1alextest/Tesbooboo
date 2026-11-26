@@ -1,9 +1,8 @@
 {
   "study": "First-draft coverage of ticket import when source context crosses a queue",
-  "nativeRevision": "289fdd8be002ff6094944869a60afda0aea2cdae",
-  "sourceRevision": "551e7eab4906f11a67c4046c2a02ca2be80dc8ce",
-  "sourcePath": "Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts",
-  "sourceBlob": "0aee1e8918d4bdd1bad2c31189db40077a779748",
+  "nativeGenerator": "https://github.com/1alextest/Tesbooboo/blob/289fdd8be002ff6094944869a60afda0aea2cdae/Tesbo-Backend-Nest/src/legacy/legacy.service.ts#L25667",
+  "historicalImplementation": "https://github.com/1alextest/Tesbooboo/blob/551e7eab4906f11a67c4046c2a02ca2be80dc8ce/Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts",
+  "historicalSourceObject": "https://api.github.com/repos/1alextest/Tesbooboo/git/blobs/0aee1e8918d4bdd1bad2c31189db40077a779748",
   "sourceCutoff": "Historical implementation before #268. Only selected lines were supplied. No coding-agent account, later policy, project records, or grading material entered either native message array.",
   "protocol": "A fresh assistant per source packet read only the native generator message array and returned its first answer. Model responses were returned in-process to the native provider adapter. One sample per condition. No production provider call, autonomous retrieval, stored Task, or native execution.",
   "rubricDigest": "sha256:6e1296db484ea4b4787263610b7e8acc3f7c7c433bf92ecf4d429d8a00120078",
