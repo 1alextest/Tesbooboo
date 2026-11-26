@@ -70,6 +70,40 @@ Operational contract for engineering principle 18 in [AGENTS.md](../AGENTS.md). 
 6. **Reconcile at the final candidate:** re-read current producer results, changes and dispositions at exact head/base or verified equivalent reviewed tree; reassess stale findings and new affected paths. Keep bot thread resolution, scanner alert state, underlying defect resolution, test execution and independent/human approval separate. A resolved/outdated thread alone does not prove remediation.
 7. **Acceptance:** Security independently challenges the mechanism, severity, reachability, isolation and exception authority; QA verifies discriminating positive/negative regression or reports NOT RUN; White reconciles completeness, current evidence, unknowns and all required dispositions before clearance. Blue checks existing owners/duplicate findings, Green checks seams/consumers, Red challenges assumptions and bypasses, Grey considers user impact, Purple considers misleading status/diagnostic UX, Graph links obligations and evidence without becoming a second authority, EG independently challenges the review. Operability examines skipped/unavailable scanners, coverage and reporting failures. Do not claim independent teams ran unless actual separately attributable review evidence exists. No material unresolved finding or unavailable required evidence may receive clearance; do not substitute a bot comment, self-review or green workflow for protected human/independent gates.
 
+### Evidence-bound disposition and closure (candidate refinement)
+
+Use the existing finding record, not a new authority or an alternative gate. For every occurrence, retain the producer's original identifier, rule and version (or explicitly unknown), observation revision, path/region, affected artifact and scan execution reference. Group repeated occurrences by demonstrated mechanism only; preserve every alert/thread ID and the mapping to the shared investigation.
+
+Separate these dimensions in the existing record:
+
+| Dimension | Required evidence or state |
+|---|---|
+| Observation | Exact producer occurrence and source/scan revision; coverage complete, partial, unavailable or pending |
+| Technical assessment | Claimed mechanism, actual data/control flow, reachable sink or its absence, affected environment, severity, confidence, counterexample and evidence links |
+| Classification | Confirmed defect, false positive, intentional test condition, protective implementation, residual risk or unknown; never infer classification from the workflow conclusion |
+| Decision | Proposed, independently accepted, rejected or superseded; attributable authorized reviewer, reviewed revision, scope, rationale and expiry/reassessment for residual risk |
+| Execution | Remediation and regression result, or explicit reason a change is unnecessary; NOT RUN remains distinct from pass |
+| Reconciliation | Individual scanner alert state, review thread state, linked defect state, and final candidate revalidation; unknown is not closed |
+
+An investigation author may propose a disposition but may not impersonate the independent decision owner. For a protective guard or intentional fixture, demonstrate both its security purpose and its actual boundary: a guard must reject the prohibited input at the authoritative path; a fixture must be isolated from production artifacts, avoid unintended external effects, and exercise its claimed oracle. A scanner warning about a test may still identify a genuine issue in test infrastructure. A scanner that fails to parse or emits incomplete results is a coverage failure, not a false-positive finding.
+
+When a new scan emits a duplicate, reuse prior reasoning only after checking the rule, mechanism, source and relevant deployment/control-flow assumptions are unchanged. Link the new occurrence, revalidate its applicability and obtain any required current-candidate disposition; do not globally dismiss by rule or filename. Source equality alone does not establish equivalent reachability when build configuration or callers change.
+
+At closure, verify the independently accepted disposition is still applicable to the candidate, then reconcile the actual producer and review-thread states using authorized operations. If one operation is unavailable or fails, preserve the accepted decision and record the remaining operational blocker rather than claiming all states closed. A later conflicting observation reopens the affected assessment; retain prior records. A protected merge, scanner dismissal or risk exception is never implied by this procedure.
+
+#### Case study: OAuth PR #246 (observations, not independent acceptance)
+
+At inspected head [e3e8027](https://github.com/1alextest/Tesbooboo/commit/e3e8027d576aa0e36bddb4fa76b5c625e6198786), DevSkim alerts 3332–3338 span four mechanisms:
+
+| Occurrences | Proposed assessment | Evidence needed for independent disposition |
+|---|---|---|
+| 3334 | Protective localhost rejection in mcp-access.ts | Trace validation to the owning authorization path; verify hostile input rejection and legitimate canonical HTTPS acceptance |
+| 3332, 3333 | Intentional negative URL fixtures in mcp-oauth-grants.spec.ts | Verify throwing assertion, actual test execution and production exclusion |
+| 3335, 3336 | Isolated ephemeral loopback HTTP fixture in mcp-oauth-joined.http.integration.spec.ts | Verify bind address/port, request target, teardown, production exclusion and real fixture execution |
+| 3337, 3338 | Protective disposable PostgreSQL test boundary in mcp-oauth-grant-binding.db.spec.ts | Verify CI/environment/database guard, refusal outside permitted scope, actual guarded run and production exclusion |
+
+The inspected source supports these candidate classifications. All 14 workflow groups on that inspected head reported success; this is not per-test execution evidence, an authoritative alert dismissal or independent approval. Re-read the live head and each producer occurrence before closure. The original PR remains responsible for its OAuth acceptance, reviewer authority and feature-off posture; this case study does not waive any of those gates.
+
 ### Acceptance examples (proposed regression oracles; NOT RUN)
 
 | Scenario | Required outcome |
@@ -82,5 +116,9 @@ Operational contract for engineering principle 18 in [AGENTS.md](../AGENTS.md). 
 | Scanner inventory or alert permissions unavailable | Explicit scope gap; block dependent clearance |
 | Reviewer accepts a real risk without authority or expiry | Invalid disposition; retain open |
 | Candidate changes after disposition | Reassess affected findings; retain original evidence |
+| Same rule emits another occurrence after a prior disposition | Retain new ID; revalidate shared mechanism and current authority |
+| Accepted disposition but alert or thread mutation fails | Report partial reconciliation; do not claim closure |
+| Identical flagged blob but production reachability changes | Reassess contextual evidence |
+| Test fixture has a genuine unsafe side effect | Treat actual mechanism as a defect despite test-only location |
 
 These examples describe engineering assurance, not a new product subsystem or a claim that a machine-enforced merge gate is installed. A future machine gate must be reviewed against the existing trusted assurance publisher and protected branch policy; no parallel publisher or self-authorized waiver.
