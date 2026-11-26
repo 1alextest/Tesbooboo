@@ -13587,12 +13587,13 @@ export class LegacyService implements OnModuleInit {
         // cannot keep the same broken rows at the head of every batch.
         await this.db.query(
           `UPDATE knowledge_files
-              SET extraction_status = $3,
-                  extraction_claimed_at = CASE WHEN $3 = 'pending' THEN now() ELSE NULL END,
+              SET extraction_status = $3, extraction_claimed_at = $4,
                   extraction_claim_token = NULL, updated_at = now()
             WHERE id = $1 AND extraction_claim_token = $2`,
-          [fileId, claimToken, missing ? "failed" : "pending"]
-        ).catch(() => undefined);
+          [fileId, claimToken, missing ? "failed" : "pending", missing ? null : new Date()]
+        ).catch((releaseError) => {
+          this.logger.warn(`Could not release knowledge transcription ${fileId}: ${releaseError instanceof Error ? releaseError.message : releaseError}`);
+        });
       }
     }
   }
