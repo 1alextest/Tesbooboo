@@ -440,6 +440,29 @@ test("MCP-P18 UI approves a named credential, shows stale conflicts, and revokes
       return response.json();
     };
     await page.goto(`/projects/${projectId}/settings?tab=apiTokens`);
+    const setup = page.getByRole("heading", { name: "Connect an MCP client" }).locator("../..");
+    await expect(setup).toBeVisible();
+    await setup.getByRole("button", { name: "Claude Code", exact: true }).click();
+    await expect(setup.locator("pre").first()).toContainText("claude mcp add --transport http --scope user");
+    await expect(setup.locator("pre").first()).toContainText("Bearer ${TESBO_API_TOKEN}");
+    const claude = JSON.parse(await setup.locator("pre").nth(1).innerText());
+    expect(claude.mcpServers.tesbo).toMatchObject({ type: "http", headers: { Authorization: "Bearer ${TESBO_API_TOKEN}" } });
+    expect(claude.mcpServers.tesbo.url).toContain(projectId!);
+    await setup.getByRole("button", { name: "Claude Desktop", exact: true }).click();
+    await expect(setup).toContainText("Organization-wide fixed headers are shared credentials");
+    await expect(setup.locator("pre").first()).toContainText(projectId!);
+    await expect(setup.locator("pre").nth(1)).toContainText("Authorization: Bearer <YOUR_API_TOKEN>");
+    await setup.getByRole("button", { name: "OpenCode", exact: true }).click();
+    const openCode = JSON.parse(await setup.locator("pre").first().innerText());
+    expect(openCode.mcp.servers.tesbo).toMatchObject({ type: "remote", oauth: false,
+      headers: { Authorization: "Bearer {env:TESBO_API_TOKEN}" } });
+    expect(openCode.mcp.servers.tesbo.url).toBe(claude.mcpServers.tesbo.url);
+    await setup.getByRole("button", { name: "Other / curl", exact: true }).click();
+    await expect(setup.locator("pre").first()).toContainText("Bearer $TESBO_API_TOKEN");
+    await expect(setup.locator("pre").nth(1)).toContainText("Bearer $env:TESBO_API_TOKEN");
+    await expect(setup).toContainText("Inspect the JSON-RPC error as well as the HTTP status");
+    // Do not put the fixture's actual secret in test failure diagnostics.
+    expect((await setup.innerText()).includes(credential.token), "setup snippets must never expose the raw token").toBe(false);
     const panel = page.getByRole("heading", { name: "External AI & MCP Access" }).locator("..").locator("..");
     await expect(panel.getByText("External MCP: Off", { exact: true })).toBeVisible();
     expect((await discover()).error.code).toBe(-32001);
