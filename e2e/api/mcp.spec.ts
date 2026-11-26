@@ -6,7 +6,7 @@ import { env } from "../utils/env";
 import { approveMcpTestClient, issueMcpTestToken } from "../utils/mcp-access";
 import { approveTestcase, createApprovedTestcase } from "../utils/testcase-approval";
 import { testcaseEditState } from "../utils/testcase-edit-state";
-import { loginAs, provisionRbacTenant } from "../utils/rbac-tenant";
+import { loginAs, provisionRbacTenant, resetRbacMembership } from "../utils/rbac-tenant";
 import { exec, literal, scalar } from "../utils/psql";
 import { stageAndApplyMcpTestcases, testcaseUpdateProposal, type TestcaseProposalOperation } from "../utils/mcp-proposals";
 
@@ -580,6 +580,126 @@ test("write-scoped project tokens require an owner/manager and carry explicit ta
     await Promise.all([owner.dispose(), manager.dispose(), qa.dispose()]);
   }
 });
+
+// CL-T01/02: retain the original bearer across the real membership API lifecycle.
+// Characterization of the proposed non-resurrection invariant in the existing
+// multi-member tenant; not a new token system or a direct SQL membership mutation.
+for (const membership of ["project", "organization"] as const) {
+  test(`CL-T01/02 delegated token ${membership} removal and reinstatement does not revive prior authority`, async () => {
+    const tenant = await provisionRbacTenant("mcp-lifecycle");
+    if (!tenant && env.ci) throw new Error("Credential lifecycle CI requires its disposable SQL fixture");
+    test.skip(!tenant, "requires disposable multi-user SQL fixture");
+    const t = tenant!;
+    const projectId = t.mainProjectId;
+    const projectPath = `/api/projects/${projectId}`;
+    const owner = await loginAs(t.owner);
+    const qa = await loginAs(t.qa);
+    const machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
+    const issued: string[] = [];
+    const issue = async (human: APIRequestContext, label: string) => {
+      const response = await human.post(`${projectPath}/apikeys`, {
+        data: { name: `CL lifecycle ${label} ${Date.now()}`, scopes: ["read"] }
+      });
+      expect(response.status(), "read-only issuance must succeed").toBe(201);
+      const credential = await response.json() as { id: string; token: string; name: string; scopes: string[] };
+      issued.push(credential.id);
+      await approveMcpTestClient(owner, projectId, credential);
+      return credential;
+    };
+    const projectMembership = () => scalar(`SELECT id FROM project_members WHERE project_id=${literal(projectId)} AND user_id=${literal(t.qa.userId)}`);
+    const orgMembership = () => scalar(`SELECT id FROM organization_members WHERE organization_id=${literal(t.organizationId)} AND user_id=${literal(t.qa.userId)}`);
+    const observe = async (token: string) => {
+      const headers = { Authorization: `Bearer ${token}` };
+      const rest = await machine.get(`${projectPath}/testcases`, { headers, failOnStatusCode: false });
+      const restBody = await rest.json().catch(() => null);
+      const mcp = await machine.post(`${projectPath}/mcp`, {
+        headers, failOnStatusCode: false,
+        data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_testcases", arguments: {} } }
+      });
+      const rpc = await mcp.json().catch(() => null);
+      // No credential, raw body, or provider payload in assertion diagnostics.
+      return {
+        restStatus: rest.status(), mcpStatus: mcp.status(), rpcCode: rpc?.error?.code ?? null,
+        restAllowed: rest.ok(),
+        restDenied: [401, 403, 404].includes(rest.status()) ||
+          (rest.status() === 400 && restBody?.error === "Authentication required"),
+        mcpAllowed: mcp.ok() && !rpc?.error && rpc?.result?.isError === false && Array.isArray(rpc?.result?.content),
+        mcpDenied: [401, 403, 404].includes(mcp.status()) ||
+          (mcp.ok() && rpc?.error?.code === -32001 && rpc?.result === undefined),
+      };
+    };
+    type Observation = Awaited<ReturnType<typeof observe>>;
+    const allowed = (value: Observation) => {
+      expect(value.restAllowed, JSON.stringify(value)).toBe(true);
+      expect(value.mcpAllowed, JSON.stringify(value)).toBe(true);
+    };
+    const denied = (value: Observation) => {
+      expect(value.restDenied, JSON.stringify(value)).toBe(true);
+      expect(value.mcpDenied, JSON.stringify(value)).toBe(true);
+    };
+    try {
+      const old = await issue(qa, "departing member");
+      const unaffected = await issue(owner, "unaffected member");
+      const oldProjectMembership = projectMembership();
+      const oldOrgMembership = orgMembership();
+      expect(oldProjectMembership).toBeTruthy();
+      expect(oldOrgMembership).toBeTruthy();
+      allowed(await observe(old.token));
+      allowed(await observe(unaffected.token));
+
+      const removePath = membership === "project"
+        ? `${projectPath}/members/${t.qa.userId}`
+        : `/api/workspace/members/${t.qa.userId}`;
+      expect((await owner.delete(removePath)).ok(), "actual membership removal API").toBe(true);
+      expect(membership === "project" ? projectMembership() : orgMembership()).toBe("");
+      denied(await observe(old.token));
+      allowed(await observe(unaffected.token));
+
+      if (membership === "organization") {
+        const rejoin = await owner.post("/api/workspace/members", {
+          data: { userId: t.qa.userId, email: t.qa.email, role: "qa_engineer" }
+        });
+        expect(rejoin.ok(), "actual workspace member add API").toBe(true);
+        expect(orgMembership()).toBeTruthy();
+        expect(orgMembership()).not.toBe(oldOrgMembership);
+      }
+      if (!projectMembership()) {
+        const rejoin = await owner.post(`${projectPath}/members`, {
+          data: { userId: t.qa.userId, role: "qa_engineer" }
+        });
+        expect(rejoin.ok(), "actual project member add API").toBe(true);
+      }
+      expect(projectMembership()).toBeTruthy();
+      if (membership === "project") expect(projectMembership()).not.toBe(oldProjectMembership);
+      const oldAfterRejoin = await observe(old.token);
+      // New credential is an independent positive control, not reapproval of the old one.
+      const freshHuman = await loginAs(t.qa);
+      try {
+        const fresh = await issue(freshHuman, "rejoined member");
+        expect(fresh.id).not.toBe(old.id);
+        allowed(await observe(fresh.token));
+      } finally {
+        await freshHuman.dispose();
+      }
+      allowed(await observe(unaffected.token));
+      const oldAfterFresh = await observe(old.token);
+      test.info().annotations.push({ type: "credential lifecycle observations",
+        description: JSON.stringify({ oldAfterRejoin, oldAfterFresh }) });
+      // Soft assertions preserve observations from both stages and both transports.
+      for (const observation of [oldAfterRejoin, oldAfterFresh]) {
+        expect.soft(observation.restDenied, JSON.stringify(observation)).toBe(true);
+        expect.soft(observation.mcpDenied, JSON.stringify(observation)).toBe(true);
+      }
+    } finally {
+      try {
+        for (const id of issued) await owner.delete(`${projectPath}/apikeys/${id}`, { failOnStatusCode: false });
+        resetRbacMembership(t);
+      } finally {
+        await Promise.all([owner.dispose(), qa.dispose(), machine.dispose()]);
+      }
+    }
+  });
+}
 
 test("MCP-P07 edit-state oracle ignores only asynchronous embedding queue time while retaining protected case state", () => {
   const committed = {

@@ -24,6 +24,24 @@ export interface ApiTokenSummary {
   createdAt: string;
 }
 
+/**
+ * Shared current-generation predicate for a token row aliased as t.
+ * The both-null branch is compatibility for pre-migration keys only; do not
+ * infer their issuance generation from current membership. CL-D1 must be
+ * resolved before claiming complete lifecycle enforcement or rollout.
+ */
+export const API_TOKEN_CURRENT_GENERATION_SQL = `(
+  (t.project_membership_id IS NULL AND t.organization_membership_id IS NULL)
+  OR EXISTS (
+    SELECT 1 FROM projects gp
+    JOIN project_members pm ON pm.project_id = gp.id AND pm.user_id = t.user_id
+      AND pm.id = t.project_membership_id
+    JOIN organization_members om ON om.organization_id = gp.organization_id
+      AND om.user_id = t.user_id AND om.id = t.organization_membership_id
+    WHERE gp.id = t.project_id AND gp.archived_at IS NULL
+  )
+)`;
+
 const TOKEN_PREFIX = "tsbo_";
 const RAW_TOKEN_BYTES = 24;
 const VALID_SCOPES = new Set(["read", "write"]);
@@ -130,11 +148,20 @@ export class ApiTokenService {
     const rawToken = this.generateRawToken();
     const tokenHash = this.hashToken(rawToken);
     const res = await this.db.query(
-      `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes)
-       VALUES ($1, $2, $3, $4, $5)
+       `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes,
+          project_membership_id, organization_membership_id)
+       SELECT $1, $2, $3, $4, $5, pm.id, om.id
+         FROM projects p
+         JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
+         JOIN organization_members om ON om.organization_id = p.organization_id AND om.user_id = $1
+        WHERE p.id = $2 AND p.archived_at IS NULL
+        FOR SHARE OF p, pm, om
        RETURNING id, name, scopes, token_hash, last_used_at, created_at`,
       [userId, projectId, name, tokenHash, scopes]
     );
+    if (!res.rows[0]) {
+      throw new BadRequestException({ error: "Current project membership is required to issue a credential" });
+    }
     return { ...this.toSummary(res.rows[0] as never), token: rawToken };
   }
 
@@ -156,7 +183,8 @@ export class ApiTokenService {
     if (!token) return null;
     const tokenHash = this.hashToken(token);
     const res = await this.db.query(
-      `SELECT id, user_id, project_id, scopes FROM api_tokens WHERE token_hash = $1 LIMIT 1`,
+       `SELECT t.id, t.user_id, t.project_id, t.scopes FROM api_tokens t
+        WHERE t.token_hash = $1 AND ${API_TOKEN_CURRENT_GENERATION_SQL} LIMIT 1`,
       [tokenHash]
     );
     const row = res.rows[0] as
