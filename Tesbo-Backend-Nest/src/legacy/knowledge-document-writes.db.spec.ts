@@ -992,6 +992,39 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
   });
 
+  it("never compensates a committed upload merely because COMMIT acknowledgement is lost", async () => {
+    const name = `commit-ack-${randomUUID()}.txt`;
+    let committed = false;
+    // The real PostgreSQL COMMIT completes first; only delivery of its result to the
+    // application is fault-injected. This is not a real network or storage outage.
+    const observed = observedPool(async (sql) => {
+      if (!committed && sql.trim().toUpperCase() === "COMMIT") {
+        committed = true;
+        throw new Error("Connection terminated unexpectedly");
+      }
+    });
+    const f = fileService(observed);
+    try {
+      // Either a reconciled success or an explicit unknown/error response is acceptable
+      // here. The persisted row and its referenced object must not diverge.
+      await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{
+        buffer: Buffer.from("upload body"), originalname: name, mimetype: "text/plain", size: 11
+      }]).then(() => null, () => null);
+      expect(committed).toBe(true);
+      const storedKey = f.storage.put.mock.calls[0]?.[0];
+      expect(storedKey).toBeTruthy();
+      const actual = await setup.query(
+        "SELECT storage_key,is_deleted FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
+        [projectId, storedKey]
+      );
+      expect(actual.rows).toEqual([{ storage_key: storedKey, is_deleted: false }]);
+      expect(f.storage.delete).not.toHaveBeenCalledWith(storedKey);
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND original_file_name = $2", [projectId, name]);
+    }
+  });
+
   it("compensates a file upload when its destination is deleted before the insert", async () => {
     const target = (await setup.query<{ id: string }>(
       "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
