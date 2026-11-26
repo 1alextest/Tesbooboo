@@ -440,3 +440,10 @@ A clean merge can change the business meaning of a case. Revalidate the reconcil
 | Existing adapters and fallback | Run equivalent create/update and a mixed requirement/case/link selection through every supported entry in the writer inventory, including import, legacy aliases and jobs. Each yields the same applicable checks or a visible unsupported disposition. Replay a historical import without provenance; preserve unknown. Revoke a Skill during evidence capture; preserve the authorized observation and block stale authored changes. |
 
 All additional fixtures are proposed product acceptance criteria. A release claim requires the exact build and profile, distinct authenticated client receipts, submitted/read-back revisions, native committed rows or refusal, independent human decision where applicable, and the retained outputs used to compare conformance.
+
+
+## Canonical revision 1.4.47 — authority through agent handoffs and memory
+
+Extend R-ASE-25/27/30/31/32/46 through [canonical 03](../../qa-orchestration/03_TECHNICAL_DESIGN.md). Imported content, reports, candidate Skills, references, summaries and memory retain their source revision, authority and access class when another agent or later session consumes them. Readability, a trusted transport, an agent endorsement or summarization cannot promote a candidate into an effective instruction or confer tool/network permissions. Executable resources remain disabled until separately admitted; approved text is not execution authorization.
+
+Test a hostile source passed from A through summary/RAG/memory to fresh B, alongside valid inert quoted instructions. Native tools and current grants constrain effects even if content detection fails. Quarantine and rebuild affected derivatives with lineage; preserve originals and approved history under access/retention policy. Subjects cannot edit accepted trial evidence, another contributor's protected observations or collector settings. Existing v1.4.46 independent grading and held-out controls apply; canonical 05 allocates the cumulative variations. No Skill installation, approval, assignment or automatic containment is performed by this amendment.

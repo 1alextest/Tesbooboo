@@ -119,3 +119,43 @@ All backend paths below are relative to `Tesbo-Backend-Nest/src/` at the pinned 
 **Verification boundary:** package preservation, internal-reference, manifest/archive and whitespace checks are source/document checks. New runtime acceptance remains NOT RUN. No API, provider, execution, approval, assignment, production data, CI rules or deployment was changed. **Tesbo sync not performed:** no callable authorized Tesbo project connector is exposed; retain the proposed native handoff rather than invent records or direct-write through another path.
 
 **Final integration source recheck:** development advanced to `289fdd8be002ff6094944869a60afda0aea2cdae` after the pinned review. A full-tree comparison against b28c173 identifies only `e2e/api/mcp.spec.ts` and `e2e/utils/testcase-edit-state.ts`; all inspected frontend/backend application owners are byte-identical. The documentation integration preserves those newer test/helper bytes. This continuity recheck carries no execution or deployment credit.
+
+
+## 26 November 2026 — multiagent control coverage
+
+**Method and scope.** Re-read the complete [multiagent engineering article](https://x.com/katelyn_lesse/article/2114542280535318557) and its complete [linked security architecture article](https://www.katelynlesse.com/blog/secure-agents-architecture-and-sandboxing). The table records topic coverage, not independent confirmation of every external claim. These are research inputs; the Tesbo-specific controls and falsifiers are proposed adaptations derived with the existing native design. Source review is informed, by the updating agent, not an independently dispatched team or runtime acceptance run. The introductory encouragement to engineers is contextual, not a product requirement.
+
+| Source concern | Existing owner / revision 1.4.47 disposition | Proof allocation in canonical 05 |
+| --- | --- | --- |
+| Coordinator and non-executor specialist roles | R-ASE-12; bounded independent question, evidence, permission and result | Delegation and legitimate narrower worker |
+| Stateful, single-instance work with arbitrary idle periods | T-201/203; native durable context and claim generation | Idle/crash/event/wake recovery |
+| Waiting on tools, inference, peers or humans | FR-009/058; explicit waiting cause and fresh resume | Duplicate/lost/out-of-order events |
+| Startup, idle allocation and burst scale tradeoffs | NFR-010/012; measure before runtime/scheduler selection | Mixed active/idle burst and fairness |
+| Agent identity and short-lived workload credentials | FR-010/011; evaluate existing issuer/credential mechanism | Principal/audience/expiry/rotation |
+| Acting for a human versus independent workload | R-ASE-12/18; separately evidenced authority and consent | Human/workload and valid-control flows |
+| Meaningful long-running consent | FR-012–015; scope/lifetime and renewal/effect rechecks | Revoke during wait and before commit |
+| Trust between agents | R-ASE-12/18; verified peer request and bounded delegation | Forgery/replay/scope/fan-out |
+| Vulnerable kernels, browsers, runtimes and libraries | R-ASE-18; image/dependency provenance and patch evidence | Chosen isolation/advisory controls |
+| Injection transmitted between agents and future memory | R-ASE-31; derivative authority never increases | A → summary/RAG/memory → fresh B |
+| Separate orchestration, state and secrets from hostile code | T-101/203/408; independent custody/enforcement | Secret-access and broker misuse |
+| Destination-bound credential injection and MCP brokerage | T-105/106/408; existing custody or evaluated broker | Destination/redirect/error leakage |
+| Isolation level and tenant blast radius | R-ASE-18; qualify actual hostile-code boundary | Escape/mount/cross-tenant controls |
+| Disposable environments and hard resource limits | T-408/410; bounded execution and independent cleanup | Limits, teardown failure and quarantine |
+| Default-deny outbound access, including DNS | FR-012/058; actual network and action enforcement | IP/protocol/DNS/rebinding/private-target controls |
+| Dependency bootstrap before tighter execution scope | T-408; isolated pinned install phase, no elevated secrets | Install-hook and subsequent egress controls |
+| Correlated cross-agent OTel | Existing observability + T-459; validate associations | Forged/late/duplicate/missing observations |
+| Agents cannot rewrite their own or others' traces | R-ASE-14/38/46; protected collector and accepted evidence | Edit/delete/admin and correction controls |
+| Independent tool, command and network observations | NFR-010; real evidence source and completeness | Self-report versus observed effect |
+| Monitoring-triggered scoped stop and credential cutoff | T-105/203/408; admitted policy plus trusted control | Queued/idle/in-flight/descendant stop |
+| Stop survives the compromised execution | R-ASE-18/43; external control and fresh continuation | Worker/control restart and uncertain remote activity |
+| Legitimate persistence can resemble an attack | FR-124/R-ASE-44/47; observed policy event, calibrated intent limits | False stops, misses and valid retries |
+
+### Specification and source reconciliation
+
+Input inventory: all eight saved canonical v1.4.46 files (archive Library version 30, SHA-256 `1b84a0f0840d04b097007d3cdfa460157e9c2c91796b7b1ec78d4b3539e8018c`); all six ASER integration views; Skills governance, team attribution, MCP workflow, OAuth, PR reconciliation, harness/options/research and Langfuse plan. Work Package A/B were assessed for shared-control consumers; their domain schemas/review owners remain unchanged. The current application owner inspection is pinned to development `899543a6625fafebb522783550678324e12ec4c4`; #295 at `21d19243ae54a0fb79d280e3c12ad140444363ce` supplies the documentation parent. Six canonical bodies match the saved input exactly at that parent; canonical 02/05 additionally preserve the later saved revision 58/live owner-view deltas. No older source or prototype observation is relabeled as a fresh production check.
+
+Current source has MCP grant/membership/tool enforcement and partial opt-in OTel/bounded turn tracing. General workload identity/delegation, durable idle runtime, secretless managed execution, protected fleet collector and independently confirmed fleet stopping remain unverified. KB claim/heartbeat/fencing is a reusable local pattern, not acceptance of a general executor. #246/#292/#298/#297/#299 retain their own owners and gates. No new runtime is selected; the first proof is one bounded task/worker lifecycle, not scale infrastructure. New product acceptance remains NOT RUN; no native Tesbo synchronization or formal independent signoff is claimed.
+
+### Review correction retained
+
+The earlier chat review emphasized tracing, revocation and contamination but compressed idle infrastructure, workload identity/peer trust, DNS/bootstrap restrictions, patching and ambiguity in monitoring. This second pass explicitly allocates all those concerns. It does not generalize an article's architecture preference into a requirement to replace existing hosting or mandate managed workers. Mandatory native audit and best-effort diagnostics remain separate. The source-informed consistency pass also clarified shared-host stop scope and pre-authorized independent emergency containment during a control/audit outage, without permitting ordinary writes or an unauthenticated bypass. Requirements/API/design/UX/proof use the same distinction between request acceptance, authority fencing, real termination and uncertain external work; no parallel workflow enum is introduced.
