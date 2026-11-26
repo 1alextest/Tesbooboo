@@ -13753,9 +13753,12 @@ export class LegacyService implements OnModuleInit {
   private async kbUniqueFileName(client: PoolClient, folderId: string, desiredName: string): Promise<string> {
     const ext = path.extname(desiredName);
     const base = path.basename(desiredName, ext);
+    // Only the desired name and its numbered variants can affect this allocation. Restrict the
+    // transaction's read instead of pulling every name in a large folder.
+    const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
     const existing = await client.query<{ original_file_name: string }>(
-      "SELECT original_file_name FROM knowledge_files WHERE folder_id = $1 AND is_deleted = false",
-      [folderId]
+      "SELECT original_file_name FROM knowledge_files WHERE folder_id = $1 AND is_deleted = false AND (original_file_name = $2 OR original_file_name LIKE $3 ESCAPE '\\')",
+      [folderId, desiredName, `${escapeLike(base)} (%${escapeLike(ext)}`]
     );
     const taken = new Set(existing.rows.map((row) => row.original_file_name));
     if (!taken.has(desiredName)) return desiredName;

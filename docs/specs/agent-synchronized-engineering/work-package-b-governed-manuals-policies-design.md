@@ -812,8 +812,8 @@ from filenames or content alone.
   committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
   exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
   deleted/archived exclusion, terminal missing-object failure, transient read-release, stale-token
-  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–86
-  (including duplicated and whitespace-only keys); browser coverage KBU-80 lets the backend commit and then
+  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–87
+  (including duplicated and whitespace-only keys, and ten concurrent same-name uploads); browser coverage KBU-80 lets the backend commit and then
   replaces the acknowledgement with a 503, so the second request is a real replay and a missing key
   would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
   acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
@@ -844,7 +844,9 @@ provider failures.
 transaction, so concurrent uploads of the same name could both choose the unsuffixed one. It is now
 allocated on the transaction's own client after the project mutation advisory lock, so the second
 writer observes the first committed row and takes the next suffix. No new unique index or second
-naming owner is introduced; the upload writer is the only path using this allocation. Native
+naming owner is introduced; the upload writer is the only path using this allocation. This closes
+the upload-vs-upload race only: move, rename and restore still do not reallocate a displayed name,
+so the broader folder-wide uniqueness invariant remains a separate disposition. Native
 coverage is staged as task `5a9fa3ab-5fc9-468a-b673-bb7c1cbac3e9`, revision
 `d7da6e4267199877a951068f5555fe23cd3248c47a8f6f1413e27cc666646847`, `in_review`, one unpublished
 Draft case; manual execution remains **UNRUN**.
