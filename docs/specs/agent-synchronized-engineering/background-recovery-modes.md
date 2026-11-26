@@ -88,6 +88,20 @@ folder/name allocation with the insert, preserve deliberate same-name uploads un
 key, and prove two concurrent uploads cannot claim the same displayed name. That work is not started
 here.
 
+## Native coverage record
+
+A native search found 35 existing cases in the authorized Tesbo project, none covering graph background
+recovery. A create-case proposal was staged through the authorized MCP path:
+
+- task `3484b21f-5c20-4b15-b28e-d5a474551499`
+- proposal revision `93457a5ad0156066d563428e619330f9e4925b512bc2f669d96d2f2aabdd2ff5`
+- request key `bg-recovery-mode-20261126-1795729018487`
+- status `in_review`, one unpublished Draft case in the Requirements suite
+- native review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/3484b21f-5c20-4b15-b28e-d5a474551499`
+
+The proposal is not applied, linked or executed. Manual execution remains **UNRUN**; the case remains
+Draft if a human later applies it, and no PASS/FAIL evidence is inferred from the staging.
+
 ## Coordination
 
 - **#301** owns `knowledge-document-writes.db.spec.ts` destination/race coverage; this work does not
