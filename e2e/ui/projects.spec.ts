@@ -440,6 +440,8 @@ test("MCP-P18 UI approves a named credential, shows stale conflicts, and revokes
       return response.json();
     };
     await page.goto(`/projects/${projectId}/settings?tab=apiTokens`);
+    await page.getByRole("link", { name: "Manage API tokens", exact: true }).click();
+    await expect(page).toHaveURL(/\/settings\/api-tokens(?:\?.*)?$/);
     const setup = page.getByRole("heading", { name: "Connect an MCP client" }).locator("../..");
     await expect(setup).toBeVisible();
     await setup.getByRole("button", { name: "Claude Code", exact: true }).click();
@@ -463,6 +465,8 @@ test("MCP-P18 UI approves a named credential, shows stale conflicts, and revokes
     await expect(setup).toContainText("Inspect the JSON-RPC error as well as the HTTP status");
     // Do not put the fixture's actual secret in test failure diagnostics.
     expect((await setup.innerText()).includes(credential.token), "setup snippets must never expose the raw token").toBe(false);
+    // Keep the existing settings-tab consent journey, separate from the dedicated setup route.
+    await page.goto(`/projects/${projectId}/settings?tab=apiTokens`);
     const panel = page.getByRole("heading", { name: "External AI & MCP Access" }).locator("..").locator("..");
     await expect(panel.getByText("External MCP: Off", { exact: true })).toBeVisible();
     expect((await discover()).error.code).toBe(-32001);
