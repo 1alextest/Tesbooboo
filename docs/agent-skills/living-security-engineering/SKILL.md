@@ -76,11 +76,11 @@ The phrase “do not leave debug code in production” is a *contextual rule*, n
 
 ### Finding disposition continuity — SEC-P06/P10 refinement (provisional)
 
-A warning is an observation, a classification is a technical conclusion, and closure is an authorized state transition. Preserve these separately across repeated observations and candidate changes. The transferable mechanism is that evidence, decision authority and the state of the assessed object must remain correlated; a change in any one can invalidate a conclusion without erasing its history.
+A warning is an observation, a classification is a technical conclusion, and closure is an authorized state transition. Preserve their relationship across repeated observations and candidate changes. A change in evidence, decision authority or assessed context can invalidate a conclusion without erasing its history.
 
-Use the existing [finding reconciliation procedure](../../agent-scope-discipline.md#evidence-bound-disposition-and-closure-candidate-refinement) for the record, occurrence mapping and acceptance criteria. Do not build a separate Security Skill approval mechanism. Challenge with a harmless-looking test that performs a real external action, an unchanged guard whose caller now bypasses it, a repeated scanner alert with changed semantics, and a correctly accepted disposition whose remote closure operation fails. Distinguish scanner execution failures from false positives. Require evidence that would falsify the proposed harmless interpretation, not just a filename or reassuring comment.
+Apply the existing [finding reconciliation procedure](../../agent-scope-discipline.md#evidence-bound-disposition-and-closure-candidate-refinement) rather than introducing another record or approval mechanism. Challenge the conclusion with a test that performs a real external action, an unchanged guard whose caller bypasses it, a repeated alert with changed semantics, and an accepted disposition whose remote closure fails. Seek discriminating evidence, not just a reassuring filename or comment.
 
-Origin: OAuth #246 alerts 3332–3338 and the inspected e3e8027 source; four candidate mechanisms, not seven independently accepted dispositions. The case study and regression oracles in the reconciliation procedure are proposed, not executed by this Skill revision. No native Skill approval or assignment change is implied.
+Origin: OAuth #246 alerts 3332–3338; evidence and current-candidate reconciliation belong to the PR's finding record. Proposed regression oracles are not executed by this Skill revision. No native Skill approval or assignment change is implied.
 
 ## Required security review probes
 
