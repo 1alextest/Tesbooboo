@@ -722,3 +722,10 @@ Not included: putting TLS in front of the Langfuse instance (§7.1), which is an
   `startZyraTurn` itself uses. Added `src/observability/ai-trace.spec.ts` (previously nonexistent —
   see §3.2's original, never-fulfilled `ai-trace.service.spec.ts` line item) covering all of the
   above at the unit level, `@langfuse/tracing` mocked. §9's actual e2e list is still not written.
+
+
+## Skill evaluation integration — 26 November 2026 (proposed)
+
+Canonical [03 Technical Design](qa-orchestration/03_TECHNICAL_DESIGN.md) and [04 MCP/API Contracts](qa-orchestration/04_MCP_API_CONTRACTS.md), revision 1.4.46, extend this existing observability owner for T-422/D-14 and FR-124/T-461; this is a specification update only. Source at `b28c17386ecc2e88f550b3c4a641143ede339255` already exports optional model/retrieval/tool diagnostics and persists bounded chat-stage traces. Current tracing can carry actual prompts/outputs and source information. Destination opt-in and regex masking do not certify project-specific disclosure, retention, metadata minimization or complete secret redaction.
+
+Reuse these modules for separately authorized minimized routine Skill events and correlate exact method/assignment, client/model/tool, native task/trial and evidence identities where actually observed. Required evaluation inputs, observations, missingness and adjudication belong to native durable records; best-effort export or bounded stage traces cannot be the sole admission evidence. Preserve collection source, incompleteness, estimates and unknown prices; project totals and overlapping snapshot windows cannot establish per-Skill attributable cost. Link experiments/scores only after installed-version compatibility, data handling, access and independently retrievable native evidence are verified. Hidden grading material must remain outside the evaluated agent's authorized retrieval, chat and trace/export views. Existing Phase 3/4 remain separately admitted work; no dashboard, score, collector configuration, price inventory or deployed acceptance was changed here.

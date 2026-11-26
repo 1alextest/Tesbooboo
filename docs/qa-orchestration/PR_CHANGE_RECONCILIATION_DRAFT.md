@@ -254,3 +254,8 @@ The design now carries each finding into an owner and an observable check. The n
 6. Inspect current native Zyra task, governed proposal, source-binding and review/impact writers including migrations before deciding any PR generation persistence or API schema. #267's conceptual decision receipt is not an accepted MCP payload.
 
 **Implementation state:** This file is a design draft only. No native Tesbo write, live PR assessment, end-to-end execution, GitHub App installation or merge gate was performed for this extension.
+
+
+## Canonical revision 1.4.46 — shared method-evaluation owner (proposed)
+
+The [current package amendment](00_README.md#revision-1446--evaluated-skills-and-continuous-method-improvement) operationalizes the existing FR-124 comparisons and source/observable-process qualifications above. Reuse its frozen inventories, independent expected outcomes, paired/repeated controls, full missingness denominators, per-trial cost provenance and source-qualified telemetry contracts. It does not turn this optional PR assessment into a prerequisite for source-free work or add another readiness authority. The real Task writer, capability admission and separate protected human review remain required. Existing first-pass isolation includes chat, KB/retrieval, worker/cache and trace/export access; the new evaluation amendment strengthens its falsifiers, without proving independence or live enforcement by specification. Current source inspection is pinned to `b28c17386ecc2e88f550b3c4a641143ede339255`; previous source and pilot receipts retain their own scope. No new runtime acceptance or native record effect is claimed.
