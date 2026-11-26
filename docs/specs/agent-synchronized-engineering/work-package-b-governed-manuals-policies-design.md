@@ -814,12 +814,13 @@ from filenames or content alone.
   would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
   acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
 
-Evidence on exact head `9ce408bb`: database-integrity job `139835627562` passed all 747 tests in 18
-suites; backend-quality job `139835627756`, frontend-quality job `139835627898`, CodeQL and the smoke
-run `45798607609` all passed. The smoke log shows KBF-A-81 (558 ms), KBF-A-82 (465 ms), KBF-A-83
-(391 ms), KBF-A-84 (302 ms), KBF-A-85 (379 ms) and KBU-80 (1.6 s) passing, and the updated ci-smoke
-transport test passing with the same-key replay assertion. These are CI results, not native manual
-execution; every native linked case remains **UNRUN**.
+Evidence on final code head `5c76cba0` (merged as `72924518`): database-integrity job
+`139857636428` passed all 749 tests in 18 suites; backend-quality job `139857632241`,
+frontend-quality job `139857632644`, CodeQL and smoke run `45804954679` all passed. The smoke log
+shows KBF-A-81 (747 ms), KBF-A-82 (666 ms), KBF-A-83 (561 ms), KBF-A-84 (487 ms), KBF-A-85 (538 ms),
+KBF-A-86 (567 ms) and KBU-80 (2.2 s) passing, and the updated ci-smoke transport test passing with the
+same-key replay assertion. Production `/api/health` returned `72924518` with `status: ok` after the
+merge. These are CI results, not native manual execution; every native linked case remains **UNRUN**.
 
 **Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
 than mandatory; requiring them would give every client automatic retry safety but breaks existing
@@ -853,7 +854,7 @@ REQ-WPB-08 is staged as task `f0463d10-7acc-4b1d-8103-46cd2be3a40d`, revision
 `b5ed3de2541662f8dffdfbc2d8f075fc74809857e0772690a07b8aa4534b82b4`, `in_review`, unassigned, with
 its linked cases still **UNRUN**; this session had no native execution-evidence writer.
 
-PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`. Production
-`/api/health` returned the #288 merge SHA and the deployed MCP catalog/proposal-preview tool set was
-verified at that SHA. Manual execution remains **UNRUN**; native execution-evidence writing remains
-unavailable.
+PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`; PR #296
+merged as `729245181f72fa4d76a00adbd4188c9842d5be38`. Production `/api/health` returned the #288 and
+#296 merge SHAs; the deployed MCP catalog/proposal-preview tool set was verified at #288. Manual
+execution remains **UNRUN**; native execution-evidence writing remains unavailable.
