@@ -112,8 +112,12 @@ export default function SkillsSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const tab = useSearchParams().get("tab") === "assignments" ? "assignments" : "library";
+  const requestedTab = useSearchParams().get("tab") === "assignments" ? "assignments" : "library";
+  // Escape needs the selected tab immediately, before Next reflects a click in useSearchParams.
+  const [tab, setSelectedTab] = useState<"library" | "assignments">(requestedTab);
+  useEffect(() => { setSelectedTab(requestedTab); }, [requestedTab]);
   function setTab(next: "library" | "assignments") {
+    setSelectedTab(next);
     const url = new URL(window.location.href);
     if (next === "assignments") url.searchParams.set("tab", next);
     else url.searchParams.delete("tab");
