@@ -748,9 +748,110 @@ or eventual processing. Distinguish the following unresolved decisions and test 
 These are source-level risks; runtime reproduction and severity/ownership disposition remain open.
 Do not describe them as resolved by #288, or claim native execution before the tests actually run.
 
+### 13.1 Upload request identity and restart-safe processing (implementation)
+
+`V166_knowledge_file_upload_recovery.sql` adds optional request identity and a transcription lease to
+`knowledge_files`. The contract is deliberately caller-driven because the service cannot infer intent:
+a retry of one logical upload and a deliberate second upload of identical bytes are indistinguishable
+from filenames or content alone.
+
+- The upload route accepts an optional multipart `requestKey` (trimmed, 1–160 characters when present).
+  It is scoped to `(project_id, uploaded_by)`; a key from another project or another uploader is a
+  different request. Omitting it preserves the previous non-idempotent behaviour, so existing clients
+  remain compatible.
+- Request identity is the key plus the zero-based batch position, protected by
+  `UNIQUE(project_id, uploaded_by, upload_request_key, upload_request_file_index)`. The stored digest
+  covers the destination folder and the ordered manifest (name, declared size, MIME type and SHA-256 of
+  each buffer). Reusing a key for different bytes, a different folder or a different order is a
+  `409 UPLOAD_REQUEST_CONFLICT`; it never overwrites or adopts the earlier row.
+- A fully committed request returns the original rows with `replayed: true` and performs no storage
+  write, insert or audit; the original folder need not still exist for that answer. A partially
+  committed batch returns `replayed: false`, rechecks the destination, and writes only the missing
+  positions. A committed row whose file was later deleted refuses replay with
+  `409 UPLOAD_REQUEST_CLOSED`; the upload does not resurrect deleted content under an old key.
+  A changed manifest is evaluated before plan storage, so a replay is not refused because the workspace
+  has since filled its storage allowance. A duplicated multipart `requestKey` field is refused rather
+  than silently treated as absent.
+- A concurrent retry that loses the unique-index race reconciles by the authoritative keyed row,
+  deletes only its own unreferenced object, and returns that row. A lost COMMIT acknowledgement still
+  skips reconciliation and compensation entirely; the client retries with the same key instead.
+- Audio/video extraction now has an explicit claim (`extraction_status = 'processing'`,
+  `extraction_claimed_at` and a UUID `extraction_claim_token`) taken by an atomic conditional UPDATE
+  that rechecks the file is live and the project is not archived. The claim has a five-minute lease,
+  refreshed every minute while bytes are read and while the provider call runs. The token fences every
+  terminal write, so a takeover cannot be clobbered by the previous owner. A provider failure remains
+  terminal `failed`; a missing OpenAI allocation remains terminal `unsupported`. A deleted file or
+  archived project is never claimed, and a project archived between claim and dispatch is released to
+  `pending`.
+- `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes, bounded to 25 rows per
+  sweep, ordered by least-recently-claimed, and can be scoped to one project for tests. It claims before
+  reading bytes or dispatching, so overlapping sweeps and a live worker cannot both own the row; fencing
+  prevents duplicate state effects. It cannot prevent a *repeat provider call* if the process crashes
+  after the provider returned but before the result is persisted — the Whisper endpoint has no
+  idempotency key — so recovery is at-least-once externally and exactly-once in persisted state. A
+  missing object becomes terminal `failed`; a transient byte-read failure (including a bounded read
+  timeout) releases the claim to `pending` and records the attempt time so the next sweep does not
+  keep the same rows at the head. In-flight `processing` is surfaced to Zyra as "still in progress",
+  not as an unsupported file type. This complements, and does not replace,
+  `RagIngestionService.resumeInterruptedEmbeddings`: that sweep still covers ordinary-file embeddings
+  whose extraction already completed, while a pending transcript has no text to embed and is recovered
+  here.
+- The frontend generates one request key per upload batch and replays once — with that same key — on a
+  lost transport response or a 502/503/504 response, including the backend's explicit uncertain-COMMIT
+  503. The shared fetch wrapper still refuses to replay any other mutation without a key. A manual
+  re-selection after that one replay is a new logical upload; a duplicated multipart `requestKey` is
+  refused rather than silently dropped.
+- Internal coordination columns (`uploadRequestKey`, `uploadRequestFileIndex`, `uploadRequestDigest`,
+  `extractionClaimedAt`, `extractionClaimToken`) are stripped from every file response.
+- Database regressions in `knowledge-document-writes.db.spec.ts` cover full replay, digest conflict,
+  deliberate duplicate under a new key, partial-batch resume after a pre-COMMIT audit failure,
+  committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
+  exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
+  deleted/archived exclusion, terminal missing-object failure, transient read-release, stale-token
+  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–86
+  (including duplicated and whitespace-only keys); browser coverage KBU-80 lets the backend commit and then
+  replaces the acknowledgement with a 503, so the second request is a real replay and a missing key
+  would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
+  acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
+
+Evidence on exact head `9ce408bb`: database-integrity job `139835627562` passed all 747 tests in 18
+suites; backend-quality job `139835627756`, frontend-quality job `139835627898`, CodeQL and the smoke
+run `45798607609` all passed. The smoke log shows KBF-A-81 (558 ms), KBF-A-82 (465 ms), KBF-A-83
+(391 ms), KBF-A-84 (302 ms), KBF-A-85 (379 ms) and KBU-80 (1.6 s) passing, and the updated ci-smoke
+transport test passing with the same-key replay assertion. These are CI results, not native manual
+execution; every native linked case remains **UNRUN**.
+
+**Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
+than mandatory; requiring them would give every client automatic retry safety but breaks existing
+integrations until all callers send one. Replay returns the original rows rather than a `202`-style
+"already accepted" response, because callers need the file IDs. A key is closed after any of its files
+is deleted, so a deleted position makes the whole logical batch non-replayable rather than silently
+resurrecting or filling around it. An explicitly supplied whitespace-only key is a `400`, not an
+absence, so a caller cannot believe it has retry safety it does not have; an empty multipart value is
+indistinguishable from an omitted field after parsing, so the transport-level case is documented
+rather than guessed at. Transcription failure is terminal instead
+of automatically retried, because a provider rejection is not evidence that a restart would succeed;
+manual re-upload remains the recovery path. The owner may still choose mandatory keys, per-position
+reopening after deletion, an explicit reconciliation endpoint, or automatic bounded retries for
+provider failures.
+
+**Separate dispositions (unchanged, not silently fixed here).** Filename uniqueness is still computed
+outside the insert lock; per-file batch atomicity still permits committed prefixes before a later file
+fails (resume now makes that state recoverable but does not make the batch all-or-nothing); storage
+deletion is still best-effort with no retry queue; rows stranded by the pre-V166 code receive no
+one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
+a share lock on `knowledge_files` during deployment; that is the repository's established migration
+pattern, not a change in this PR. The global sweep still sees every tenant, matching the existing
+embedding sweep; a local backend booted against shared infrastructure can therefore recover another
+tenant's pending transcript. That is recorded as an operational risk and an owner decision (dedicated
+worker, configuration gate, or per-tenant scheduling), not silently accepted as correct.
+
 Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
 `e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
+REQ-WPB-08 is staged as task `f0463d10-7acc-4b1d-8103-46cd2be3a40d`, revision
+`b5ed3de2541662f8dffdfbc2d8f075fc74809857e0772690a07b8aa4534b82b4`, `in_review`, unassigned, with
+its linked cases still **UNRUN**; this session had no native execution-evidence writer.
 
 PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`. Production
 `/api/health` returned the #288 merge SHA and the deployed MCP catalog/proposal-preview tool set was

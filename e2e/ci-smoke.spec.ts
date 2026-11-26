@@ -980,13 +980,14 @@ test("Zyra overlapping suite moves count distinct saved cases while retaining bo
   await verifyCiZyraOverlappingMoveTrace(page, api, web, ids[0], ids[1], ownerId, testInfo); expect(errors).toEqual([]);
 });
 
-test("browser API transport never replays ambiguous mutations and retains bounded read retries", async () => {
+test("browser API transport reuses a request key only for the KB upload retry and never replays other ambiguous mutations", async () => {
   // Actual loopback HTTP and the production helper source, not a database or a browser bundle.
   // Node reports socket loss as "fetch failed"; the small adapter below presents the equivalent
   // browser "Failed to fetch" error without fabricating an HTTP response or skipping the request.
   const calls = new Map<string, number>();
   const applied = new Map<string, number>();
   const bodies = new Map<string, { body: string; contentType: string }>();
+  const uploadKeys: string[] = [];
   let abortApplied!: () => void;
   const didApplyBeforeAbort = new Promise<void>((resolve) => { abortApplied = resolve; });
   const server = createServer(async (req, res) => {
@@ -995,7 +996,11 @@ test("browser API transport never replays ambiguous mutations and retains bounde
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const count = (calls.get(pathname) ?? 0) + 1;
     calls.set(pathname, count);
-    bodies.set(pathname, { body: Buffer.concat(chunks).toString(), contentType: req.headers["content-type"] ?? "" });
+    const body = Buffer.concat(chunks).toString();
+    bodies.set(pathname, { body, contentType: req.headers["content-type"] ?? "" });
+    if (pathname.endsWith("/files/upload")) {
+      uploadKeys.push(body.match(/name="requestKey"\r\n\r\n([^\r\n]+)/)?.[1] ?? "");
+    }
     if (pathname.startsWith("/lost-") || pathname.includes("/comments") || pathname.endsWith("/files/upload") || pathname === "/abort-write") {
       applied.set(pathname, (applied.get(pathname) ?? 0) + 1);
       if (pathname === "/abort-write") { abortApplied(); return; }
@@ -1045,11 +1050,18 @@ test("browser API transport never replays ambiguous mutations and retains bounde
     expect(bodies.get(commentPath)?.body).toContain("Fixture multipart bytes");
     const uploadPath = "/api/projects/fixture/knowledge-base/files/upload";
     const uploadError = await errorFrom(browserApi.uploadKnowledgeFiles("fixture", "folder", [file]));
-    expect.soft(calls.get(uploadPath), "multipart KB upload must not be resent").toBe(1);
-    expect.soft(applied.get(uploadPath)).toBe(1);
-    expect.soft(uploadError).toMatch(/outcome unconfirmed/i);
-    expect(bodies.get(uploadPath)?.contentType).toMatch(/^multipart\/form-data; boundary=/);
-    expect(bodies.get(uploadPath)?.body).toContain("Fixture multipart bytes");
+    // The KB upload deliberately differs from every other mutation: it owns a requestKey, so one
+    // lost response is replayed. The fixture intentionally applies both requests; the real server
+    // deduplicates by key. What this test proves is that the retry carries the SAME key, which is
+    // the only property that makes that server-side replay possible.
+    expect.soft(calls.get(uploadPath), "the KB upload retries exactly once").toBe(2);
+    expect.soft(applied.get(uploadPath), "fixture applies both attempts; the real server replays").toBe(2);
+    expect.soft(uploadError).toBe("");
+    expect.soft(bodies.get(uploadPath)?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+    expect.soft(bodies.get(uploadPath)?.body).toContain("Fixture multipart bytes");
+    expect.soft(uploadKeys).toHaveLength(2);
+    expect.soft(uploadKeys[0]).not.toBe("");
+    expect.soft(uploadKeys[1]).toBe(uploadKeys[0]);
 
     const controller = new AbortController();
     const pending = errorFrom(browserApi.api("/abort-write", { method: "POST", body: { title: "Applied before abort" }, signal: controller.signal }));

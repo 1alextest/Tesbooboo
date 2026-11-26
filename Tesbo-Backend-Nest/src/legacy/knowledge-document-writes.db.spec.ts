@@ -6,6 +6,7 @@ import { summarizeDocumentChange } from "../common/text-diff.util";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import * as ragAiAllocation from "../rag/rag-ai-allocation";
+import * as aiTrace from "../observability/ai-trace";
 import { RAG_EMBEDDING_DIMENSION } from "../rag/rag.constants";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -133,6 +134,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
   function fileService(dbPool = pool) {
     const storage = {
       put: jest.fn().mockResolvedValue(undefined),
+      getBuffer: jest.fn().mockResolvedValue(Buffer.from("stored body")),
       delete: jest.fn().mockResolvedValue(undefined)
     };
     const planLimits = { assertStorageAvailable: jest.fn().mockResolvedValue(undefined) };
@@ -143,6 +145,39 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     jest.spyOn(internals, "enqueueEmbedding").mockReturnValue(undefined);
     jest.spyOn(internals, "notifyKnowledgeItem").mockResolvedValue(undefined);
     return { svc, storage, planLimits, activity };
+  }
+  async function waitFor(check: () => Promise<boolean>, message: string) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out waiting for ${message}`);
+  }
+  async function seedMedia(options: {
+    status: "pending" | "processing";
+    claimedAt?: Date;
+    deleted?: boolean;
+    project?: string;
+    folder?: string;
+  }) {
+    const key = `kb/${randomUUID()}.mp3`;
+    const id = (await setup.query<{ id: string }>(
+      `INSERT INTO knowledge_files (organization_id,project_id,folder_id,file_name,original_file_name,mime_type,file_extension,file_size,storage_key,uploaded_by,extraction_status,extraction_claimed_at,is_deleted)
+       VALUES ($1,$2,$3,$4,$4,'audio/mpeg','mp3',12,$5,$6,$7,$8::timestamptz,$9) RETURNING id`,
+      [
+        orgId,
+        options.project ?? projectId,
+        options.folder ?? folderId,
+        `meeting-${randomUUID()}.mp3`,
+        key,
+        actor,
+        options.status,
+        options.claimedAt ?? null,
+        options.deleted ?? false
+      ]
+    )).rows[0].id;
+    return { id, key };
   }
   async function seedFile(name = `file-${randomUUID()}.txt`, folder = folderId) {
     return (await setup.query<{ id: string }>(
@@ -1112,5 +1147,363 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await observed.end();
       await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
     }
+  });
+
+  describe("upload request identity", () => {
+    const file = (name: string, body = "upload body") => ({
+      buffer: Buffer.from(body), originalname: name, mimetype: "text/plain", size: Buffer.byteLength(body)
+    });
+    const cleanup = (requestKey: string) => setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+
+    it("replays a fully committed request without writing storage or auditing it twice", async () => {
+      const requestKey = randomUUID();
+      const name = `replay-${randomUUID()}.txt`;
+      const f = fileService();
+      try {
+        const first = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey);
+        expect(first).toMatchObject({ total: 1, replayed: false });
+        expect(f.storage.put).toHaveBeenCalledTimes(1);
+        expect(f.activity).toHaveBeenCalledTimes(1);
+
+        const second = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey);
+        expect(second).toMatchObject({ total: 1, replayed: true });
+        expect(second.list[0].id).toBe(first.list[0].id);
+        expect(f.storage.put).toHaveBeenCalledTimes(1);
+        expect(f.activity).toHaveBeenCalledTimes(1);
+        expect((await setup.query(
+          "SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2",
+          [projectId, requestKey]
+        )).rows[0].n).toBe(1);
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+
+    it("refuses the same request key for different content and leaves the committed row untouched", async () => {
+      const requestKey = randomUUID();
+      const f = fileService();
+      try {
+        const first = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(`original-${randomUUID()}.txt`)], requestKey);
+        const changed = file(`changed-${randomUUID()}.txt`, "different body");
+        await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [changed], requestKey))
+          .rejects.toMatchObject({ status: 409, response: { code: "UPLOAD_REQUEST_CONFLICT" } });
+        expect(f.storage.put).toHaveBeenCalledTimes(1);
+        expect((await setup.query("SELECT id FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows)
+          .toEqual([{ id: first.list[0].id }]);
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+
+    it("treats an identical file under a new request key as a deliberate second upload", async () => {
+      const firstKey = randomUUID();
+      const secondKey = randomUUID();
+      const f = fileService();
+      const name = `same-${randomUUID()}.txt`;
+      try {
+        const first = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], firstKey);
+        const second = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], secondKey);
+        expect(second).toMatchObject({ total: 1, replayed: false });
+        expect(second.list[0].id).not.toBe(first.list[0].id);
+        expect(f.storage.put).toHaveBeenCalledTimes(2);
+        expect((await setup.query(
+          "SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key IN ($2,$3)",
+          [projectId, firstKey, secondKey]
+        )).rows[0].n).toBe(2);
+      } finally {
+        await cleanup(firstKey);
+        await cleanup(secondKey);
+      }
+    });
+
+    it("resumes a partially committed batch without rewriting its committed position", async () => {
+      const requestKey = randomUUID();
+      const first = file(`partial-first-${randomUUID()}.txt`);
+      const second = file(`partial-second-${randomUUID()}.txt`);
+      const f = fileService();
+      f.activity.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("injected second-file audit fault"));
+      try {
+        await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [first, second], requestKey))
+          .rejects.toThrow("injected second-file audit fault");
+        const committed = (await setup.query<{ id: string; upload_request_file_index: number }>(
+          "SELECT id, upload_request_file_index FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2 ORDER BY upload_request_file_index",
+          [projectId, requestKey]
+        )).rows;
+        expect(committed.map((row) => row.upload_request_file_index)).toEqual([0]);
+
+        const retried = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [first, second], requestKey);
+        expect(retried).toMatchObject({ total: 2, replayed: false });
+        expect(retried.list[0].id).toBe(committed[0].id);
+        expect(retried.list[0].id).not.toBe(retried.list[1].id);
+        expect((await setup.query("SELECT id FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2 ORDER BY upload_request_file_index", [projectId, requestKey])).rows)
+          .toEqual([{ id: retried.list[0].id }, { id: retried.list[1].id }]);
+        // Two initial object writes, one compensated for the refused second file, and only the
+        // missing position written on retry.
+        expect(f.storage.put).toHaveBeenCalledTimes(3);
+        expect(f.storage.delete).toHaveBeenCalledTimes(1);
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+
+    it("retries an upload whose COMMIT acknowledgement was lost without creating a second row", async () => {
+      const requestKey = randomUUID();
+      const name = `uncertain-retry-${randomUUID()}.txt`;
+      let committed = false;
+      const observed = observedPool(async (sql) => {
+        if (!committed && sql.trim().toUpperCase() === "COMMIT") {
+          committed = true;
+          throw new Error("Connection terminated unexpectedly");
+        }
+      });
+      const uncertain = fileService(observed);
+      try {
+        await uncertain.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey).then(() => null, () => null);
+        expect(committed).toBe(true);
+        const stored = (await setup.query<{ id: string; storage_key: string }>(
+          "SELECT id, storage_key FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2",
+          [projectId, requestKey]
+        )).rows;
+        expect(stored).toHaveLength(1);
+
+        const retry = fileService();
+        const replayed = await retry.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey);
+        expect(replayed).toMatchObject({ total: 1, replayed: true });
+        expect(replayed.list[0].id).toBe(stored[0].id);
+        expect(retry.storage.put).not.toHaveBeenCalled();
+        expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows[0].n).toBe(1);
+      } finally {
+        await observed.end();
+        await cleanup(requestKey);
+      }
+    });
+
+    it("refuses to replay a request whose committed file was later deleted", async () => {
+      const requestKey = randomUUID();
+      const uploaded = file(`deleted-${randomUUID()}.txt`);
+      const f = fileService();
+      try {
+        await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [uploaded], requestKey);
+        await setup.query("UPDATE knowledge_files SET is_deleted = true WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+        await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [uploaded], requestKey))
+          .rejects.toMatchObject({ status: 409, response: { code: "UPLOAD_REQUEST_CLOSED" } });
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+  });
+
+  it("lets only one of two concurrent same-key uploads create a row", async () => {
+    const requestKey = randomUUID();
+    const name = `concurrent-${randomUUID()}.txt`;
+    const body = { buffer: Buffer.from("upload body"), originalname: name, mimetype: "text/plain", size: 11 };
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /INSERT INTO knowledge_files/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const winner = fileService(observed);
+    const loser = fileService();
+    try {
+      const first = winner.svc.uploadKnowledgeFiles(projectId, actor, folderId, [body], requestKey);
+      await acquiring;
+      const second = loser.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{ ...body, buffer: Buffer.from("upload body") }], requestKey);
+      await waitForAnyLockWait();
+      release();
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.list[0].id).toBe(two.list[0].id);
+      expect([one.replayed, two.replayed].sort()).toEqual([false, true]);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows[0].n).toBe(1);
+      expect(winner.storage.put).toHaveBeenCalledTimes(1);
+      expect(loser.storage.put).toHaveBeenCalledTimes(1);
+      expect(loser.storage.delete).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+    }
+  });
+
+  describe("knowledge transcription recovery", () => {
+    function transcriptionService() {
+      const f = fileService();
+      jest.spyOn(f.svc as unknown as { zyraAiAllocation: () => Promise<unknown> }, "zyraAiAllocation").mockResolvedValue({
+        key: {
+          provider: "openai", api_key: "test-key", is_active: true,
+          base_url: "https://api.openai.com/v1/audio/transcriptions", auth_header_name: "Authorization", auth_scheme: "Bearer"
+        },
+        reason: "test allocation"
+      });
+      const fetchProvider = jest.spyOn(
+        f.svc as unknown as { fetchAiProvider: () => Promise<Response> },
+        "fetchAiProvider"
+      ).mockResolvedValue({ ok: true } as Response);
+      jest.spyOn(
+        f.svc as unknown as { readAiProviderJson: () => Promise<Record<string, unknown>> },
+        "readAiProviderJson"
+      ).mockResolvedValue({ text: "recovered transcript" });
+      const sweep = (projectIdFilter?: string) => (f.svc as unknown as { resumeInterruptedKnowledgeTranscriptions: (id?: string) => Promise<void> })
+        .resumeInterruptedKnowledgeTranscriptions(projectIdFilter);
+      const transcribe = (projectId: string, fileId: string, token: string) => (
+        f.svc as unknown as {
+          transcribeKnowledgeFile: (p: string, f: string, b: Buffer, e: string, m: string, n: string, claimed: boolean, token: string) => Promise<void>
+        }
+      ).transcribeKnowledgeFile(projectId, fileId, Buffer.from("audio"), "mp3", "audio/mpeg", "meeting.mp3", true, token);
+      const embedding = (f.svc as unknown as { enqueueEmbedding: jest.Mock }).enqueueEmbedding;
+      return { ...f, fetchProvider, sweep, transcribe, embedding };
+    }
+    const statuses = async (ids: string[]) => (await setup.query<{ id: string; extraction_status: string; extracted_text: string | null }>(
+      "SELECT id, extraction_status, extracted_text FROM knowledge_files WHERE id = ANY($1::uuid[]) ORDER BY array_position($1::uuid[], id)",
+      [ids]
+    )).rows;
+
+    it("claims and finishes pending and abandoned transcriptions exactly once, leaving a live claim alone", async () => {
+      const deletedPending = await seedMedia({ status: "pending", deleted: true });
+      const abandoned = await seedMedia({ status: "processing", claimedAt: new Date(Date.now() - 60 * 60 * 1000) });
+      const live = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const liveBefore = (await setup.query("SELECT extraction_claimed_at FROM knowledge_files WHERE id = $1", [live.id])).rows[0];
+      const f = transcriptionService();
+      try {
+        // A deleted pending row is not recovered. Two concurrent sweeps must not both dispatch.
+        await Promise.all([f.sweep(projectId), f.sweep(projectId)]);
+        await waitFor(async () => (await statuses([abandoned.id])).every((row) => row.extraction_status === "ready"), "abandoned transcription");
+        expect(await statuses([deletedPending.id, abandoned.id, live.id])).toEqual([
+          { id: deletedPending.id, extraction_status: "pending", extracted_text: null },
+          { id: abandoned.id, extraction_status: "ready", extracted_text: "recovered transcript" },
+          { id: live.id, extraction_status: "processing", extracted_text: null }
+        ]);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.storage.getBuffer).toHaveBeenCalledTimes(1);
+        expect(f.storage.getBuffer).toHaveBeenCalledWith(abandoned.key);
+        expect(f.embedding).toHaveBeenCalledTimes(1);
+        expect(f.embedding).toHaveBeenCalledWith(orgId, projectId, "file", abandoned.id, "transcribed");
+        expect((await setup.query("SELECT extraction_claimed_at FROM knowledge_files WHERE id = $1", [live.id])).rows[0])
+          .toEqual(liveBefore);
+
+        await f.sweep(projectId);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect((await setup.query("SELECT extraction_claim_token FROM knowledge_files WHERE id = $1", [abandoned.id])).rows[0].extraction_claim_token).toBeNull();
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[deletedPending.id, abandoned.id, live.id]]);
+      }
+    });
+
+    it("does not recover transcriptions for a deleted file or an archived project", async () => {
+      const deleted = await seedMedia({ status: "pending", deleted: true });
+      const archivedProject = (await setup.query<{ id: string }>(
+        "INSERT INTO projects (organization_id, key, name, archived_at) VALUES ($1,$2,'Archived KB CI',now()) RETURNING id",
+        [orgId, `KBA${randomUUID().slice(0, 6)}`.toUpperCase()]
+      )).rows[0].id;
+      const archivedFolder = (await setup.query<{ id: string }>(
+        "INSERT INTO knowledge_folders (organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id",
+        [orgId, archivedProject]
+      )).rows[0].id;
+      const archived = await seedMedia({ status: "pending", project: archivedProject, folder: archivedFolder });
+      const f = transcriptionService();
+      try {
+        await Promise.all([f.sweep(projectId), f.sweep(archivedProject)]);
+        expect(f.storage.getBuffer).not.toHaveBeenCalledWith(deleted.key);
+        expect(f.storage.getBuffer).not.toHaveBeenCalledWith(archived.key);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+        expect(await statuses([deleted.id, archived.id])).toEqual([
+          { id: deleted.id, extraction_status: "pending", extracted_text: null },
+          { id: archived.id, extraction_status: "pending", extracted_text: null }
+        ]);
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[deleted.id, archived.id]]);
+        await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [archivedFolder]);
+        await setup.query("DELETE FROM projects WHERE id = $1", [archivedProject]);
+      }
+    });
+
+    it("marks a claimed transcription failed when its stored bytes cannot be read", async () => {
+      const row = await seedMedia({ status: "pending" });
+      const f = transcriptionService();
+      f.storage.getBuffer.mockRejectedValueOnce(Object.assign(new Error("object missing"), { code: "ENOENT" }));
+      try {
+        await f.sweep(projectId);
+        expect(await statuses([row.id])).toEqual([{ id: row.id, extraction_status: "failed", extracted_text: null }]);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("releases a transient byte-read failure to pending so the next sweep can recover it", async () => {
+      const row = await seedMedia({ status: "pending" });
+      const f = transcriptionService();
+      f.storage.getBuffer.mockRejectedValueOnce(new Error("storage timeout"));
+      try {
+        await f.sweep(projectId);
+        expect(await statuses([row.id])).toEqual([{ id: row.id, extraction_status: "pending", extracted_text: null }]);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+
+        await f.sweep(projectId);
+        await waitFor(async () => (await statuses([row.id])).every((item) => item.extraction_status === "ready"), "retried transcription");
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect((await statuses([row.id]))[0].extracted_text).toBe("recovered transcript");
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("describes an in-flight transcription as in progress rather than as an unsupported type", () => {
+      const f = fileService();
+      const content = (f.svc as unknown as { knowledgeFileFallbackContent: (ext: string, status: string) => string })
+        .knowledgeFileFallbackContent("mp3", "processing");
+      expect(content).toContain("in progress");
+      expect(content).not.toContain("no extractable text");
+    });
+
+    it("does not record a stale claim owner's failure after a takeover", async () => {
+      const row = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const staleToken = randomUUID();
+      const currentToken = randomUUID();
+      await setup.query("UPDATE knowledge_files SET extraction_claim_token = $2 WHERE id = $1", [row.id, currentToken]);
+      const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+      const f = transcriptionService();
+      f.fetchProvider.mockRejectedValueOnce(new Error("synthetic provider failure"));
+      try {
+        await f.transcribe(projectId, row.id, staleToken);
+        expect(recorded).not.toHaveBeenCalled();
+        expect((await setup.query("SELECT extraction_status, extraction_claim_token FROM knowledge_files WHERE id = $1", [row.id])).rows[0])
+          .toEqual({ extraction_status: "processing", extraction_claim_token: currentToken });
+      } finally {
+        recorded.mockRestore();
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("does not let a stale claim owner overwrite the row after a takeover", async () => {
+      const row = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const staleToken = randomUUID();
+      const currentToken = randomUUID();
+      await setup.query(
+        "UPDATE knowledge_files SET extraction_status = 'processing', extraction_claim_token = $2, extraction_claimed_at = now() WHERE id = $1",
+        [row.id, staleToken]
+      );
+      // A later claim owns the row before the stale worker finishes its provider call.
+      await setup.query("UPDATE knowledge_files SET extraction_claim_token = $2 WHERE id = $1", [row.id, currentToken]);
+      const f = transcriptionService();
+      try {
+        await f.transcribe(projectId, row.id, staleToken);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.embedding).not.toHaveBeenCalled();
+        const state = (await setup.query(
+          "SELECT extraction_status, extracted_text, extraction_claim_token FROM knowledge_files WHERE id = $1",
+          [row.id]
+        )).rows[0];
+        expect(state).toEqual({ extraction_status: "processing", extracted_text: null, extraction_claim_token: currentToken });
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
   });
 });
