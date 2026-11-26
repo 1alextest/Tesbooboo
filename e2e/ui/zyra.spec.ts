@@ -1467,6 +1467,34 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByTestId("skill-readiness-testcase_create")).toBeVisible();
       await page.goBack();
       await expect(assignmentsLink).toBeVisible();
+      await test.step("Review conflicting assignments and a legacy proposal without staged Skill details", async () => {
+        const snapshotPage = await page.context().newPage();
+        const taskRead = `**/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${task.id}`;
+        const gate = snapshotPage.getByTestId("requirement-bundle-publication-gate");
+        const target = { module: "requirements", subtype: "functional", operation: "requirement_revision" };
+        const caseTarget = { module: "test_cases", subtype: "manual", operation: "testcase_create" };
+        for (const skillContext of [{ status: "conflict", missing: [caseTarget], conflicts: [{ ...target, matches: 2 }] }, undefined]) {
+          await snapshotPage.route(taskRead, async route => {
+            const response = await route.fetch();
+            await route.fulfill({ response, json: { ...await response.json(), skillContext } });
+          });
+          await snapshotPage.goto(page.url());
+          if (skillContext) {
+            await expect(gate).toContainText("Multiple Skill assignments matched");
+            await expect(gate.getByRole("listitem")).toHaveText([
+              "test_cases / manual / testcase_create · Unassigned",
+              "requirements / functional / requirement_revision · 2 matching assignments",
+            ]);
+          } else {
+            await expect(gate).toContainText("no verified record of the required Skill assignments");
+            await expect(gate.getByRole("listitem")).toHaveCount(0);
+          }
+          await expect(gate).toContainText("each required operation resolves to exactly one approved Skill, stage a refreshed proposal");
+          await expect(snapshotPage.getByTestId("requirement-bundle-apply")).toHaveCount(0);
+          await snapshotPage.unroute(taskRead);
+        }
+        await snapshotPage.close();
+      });
       await expect(page.getByRole("button", { name: "Close task", exact: true })).toHaveCount(0);
       await page.getByRole("button", { name: /^Feedback(?: \(\d+\))?$/ }).click();
       await page.locator("textarea").first().fill("Regenerate this exact requirement bundle with different content");

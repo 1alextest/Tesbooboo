@@ -896,7 +896,7 @@ export default function ZyraTaskDetailPage() {
                     </ul>
                   )}
                   <p className="mt-2">
-                    A project owner or manager can review the current assignments. Once each required operation has an approved Skill, stage a refreshed proposal for review.
+                    A project owner or manager can review the current assignments. Once each required operation resolves to exactly one approved Skill, stage a refreshed proposal for review.
                   </p>
                   <Link className="mt-1 inline-block underline" href={`/projects/${projectId}/settings/skills?tab=assignments`}>View current Skill assignments</Link>
                 </>}
