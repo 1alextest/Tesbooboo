@@ -41,6 +41,9 @@ describe("ApiTokenService", () => {
 
       const [sql, params] = query.mock.calls[0];
       expect(sql).toContain("INSERT INTO api_tokens");
+      expect(sql).toContain("project_membership_id, organization_membership_id");
+      expect(sql).toContain("pm.id, om.id");
+      expect(sql).toContain("FOR SHARE OF p, pm, om");
       // Params: [userId, projectId, name, tokenHash, scopes]
       expect(params[0]).toBe("user-1");
       expect(params[1]).toBe("proj-1");
@@ -48,6 +51,12 @@ describe("ApiTokenService", () => {
       expect(params[3]).not.toBe(result.token); // raw never stored
       expect(result.token).toMatch(/^tsbo_/);
       expect(result.scopes).toEqual(["read", "write"]);
+    });
+
+    it("refuses issuance when the membership-bound insert returns no row", async () => {
+      const { db, query } = makeDb([]);
+      await expect(new ApiTokenService(db).issueToken("u", "p", "n", ["read"])).rejects.toMatchObject({ status: 400 });
+      expect(query).toHaveBeenCalledTimes(1);
     });
 
     it("defaults omitted scopes to read only", async () => {
@@ -114,6 +123,11 @@ describe("ApiTokenService", () => {
       });
       // Looks up by the hash of the presented token.
       expect(query.mock.calls[0][1][0]).toBe(svc.hashToken("tsbo_secret"));
+      // The authentication predicate must require the original membership IDs,
+      // with explicitly unresolved pre-migration compatibility.
+      expect(query.mock.calls[0][0]).toContain("pm.id = t.project_membership_id");
+      expect(query.mock.calls[0][0]).toContain("om.id = t.organization_membership_id");
+      expect(query.mock.calls[0][0]).toContain("t.project_membership_id IS NULL AND t.organization_membership_id IS NULL");
       // Second call updates usage.
       expect(query.mock.calls[1][0]).toContain("UPDATE api_tokens SET last_used_at");
     });
