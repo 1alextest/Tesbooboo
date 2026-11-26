@@ -130,6 +130,27 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     jest.spyOn(svc as unknown as { enqueueEmbedding: (...args: unknown[]) => void }, "enqueueEmbedding").mockReturnValue(undefined);
     return svc;
   }
+  function fileService(dbPool = pool) {
+    const storage = {
+      put: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue(undefined)
+    };
+    const planLimits = { assertStorageAvailable: jest.fn().mockResolvedValue(undefined) };
+    const svc = makeLegacy(new DatabaseService(dbPool), { storage: storage as never, planLimits: planLimits as never });
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: projectId, organization_id: orgId } as never);
+    const activity = jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
+    const internals = svc as unknown as { enqueueEmbedding: (...args: unknown[]) => void; notifyKnowledgeItem: (...args: unknown[]) => Promise<void> };
+    jest.spyOn(internals, "enqueueEmbedding").mockReturnValue(undefined);
+    jest.spyOn(internals, "notifyKnowledgeItem").mockResolvedValue(undefined);
+    return { svc, storage, planLimits, activity };
+  }
+  async function seedFile(name = `file-${randomUUID()}.txt`) {
+    return (await setup.query<{ id: string }>(
+      `INSERT INTO knowledge_files (organization_id,project_id,folder_id,file_name,original_file_name,mime_type,file_extension,file_size,storage_key,uploaded_by)
+       VALUES ($1,$2,$3,$4,$4,'text/plain','txt',4,$5,$6) RETURNING id`,
+      [orgId, projectId, folderId, name, `kb/${randomUUID()}`, actor]
+    )).rows[0].id;
+  }
   const update = (svc: ReturnType<typeof service>["svc"], text = "Saved body") => svc.updateKnowledgeDocument(projectId, actor, documentId, { contentJson: json(text), contentHtml: `<p>${text}</p>`, contentText: text });
 
   it.each(["new snapshot", "coalesced diff", "restore"])("rolls back the complete %s and actual document UPDATE after a late native SQL fault", async (kind) => {
@@ -893,6 +914,103 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await observed.end();
       await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory'", [projectId]);
       await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [memoryFolder]);
+    }
+  });
+
+  it("refuses to restore a child folder while its parent remains deleted", async () => {
+    const parent = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Restore parent ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const child = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Restore child ${randomUUID()}`, parent]
+    )).rows[0].id;
+    const f = service();
+    try {
+      await f.svc.deleteKnowledgeFolder(projectId, actor, parent);
+      const restore = f.svc.restoreKnowledgeFolder(projectId, actor, child).then(() => null, (error) => error);
+      expect(await restore).toMatchObject({ status: 400 });
+      expect((await setup.query("SELECT is_deleted FROM knowledge_folders WHERE id = $1", [child])).rows[0].is_deleted).toBe(true);
+    } finally {
+      await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[child, parent]]);
+    }
+  });
+
+  it("rechecks a file move destination so a concurrent delete cannot strand the file", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `File target ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const fileId = await seedFile();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /UPDATE knowledge_folders SET is_deleted = true/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const deleting = service(observed);
+    const f = fileService();
+    try {
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, target).then(() => null, (error) => error);
+      await acquiring;
+      const move = f.svc.moveKnowledgeFile(projectId, actor, fileId, { folderId: target }).then(() => null, (error) => error);
+      await waitForAnyLockWait();
+      release();
+      expect(await deletion).toBeNull();
+      expect(await move).toMatchObject({ status: 404 });
+      expect((await setup.query("SELECT folder_id FROM knowledge_files WHERE id = $1", [fileId])).rows[0].folder_id).toBe(folderId);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_files WHERE id = $1", [fileId]);
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
+    }
+  });
+
+  it("compensates a file upload when its destination is deleted before the insert", async () => {
+    const target = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `Upload target ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /UPDATE knowledge_folders SET is_deleted = true/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const deleting = service(observed);
+    const f = fileService();
+    try {
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, target).then(() => null, (error) => error);
+      await acquiring;
+      const upload = f.svc.uploadKnowledgeFiles(projectId, actor, target, [{
+        buffer: Buffer.from("upload body"), originalname: `upload-${randomUUID()}.txt`, mimetype: "text/plain", size: 11
+      }]).then(() => null, (error) => error);
+      await waitForAnyLockWait();
+      release();
+      expect(await deletion).toBeNull();
+      expect(await upload).toMatchObject({ status: 404 });
+      const storedKey = f.storage.put.mock.calls[0]?.[0];
+      expect(storedKey).toBeTruthy();
+      expect(f.storage.delete).toHaveBeenCalledWith(storedKey);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_files WHERE folder_id = $1 AND is_deleted = false", [target])).rows[0].n).toBe(0);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
     }
   });
 });
