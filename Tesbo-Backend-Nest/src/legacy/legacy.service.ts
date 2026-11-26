@@ -13522,7 +13522,7 @@ export class LegacyService implements OnModuleInit {
           AND (kf.extraction_status = 'pending'
                OR (kf.extraction_status = 'processing'
                    AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
-        ORDER BY kf.created_at
+        ORDER BY kf.extraction_claimed_at NULLS FIRST, kf.created_at
         LIMIT 25`,
       [projectIdFilter ?? null]
     ).catch((err) => {
@@ -13552,7 +13552,15 @@ export class LegacyService implements OnModuleInit {
       }, 60 * 1000);
       keepAlive.unref?.();
       try {
-        const buffer = await this.storage.getBuffer(storageKey);
+        let readTimeout: NodeJS.Timeout | undefined;
+        const buffer = await Promise.race([
+          this.storage.getBuffer(storageKey),
+          new Promise<never>((_resolve, reject) => {
+            readTimeout = setTimeout(() => reject(new Error("storage read timed out")), 60 * 1000);
+            readTimeout.unref?.();
+          })
+        ]);
+        if (readTimeout) clearTimeout(readTimeout);
         clearInterval(keepAlive);
         const ext = String(row.file_extension || path.extname(String(row.original_file_name || "")).replace(/^\./, "")).toLowerCase();
         void this.transcribeKnowledgeFile(
@@ -13573,9 +13581,16 @@ export class LegacyService implements OnModuleInit {
         // the transcript forever.
         const code = String((err as { code?: unknown })?.code || (err as { name?: unknown })?.name || "");
         const message = err instanceof Error ? err.message : String(err);
-        const missing = code === "ENOENT" || code === "NoSuchKey" || /NoSuchKey|not found/i.test(message);
+        const missing = ["ENOENT", "NoSuchKey", "NotFound"].includes(code)
+          || /NoSuchKey|not found|does not exist|specified key does not exist/i.test(message);
+        // A release records when it was attempted, so the sweep's least-recently-tried ordering
+        // cannot keep the same broken rows at the head of every batch.
         await this.db.query(
-          "UPDATE knowledge_files SET extraction_status = $3, extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          `UPDATE knowledge_files
+              SET extraction_status = $3,
+                  extraction_claimed_at = CASE WHEN $3 = 'pending' THEN now() ELSE NULL END,
+                  extraction_claim_token = NULL, updated_at = now()
+            WHERE id = $1 AND extraction_claim_token = $2`,
           [fileId, claimToken, missing ? "failed" : "pending"]
         ).catch(() => undefined);
       }
@@ -13654,16 +13669,20 @@ export class LegacyService implements OnModuleInit {
         "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $3 AND extraction_status = 'processing' AND is_deleted = false RETURNING id",
         [fileId, text || null, claimToken]
       );
-      if (text && saved.rows[0]) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
-      void recordStandaloneGeneration({
-        traceSeed,
-        name: "knowledge.transcription",
-        provider: "openai",
-        model: "whisper-1",
-        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
-        output: { status: "ready", transcriptChars: text.length },
-        metadata: traceMeta
-      });
+      if (saved.rows[0]) {
+        if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+        // A stale owner's provider call is real, but its result was fenced out; recording it as a
+        // successful generation would double-count one persisted transcript in observability.
+        void recordStandaloneGeneration({
+          traceSeed,
+          name: "knowledge.transcription",
+          provider: "openai",
+          model: "whisper-1",
+          input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+          output: { status: "ready", transcriptChars: text.length },
+          metadata: traceMeta
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
@@ -13872,6 +13891,7 @@ export class LegacyService implements OnModuleInit {
           let persisted: boolean | null = null;
           let replay: Body | null = null;
           let conflict = false;
+          let closed = false;
           try {
             if (requestKey) {
               // A concurrent retry with the same key can make this INSERT lose the unique index
@@ -13886,7 +13906,7 @@ export class LegacyService implements OnModuleInit {
                   conflict = true;
                 } else if (row.rows[0].is_deleted) {
                   persisted = false;
-                  conflict = true;
+                  closed = true;
                 } else {
                   replay = row.rows[0];
                   persisted = true;
@@ -13906,6 +13926,9 @@ export class LegacyService implements OnModuleInit {
           if (persisted === false) {
             await this.storage.delete(storageKey).catch((storageError) =>
               this.logger.warn(`Failed to compensate storage object ${storageKey}: ${storageError}`));
+          }
+          if (closed) {
+            throw new ConflictException({ code: "UPLOAD_REQUEST_CLOSED", error: "This upload request was completed, but its file has since been deleted" });
           }
           if (conflict) {
             throw new ConflictException({ code: "UPLOAD_REQUEST_CONFLICT", error: "This requestKey already belongs to a different upload" });

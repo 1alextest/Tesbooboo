@@ -4923,8 +4923,8 @@ async function uploadKnowledgeFileBatch(
   files: File[]
 ): Promise<{ list: KnowledgeFile[]; total: number }> {
   // One key per logical batch, reused only by the single retry below. The server treats a replay
-  // with this key as the same request, so a committed batch whose response was lost cannot become
-  // a second set of files.
+  // with this key as the same request, so a committed batch whose response was lost (including a
+  // 503 raised after an uncertain COMMIT) cannot become a second set of files.
   const requestKey = crypto.randomUUID();
   const send = () => {
     const formData = new FormData();
@@ -4936,16 +4936,19 @@ async function uploadKnowledgeFileBatch(
       { method: "POST", credentials: "include", body: formData }
     );
   };
-  let res: Response;
-  try {
-    res = await send();
-  } catch (error) {
-    // fetchWithNetworkErrorMessage refuses to replay mutations automatically because their outcome
-    // is unknown. This upload now has a request key, so a single replay is safe: a committed first
-    // attempt is returned as a replay, and a definitely-failed one creates the files once.
-    if (!(error instanceof MutationOutcomeUnknownError)) throw error;
-    res = await send();
+  let res: Response | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      res = await send();
+      // A gateway/503 response can arrive after the upload committed (the backend deliberately
+      // answers 503 when it cannot know the COMMIT outcome). With a request key both that and a
+      // lost transport response are safe to replay once; a definite refusal is not retried.
+      if (![502, 503, 504].includes(res.status) || attempt === 1) break;
+    } catch (error) {
+      if (!(error instanceof MutationOutcomeUnknownError) || attempt === 1) throw error;
+    }
   }
+  if (!res) throw new MutationOutcomeUnknownError();
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error((err as { error?: string }).error || String(res.status));

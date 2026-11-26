@@ -782,17 +782,22 @@ from filenames or content alone.
   archived project is never claimed, and a project archived between claim and dispatch is released to
   `pending`.
 - `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes, bounded to 25 rows per
-  sweep, and can be scoped to one project for tests. It claims before reading bytes or dispatching, so
-  overlapping sweeps and a live worker cannot both own the row; fencing prevents duplicate state
-  effects. It cannot prevent a *repeat provider call* if the process crashes after the provider returned
-  but before the result is persisted — the Whisper endpoint has no idempotency key — so recovery is
-  at-least-once externally and exactly-once in persisted state. A missing object becomes terminal
-  `failed`; a transient byte-read failure releases the claim to `pending` so a later sweep retries.
-  This complements, and does not replace, `RagIngestionService.resumeInterruptedEmbeddings`: that sweep
-  still covers ordinary-file embeddings whose extraction already completed, while a pending transcript
-  has no text to embed and is recovered here.
-- The frontend generates one request key per upload batch and replays a network-failed upload once with
-  that key; the shared fetch wrapper still refuses to replay mutations without one.
+  sweep, ordered by least-recently-claimed, and can be scoped to one project for tests. It claims before
+  reading bytes or dispatching, so overlapping sweeps and a live worker cannot both own the row; fencing
+  prevents duplicate state effects. It cannot prevent a *repeat provider call* if the process crashes
+  after the provider returned but before the result is persisted — the Whisper endpoint has no
+  idempotency key — so recovery is at-least-once externally and exactly-once in persisted state. A
+  missing object becomes terminal `failed`; a transient byte-read failure (including a bounded read
+  timeout) releases the claim to `pending` and records the attempt time so the next sweep does not
+  keep the same rows at the head. This complements, and does not replace,
+  `RagIngestionService.resumeInterruptedEmbeddings`: that sweep still covers ordinary-file embeddings
+  whose extraction already completed, while a pending transcript has no text to embed and is recovered
+  here.
+- The frontend generates one request key per upload batch and replays once — with that same key — on a
+  lost transport response or a 502/503/504 response, including the backend's explicit uncertain-COMMIT
+  503. The shared fetch wrapper still refuses to replay any other mutation without a key. A manual
+  re-selection after that one replay is a new logical upload; a duplicated multipart `requestKey` is
+  refused rather than silently dropped.
 - Internal coordination columns (`uploadRequestKey`, `uploadRequestFileIndex`, `uploadRequestDigest`,
   `extractionClaimedAt`, `extractionClaimToken`) are stripped from every file response.
 - Database regressions in `knowledge-document-writes.db.spec.ts` cover full replay, digest conflict,
@@ -800,9 +805,10 @@ from filenames or content alone.
   committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
   exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
   deleted/archived exclusion, terminal missing-object failure, transient read-release, and stale-token
-  fencing. HTTP coverage is KBF-A-81–85; browser coverage is KBU-80. Fault injection is disclosed where
-  used: the uncertain-COMMIT tests fault acknowledgement delivery, and the race test pauses after the
-  INSERT, not inside PostgreSQL.
+  fencing. HTTP coverage is KBF-A-81–85; browser coverage KBU-80 lets the backend commit and then
+  replaces the acknowledgement with a 503, so the second request is a real replay and a missing key
+  would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
+  acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
 
 **Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
 than mandatory; requiring them would give every client automatic retry safety but breaks existing

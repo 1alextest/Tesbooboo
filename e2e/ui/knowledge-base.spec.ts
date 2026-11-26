@@ -384,16 +384,25 @@ test.describe("knowledge base (UI)", () => {
     expect(summary.files, "the summary counts the uploaded file").toBe(1);
   });
 
-  test("KBU-80 a lost upload response is retried once and lands exactly one file", async ({ browser }) => {
+  test("KBU-80 an upload whose response is lost after commit lands exactly one file", async ({ browser }) => {
     const page = await openKb(browser);
-    const fileName = `kbu-48-${Date.now()}.txt`;
+    const fileName = `kbu-80-${Date.now()}.txt`;
     let attempts = 0;
-    await page.route(/\/knowledge-base\/files/, (route) => {
+    await page.route(/\/knowledge-base\/files/, async (route) => {
       if (route.request().method() !== "POST") return route.continue();
       attempts += 1;
-      // Model a lost response, not a server refusal: the first attempt reaches the browser as a
-      // network failure, so only the requestKey makes the single replay safe.
-      return attempts === 1 ? route.abort("failed") : route.continue();
+      if (attempts === 1) {
+        // Let the real backend commit the upload, then replace its acknowledgement with a 503.
+        // The browser can only recover because the retry carries the same requestKey; without it
+        // the second request would create a second file and the summary assertion below would fail.
+        await route.fetch();
+        return route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Simulated lost upload acknowledgement" }),
+        });
+      }
+      return route.continue();
     });
 
     await newMenu(page, "Upload file");
