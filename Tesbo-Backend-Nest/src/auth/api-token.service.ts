@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
 
 /**
@@ -91,8 +92,12 @@ export class ApiTokenService {
    * created before the issuer was always recorded). Existence and issuer are separate answers so a
    * null issuer is not mistaken for "token not found".
    */
-  async issuerOf(projectId: string, tokenId: string): Promise<{ exists: boolean; userId: string | null }> {
-    const res = await this.db.query("SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2", [tokenId, projectId]);
+  async issuerOf(projectId: string, tokenId: string, client?: PoolClient): Promise<{ exists: boolean; userId: string | null }> {
+    // With a transaction client, retain the issuer/target lock through the authorized delete.
+    const res = await (client ?? this.db).query(
+      `SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2${client ? " FOR UPDATE" : ""}`,
+      [tokenId, projectId]
+    );
     const row = res.rows[0] as { user_id: string | null } | undefined;
     return { exists: Boolean(row), userId: row?.user_id ?? null };
   }
@@ -151,8 +156,8 @@ export class ApiTokenService {
   }
 
   /** Deletes a token belonging to the given project. Returns whether a row was removed. */
-  async revokeToken(projectId: string, tokenId: string): Promise<boolean> {
-    const res = await this.db.query(
+  async revokeToken(projectId: string, tokenId: string, client?: PoolClient): Promise<boolean> {
+    const res = await (client ?? this.db).query(
       `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`,
       [tokenId, projectId]
     );
