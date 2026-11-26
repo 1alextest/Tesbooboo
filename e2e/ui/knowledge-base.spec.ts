@@ -2860,7 +2860,32 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
     // First submission has no earlier immutable base, but the current comparison still renders.
     await expect(page.getByTestId("governed-comparison-first")).toBeVisible();
-    await expect(page.getByTestId("governed-current-comparison")).toContainText("Identical");
+    const identicalComparison = page.getByTestId("governed-current-comparison");
+    await expect(identicalComparison).toContainText("Identical");
+    // Identical is a summary, not a reason to withhold the evidence. The
+    // comparison contract promises complete old/new values for every field.
+    for (const field of ["title", "text", "html", "json", "source", "metadata"]) {
+      await expect(identicalComparison.getByTestId(`governed-current-comparison-field-${field}`)).toHaveAttribute("data-status", "unchanged");
+    }
+    const identicalText = identicalComparison.getByTestId("governed-current-comparison-field-text");
+    await expect(identicalText).toHaveAttribute("data-status", "unchanged");
+    await identicalText.getByText("Complete exact values for Plain text", { exact: true }).click();
+    await expect(identicalText.getByTestId("governed-current-comparison-old-text")).toBeVisible();
+    await expect(identicalText.getByTestId("governed-current-comparison-old-text")).toHaveText("Compare body");
+    await expect(identicalText.getByTestId("governed-current-comparison-new-text")).toBeVisible();
+    await expect(identicalText.getByTestId("governed-current-comparison-new-text")).toHaveText("Compare body");
+    const identicalJson = identicalComparison.getByTestId("governed-current-comparison-field-json");
+    await expect(identicalJson).toHaveAttribute("data-status", "unchanged");
+    await identicalJson.getByText("Complete exact values for Editor JSON", { exact: true }).click();
+    const oldJson = identicalJson.getByTestId("governed-current-comparison-old-json");
+    const newJson = identicalJson.getByTestId("governed-current-comparison-new-json");
+    await expect(oldJson).toBeVisible();
+    await expect(newJson).toBeVisible();
+    // PostgreSQL JSONB need not preserve the request object's property order.
+    // Compare both stored values semantically and the two visible representations exactly.
+    expect(JSON.parse((await oldJson.textContent())!)).toEqual(baseJson);
+    expect(JSON.parse((await newJson.textContent())!)).toEqual(baseJson);
+    expect(await oldJson.textContent()).toBe(await newJson.textContent());
 
     // HTML/JSON-only change: text and metadata stay byte-identical, the representations change.
     const repEdit = await api.patch(kbUrl(`/documents/${documentId}`), {
