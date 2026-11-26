@@ -9,6 +9,8 @@ describe("graph QA recovery mode configuration", () => {
   it("preserves the legacy enabled flag as global only when MODE is unset", () => {
     expect(resolveGraphQaRecoveryMode(undefined, "1")).toBe("global");
     expect(resolveGraphQaRecoveryMode("", "1")).toBe("global");
+    expect(resolveGraphQaRecoveryMode(undefined, " 1")).toBe("off");
+    expect(resolveGraphQaRecoveryMode(undefined, "1\n")).toBe("off");
     expect(resolveGraphQaRecoveryMode("project", "1")).toBe("project");
     expect(resolveGraphQaRecoveryMode("off", "1")).toBe("off");
   });

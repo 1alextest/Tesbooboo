@@ -29,8 +29,8 @@ export class GraphChangeReviewRecovery {
   ) {}
 
   /** Optional internal project scope enables isolated replays and database-safe QA fixtures.
-   * The scheduled worker always calls runOnce() without a scope, covering all eligible projects.
-   * No HTTP/MCP route accepts this argument.
+   * The legacy scheduled worker calls runOnce() without a scope; project mode's scoped processor
+   * always supplies the configured project. No HTTP/MCP route accepts this argument.
    */
   async runOnce(projectId?: string): Promise<GraphReviewRecoverySummary> {
     const result = await this.db.query<{ project_id: string; history_id: string }>(

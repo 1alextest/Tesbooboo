@@ -5,7 +5,12 @@ import {
   GRAPH_QA_RECOVERY_JOB,
   GRAPH_QA_RECOVERY_SCOPED_JOB
 } from "./graph-change-review.recovery.processor";
-import { graphRecoveryRegistration } from "./graph-change-review.recovery.mode";
+import {
+  graphRecoveryRegistration,
+  GRAPH_QA_RECOVERY_SCHEDULER,
+  GRAPH_QA_RECOVERY_SCOPED_SCHEDULER
+} from "./graph-change-review.recovery.mode";
+import { GraphChangeReviewModule } from "./graph-change-review.module";
 
 const PROJECT = "00000000-0000-4000-8000-000000000001";
 
@@ -111,16 +116,51 @@ describe("graph QA notification recovery from durable receipts", () => {
 
   it("registers a separate scoped queue and scheduler and fails project mode closed without a UUID", () => {
     expect(graphRecoveryRegistration("off", PROJECT)).toBeNull();
-    expect(graphRecoveryRegistration("global", PROJECT)).toMatchObject({
-      queue: "global", scheduler: "graph-qa-review-recovery-v1", job: "recover-committed-notifications", data: {}
+    expect(graphRecoveryRegistration("global", PROJECT)).toEqual({
+      queue: "global", scheduler: GRAPH_QA_RECOVERY_SCHEDULER, job: "recover-committed-notifications", data: {}
     });
     expect(graphRecoveryRegistration("project", PROJECT)).toEqual({
       queue: "project",
-      scheduler: "graph-qa-review-recovery-scoped-v1",
-      job: "recover-committed-notifications-for-project",
+      scheduler: GRAPH_QA_RECOVERY_SCOPED_SCHEDULER,
+      job: GRAPH_QA_RECOVERY_SCOPED_JOB,
       data: { projectId: PROJECT }
     });
     expect(graphRecoveryRegistration("project", null)).toMatchObject({ error: expect.stringContaining("UUID") });
     expect(graphRecoveryRegistration("project", "not-a-uuid")).toMatchObject({ error: expect.stringContaining("UUID") });
+  });
+
+  it("registers only the configured queue and scheduler on module init", async () => {
+    const globalQueue = { upsertJobScheduler: jest.fn().mockResolvedValue(undefined) };
+    const scopedQueue = { upsertJobScheduler: jest.fn().mockResolvedValue(undefined) };
+    const runInit = async (cfg: ReturnType<typeof config>) => {
+      globalQueue.upsertJobScheduler.mockClear();
+      scopedQueue.upsertJobScheduler.mockClear();
+      const module = new GraphChangeReviewModule(globalQueue as never, scopedQueue as never, cfg);
+      await module.onModuleInit();
+    };
+
+    await runInit(config("off"));
+    expect(globalQueue.upsertJobScheduler).not.toHaveBeenCalled();
+    expect(scopedQueue.upsertJobScheduler).not.toHaveBeenCalled();
+
+    await runInit(config("project", null));
+    expect(globalQueue.upsertJobScheduler).not.toHaveBeenCalled();
+    expect(scopedQueue.upsertJobScheduler).not.toHaveBeenCalled();
+
+    await runInit(config("project", PROJECT));
+    expect(globalQueue.upsertJobScheduler).not.toHaveBeenCalled();
+    expect(scopedQueue.upsertJobScheduler).toHaveBeenCalledWith(
+      GRAPH_QA_RECOVERY_SCOPED_SCHEDULER,
+      { pattern: "*/10 * * * *", tz: "UTC" },
+      { name: GRAPH_QA_RECOVERY_SCOPED_JOB, data: { projectId: PROJECT } }
+    );
+
+    await runInit(config("global"));
+    expect(scopedQueue.upsertJobScheduler).not.toHaveBeenCalled();
+    expect(globalQueue.upsertJobScheduler).toHaveBeenCalledWith(
+      GRAPH_QA_RECOVERY_SCHEDULER,
+      { pattern: "*/10 * * * *", tz: "UTC" },
+      { name: GRAPH_QA_RECOVERY_JOB, data: {} }
+    );
   });
 });

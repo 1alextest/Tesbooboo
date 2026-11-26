@@ -14,7 +14,8 @@ export function resolveGraphQaRecoveryMode(
   if (explicit === "off" || explicit === "project" || explicit === "global") return explicit;
   // An unknown value is a configuration mistake; fail closed rather than guessing a wider scope.
   if (explicit) return "off";
-  return (legacyEnabled ?? "").trim() === "1" ? "global" : "off";
+  // Preserve the legacy guard's exact comparison: " 1" or "1\n" was off before and must stay off.
+  return (legacyEnabled ?? "") === "1" ? "global" : "off";
 }
 
 @Injectable()
@@ -236,7 +237,9 @@ export class AppConfigService {
   private parseGraphQaRecoveryMode(): GraphQaRecoveryMode {
     return resolveGraphQaRecoveryMode(
       this.optionalString("TESBO_GRAPH_QA_RECOVERY_MODE"),
-      this.string("TESBO_GRAPH_QA_RECOVERY_ENABLED", "0")
+      // The legacy guard read process.env directly. Reading it from the merged .env view could
+      // remove an enabled worker solely because a local file disagreed with the real environment.
+      process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED
     );
   }
 

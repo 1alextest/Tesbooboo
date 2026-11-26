@@ -9,6 +9,15 @@
  */
 export type GraphQaRecoveryMode = "off" | "project" | "global";
 
+// One definition shared by registration and dispatch. A job name that drifts between the scheduler
+// and its processor is silently logged as unknown, so these constants are the identity contract.
+export const GRAPH_QA_RECOVERY_QUEUE = "graph-qa-review-recovery";
+export const GRAPH_QA_RECOVERY_JOB = "recover-committed-notifications";
+export const GRAPH_QA_RECOVERY_SCHEDULER = "graph-qa-review-recovery-v1";
+export const GRAPH_QA_RECOVERY_SCOPED_QUEUE = "graph-qa-review-recovery-scoped";
+export const GRAPH_QA_RECOVERY_SCOPED_JOB = "recover-committed-notifications-for-project";
+export const GRAPH_QA_RECOVERY_SCOPED_SCHEDULER = "graph-qa-review-recovery-scoped-v1";
+
 export interface GraphRecoveryRegistration {
   /** Which existing BullMQ worker owns this scope. */
   queue: "global" | "project";
@@ -35,15 +44,15 @@ export function graphRecoveryRegistration(
 ): GraphRecoveryRegistrationResult {
   if (mode === "off") return null;
   if (mode === "global") {
-    return { queue: "global", scheduler: "graph-qa-review-recovery-v1", job: "recover-committed-notifications", data: {} };
+    return { queue: "global", scheduler: GRAPH_QA_RECOVERY_SCHEDULER, job: GRAPH_QA_RECOVERY_JOB, data: {} };
   }
   if (!isGraphRecoveryProjectId(projectId)) {
     return { error: "Project-scoped graph recovery requires TESBO_GRAPH_QA_RECOVERY_PROJECT_ID to be a UUID" };
   }
   return {
     queue: "project",
-    scheduler: "graph-qa-review-recovery-scoped-v1",
-    job: "recover-committed-notifications-for-project",
+    scheduler: GRAPH_QA_RECOVERY_SCOPED_SCHEDULER,
+    job: GRAPH_QA_RECOVERY_SCOPED_JOB,
     data: { projectId }
   };
 }

@@ -12,7 +12,8 @@ the code with no new environment variables.
 - `graph-change-review.module.ts` — the cluster-wide scheduler registration.
 - `graph-change-review.delivery.ts` — the existing notification writer and per-user dedupe key.
 
-No outbox table, scheduler, notification type or delivery implementation is added. The committed
+No outbox table, notification type or delivery implementation is added. Project mode does add a
+second BullMQ queue and scheduler so it cannot be claimed by the legacy worker. The committed
 `graph_capture_history` receipt and native `notifications` row remain authoritative. REST/MCP retries
 remain project-authorized; the background path only calls the trusted internal recovery method.
 
@@ -43,6 +44,11 @@ old instance cannot receive it. The legacy queue remains global-only.
 
 Mixed versions and mixed modes are still unsafe to treat casually:
 
+- **All replicas must share the same mode and, in project mode, the same project id.** A global
+  instance still registers a scoped processor (which refuses the job) and can therefore consume a
+  project tick without doing its work. Two project instances with different ids upsert the same
+  scoped scheduler id, so the last boot wins and the other project silently never runs. Mixed
+  configurations are unsupported, not merged.
 - During a rolling deployment, an old instance with `TESBO_GRAPH_QA_RECOVERY_ENABLED=1` continues to
   run the legacy global sweep. `project` cannot constrain that instance.
 - A disabled instance never deletes the shared scheduler because the scheduler identity belongs to
@@ -63,9 +69,11 @@ Mixed versions and mixed modes are still unsafe to treat casually:
    scheduler state is understood, set `MODE=global` (or retain the legacy flag). Verify the log
    heartbeat, a SQL-confirmed notification row, and scheduler identity. Never infer delivery from an
    enqueued job or a UI toast.
-5. **Rollback.** Set `MODE=off` and remove the registered scheduler after all workers are disabled.
-   A rollback does not delete committed receipts or delivered notifications; re-enabling is safe
-   because the native dedupe key makes delivery idempotent.
+5. **Rollback.** Set `MODE=off` and remove the registered scheduler after all workers are disabled
+   using the BullMQ scheduler id (`graph-qa-review-recovery-v1` or
+   `graph-qa-review-recovery-scoped-v1`) through the existing Redis/queue tooling; there is no HTTP
+   removal route. A rollback does not delete committed receipts or delivered notifications;
+   re-enabling is safe because the native dedupe key makes delivery idempotent.
 
 ## Verification plan
 
