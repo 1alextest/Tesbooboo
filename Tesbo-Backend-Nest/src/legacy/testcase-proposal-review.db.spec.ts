@@ -359,6 +359,80 @@ type Body=Record<string,any>;
       approvals:(await admin.query("SELECT r.id FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=$1 ORDER BY r.id",[project])).rows
     });
 
+    // CL-T10 exercises each public native staging inlet, not only the shared
+    // predicate through testcase staging. The document inlet has no suite lock.
+    it.each([
+      ["requirement","project"], ["requirement","organization"],
+      ["user_manual","project"], ["user_manual","organization"],
+      ["policy","project"], ["policy","organization"],
+    ] as const)("CL-T10 generation replacement at %s staging (%s)",async(inlet,membership)=>{
+      const issuer=new ApiTokenService(new DatabaseService(pool));
+      const old=await issuer.issueToken(user,project,"Retired native inlet generation",["read","write"]);
+      const oldPrincipal={kind:"api_token" as const,tokenId:old.id,transport:"rest" as const};
+      const blocker=new Client({connectionString:url});await blocker.connect();
+      let attempt:Promise<unknown>|undefined,freshId:string|undefined;
+      const key=randomUUID(),operations=ops();
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 AND is_deleted=false LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",
+        subtype:inlet==="policy"?"policy":"manual",confidentiality:"internal",distribution:"internal",
+        sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:null,to:null},enforcementRefs:inlet==="policy"?["ACME-1"]:[]};
+      const body={requestKey:key,operation:"create",folderId:folder,
+        document:{title:`Generation boundary ${key}`,contentText:"Candidate body",contentHtml:"<p>Candidate body</p>",
+          contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Candidate body"}]}]},
+          governedMetadata:metadata},reason:"Generation continuity regression"};
+      const submit=(principal:typeof oldPrincipal)=>inlet==="requirement"
+        ? stageBundle(operations,key,principal)
+        : service().stageManagedDocumentProposal(project,user,body,principal,inlet);
+      const restore=async()=>{
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[org,user]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+      };
+      try{
+        const before=(await tasks()).rows,officialBefore=await docCounts();
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",[`skill-assignments:${project}`]);
+        attempt=submit(oldPrincipal).then(()=>null,(error:unknown)=>error);
+        const deadline=Date.now()+5000;let waiting=false;
+        while(Date.now()<deadline){
+          waiting=!!(await admin.query(
+            "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+            [applicationName])).rowCount;
+          if(waiting)break;
+          await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        expect(waiting).toBe(true);
+        const removed=membership==="project"
+          ? await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id",[project,user])
+          : await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING id",[org,user]);
+        expect(removed.rowCount).toBe(1);
+        await restore();
+        expect((await admin.query("SELECT id FROM api_tokens WHERE id=$1",[old.id])).rowCount).toBe(1);
+        await blocker.query("COMMIT");
+        expect(await attempt).toMatchObject({status:403});
+        expect((await tasks()).rows).toEqual(before);
+        expect(await docCounts()).toEqual(officialBefore);
+        await expect(submit(oldPrincipal)).rejects.toMatchObject({status:403});
+        const fresh=await issuer.issueToken(user,project,"Current native inlet generation",["read","write"]);
+        freshId=fresh.id;
+        const freshPrincipal={...oldPrincipal,tokenId:fresh.id};
+        const staged=await submit(freshPrincipal);
+        expect(staged).toMatchObject({taskStatus:"in_review",proposalProvenance:{kind:"api_token",tokenId:fresh.id,issuerId:user}});
+        expect((await submit(freshPrincipal)).id).toBe(staged.id);
+        await expect(submit(oldPrincipal)).rejects.toMatchObject({status:403});
+        expect((await tasks()).rows.filter(row=>!before.some(previous=>previous.id===row.id))).toHaveLength(1);
+        expect(await docCounts()).toEqual(officialBefore);
+      }finally{
+        await blocker.query("ROLLBACK");
+        if(attempt)await attempt;
+        await blocker.end();
+        await restore();
+        await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[old.id,project]);
+        if(freshId)await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[freshId,project]);
+      }
+    },15000);
+
     it("serializes a shared producer requestKey across testcase and requirement proposal inlets",async()=>{
       const key=randomUUID();
       const principal={kind:"api_token",tokenId:token,transport:"rest"};
