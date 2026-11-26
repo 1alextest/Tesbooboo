@@ -10,7 +10,7 @@ import { McpOAuthServer } from "../auth/mcp-oauth-server";
 type InteractionDetails = {
   uid: string;
   prompt?: { name?: string };
-  params?: { client_id?: string; scope?: string; resource?: string | string[] };
+  params?: { client_id?: string; scope?: string; resource?: string | string[]; redirect_uri?: string };
 };
 type ConsentBody = { action?: string; csrf?: string; review?: string };
 
@@ -76,15 +76,36 @@ export class McpOAuthInteractionController {
     const clientId = params?.client_id;
     const resource = params?.resource;
     const scope = params?.scope;
+    const redirectUri = params?.redirect_uri;
     if (typeof clientId !== "string" || typeof resource !== "string" ||
         typeof scope !== "string" || !scope.split(/\s+/).includes("mcp:read") ||
         scope.split(/\s+/).some(value => !["openid", "offline_access", "mcp:read"].includes(value))) {
       throw new ForbiddenException({ error: "Only one approved MCP read resource and scope may be requested" });
     }
+    // The provider owns registration and exact callback validation. Require the
+    // same canonical HTTPS shape here so a missing/malformed interaction cannot
+    // be reviewed, and bind the full URI (including path/query) without displaying its query.
+    let callback: URL;
+    if (typeof redirectUri !== "string" || redirectUri.length > 2048) {
+      throw new ForbiddenException({ error: "A verified OAuth callback is required" });
+    }
+    try { callback = new URL(redirectUri); } catch {
+      throw new ForbiddenException({ error: "A verified OAuth callback is required" });
+    }
+    if (callback.protocol !== "https:" || callback.username || callback.password ||
+        callback.hash || callback.href !== redirectUri) {
+      throw new ForbiddenException({ error: "A verified OAuth callback is required" });
+    }
     const projectId = this.oauth.projectIdFromResource(resource);
     const approved = await this.oauth.approvedClient(clientId, resource);
     if (!approved) throw new ForbiddenException({ error: "Project owner has not approved this OAuth client" });
     const project = await this.mcp.requireOAuthConsentProject(userId, projectId);
+    const organizationId = project.organization_id;
+    const organizationName = project.organization_name;
+    if (typeof organizationId !== "string" || !organizationId ||
+        typeof organizationName !== "string" || !organizationName) {
+      throw new ForbiddenException({ error: "Current workspace identity is required to review consent" });
+    }
     const projectMembershipId = project.project_membership_id;
     const organizationMembershipId = project.organization_membership_id;
     if (typeof projectMembershipId !== "string" || !projectMembershipId ||
@@ -92,7 +113,8 @@ export class McpOAuthInteractionController {
       throw new ForbiddenException({ error: "Current membership identities are required to authorize this client" });
     }
     const requestedScopes = scope.split(/\s+/);
-    return { userId, clientId, projectId, resource, clientName: approved.clientName,
+    return { userId, clientId, projectId, resource, redirectUri, callbackOrigin: callback.origin, clientName: approved.clientName,
+      organizationId, organizationName, projectKey: project.key,
       projectName: project.name || project.key || projectId,
       projectMembershipId, organizationMembershipId,
       refreshRequested: requestedScopes.includes("offline_access"), openidRequested: requestedScopes.includes("openid"),
@@ -135,11 +157,13 @@ export class McpOAuthInteractionController {
     res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
     res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Authorize read-only Tesbo QA access</title>
-<style>body{font-family:system-ui,sans-serif;max-width:38rem;padding:2rem;margin:auto;line-height:1.5}button{padding:.75rem 1rem;font:inherit;cursor:pointer}button+button{margin-left:.6rem}.secondary{background:transparent;border:1px solid #888}.muted{color:#555}main{border:1px solid #8886;border-radius:12px;padding:1.5rem}dl{display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1rem}dt{font-weight:700}</style></head>
+<style>body{font-family:system-ui,sans-serif;max-width:38rem;padding:2rem;margin:auto;line-height:1.5}button{padding:.75rem 1rem;font:inherit;cursor:pointer}button+button{margin-left:.6rem}.secondary{background:transparent;border:1px solid #888}.muted{color:#555}main{border:1px solid #8886;border-radius:12px;padding:1.5rem}dl{display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1rem}dt{font-weight:700}dd{margin:0;overflow-wrap:anywhere;min-width:0}</style></head>
 <body><main><h1>Authorize Tesbo QA access</h1>
 <p>This action ${login ? "confirms which Tesbo account is signing in. You will still review the permissions before granting access." : "allows a verified OAuth client to READ data only. It cannot create, edit, publish, approve or execute tests."}</p>
 <dl><dt>Account</dt><dd>${html(userId)}</dd><dt>Client</dt><dd>${html(target.clientName)}</dd>
-<dt>Client ID</dt><dd>${html(target.clientId)}</dd><dt>Project</dt><dd>${html(target.projectName)}</dd>
+<dt>Client ID</dt><dd>${html(target.clientId)}</dd><dt>Callback origin</dt><dd>${html(target.callbackOrigin)}</dd>
+<dt>Workspace</dt><dd>${html(target.organizationName)} <span class="muted">(${html(target.organizationId)})</span></dd>
+<dt>Project</dt><dd>${html(target.projectName)} <span class="muted">(${html(target.projectKey || target.projectId)} · ${html(target.projectId)})</span></dd>
 <dt>Permissions</dt><dd>Read-only QA records and tools: ${html(target.allowedTools ? target.allowedTools.join(", ") : "all permitted read-only tools")}</dd><dt>Owner approval expiry</dt><dd>${html(target.expiresAt ?? "No fixed expiry")}</dd><dt>Reconnect</dt><dd>${target.refreshRequested ? "You are also granting offline read-only access until revoked." : "No offline access was requested; you may need to sign in again."}</dd></dl>
 <p class="muted">The project owner preapproved this client identity. You can cancel. You may later revoke the project grant. Login and consent do not publish test cases or approve Skills.</p>
 <form method="post" action="/api/oauth/interactions/${encodeURIComponent(uid)}">

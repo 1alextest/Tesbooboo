@@ -97,7 +97,7 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     resolveSession.mockImplementation(async token => token === SESSION ? "test-member" : null);
     authenticate.mockResolvedValue(null);
     members.mockResolvedValue({
-      name: "Existing project", key: "TES",
+      name: "Existing project", key: "TES", organization_id: "66666666-6666-4666-8666-666666666666", organization_name: "QA workspace",
       project_membership_id: "11111111-1111-4111-8111-111111111111",
       organization_membership_id: "22222222-2222-4222-8222-222222222222"
     });
@@ -108,7 +108,7 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     details.mockReset().mockResolvedValue({
       uid: UID,
       prompt: { name: "consent" },
-      params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read" }
+      params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read", redirect_uri: "https://client.example/oauth/callback" }
     });
     save.mockResolvedValue("ci-only-grant");
     finish.mockImplementation(async (_req: unknown, res: Response, result: object) => {
@@ -254,7 +254,7 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
       // Unchanged names, scope and owner revision must not authenticate a
       // browser's stale review when membership was removed and recreated.
       members.mockResolvedValue({
-        name: "Existing project", key: "TES",
+        name: "Existing project", key: "TES", organization_id: "66666666-6666-4666-8666-666666666666", organization_name: "QA workspace",
         project_membership_id: membership === "project"
           ? "33333333-3333-4333-8333-333333333333"
           : "11111111-1111-4111-8111-111111111111",

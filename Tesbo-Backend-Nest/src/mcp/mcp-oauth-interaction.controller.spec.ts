@@ -33,7 +33,7 @@ function fixture() {
   const details = {
     uid: UID,
     prompt: { name: "consent" },
-    params: { client_id: CLIENT, resource: RESOURCE, scope: "openid mcp:read offline_access" }
+    params: { client_id: CLIENT, resource: RESOURCE, scope: "openid mcp:read offline_access", redirect_uri: "https://client.example/oauth/callback" }
   };
   const provider = {
     interactionDetails: jest.fn().mockResolvedValue(details),
@@ -56,7 +56,7 @@ function fixture() {
   };
   const mcp = {
     requireOAuthConsentProject: jest.fn().mockResolvedValue({
-      name: "QA Project", key: "QA",
+      name: "QA Project", key: "QA", organization_id: "66666666-6666-4666-8666-666666666666", organization_name: "QA workspace",
       project_membership_id: "11111111-1111-4111-8111-111111111111",
       organization_membership_id: "22222222-2222-4222-8222-222222222222"
     })
@@ -207,6 +207,27 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     }
   });
 
+  it.each(["", "not a URL", "https://user:pass@client.example/callback", "https://client.example/callback#fragment"])(
+    "refuses malformed or absent provider callback context: %s", async redirect => {
+      const f = fixture();
+      f.details.params.redirect_uri = redirect;
+      await expect(f.ctrl.consentPage(f.req, f.res as unknown as Response, UID)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(f.save).not.toHaveBeenCalled();
+    }
+  );
+
+  it("does not expose callback query values and binds a changed callback query to a new review", async () => {
+    const f = fixture();
+    f.details.params.redirect_uri = "https://client.example/callback?opaque=first";
+    const initial = await f.tokenFromPage();
+    expect(initial.output).toContain("https://client.example");
+    expect(initial.output).not.toContain("opaque=first");
+    f.details.params.redirect_uri = "https://client.example/callback?opaque=second";
+    await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+      { action: "approve", csrf: initial.csrf, review: initial.review })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(f.save).not.toHaveBeenCalled();
+  });
+
   it("refuses cross-origin, invalid CSRF and invalid action before any grant is created", async () => {
     const f = fixture();
     const { csrf, review } = await f.tokenFromPage();
@@ -300,7 +321,7 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     const f = fixture();
     // The existing membership rows are the authority generation. A remove/rejoin
     // can leave all visible project/client facts and the owner revision identical.
-    const original = { name: "QA Project", key: "QA",
+    const original = { name: "QA Project", key: "QA", organization_id: "66666666-6666-4666-8666-666666666666", organization_name: "QA workspace",
       project_membership_id: "11111111-1111-4111-8111-111111111111",
       organization_membership_id: "22222222-2222-4222-8222-222222222222" };
     f.mcp.requireOAuthConsentProject.mockResolvedValue(original);

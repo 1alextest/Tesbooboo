@@ -315,8 +315,10 @@ export class McpService {
     // display names alone do not distinguish a removed-and-rejoined member.
     const project = await this.legacy.requireProjectAccess(userId, projectId);
     const rows = (await this.db.query(
-      `SELECT p.name, p.key, pm.id AS project_membership_id, om.id AS organization_membership_id
+      `SELECT p.name, p.key, p.organization_id, o.name AS organization_name,
+                pm.id AS project_membership_id, om.id AS organization_membership_id
          FROM projects p
+         JOIN organizations o ON o.id=p.organization_id
          JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
          JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
         WHERE p.id=$1 AND p.archived_at IS NULL`,
@@ -328,6 +330,7 @@ export class McpService {
       throw new ForbiddenException({ error: "Project membership changed; review consent again" });
     }
     return { ...project, name: membership.name, key: membership.key,
+      organization_id: membership.organization_id, organization_name: membership.organization_name,
       project_membership_id: membership.project_membership_id,
       organization_membership_id: membership.organization_membership_id };
   }

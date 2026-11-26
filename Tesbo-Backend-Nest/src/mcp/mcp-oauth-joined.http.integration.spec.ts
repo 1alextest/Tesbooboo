@@ -43,7 +43,7 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
   const currentGrantRows = (sql: string) => ({
     rows: sql.includes("pm.id AS project_membership_id")
       ? memberActive ? [{
-        name: "Existing QA project", key: "TES",
+        name: "Existing QA project", key: "TES", organization_id: "ci-org", organization_name: "QA workspace",
         project_membership_id: P, organization_membership_id: OTHER
       }] : []
       : sql.includes("mcp_oauth_grant_approval_bindings")
@@ -106,7 +106,7 @@ describe("joined Tesbo OAuth consent -> verified read-only MCP over real Nest HT
       interactionDetails: jest.fn().mockResolvedValue({
         uid: UID,
         prompt: { name: "consent" },
-        params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read" }
+        params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read", redirect_uri: "https://client.example/oauth/callback" }
       }),
       interactionFinished: jest.fn(async (_req: unknown, res: Response, result: object) => {
         res.status(200).json({ completedInteraction: result });
