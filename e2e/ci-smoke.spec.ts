@@ -185,6 +185,12 @@ async function verifyHistoryImportText(
     runs.push(runId);
     const attached = await request.post(`${api}/api/cycles/${runId}/testcases`, { data: { testcaseIds: cases.map((item) => item.id) } });
     expect(attached.ok(), await attached.text()).toBeTruthy();
+    // Creation and approval both enqueue an embedding. In this keyless fixture the worker
+    // returns the case to pending. Wait for the approval generation before taking the full-row baseline.
+    await expect.poll(async () => (await db.query(
+      `SELECT count(*)::int AS settled FROM testcases WHERE id = ANY($1::uuid[])
+       AND embedding_status = 'pending' AND embedding_queued_at >= updated_at`, [cases.map(item => item.id)]
+    )).rows[0].settled, { message: "The approved history fixtures must finish embedding bookkeeping" }).toBe(cases.length);
     const before = await state();
     const nul = "before\u0000after";
     const invalid: Array<{ label: string; run?: Record<string, unknown>; result?: Record<string, unknown> }> = [
