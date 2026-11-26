@@ -92,18 +92,25 @@ async function verifyBugCreateAccess(request: APIRequestContext, api: string, pr
     await db.query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2", [projectId, ownerId]);
     try {
       await denied(request, 404);
-      await denied(anonymous, 404, { Authorization: `Bearer ${tokens.write}` });
+      await denied(anonymous, 400, { Authorization: `Bearer ${tokens.write}` });
       const before = await persisted();
       const refusedMcp = await anonymous.post(`${base}/mcp`, {
         headers: { Authorization: `Bearer ${tokens.write}` },
         data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_bug", arguments: body } }
       });
-      expect(refusedMcp.ok()).toBeTruthy();
+      expect(refusedMcp.status()).toBe(401);
       expect((await refusedMcp.json()).error).toBeDefined();
       expect(await persisted()).toEqual(before);
     } finally {
       await db.query("INSERT INTO project_members (project_id, user_id, role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING", [projectId, ownerId]);
     }
+    // Rejoining grants a new membership, not permission to reuse the old token.
+    await denied(anonymous, 400, { Authorization: `Bearer ${tokens.write}` });
+    const replacement = await issueMcpTestToken(request, `${base}/apikeys`, { data: { name: "CI bug replacement", scopes: ["write"] } });
+    expect(replacement.ok()).toBeTruthy();
+    const fresh = await replacement.json();
+    tokenIds.push(fresh.id);
+    tokens.write = fresh.token;
     otherOrgId = (await db.query<{ id: string }>(
       "INSERT INTO organizations (name, slug) VALUES ('CI other workspace','ci-bug-auth-other') RETURNING id"
     )).rows[0].id;
