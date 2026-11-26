@@ -127,6 +127,59 @@ describe("Tesbo OAuth human login and read-only consent ownership", () => {
     expect(f.res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
   });
 
+
+  it("distinguishes identically named projects across workspaces and displays the provider callback origin", async () => {
+    const f = fixture();
+    const otherProject = "44444444-4444-4444-8444-444444444444";
+    const otherWorkspace = "55555555-5555-4555-8555-555555555555";
+    const workspace = "66666666-6666-4666-8666-666666666666";
+    const first = { name: "Identical QA project", key: "QA", organization_id: workspace,
+      organization_name: "Identical workspace",
+      project_membership_id: PROJECT, organization_membership_id: otherProject };
+    Object.assign(f.details.params, { redirect_uri: "https://client.example/oauth/callback" });
+    f.mcp.requireOAuthConsentProject.mockResolvedValue(first);
+    const firstPage = await f.tokenFromPage();
+    const otherResource = "https://tesbo.example/api/projects/" + otherProject + "/mcp";
+    f.details.params.resource = otherResource;
+    f.oauth.projectIdFromResource.mockReturnValue(otherProject);
+    f.mcp.requireOAuthConsentProject.mockResolvedValue({ ...first, organization_id: otherWorkspace });
+    const secondPage = await f.tokenFromPage();
+    for (const [page, projectId, workspaceId, foreignWorkspace] of [
+      [firstPage.output, PROJECT, workspace, otherWorkspace],
+      [secondPage.output, otherProject, otherWorkspace, workspace]
+    ]) {
+      expect(page).toContain("Identical QA project");
+      expect(page).toContain("Identical workspace");
+      expect(page).toContain(projectId);
+      expect(page).toContain(workspaceId);
+      expect(page).not.toContain(foreignWorkspace);
+      expect(page).toContain("https://client.example");
+    }
+    expect(firstPage.review).not.toBe(secondPage.review);
+    expect(f.save).not.toHaveBeenCalled();
+  });
+
+  it.each(["https://other-client.example/oauth/callback", "https://client.example/different-callback"])(
+    "rejects a stale affirmative review when the provider callback changes to %s", async redirect => {
+      const f = fixture();
+      Object.assign(f.details.params, { redirect_uri: "https://client.example/oauth/callback" });
+      const original = await f.mcp.requireOAuthConsentProject();
+      f.mcp.requireOAuthConsentProject.mockResolvedValue({ ...original,
+        organization_id: "66666666-6666-4666-8666-666666666666", organization_name: "QA workspace" });
+      const { csrf, review } = await f.tokenFromPage();
+      Object.assign(f.details.params, { redirect_uri: redirect });
+      await expect(f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+        { action: "approve", csrf, review })).rejects.toBeInstanceOf(ForbiddenException);
+      expect(f.save).not.toHaveBeenCalled();
+      expect(f.oauth.bindIssuedGrant).not.toHaveBeenCalled();
+      expect(f.provider.interactionFinished).not.toHaveBeenCalled();
+      const fresh = await f.tokenFromPage();
+      await f.ctrl.submitConsent(f.req, f.res as unknown as Response, UID,
+        { action: "approve", csrf: fresh.csrf, review: fresh.review });
+      expect(f.save).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it("denies unapproved clients, invalid resources and removed project members before rendering consent", async () => {
     for (const mode of ["unapproved", "foreign-resource", "removed-member"]) {
       const f = fixture();

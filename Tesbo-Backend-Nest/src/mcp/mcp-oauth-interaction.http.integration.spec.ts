@@ -192,6 +192,34 @@ describe("OAuth consent through the actual Nest HTTP/middleware boundary", () =>
     expect(resolveSession).toHaveBeenCalledWith(SESSION);
   });
 
+
+  it("rejects an actual stale HTTP consent form after the provider redirect changes", async () => {
+    const workspace = "66666666-6666-4666-8666-666666666666";
+    const original = await members();
+    members.mockResolvedValue({ ...original, organization_id: workspace, organization_name: "QA workspace" });
+    const interaction = { uid: UID, prompt: { name: "consent" },
+      params: { client_id: CLIENT, resource: RESOURCE, scope: "mcp:read",
+        redirect_uri: "https://client.example/oauth/callback" } };
+    details.mockResolvedValue(interaction);
+    const page = await request(UID);
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(html)?.[1];
+    const review = /name="review" value="([a-f0-9]{64})"/.exec(html)?.[1];
+    expect(csrf).toBeDefined();
+    expect(review).toBeDefined();
+    details.mockResolvedValue({ ...interaction, params: { ...interaction.params,
+      redirect_uri: "https://other-client.example/oauth/callback" } });
+    const post = await request(UID, {
+      method: "POST",
+      headers: { Origin: "https://tesbo.example", "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ action: "approve", csrf: csrf!, review: review! })
+    });
+    expect(post.status).toBe(403);
+    expect(save).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+  });
+
   it("rejects a stale displayed permission review through the real HTTP form", async () => {
     const page = await request(UID);
     expect(page.status).toBe(200);
