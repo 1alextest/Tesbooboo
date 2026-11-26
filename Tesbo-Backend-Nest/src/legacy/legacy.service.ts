@@ -12006,6 +12006,20 @@ export class LegacyService implements OnModuleInit {
     return { success: true };
   }
 
+  /** Live ancestry check under the project mutation lock; a live row under a deleted ancestor is invisible. */
+  private async knowledgeFolderAncestry(client: PoolClient, projectId: string, folderId: string) {
+    return client.query<{ is_deleted: boolean; deletion_reason: string | null }>(
+      `WITH RECURSIVE ancestry AS (
+         SELECT id, parent_folder_id, is_deleted, deletion_reason FROM knowledge_folders
+          WHERE id = $1 AND project_id = $2
+         UNION ALL
+         SELECT kf.id, kf.parent_folder_id, kf.is_deleted, kf.deletion_reason FROM knowledge_folders kf
+           JOIN ancestry a ON kf.id = a.parent_folder_id AND kf.project_id = $2
+       ) SELECT is_deleted, deletion_reason FROM ancestry`,
+      [folderId, projectId]
+    );
+  }
+
   async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
     principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
@@ -12026,8 +12040,9 @@ export class LegacyService implements OnModuleInit {
         deleted_at: string | null;
         deletion_reason: string | null;
         source_provider: string | null;
+        parent_folder_id: string | null;
       }>(
-        "SELECT name, is_deleted, deleted_at::text AS deleted_at, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2 FOR UPDATE",
+        "SELECT name, is_deleted, deleted_at::text AS deleted_at, deletion_reason, source_provider, parent_folder_id FROM knowledge_folders WHERE id = $1 AND project_id = $2 FOR UPDATE",
         [folderId, projectId]
       );
       if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
@@ -12045,6 +12060,20 @@ export class LegacyService implements OnModuleInit {
       if (!existing.rows[0].is_deleted) {
         const active = await client.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
         return { folder: active.rows[0], folders: 0, documents: 0, replayed: true };
+      }
+      // Restoring a child while its parent remains in Trash would produce a live folder under a
+      // deleted ancestor: invisible in the tree, absent from Trash, still counted. The project
+      // advisory lock serialises this check with a concurrent parent delete.
+      if (existing.rows[0].parent_folder_id) {
+        const ancestry = await this.knowledgeFolderAncestry(client, projectId, existing.rows[0].parent_folder_id);
+        if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+          const disconnected = ancestry.rows.some((row) => row.deletion_reason === "integration_disconnect");
+          throw new BadRequestException({
+            error: disconnected
+              ? "This folder's parent was removed when an integration was disconnected and cannot be restored. Reconnect and sync instead."
+              : "Restore the parent folder before restoring this folder."
+          });
+        }
       }
 
       // Deleting a folder soft-deletes the whole subtree in one transaction, so every row it took
@@ -12074,11 +12103,11 @@ export class LegacyService implements OnModuleInit {
         [[folderId], uid, projectId, deletedAt]
       );
       const folder = await client.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
+      await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, folder.rows[0].name, {}, client);
       return { folder: folder.rows[0], folders: folders.rowCount ?? 0, documents: documents.rowCount ?? 0 };
     });
     if (!restored.folder) throw new NotFoundException({ error: "Folder not found" });
     if ("replayed" in restored && restored.replayed) return toCamel(restored.folder);
-    await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, restored.folder.name, {});
     return { ...toCamel(restored.folder), restoredFolders: restored.folders, restoredDocuments: restored.documents };
   }
 
@@ -13585,20 +13614,66 @@ export class LegacyService implements OnModuleInit {
       const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
       const originalFileName = await this.kbUniqueFileName(folderId, file.originalname);
       const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
-      await this.storage.put(storageKey, file.buffer, file.mimetype);
       // Audio/video transcription is slow (calls an external AI provider) and shouldn't block
       // the upload response — it's kicked off after insert, below, and fills in extracted_text
       // asynchronously. Everything else extracts synchronously (local CPU/WASM work only).
       const isTranscribable = LegacyService.KB_AUDIO_EXTENSIONS.has(ext) || LegacyService.KB_TRANSCRIBABLE_VIDEO_EXTENSIONS.has(ext);
-      const extractedText = isTranscribable ? null : await this.extractKnowledgeFileText(file.buffer, ext);
-      const extractionStatus = isTranscribable ? "pending" : null;
-      const res = await this.db.query(
-        `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-        [project.organization_id, projectId, folderId, path.basename(storageKey), originalFileName, file.mimetype, ext, file.size, storageKey, uid, extractedText, extractionStatus]
-      );
+      let res: { rows: Body[] };
+      try {
+        await this.storage.put(storageKey, file.buffer, file.mimetype);
+        const extractedText = isTranscribable ? null : await this.extractKnowledgeFileText(file.buffer, ext);
+        const extractionStatus = isTranscribable ? "pending" : null;
+        res = await this.db.transaction(async client => {
+          // Match the document/folder writers: advisory first, then a locked destination. A
+          // folder delete that wins makes this row refuse; the catch below removes only this
+          // upload's newly written object, never an existing one.
+          await this.lockSkillAssignments(client, projectId);
+          const target = await client.query(
+            "SELECT id FROM knowledge_folders WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR SHARE",
+            [folderId, projectId]
+          );
+          if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+          const ancestry = await this.knowledgeFolderAncestry(client, projectId, folderId);
+          if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+            throw new NotFoundException({ error: "Folder not found" });
+          }
+          const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+          const inserted = await client.query(
+            `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+            [authority.organization_id, projectId, folderId, path.basename(storageKey), originalFileName, file.mimetype, ext, file.size, storageKey, uid, extractedText, extractionStatus]
+          );
+          await this.logProjectActivity(projectId, uid, "uploaded", "knowledge_file", inserted.rows[0].id, originalFileName, {}, client);
+          return inserted;
+        });
+      } catch (error) {
+        // A lost COMMIT acknowledgement is indistinguishable from a rollback at the driver level.
+        // Reconcile by the unique storage key first: delete only when the row is known not to have
+        // committed. If the check itself fails, preserve the object and surface the error rather
+        // than risk deleting bytes a committed row still references.
+        // A COMMIT whose acknowledgement was lost is never treated as proof of rollback: the row
+        // may be committed and an absent observation (replica lag, fault-injected lookup) cannot
+        // establish otherwise. Only a failure before COMMIT permits compensation.
+        const commitUncertain = Boolean(error && typeof error === "object" && (error as { commitUncertain?: boolean }).commitUncertain);
+        if (!commitUncertain) {
+          let persisted: boolean | null = null;
+          try {
+            const row = await this.db.query<{ id: string }>(
+              "SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
+              [projectId, storageKey]
+            );
+            persisted = Boolean(row.rows[0]);
+          } catch (reconcileError) {
+            this.logger.warn(`Could not reconcile upload ${storageKey} after failure: ${reconcileError}`);
+          }
+          if (persisted === false) {
+            await this.storage.delete(storageKey).catch((storageError) =>
+              this.logger.warn(`Failed to compensate storage object ${storageKey}: ${storageError}`));
+          }
+        }
+        throw error;
+      }
       created.push(this.kbFileView(res.rows[0]));
-      await this.logProjectActivity(projectId, uid, "uploaded", "knowledge_file", res.rows[0].id, originalFileName, {});
       if (isTranscribable) {
         // Embedding is enqueued once the transcript lands (transcribeKnowledgeFile), not here —
         // there's no content yet for audio/video at upload time.
@@ -13636,18 +13711,37 @@ export class LegacyService implements OnModuleInit {
   async moveKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string, body: Body) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
-    const file = await this.kbFile(projectId, fileId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireMutateAccess(role, file.uploaded_by, uid);
     const folderId = String(body.folderId || "");
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
+    // Fast preflight only; the transaction below rechecks the file, authority and destination.
+    await this.kbFile(projectId, fileId);
     await this.kbFolder(projectId, folderId);
 
-    const res = await this.db.query(
-      "UPDATE knowledge_files SET folder_id = $2, updated_at = now() WHERE id = $1 RETURNING *",
-      [fileId, folderId]
-    );
-    await this.logProjectActivity(projectId, uid, "moved", "knowledge_file", fileId, res.rows[0].original_file_name, {});
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query<Body>(
+        "SELECT * FROM knowledge_files WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE",
+        [fileId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "File not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.uploaded_by, uid);
+      const target = await client.query(
+        "SELECT id FROM knowledge_folders WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR SHARE",
+        [folderId, projectId]
+      );
+      if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      const ancestry = await this.knowledgeFolderAncestry(client, projectId, folderId);
+      if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+        throw new NotFoundException({ error: "Folder not found" });
+      }
+      const updated = await client.query(
+        "UPDATE knowledge_files SET folder_id = $2, updated_at = now() WHERE id = $1 AND project_id = $3 AND is_deleted = false RETURNING *",
+        [fileId, folderId, projectId]
+      );
+      await this.logProjectActivity(projectId, uid, "moved", "knowledge_file", fileId, updated.rows[0].original_file_name, {}, client);
+      return updated;
+    });
     return this.kbFileView(res.rows[0]);
   }
 
@@ -13671,15 +13765,33 @@ export class LegacyService implements OnModuleInit {
   async restoreKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireOwnerOrManager(role);
     if (!isUuid(fileId)) throw new NotFoundException({ error: "File not found" });
-    const res = await this.db.query(
-      "UPDATE knowledge_files SET is_deleted = false, deleted_at = NULL, updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING *",
-      [fileId, projectId]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "File not found" });
-    await this.logProjectActivity(projectId, uid, "restored", "knowledge_file", fileId, res.rows[0].original_file_name, {});
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query<Body>(
+        "SELECT * FROM knowledge_files WHERE id = $1 AND project_id = $2 FOR UPDATE",
+        [fileId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "File not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      if (!current.is_deleted) return { rows: [current] };
+      const ancestry = await this.knowledgeFolderAncestry(client, projectId, String(current.folder_id));
+      if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+        const disconnected = ancestry.rows.some((row) => row.deletion_reason === "integration_disconnect");
+        throw new BadRequestException({
+          error: disconnected
+            ? "This file's folder was removed when an integration was disconnected and cannot be restored. Reconnect and sync instead."
+            : "Restore the parent folder before restoring this file."
+        });
+      }
+      const updated = await client.query(
+        "UPDATE knowledge_files SET is_deleted = false, deleted_at = NULL, updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING *",
+        [fileId, projectId]
+      );
+      await this.logProjectActivity(projectId, uid, "restored", "knowledge_file", fileId, updated.rows[0].original_file_name, {}, client);
+      return updated;
+    });
     return this.kbFileView(res.rows[0]);
   }
 
