@@ -669,7 +669,12 @@ remain distinguishable from the current document binding (`reviewedVersionId`/st
 **Coverage.** `e2e/ui/skills.spec.ts` covers inherited vs cleared vs new-document proposals and a long
 document's bounded excerpt with full-value access. `e2e/ui/knowledge-base.spec.ts` KBU-79 covers first
 submission, current-identical, HTML/JSON-only, metadata-only, digest-bound folder placement, denied-version
-retry and historical-base comparison with exact-version access. Native requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
+retry and historical-base comparison with exact-version access. PR #286 completed the identical-disclosure
+follow-up: the Identical summary stays while every field's full old/new values remain inspectable (failing-first
+KBU-79 run 45708009410; merged 33245701). A corrected native requirement proposal is staged as task
+`1d6995fb-431a-44be-8908-3a92362065d3`, revision
+`3770f45c35b7b6fc192490ee42dfb46fec8ec123bdaff0e66a57c049802d4a7f`, in_review/unassigned. Original
+requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
 `1c957dfea4cc767b14bfe7c8f49906256e8a1de5d8ba13db31dcd18ba596c037`, `in_review`, unassigned. Manual
 execution remains **UNRUN**; native execution-evidence writing remains unavailable.
 
@@ -697,9 +702,10 @@ manual execution of the native case remains **UNRUN**.
   child subtree and documents. Its restore and audit now share one transaction.
 - `restoreKnowledgeFile` applies the same recursive ancestry rule, is idempotent for an already-live
   file, revalidates owner/manager authority under the project lock, and writes its audit transactionally.
-- Upload compensation reconciles by the unique storage key after a failed transaction: a lost COMMIT
-  acknowledgement leaves the committed row and its object intact; only a known-uncommitted row causes
-  the newly written object to be deleted. If reconciliation itself fails, the object is preserved.
+- Upload compensation never deletes bytes when the transaction outcome is uncertain after an attempted
+  COMMIT. For a failure before COMMIT, reconciliation by the unique storage key must establish that
+  the upload row is absent before deleting only the new object. If reconciliation fails or finds a row,
+  the object is preserved. This protects referenced bytes; it does not establish complete upload recovery.
 - New HTTP contracts run in smoke: KB-A-80 (direct child restore refused, parent restore returns it)
   and KBF-A-80 (upload/move into a deleted folder refused, existing file unchanged).
 - Existing integration-disconnect non-restorable refusals, storage-key cleanup on file delete, and the
@@ -709,7 +715,40 @@ Evidence: failing-first DB run `45731230795` (upload, move and folder-restore re
 pre-fix; 3 failed / 728 passed); the later tests-only commit `8f5e0d9d` characterized the lost-COMMIT
 compensation defect (database-integrity failed with one test). Green runs: `45732950964`, `45734330589`
 (file-restore parent regression added with the fix; its pre-fix failure is deterministic — the old
-code returned 200), and the final run after the reconciliation/e2e additions recorded in the PR. Native REQ-WPB-07 is staged as task
+code returned 200), `45742031601` (735 DB tests incl. uncertain-COMMIT reconciliation) and the final
+exact-head `46ec5644`, where database-integrity passed and smoke ran and passed KB-A-80 + KBF-A-80
+(46 tests in 3 files, run 45748345549). Remaining LOWs: filename uniqueness outside the lock, per-file
+batch atomicity, storage-delete retry, DB-global lock-wait helper, and no one-time repair of rows
+stranded by the old code.
+
+**Open lifecycle follow-ups (source inspection, not executed acceptance).** On merged development
+`6ea0b839a1037032dcfa8104504776f0e93dfd83`, `uploadKnowledgeFiles` generates a new storage key
+per attempt, propagates an uncertain COMMIT error, and dispatches transcription/embedding only after
+the transaction returns successfully. A database connectivity error can still instruct the caller to
+retry. The completed compensation regression verifies preservation of bytes, not request idempotency
+or eventual processing. Distinguish the following unresolved decisions and test obligations:
+
+- **Ambiguous upload retry:** establish the intended client/request identity and reconciliation contract
+  before implementing idempotency; the same logical retry must not create another committed file or
+  duplicate audit/effect, but a deliberate second upload must remain possible under the chosen policy.
+  Fault-inject both a committed-but-unacknowledged operation and a definite rollback, then retry and
+  check record IDs, stored objects, audit activity and caller-visible outcome. Do not infer identity
+  from filename or content equality alone.
+- **Dependent processing recovery:** the existing `RagIngestionService.resumeInterruptedEmbeddings`
+  can re-enqueue eligible files at restart, but its file query excludes pending extraction. Audio/video
+  transcription currently dispatches after the successful transaction return. Verify recovery of both
+  ordinary files and pending audio/video extraction after lost COMMIT acknowledgement and after process
+  restart, including current authority, duplicate work/external cost, and terminal unsupported/failed
+  outcomes. The restart embedding sweep is partial mitigation, not evidence that transcription resumes.
+
+These are source-level risks; runtime reproduction and severity/ownership disposition remain open.
+Do not describe them as resolved by #288, or claim native execution before the tests actually run.
+
+Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
 `e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
-Manual execution remains **UNRUN**; native execution-evidence writing remains unavailable.
+
+PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`. Production
+`/api/health` returned the #288 merge SHA and the deployed MCP catalog/proposal-preview tool set was
+verified at that SHA. Manual execution remains **UNRUN**; native execution-evidence writing remains
+unavailable.
