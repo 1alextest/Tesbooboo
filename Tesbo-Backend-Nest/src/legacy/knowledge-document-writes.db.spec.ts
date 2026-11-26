@@ -1292,6 +1292,44 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     });
   });
 
+  it("lets only one of two concurrent same-key uploads create a row", async () => {
+    const requestKey = randomUUID();
+    const name = `concurrent-${randomUUID()}.txt`;
+    const body = { buffer: Buffer.from("upload body"), originalname: name, mimetype: "text/plain", size: 11 };
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /INSERT INTO knowledge_files/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const winner = fileService(observed);
+    const loser = fileService();
+    try {
+      const first = winner.svc.uploadKnowledgeFiles(projectId, actor, folderId, [body], requestKey);
+      await acquiring;
+      const second = loser.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{ ...body, buffer: Buffer.from("upload body") }], requestKey);
+      await waitForAnyLockWait();
+      release();
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.list[0].id).toBe(two.list[0].id);
+      expect([one.replayed, two.replayed].sort()).toEqual([false, true]);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows[0].n).toBe(1);
+      expect(winner.storage.put).toHaveBeenCalledTimes(1);
+      expect(loser.storage.put).toHaveBeenCalledTimes(1);
+      expect(loser.storage.delete).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+    }
+  });
+
   describe("knowledge transcription recovery", () => {
     function transcriptionService() {
       const f = fileService();
@@ -1310,10 +1348,15 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
         f.svc as unknown as { readAiProviderJson: () => Promise<Record<string, unknown>> },
         "readAiProviderJson"
       ).mockResolvedValue({ text: "recovered transcript" });
-      const sweep = () => (f.svc as unknown as { resumeInterruptedKnowledgeTranscriptions: () => Promise<void> })
-        .resumeInterruptedKnowledgeTranscriptions();
+      const sweep = (projectIdFilter?: string) => (f.svc as unknown as { resumeInterruptedKnowledgeTranscriptions: (id?: string) => Promise<void> })
+        .resumeInterruptedKnowledgeTranscriptions(projectIdFilter);
+      const transcribe = (projectId: string, fileId: string, token: string) => (
+        f.svc as unknown as {
+          transcribeKnowledgeFile: (p: string, f: string, b: Buffer, e: string, m: string, n: string, claimed: boolean, token: string) => Promise<void>
+        }
+      ).transcribeKnowledgeFile(projectId, fileId, Buffer.from("audio"), "mp3", "audio/mpeg", "meeting.mp3", true, token);
       const embedding = (f.svc as unknown as { enqueueEmbedding: jest.Mock }).enqueueEmbedding;
-      return { ...f, fetchProvider, sweep, embedding };
+      return { ...f, fetchProvider, sweep, transcribe, embedding };
     }
     const statuses = async (ids: string[]) => (await setup.query<{ id: string; extraction_status: string; extracted_text: string | null }>(
       "SELECT id, extraction_status, extracted_text FROM knowledge_files WHERE id = ANY($1::uuid[]) ORDER BY array_position($1::uuid[], id)",
@@ -1328,7 +1371,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       const f = transcriptionService();
       try {
         // A deleted pending row is not recovered. Two concurrent sweeps must not both dispatch.
-        await Promise.all([f.sweep(), f.sweep()]);
+        await Promise.all([f.sweep(projectId), f.sweep(projectId)]);
         await waitFor(async () => (await statuses([abandoned.id])).every((row) => row.extraction_status === "ready"), "abandoned transcription");
         expect(await statuses([deletedPending.id, abandoned.id, live.id])).toEqual([
           { id: deletedPending.id, extraction_status: "pending", extracted_text: null },
@@ -1343,8 +1386,9 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
         expect((await setup.query("SELECT extraction_claimed_at FROM knowledge_files WHERE id = $1", [live.id])).rows[0])
           .toEqual(liveBefore);
 
-        await f.sweep();
+        await f.sweep(projectId);
         expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect((await setup.query("SELECT extraction_claim_token FROM knowledge_files WHERE id = $1", [abandoned.id])).rows[0].extraction_claim_token).toBeNull();
       } finally {
         await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[deletedPending.id, abandoned.id, live.id]]);
       }
@@ -1363,7 +1407,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       const archived = await seedMedia({ status: "pending", project: archivedProject, folder: archivedFolder });
       const f = transcriptionService();
       try {
-        await f.sweep();
+        await Promise.all([f.sweep(projectId), f.sweep(archivedProject)]);
         expect(f.storage.getBuffer).not.toHaveBeenCalledWith(deleted.key);
         expect(f.storage.getBuffer).not.toHaveBeenCalledWith(archived.key);
         expect(f.fetchProvider).not.toHaveBeenCalled();
@@ -1381,11 +1425,54 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     it("marks a claimed transcription failed when its stored bytes cannot be read", async () => {
       const row = await seedMedia({ status: "pending" });
       const f = transcriptionService();
-      f.storage.getBuffer.mockRejectedValueOnce(new Error("object missing"));
+      f.storage.getBuffer.mockRejectedValueOnce(Object.assign(new Error("object missing"), { code: "ENOENT" }));
       try {
-        await f.sweep();
+        await f.sweep(projectId);
         expect(await statuses([row.id])).toEqual([{ id: row.id, extraction_status: "failed", extracted_text: null }]);
         expect(f.fetchProvider).not.toHaveBeenCalled();
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("releases a transient byte-read failure to pending so the next sweep can recover it", async () => {
+      const row = await seedMedia({ status: "pending" });
+      const f = transcriptionService();
+      f.storage.getBuffer.mockRejectedValueOnce(new Error("storage timeout"));
+      try {
+        await f.sweep(projectId);
+        expect(await statuses([row.id])).toEqual([{ id: row.id, extraction_status: "pending", extracted_text: null }]);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+
+        await f.sweep(projectId);
+        await waitFor(async () => (await statuses([row.id])).every((item) => item.extraction_status === "ready"), "retried transcription");
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect((await statuses([row.id]))[0].extracted_text).toBe("recovered transcript");
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("does not let a stale claim owner overwrite the row after a takeover", async () => {
+      const row = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const staleToken = randomUUID();
+      const currentToken = randomUUID();
+      await setup.query(
+        "UPDATE knowledge_files SET extraction_status = 'processing', extraction_claim_token = $2, extraction_claimed_at = now() WHERE id = $1",
+        [row.id, staleToken]
+      );
+      // A later claim owns the row before the stale worker finishes its provider call.
+      await setup.query("UPDATE knowledge_files SET extraction_claim_token = $2 WHERE id = $1", [row.id, currentToken]);
+      const f = transcriptionService();
+      try {
+        await f.transcribe(projectId, row.id, staleToken);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.embedding).not.toHaveBeenCalled();
+        const state = (await setup.query(
+          "SELECT extraction_status, extracted_text, extraction_claim_token FROM knowledge_files WHERE id = $1",
+          [row.id]
+        )).rows[0];
+        expect(state).toEqual({ extraction_status: "processing", extracted_text: null, extraction_claim_token: currentToken });
       } finally {
         await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
       }

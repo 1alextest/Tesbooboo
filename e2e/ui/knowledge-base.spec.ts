@@ -384,6 +384,33 @@ test.describe("knowledge base (UI)", () => {
     expect(summary.files, "the summary counts the uploaded file").toBe(1);
   });
 
+  test("KBU-48 a lost upload response is retried once and lands exactly one file", async ({ browser }) => {
+    const page = await openKb(browser);
+    const fileName = `kbu-48-${Date.now()}.txt`;
+    let attempts = 0;
+    await page.route(/\/knowledge-base\/files/, (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts += 1;
+      // Model a lost response, not a server refusal: the first attempt reaches the browser as a
+      // network failure, so only the requestKey makes the single replay safe.
+      return attempts === 1 ? route.abort("failed") : route.continue();
+    });
+
+    await newMenu(page, "Upload file");
+    const dialog = modal(page, "Upload files");
+    await dialog.locator('input[type="file"]').setInputFiles({
+      name: fileName,
+      mimeType: "text/plain",
+      buffer: Buffer.from("KBU-48 retry fixture"),
+    });
+    await dialog.getByRole("button", { name: /Upload/ }).click();
+
+    await expect(row(page, fileName)).toBeVisible();
+    expect(attempts, "the upload was attempted twice").toBe(2);
+    const summary = await (await api.get(kbUrl("/summary"))).json();
+    expect(summary.files, "the retry did not duplicate the file").toBe(1);
+  });
+
   // ─── Validation ────────────────────────────────────────────────────────────
 
   test("KBU-05 the create button stays disabled for an empty or whitespace-only folder name", { tag: '@tesbo.testId("TES-TC-1004")' }, async ({

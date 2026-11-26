@@ -243,6 +243,10 @@ test.describe("knowledge base v2 — files", () => {
     const secondBody = await second.json();
     expect(secondBody).toMatchObject({ total: 1, replayed: true });
     expect(secondBody.list[0].id).toBe(firstBody.list[0].id);
+    // Coordination state, including the content digest, never leaves the service.
+    expect(secondBody.list[0].uploadRequestKey).toBeUndefined();
+    expect(secondBody.list[0].uploadRequestDigest).toBeUndefined();
+    expect(secondBody.list[0].extractionClaimToken).toBeUndefined();
     expect(fileCount()).toBe(1);
   });
 
@@ -288,6 +292,14 @@ test.describe("knowledge base v2 — files", () => {
     const retry = await uploadWithKey([textFile("gone.txt", "gone bytes")], requestKey, folder.id);
     expect(retry.status()).toBe(409);
     expect((await retry.json()).code).toBe("UPLOAD_REQUEST_CLOSED");
+    expect(fileCount()).toBe(0);
+  });
+
+  test("KBF-A-85 a supplied empty requestKey is refused rather than silently disabling replay", async () => {
+    const folder = await createFolder(stamp("Empty key"));
+    const res = await uploadWithKey([textFile("empty-key.txt", "bytes")], "", folder.id);
+    expect(res.status()).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("requestKey");
     expect(fileCount()).toBe(0);
   });
 

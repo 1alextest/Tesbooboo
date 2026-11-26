@@ -4922,13 +4922,30 @@ async function uploadKnowledgeFileBatch(
   folderId: string,
   files: File[]
 ): Promise<{ list: KnowledgeFile[]; total: number }> {
-  const formData = new FormData();
-  formData.append("folderId", folderId);
-  for (const file of files) formData.append("files", file);
-  const res = await fetchWithNetworkErrorMessage(
-    `${API_BASE}/api/projects/${projectId}/knowledge-base/files/upload`,
-    { method: "POST", credentials: "include", body: formData }
-  );
+  // One key per logical batch, reused only by the single retry below. The server treats a replay
+  // with this key as the same request, so a committed batch whose response was lost cannot become
+  // a second set of files.
+  const requestKey = crypto.randomUUID();
+  const send = () => {
+    const formData = new FormData();
+    formData.append("folderId", folderId);
+    formData.append("requestKey", requestKey);
+    for (const file of files) formData.append("files", file);
+    return fetchWithNetworkErrorMessage(
+      `${API_BASE}/api/projects/${projectId}/knowledge-base/files/upload`,
+      { method: "POST", credentials: "include", body: formData }
+    );
+  };
+  let res: Response;
+  try {
+    res = await send();
+  } catch (error) {
+    // fetchWithNetworkErrorMessage refuses to replay mutations automatically because their outcome
+    // is unknown. This upload now has a request key, so a single replay is safe: a committed first
+    // attempt is returned as a replay, and a definitely-failed one creates the files once.
+    if (!(error instanceof MutationOutcomeUnknownError)) throw error;
+    res = await send();
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error((err as { error?: string }).error || String(res.status));

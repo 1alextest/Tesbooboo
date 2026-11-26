@@ -13489,19 +13489,21 @@ export class LegacyService implements OnModuleInit {
   // owner explicit so a retry (upload re-send, boot sweep, or a second process) cannot dispatch a
   // second provider request for the same file. A claim older than the lease is treated as abandoned:
   // the process that held it is assumed dead, which is exactly what a backend restart leaves behind.
-  private async claimKnowledgeTranscription(fileId: string): Promise<boolean> {
-    const claimed = await this.db.query<{ id: string }>(
+  private async claimKnowledgeTranscription(fileId: string): Promise<string | null> {
+    const token = randomUUID();
+    const claimed = await this.db.query<{ extraction_claim_token: string | null }>(
       `UPDATE knowledge_files kf
-          SET extraction_status = 'processing', extraction_claimed_at = now(), updated_at = now()
+          SET extraction_status = 'processing', extraction_claimed_at = now(),
+              extraction_claim_token = $2, updated_at = now()
          FROM projects p
         WHERE kf.id = $1 AND p.id = kf.project_id AND p.archived_at IS NULL AND kf.is_deleted = false
           AND (kf.extraction_status = 'pending'
                OR (kf.extraction_status = 'processing'
                    AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
-        RETURNING kf.id`,
-      [fileId]
+        RETURNING kf.extraction_claim_token`,
+      [fileId, token]
     );
-    return Boolean(claimed.rows[0]);
+    return claimed.rows[0]?.extraction_claim_token ?? null;
   }
 
   // Recover transcriptions abandoned by a restart. Upload fires transcription without waiting, so
@@ -13510,24 +13512,48 @@ export class LegacyService implements OnModuleInit {
   // rows that already have extracted_text; it cannot invent a transcript, so this sweep is separate.
   // Claims happen before dispatch, one at a time, so re-entering this sweep (or a still-live worker)
   // cannot double-charge the provider for the same file.
-  private async resumeInterruptedKnowledgeTranscriptions(): Promise<void> {
+  private async resumeInterruptedKnowledgeTranscriptions(projectIdFilter?: string): Promise<void> {
     const res = await this.db.query<Body>(
       `SELECT kf.id, kf.project_id, kf.storage_key, kf.file_extension, kf.mime_type, kf.original_file_name
          FROM knowledge_files kf
          JOIN projects p ON p.id = kf.project_id
         WHERE kf.is_deleted = false AND p.archived_at IS NULL
+          AND ($1::uuid IS NULL OR kf.project_id = $1)
           AND (kf.extraction_status = 'pending'
                OR (kf.extraction_status = 'processing'
                    AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
-        ORDER BY kf.created_at`,
-    ).catch(() => ({ rows: [] as Body[] }));
+        ORDER BY kf.created_at
+        LIMIT 25`,
+      [projectIdFilter ?? null]
+    ).catch((err) => {
+      this.logger.warn(`Could not scan for interrupted knowledge transcripts: ${err instanceof Error ? err.message : err}`);
+      return { rows: [] as Body[] };
+    });
     for (const row of res.rows) {
       const projectId = String(row.project_id);
       const fileId = String(row.id);
       const storageKey = String(row.storage_key || "");
-      if (!storageKey || !(await this.claimKnowledgeTranscription(fileId).catch(() => false))) continue;
+      const claimToken = await this.claimKnowledgeTranscription(fileId).catch(() => null);
+      if (!claimToken) continue;
+      if (!storageKey) {
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+        continue;
+      }
+      // Reading the object can itself be slow (large video, object-store retry). Renew the same
+      // claim while it runs so another sweep cannot take it over before the provider call starts.
+      const keepAlive = setInterval(() => {
+        void this.db.query(
+          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing'",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+      }, 60 * 1000);
+      keepAlive.unref?.();
       try {
         const buffer = await this.storage.getBuffer(storageKey);
+        clearInterval(keepAlive);
         const ext = String(row.file_extension || path.extname(String(row.original_file_name || "")).replace(/^\./, "")).toLowerCase();
         void this.transcribeKnowledgeFile(
           projectId,
@@ -13536,13 +13562,21 @@ export class LegacyService implements OnModuleInit {
           ext,
           String(row.mime_type || ""),
           String(row.original_file_name || ""),
-          true
+          true,
+          claimToken
         ).catch(() => undefined);
       } catch (err) {
+        clearInterval(keepAlive);
         this.logger.warn(`Could not reload knowledge file ${fileId} for transcription recovery: ${err instanceof Error ? err.message : err}`);
+        // A missing object is permanent. Anything else (timeout, object-store 5xx, credentials)
+        // is treated as transient: release the claim so the next sweep retries instead of losing
+        // the transcript forever.
+        const code = String((err as { code?: unknown })?.code || (err as { name?: unknown })?.name || "");
+        const message = err instanceof Error ? err.message : String(err);
+        const missing = code === "ENOENT" || code === "NoSuchKey" || /NoSuchKey|not found/i.test(message);
         await this.db.query(
-          "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, updated_at = now() WHERE id = $1 AND extraction_status = 'processing'",
-          [fileId]
+          "UPDATE knowledge_files SET extraction_status = $3, extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken, missing ? "failed" : "pending"]
         ).catch(() => undefined);
       }
     }
@@ -13553,7 +13587,7 @@ export class LegacyService implements OnModuleInit {
   // so a multi-minute meeting recording doesn't block the upload HTTP response. Only attempted
   // when the project has an OpenAI key allocated — no other provider offers a compatible
   // transcription endpoint we can safely assume the shape of.
-  private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string, alreadyClaimed = false): Promise<void> {
+  private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string, alreadyClaimed = false, claimTokenInput?: string | null): Promise<void> {
     const traceSeed = `knowledge:transcription:${fileId}`;
     // File names belong in masked input, never in unmasked observation metadata.
     const traceMeta = { projectId, fileId, ext };
@@ -13561,12 +13595,14 @@ export class LegacyService implements OnModuleInit {
     // Keep the lease alive for the duration of the provider call, so a slow but healthy
     // transcription is never mistaken for an abandoned one and dispatched twice.
     let heartbeat: NodeJS.Timeout | undefined;
+    let claimToken: string | null = null;
     try {
-      if (!alreadyClaimed && !(await this.claimKnowledgeTranscription(fileId))) return;
+      claimToken = alreadyClaimed ? claimTokenInput ?? null : await this.claimKnowledgeTranscription(fileId);
+      if (!claimToken) return;
       heartbeat = setInterval(() => {
         void this.db.query(
-          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_status = 'processing' AND is_deleted = false",
-          [fileId]
+          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing' AND is_deleted = false",
+          [fileId, claimToken]
         ).catch(() => undefined);
       }, 60 * 1000);
       heartbeat.unref?.();
@@ -13578,15 +13614,18 @@ export class LegacyService implements OnModuleInit {
         // Archived/deleted between claim and dispatch: release rather than terminalise, so an
         // unarchived project can still recover it on the next sweep.
         await this.db.query(
-          "UPDATE knowledge_files SET extraction_status = 'pending', extraction_claimed_at = NULL, updated_at = now() WHERE id = $1 AND extraction_status = 'processing'",
-          [fileId]
+          "UPDATE knowledge_files SET extraction_status = 'pending', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
         ).catch(() => undefined);
         return;
       }
       const allocation = await this.zyraAiAllocation(projectId);
       const key = allocation.key;
       if (!key || String(key.provider || "").toLowerCase() !== "openai") {
-        await this.db.query("UPDATE knowledge_files SET extraction_status = 'unsupported', extraction_claimed_at = NULL, updated_at = now() WHERE id = $1", [fileId]);
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'unsupported', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        );
         // No model request occurred; do not invent a generation observation.
         return;
       }
@@ -13612,8 +13651,8 @@ export class LegacyService implements OnModuleInit {
       const data = await this.readAiProviderJson("openai", res);
       const text = String(data.text || "").trim().slice(0, LegacyService.KB_EXTRACTED_TEXT_LIMIT);
       const saved = await this.db.query(
-        "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', extraction_claimed_at = NULL, updated_at = now() WHERE id = $1 AND is_deleted = false RETURNING id",
-        [fileId, text || null]
+        "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $3 AND extraction_status = 'processing' AND is_deleted = false RETURNING id",
+        [fileId, text || null, claimToken]
       );
       if (text && saved.rows[0]) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
       void recordStandaloneGeneration({
@@ -13628,7 +13667,10 @@ export class LegacyService implements OnModuleInit {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
-      await this.db.query("UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, updated_at = now() WHERE id = $1", [fileId]).catch(() => undefined);
+      await this.db.query(
+        "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing'",
+        [fileId, claimToken]
+      ).catch(() => undefined);
       if (requestAttempted) void recordStandaloneGeneration({
         traceSeed,
         name: "knowledge.transcription",
@@ -13657,6 +13699,13 @@ export class LegacyService implements OnModuleInit {
     const camelled = toCamel(row);
     delete camelled.storageKey;
     delete camelled.fileName;
+    // Upload identity and transcription ownership are internal coordination state, not client data.
+    // The digest in particular is a content fingerprint and has no reason to leave the service.
+    delete camelled.uploadRequestKey;
+    delete camelled.uploadRequestFileIndex;
+    delete camelled.uploadRequestDigest;
+    delete camelled.extractionClaimedAt;
+    delete camelled.extractionClaimToken;
     return camelled;
   }
 
@@ -13700,6 +13749,9 @@ export class LegacyService implements OnModuleInit {
     await this.kbFolder(projectId, folderId);
     if (batchFiles.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     const rawRequestKey = typeof requestKeyInput === "string" ? requestKeyInput.trim() : "";
+    // An explicitly supplied empty key is a client mistake, not "no key": silently treating it as
+    // absent would promise retry safety the caller does not actually get.
+    if (requestKeyInput != null && rawRequestKey.length === 0) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     if (rawRequestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     // Optional for backward compatibility: clients that do not send one keep the old
     // fire-and-forget semantics. A client that wants an uncertain upload to be safely retryable

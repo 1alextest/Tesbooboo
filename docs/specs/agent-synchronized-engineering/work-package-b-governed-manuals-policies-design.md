@@ -773,39 +773,59 @@ from filenames or content alone.
 - A concurrent retry that loses the unique-index race reconciles by the authoritative keyed row,
   deletes only its own unreferenced object, and returns that row. A lost COMMIT acknowledgement still
   skips reconciliation and compensation entirely; the client retries with the same key instead.
-- Audio/video extraction now has an explicit claim (`extraction_status = 'processing'` plus
-  `extraction_claimed_at`) taken by an atomic conditional UPDATE that rechecks the file is live and the
-  project is not archived. The claim has a five-minute lease, refreshed every minute while the provider
-  call is running, so a healthy slow call cannot be taken over. A provider failure remains terminal
-  `failed`; a missing OpenAI allocation remains terminal `unsupported`. A deleted file or archived
-  project is never claimed, and a project archived between claim and dispatch is released to `pending`.
-- `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes. It claims before
-  reading bytes or dispatching, so overlapping sweeps and a live worker cannot double-charge the
-  provider. If the stored bytes cannot be read the row becomes `failed`, never silently stuck pending.
+- Audio/video extraction now has an explicit claim (`extraction_status = 'processing'`,
+  `extraction_claimed_at` and a UUID `extraction_claim_token`) taken by an atomic conditional UPDATE
+  that rechecks the file is live and the project is not archived. The claim has a five-minute lease,
+  refreshed every minute while bytes are read and while the provider call runs. The token fences every
+  terminal write, so a takeover cannot be clobbered by the previous owner. A provider failure remains
+  terminal `failed`; a missing OpenAI allocation remains terminal `unsupported`. A deleted file or
+  archived project is never claimed, and a project archived between claim and dispatch is released to
+  `pending`.
+- `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes, bounded to 25 rows per
+  sweep, and can be scoped to one project for tests. It claims before reading bytes or dispatching, so
+  overlapping sweeps and a live worker cannot both own the row; fencing prevents duplicate state
+  effects. It cannot prevent a *repeat provider call* if the process crashes after the provider returned
+  but before the result is persisted — the Whisper endpoint has no idempotency key — so recovery is
+  at-least-once externally and exactly-once in persisted state. A missing object becomes terminal
+  `failed`; a transient byte-read failure releases the claim to `pending` so a later sweep retries.
   This complements, and does not replace, `RagIngestionService.resumeInterruptedEmbeddings`: that sweep
   still covers ordinary-file embeddings whose extraction already completed, while a pending transcript
   has no text to embed and is recovered here.
+- The frontend generates one request key per upload batch and replays a network-failed upload once with
+  that key; the shared fetch wrapper still refuses to replay mutations without one.
+- Internal coordination columns (`uploadRequestKey`, `uploadRequestFileIndex`, `uploadRequestDigest`,
+  `extractionClaimedAt`, `extractionClaimToken`) are stripped from every file response.
 - Database regressions in `knowledge-document-writes.db.spec.ts` cover full replay, digest conflict,
   deliberate duplicate under a new key, partial-batch resume after a pre-COMMIT audit failure,
-  committed-but-unacknowledged retry, deleted-row refusal, concurrent sweep claiming, a live claim being
-  left alone, deleted/archived exclusion, and terminal failure when stored bytes are unreadable. HTTP
-  coverage is KBF-A-81–84. Fault injection is disclosed where used: the uncertain-COMMIT tests fault
-  the acknowledgement delivery, not PostgreSQL itself.
+  committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
+  exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
+  deleted/archived exclusion, terminal missing-object failure, transient read-release, and stale-token
+  fencing. HTTP coverage is KBF-A-81–85; browser coverage is KBU-48. Fault injection is disclosed where
+  used: the uncertain-COMMIT tests fault acknowledgement delivery, and the race test pauses after the
+  INSERT, not inside PostgreSQL.
 
 **Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
 than mandatory; requiring them would give every client automatic retry safety but breaks existing
 integrations until all callers send one. Replay returns the original rows rather than a `202`-style
-"already accepted" response, because callers need the file IDs. A key is closed after deletion rather
-than reusable. Transcription failure is terminal instead of automatically retried, because a provider
-rejection is not evidence that a restart would succeed; manual re-upload remains the recovery path. The
-owner may still choose mandatory keys, an explicit reconciliation endpoint, or automatic bounded retries
-for provider failures.
+"already accepted" response, because callers need the file IDs. A key is closed after any of its files
+is deleted, so a deleted position makes the whole logical batch non-replayable rather than silently
+resurrecting or filling around it. An explicitly supplied empty key is a `400`, not an absence, so a
+caller cannot believe it has retry safety it does not have. Transcription failure is terminal instead
+of automatically retried, because a provider rejection is not evidence that a restart would succeed;
+manual re-upload remains the recovery path. The owner may still choose mandatory keys, per-position
+reopening after deletion, an explicit reconciliation endpoint, or automatic bounded retries for
+provider failures.
 
 **Separate dispositions (unchanged, not silently fixed here).** Filename uniqueness is still computed
 outside the insert lock; per-file batch atomicity still permits committed prefixes before a later file
 fails (resume now makes that state recoverable but does not make the batch all-or-nothing); storage
 deletion is still best-effort with no retry queue; rows stranded by the pre-V166 code receive no
-one-time repair. These remain follow-ups outside this bounded correction.
+one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
+a share lock on `knowledge_files` during deployment; that is the repository's established migration
+pattern, not a change in this PR. The global sweep still sees every tenant, matching the existing
+embedding sweep; a local backend booted against shared infrastructure can therefore recover another
+tenant's pending transcript. That is recorded as an operational risk and an owner decision (dedicated
+worker, configuration gate, or per-tenant scheduling), not silently accepted as correct.
 
 Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
