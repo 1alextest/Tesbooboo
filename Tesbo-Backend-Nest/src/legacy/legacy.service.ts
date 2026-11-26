@@ -45,7 +45,7 @@ import {
   ZYRA_RU_STAGED_AWAITING,
   ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
-import { ApiTokenService, normalizeApiTokenScopes } from "../auth/api-token.service";
+import { API_TOKEN_CURRENT_GENERATION_SQL, ApiTokenService, canRevokeApiToken, normalizeApiTokenScopes } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
@@ -1716,8 +1716,10 @@ export class LegacyService implements OnModuleInit {
   // same project-membership check used across the rest of the API.
 
   async listApiKeys(userId: string | null | undefined, projectId: string) {
-    await this.requireProjectAccess(userId, projectId);
-    return this.apiTokens.listTokens(projectId);
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    return this.apiTokens.listTokens(projectId, { userId: uid, canManage: role === "owner" || role === "manager" });
   }
 
   async createApiKey(userId: string | null | undefined, projectId: string, body: Body) {
@@ -1741,6 +1743,7 @@ export class LegacyService implements OnModuleInit {
     // workspace or MCP path the one-time secret belongs to.
     return {
       ...issued,
+      canRevoke: true,
       projectId,
       projectName: String(project.name || ""),
       organizationId: String(project.organization_id || ""),
@@ -1750,19 +1753,22 @@ export class LegacyService implements OnModuleInit {
 
   async revokeApiKey(userId: string | null | undefined, projectId: string, keyId: string) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     if (!isUuid(keyId)) throw new NotFoundException({ error: "API key not found" });
-    const token = await this.apiTokens.issuerOf(projectId, keyId);
-    if (!token.exists) throw new NotFoundException({ error: "API key not found" });
-    const role = this.normalizeRole(String(project.caller_role || ""));
-    // A member may revoke their own token; revoking someone else's project credential is an
-    // owner/manager action. Otherwise any member could disable the project's machine integrations.
-    if (role !== "owner" && role !== "manager" && token.userId !== uid) {
-      throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
-    }
-    const removed = await this.apiTokens.revokeToken(projectId, keyId);
-    if (!removed) throw new NotFoundException({ error: "API key not found" });
-    return { ok: true };
+    return this.db.transaction(async (client) => {
+      // Lock current project/workspace authority before the credential, as on native proposal
+      // writes. A cached preflight cannot authorize a delete after a concurrent role change.
+      const project = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const token = await this.apiTokens.issuerOf(projectId, keyId, client);
+      if (!token.exists) throw new NotFoundException({ error: "API key not found" });
+      const role = this.normalizeRole(String(project.caller_role || ""));
+      if (!canRevokeApiToken({ userId: uid, canManage: role === "owner" || role === "manager" }, token.userId)) {
+        throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
+      }
+      const removed = await this.apiTokens.revokeToken(projectId, keyId, client);
+      if (!removed) throw new NotFoundException({ error: "API key not found" });
+      return { ok: true };
+    });
   }
 
   // --- Saved repository views ----------------------------------------------
@@ -18269,7 +18275,7 @@ export class LegacyService implements OnModuleInit {
       throw new ForbiddenException({ error: "A current authoring role is required" });
     }
     if (principal.kind !== "api_token") return;
-    const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId, projectId, uid]);
+    const token = await client.query(`SELECT t.scopes FROM api_tokens t WHERE t.id=$1 AND t.project_id=$2 AND t.user_id=$3 AND ${API_TOKEN_CURRENT_GENERATION_SQL} FOR SHARE OF t`, [principal.tokenId, projectId, uid]);
     if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) {
       throw new ForbiddenException({ error: "A current write-scoped project token is required" });
     }
@@ -23465,6 +23471,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // A governed document candidate is the exact artifact the owner reviews. Deleting its only
       // operation would destroy that artifact and rewrite the review revision.
       this.assertOrdinaryProposalMutation(existing.rows[0]);
+      // Request preflight is not authority after a task-row wait. Hold current membership
+      // and the write credential through commit, using the same boundary as proposal staging.
+      if (principal?.kind === "api_token") {
+        const uid = this.requireUser(userId);
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "delete_testcase_draft");
+      }
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -23507,6 +23520,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
       // under the reviewer without changing the exact revision they approved.
       this.assertOrdinaryProposalMutation(existing.rows[0]);
+      // Request preflight is not authority after a task-row wait. Hold current membership
+      // and the write credential through commit, using the same boundary as proposal staging.
+      if (principal?.kind === "api_token") {
+        const uid = this.requireUser(userId);
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "edit_testcase_draft");
+      }
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }

@@ -20,7 +20,7 @@ function digest(value) {
   return 'sha256:' + createHash('sha256').update(bytes).digest('hex');
 }
 
-async function replay(trial) {
+async function replay(trial, input, expectedCount) {
   // The native provider adapter uses fetch. Replace it only for this invocation and
   // reject any second request or unexpected destination, including from another tool.
   const originalFetch = globalThis.fetch;
@@ -36,14 +36,12 @@ async function replay(trial) {
       return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify(trial.originalReply) } }] });
     };
 
-    const input = structuredClone(evidence.baseGenerationInput);
-    if (trial.method === 'candidate') input.context += '\n\n' + evidence.candidateMethod;
     const result = await new LegacyService().generateZyraWithProvider({
       provider: 'evaluation-relay', model: 'blind-author-subject', apiKey: '',
       baseUrl, projectId: 'synthetic-pilot', input,
     });
     assert.equal(calls, 1, trial.id + ': provider was not called');
-    assert.equal(result.drafts.length, 5, trial.id + ': expected five normalized drafts');
+    assert.equal(result.drafts.length, expectedCount, trial.id + ': unexpected normalized draft count');
     assert.equal(digest(result.drafts), trial.normalizedDigest, trial.id + ': native normalized output changed');
     console.log(trial.id + ': verified original messages and ' + result.drafts.length + ' normalized drafts');
   } finally {
@@ -58,7 +56,22 @@ async function main() {
   assert.equal(trials.filter(trial => trial.method === 'candidate').length, 2);
   for (const trial of trials) {
     assert.ok(['baseline', 'ordinary', 'candidate'].includes(trial.method), 'Unknown trial method: ' + trial.method);
-    await replay(trial);
+    const input = structuredClone(evidence.baseGenerationInput);
+    if (trial.method === 'candidate') input.context += '\n\n' + evidence.candidateMethod;
+    await replay(trial, input, 5);
+  }
+
+  const queue = JSON.parse(readFileSync(path.join(__dirname, 'zyra-queue-context.json'), 'utf8'));
+  assert.equal(digest(queue.rubric), queue.rubricDigest, 'Frozen queue scoring criteria changed');
+  assert.deepEqual(queue.trials.map(trial => trial.condition).sort(), ['coordinator and worker', 'shared excerpts']);
+  for (const trial of queue.trials) {
+    const input = structuredClone(queue.baseGenerationInput);
+    for (const range of trial.ranges) {
+      assert.equal(typeof queue.excerpts[range], 'string', 'Missing source excerpt ' + range);
+      input.context += '\n\nLines ' + range + '\n' + queue.excerpts[range];
+    }
+    assert.equal(digest(input), trial.inputDigest, trial.id + ': frozen input changed');
+    await replay(trial, input, 3);
   }
 }
 

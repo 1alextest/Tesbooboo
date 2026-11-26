@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Client, Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
+import { ApiTokenService } from "../auth/api-token.service";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { CustomTagsService } from "../custom-tags/custom-tags.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
@@ -92,6 +93,65 @@ type Body=Record<string,any>;
     }
   },15000);
 
+  it.each(["project","organization"] as const)("CL-T10 generation replacement while native staging waits (%s)", async membership => {
+    const issuer = new ApiTokenService(new DatabaseService(pool));
+    const old = await issuer.issueToken(user,project,"Native generation barrier",["read","write"]);
+    const oldPrincipal = {kind:"api_token",tokenId:old.id,transport:"rest"};
+    const blocker = new Client({connectionString:url});
+    let attempt:Promise<unknown>|undefined, freshId:string|undefined;
+    await blocker.connect();
+    const before = (await tasks()).rows;
+    const casesBefore = (await nativeCases()).rows;
+    const operations = [{opType:"create",draft:{title:"Retired generation cannot stage"}}];
+    const key = randomUUID();
+    const restore = async () => {
+      await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[org,user]);
+      await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+    };
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+      attempt = stage(operations,key,oldPrincipal).then(()=>null,(error:unknown)=>error);
+      const deadline=Date.now()+5000; let waiting=false;
+      while(Date.now()<deadline){
+        waiting=!!(await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+          [applicationName])).rowCount;
+        if(waiting)break;
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(waiting).toBe(true);
+      const removed = membership==="project"
+        ? await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id",[project,user])
+        : await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING id",[org,user]);
+      expect(removed.rowCount).toBe(1);
+      await restore();
+      // The original token and the current member both still exist. This isolates generation
+      // continuity from ordinary absent-membership or deleted-token refusal.
+      expect((await admin.query("SELECT id FROM api_tokens WHERE id=$1",[old.id])).rowCount).toBe(1);
+      await blocker.query("COMMIT");
+      expect(await attempt).toMatchObject({status:403});
+      expect((await tasks()).rows).toEqual(before);
+      expect((await nativeCases()).rows).toEqual(casesBefore);
+      await expect(stage(operations,key,oldPrincipal)).rejects.toMatchObject({status:403});
+      const fresh = await issuer.issueToken(user,project,"Fresh generation control",["read","write"]);
+      freshId=fresh.id;
+      const freshPrincipal = {kind:"api_token",tokenId:fresh.id,transport:"rest"};
+      const freshTask = await stage(operations,key,freshPrincipal);
+      expect(freshTask.proposalProvenance).toMatchObject({kind:"api_token",tokenId:fresh.id,issuerId:user});
+      expect((await stage(operations,key,freshPrincipal)).id).toBe(freshTask.id);
+      await expect(stage(operations,key,oldPrincipal)).rejects.toMatchObject({status:403});
+      expect((await nativeCases()).rows).toEqual(casesBefore);
+    } finally {
+      await blocker.query("ROLLBACK");
+      if(attempt)await attempt;
+      await blocker.end();
+      await restore();
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[old.id,project]);
+      if(freshId)await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[freshId,project]);
+    }
+  },15000);
+
   it("default-off preview has no persisted effects and same-key content replay is bounded",async()=>{
     const before=(await tasks()).rows,casesBefore=(await nativeCases()).rows;
     process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="0";
@@ -105,6 +165,61 @@ type Body=Record<string,any>;
     await expect(stage([{opType:"create",draft:{title:"Changed request"}}],key,{kind:"api_token",tokenId:token,transport:"rest"})).rejects.toMatchObject({status:409});
     expect((await nativeCases()).rows).toEqual(casesBefore);
   });
+
+  // CL-T11: a machine draft mutation is not official publication, but still
+  // must preserve the credential's authority until the task mutation commits.
+  it.each(["edit","delete"] as const)("CL-T11 generation replacement while testcase draft %s waits",async(action)=>{
+    const issuer=new ApiTokenService(new DatabaseService(pool));
+    const old=await issuer.issueToken(user,project,"Draft mutation generation barrier",["read","write"]);
+    const oldPrincipal={kind:"api_token" as const,tokenId:old.id,transport:"rest" as const};
+    const blocker=new Client({connectionString:url});await blocker.connect();
+    let attempt:Promise<unknown>|undefined,freshId:string|undefined;
+    const restore=async()=>{
+      await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+    };
+    try{
+      const review=await stage([{opType:"create",draft:{title:"Pending generation draft"}},{opType:"create",draft:{title:"Positive control draft"}}]);
+      const mutate=(principal:typeof oldPrincipal,index:number,title:string)=>action==="edit"
+        ? service().zyraEditDraft(project,user,review.id,index,{title},principal)
+        : service().zyraDeleteDraft(project,user,review.id,index,principal);
+      // Current credentials can modify a pending ordinary testcase proposal.
+      const control=await mutate(oldPrincipal,1,"Current credential control");
+      expect(control.drafts).toHaveLength(action==="edit"?2:1);
+      const before=(await tasks()).rows,casesBefore=(await nativeCases()).rows;
+      await blocker.query("BEGIN");
+      const pid=(await blocker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await blocker.query("SELECT id FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE",[review.id,project]);
+      attempt=mutate(oldPrincipal,0,"Retired credential must not edit").then(()=>null,(error:unknown)=>error);
+      const deadline=Date.now()+5000;let waiting=false;
+      while(Date.now()<deadline){
+        waiting=!!(await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND $2::int=ANY(pg_blocking_pids(pid))",
+          [applicationName,pid])).rowCount;
+        if(waiting)break;
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(waiting).toBe(true);
+      expect((await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id",[project,user])).rowCount).toBe(1);
+      await restore();
+      expect((await admin.query("SELECT id FROM api_tokens WHERE id=$1",[old.id])).rowCount).toBe(1);
+      await blocker.query("COMMIT");
+      expect(await attempt).toMatchObject({status:403});
+      expect((await tasks()).rows).toEqual(before);
+      expect((await nativeCases()).rows).toEqual(casesBefore);
+      const fresh=await issuer.issueToken(user,project,"Current draft mutation credential",["read","write"]);
+      freshId=fresh.id;
+      const result=await mutate({...oldPrincipal,tokenId:fresh.id},0,"Fresh credential control");
+      expect(result.drafts).toHaveLength(action==="edit"?2:0);
+      expect((await nativeCases()).rows).toEqual(casesBefore);
+    }finally{
+      await blocker.query("ROLLBACK");
+      if(attempt)await attempt;
+      await blocker.end();
+      await restore();
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[old.id,project]);
+      if(freshId)await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[freshId,project]);
+    }
+  },15000);
 
   it("publishes only explicit selected operations with atomic human receipts, truthful totals and retry recovery",async()=>{
     const review=await stage([{opType:"create",draft:{title:"First selected case",postconditions:"Exact postcondition"}},{opType:"create",draft:{title:"Still pending case"}}]);
@@ -298,6 +413,80 @@ type Body=Record<string,any>;
       cases:(await admin.query("SELECT id FROM testcases WHERE project_id=$1 ORDER BY id",[project])).rows,
       approvals:(await admin.query("SELECT r.id FROM testcase_approval_receipts r JOIN testcases t ON t.id=r.testcase_id WHERE t.project_id=$1 ORDER BY r.id",[project])).rows
     });
+
+    // CL-T10 exercises each public native staging inlet, not only the shared
+    // predicate through testcase staging. The document inlet has no suite lock.
+    it.each([
+      ["requirement","project"], ["requirement","organization"],
+      ["user_manual","project"], ["user_manual","organization"],
+      ["policy","project"], ["policy","organization"],
+    ] as const)("CL-T10 generation replacement at %s staging (%s)",async(inlet,membership)=>{
+      const issuer=new ApiTokenService(new DatabaseService(pool));
+      const old=await issuer.issueToken(user,project,"Retired native inlet generation",["read","write"]);
+      const oldPrincipal={kind:"api_token" as const,tokenId:old.id,transport:"rest" as const};
+      const blocker=new Client({connectionString:url});await blocker.connect();
+      let attempt:Promise<unknown>|undefined,freshId:string|undefined;
+      const key=randomUUID(),operations=ops();
+      const folder=(await admin.query("SELECT id FROM knowledge_folders WHERE project_id=$1 AND is_deleted=false LIMIT 1",[project])).rows[0]?.id
+        || (await admin.query("INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) SELECT organization_id,id,'Knowledge base',true FROM projects WHERE id=$1 RETURNING id",[project])).rows[0].id;
+      const metadata={schemaVersion:"tesbo-governed-document/1",audience:"internal",
+        subtype:inlet==="policy"?"policy":"manual",confidentiality:"internal",distribution:"internal",
+        sourceAuthority:{kind:"internal",label:"Project owner",reference:null},
+        effectivity:{from:null,to:null},enforcementRefs:inlet==="policy"?["ACME-1"]:[]};
+      const body={requestKey:key,operation:"create",folderId:folder,
+        document:{title:`Generation boundary ${key}`,contentText:"Candidate body",contentHtml:"<p>Candidate body</p>",
+          contentJson:{type:"doc",content:[{type:"paragraph",content:[{type:"text",text:"Candidate body"}]}]},
+          governedMetadata:metadata},reason:"Generation continuity regression"};
+      const submit=(principal:typeof oldPrincipal)=>inlet==="requirement"
+        ? stageBundle(operations,key,principal)
+        : service().stageManagedDocumentProposal(project,user,body,principal,inlet);
+      const restore=async()=>{
+        await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[org,user]);
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+      };
+      try{
+        const before=(await tasks()).rows,officialBefore=await docCounts();
+        await blocker.query("BEGIN");
+        await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)",[`skill-assignments:${project}`]);
+        attempt=submit(oldPrincipal).then(()=>null,(error:unknown)=>error);
+        const deadline=Date.now()+5000;let waiting=false;
+        while(Date.now()<deadline){
+          waiting=!!(await admin.query(
+            "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+            [applicationName])).rowCount;
+          if(waiting)break;
+          await new Promise(resolve=>setTimeout(resolve,20));
+        }
+        expect(waiting).toBe(true);
+        const removed=membership==="project"
+          ? await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id",[project,user])
+          : await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING id",[org,user]);
+        expect(removed.rowCount).toBe(1);
+        await restore();
+        expect((await admin.query("SELECT id FROM api_tokens WHERE id=$1",[old.id])).rowCount).toBe(1);
+        await blocker.query("COMMIT");
+        expect(await attempt).toMatchObject({status:403});
+        expect((await tasks()).rows).toEqual(before);
+        expect(await docCounts()).toEqual(officialBefore);
+        await expect(submit(oldPrincipal)).rejects.toMatchObject({status:403});
+        const fresh=await issuer.issueToken(user,project,"Current native inlet generation",["read","write"]);
+        freshId=fresh.id;
+        const freshPrincipal={...oldPrincipal,tokenId:fresh.id};
+        const staged=await submit(freshPrincipal);
+        expect(staged).toMatchObject({taskStatus:"in_review",proposalProvenance:{kind:"api_token",tokenId:fresh.id,issuerId:user}});
+        expect((await submit(freshPrincipal)).id).toBe(staged.id);
+        await expect(submit(oldPrincipal)).rejects.toMatchObject({status:403});
+        expect((await tasks()).rows.filter(row=>!before.some(previous=>previous.id===row.id))).toHaveLength(1);
+        expect(await docCounts()).toEqual(officialBefore);
+      }finally{
+        await blocker.query("ROLLBACK");
+        if(attempt)await attempt;
+        await blocker.end();
+        await restore();
+        await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[old.id,project]);
+        if(freshId)await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[freshId,project]);
+      }
+    },15000);
 
     it("serializes a shared producer requestKey across testcase and requirement proposal inlets",async()=>{
       const key=randomUUID();

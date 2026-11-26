@@ -1,0 +1,249 @@
+{
+  "study": "First-draft coverage of ticket import when source context crosses a queue",
+  "nativeGenerator": "https://github.com/1alextest/Tesbooboo/blob/289fdd8be002ff6094944869a60afda0aea2cdae/Tesbo-Backend-Nest/src/legacy/legacy.service.ts#L25667",
+  "historicalImplementation": "https://github.com/1alextest/Tesbooboo/blob/551e7eab4906f11a67c4046c2a02ca2be80dc8ce/Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts",
+  "historicalSourceObject": "https://api.github.com/repos/1alextest/Tesbooboo/git/blobs/0aee1e8918d4bdd1bad2c31189db40077a779748",
+  "sourceCutoff": "Historical implementation before #268. Only selected lines were supplied. No coding-agent account, later policy, project records, or grading material entered either native message array.",
+  "protocol": "A fresh assistant per source packet read only the native generator message array and returned its first answer. Model responses were returned in-process to the native provider adapter. One sample per condition. No production provider call, autonomous retrieval, stored Task, or native execution.",
+  "rubricDigest": "sha256:6e1296db484ea4b4787263610b7e8acc3f7c7c433bf92ecf4d429d8a00120078",
+  "rubric": {
+    "target": "Names or exercises a folder removal after the destination was chosen or work enqueued, before the worker writes in the same original run. A subsequent sync alone does not qualify.",
+    "observation": "Names a traceable ticket/record and checks by identity both stored placement/liveness and user-visible tree or run outcome. A generic count or success label alone is insufficient.",
+    "policy": "Distinguishes the no-active-mirror-under-deleted-ancestry invariant from the unsettled choice to skip, report, replace or re-resolve. Do not credit a specific outcome inferred from code alone as settled product policy.",
+    "control": "An unchanged repeat on the same mirror is compared with its original identity and a concrete side effect or unchanged timestamp/content.",
+    "boundedEvidence": "Zero or one per category. Record verbatim anchors. Neither treatment scores product correctness or autonomous context retrieval. Two different authors, one sample per input; no advancement threshold or model/product release decision. Never claim a test ran from a draft."
+  },
+  "baseGenerationInput": {
+    "feedback": "",
+    "knowledge": [],
+    "jira": [],
+    "linear": [],
+    "notion": [],
+    "existingTestcases": [],
+    "requestedCount": 3,
+    "testcaseRange": "1-10",
+    "knowledgeConfidence": "none",
+    "language": "en",
+    "story": "The Knowledge Base team is preparing a ticket-import release. Choose three release tests that would give the reviewer the most useful evidence about what a user will see for this batch.",
+    "acceptanceCriteria": "The reviewer wants to know where each imported record lands, whether the progress report fits what was stored, and whether a repeat on unchanged input leaves the existing document alone.",
+    "context": "Release note. A provider ticket appears in a project knowledge tree as a read-only mirror. Members use the same tree to organize and remove folders. Imports may be manual or nightly. The run panel reports ticket progress. These are selected source excerpts, with some lines omitted. An existing folder, an empty project, and a fresh provider ticket may be set up in an isolated test project. Deliver exactly three draft cases, with concise setup, actions and independently observable expectations; mark any product decision that needs clarification."
+  },
+  "excerpts": {
+    "192–192": "      const folderId = await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy);",
+    "194–196": "      await this.runs.setStage(runId, \"fetching_tickets\");\n      const queued: SyncTicketJobPayload[] = [];\n      let skipped = 0;",
+    "202–207": "        const done = await this.syncedInPass(runId, projectId, String(connection.id), provider, tickets);\n        for (const ticket of tickets) {\n          if (done.has(ticket.issueId)) {\n            alreadySynced++;\n            continue;\n          }",
+    "215–216": "            const ticketId = await this.upsertTicket(projectId, String(connection.id), provider, ticket, remote.remote_id);\n            queued.push({ runId, organizationId, projectId, provider, ticketId, issueId: ticket.issueId, issueKey: ticket.issueKey, folderId, triggeredBy });",
+    "264–265": "      await this.runs.setStage(runId, \"building_documents\");\n      await this.runs.enqueueTicketJobs(queued);",
+    "451–453": "  private async processTicket(payload: SyncTicketJobPayload): Promise<void> {\n    const { runId, organizationId, projectId, provider, ticketId, issueId, folderId, triggeredBy } = payload;\n    const c = TICKET_TABLES[provider];",
+    "455–461": "    const ticketRes = await this.db.query<Row>(`SELECT * FROM ${c.table} WHERE id = $1 AND project_id = $2`, [ticketId, projectId]);\n    const row = ticketRes.rows[0];\n    if (!row) {\n      // Ticket vanished between fan-out and execution. Count it so the run can still finish.\n      await this.runs.recordTicketResult(runId, { processed: 1 });\n      return;\n    }",
+    "535–550": "    const stripVolatileMeta = (text: string) => text.replace(/^- \\*\\*Updated:\\*\\*.*$/m, \"\");\n    const existingDoc = await this.db.query<{ id: string; content_text: string; title: string }>(\n      `SELECT id, content_text, title FROM knowledge_documents\n       WHERE project_id = $1 AND source_provider = $2 AND source_external_id = $3 AND source_role = 'mirror' AND is_deleted = false`,\n      [projectId, provider, ticket.issueId]\n    );\n    const previousDoc = existingDoc.rows[0];\n    const contentChanged =\n      previousDoc?.content_text == null ||\n      stripVolatileMeta(previousDoc.content_text) !== stripVolatileMeta(mirror.markdown) ||\n      previousDoc.title !== mirror.title;\n\n    if (!contentChanged) {\n      await this.runs.recordTicketResult(runId, { processed: 1 });\n      return;\n    }",
+    "567–575": "    const upserted = await this.db.query<{ id: string; inserted: boolean }>(\n      `INSERT INTO knowledge_documents (\n         organization_id, project_id, folder_id, title, content_text, content_html, document_type, status,\n         source_provider, source_external_id, source_role, source_url, source_synced_by, source_synced_at, is_read_only\n       )\n       VALUES ($1, $2, $3, $4, $5, $6, 'requirement_note', 'published', $7, $8, 'mirror', $9, $10, now(), true)\n       ON CONFLICT (project_id, source_provider, source_external_id, source_role) WHERE source_provider IS NOT NULL AND is_deleted = false\n       DO UPDATE SET\n         title = EXCLUDED.title,",
+    "583–587": "         folder_id = EXCLUDED.folder_id,\n         updated_at = now()\n       RETURNING id, (xmax = 0) AS inserted`,\n      [organizationId, projectId, folderId, mirror.title, mirror.markdown, mirror.html, provider, ticket.issueId, ticket.url, triggeredBy]\n    );",
+    "606–612": "    await this.runs.recordTicketResult(runId, {\n      processed: 1,\n      created: mirrorDoc?.inserted ? 1 : 0,\n      updated: mirrorDoc?.inserted ? 0 : 1,\n      comments: comments.length,\n      decisions: summarized && decisionSummary ? 1 : 0\n    });"
+  },
+  "trials": [
+    {
+      "id": "M17",
+      "condition": "shared excerpts",
+      "gradeAlias": "Cedar",
+      "ranges": [
+        "192–192",
+        "194–196",
+        "202–207",
+        "264–265",
+        "455–461",
+        "535–550",
+        "606–612"
+      ],
+      "inputDigest": "sha256:44c7efea6de49af1f32d9d16068be5ef1ce02a2a7e91b17081aa7ab03512e93c",
+      "messagesDigest": "sha256:20906423757e8fb0bd6928e743894bf04f8dcdb099fdfae57d8f482f1e5530a7",
+      "normalizedDigest": "sha256:d29c7da6fa344879f2cf37b7cc740f87bba2b5b30536930b6456de3db1140293",
+      "originalReply": {
+        "drafts": [
+          {
+            "title": "Create ticket mirrors under the provider folder in empty and populated trees",
+            "preconditions": "Use two isolated projects connected to the same provider. A has an empty tree. B has an existing provider folder with recorded ID F-B and a separate member-created folder. Neither project has a mirror for its two selected tickets.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Record each project's tree and active mirror inventory. Start one manual import of the two selected tickets in each project and wait for both runs to finish.\", \"expectedResult\": \"Each run completes and identifies its two selected tickets as processed.\"}, {\"stepNumber\": 2, \"action\": \"Refresh each tree. Open both imported records, match their external IDs and titles to the provider, and inspect their parent IDs and edit controls.\", \"expectedResult\": \"A contains one provider folder with both read-only mirrors. Both mirrors in B belong to F-B. No imported record appears at the project root, in the member folder, or in a duplicate provider folder.\"}, {\"stepNumber\": 3, \"action\": \"Compare each completed run panel to the change in that project's active mirror inventory.\", \"expectedResult\": \"Each project gained exactly two distinct mirrors, one per external ID. Each panel shows 2 processed, 2 created and 0 updated.\"}]",
+            "testData": "Project A: A-101, A-102. Project B: B-201, B-202. Give each ticket its external ID as its title. Select no other tickets.",
+            "expectedSummary": "The reviewer can trace each of the four records to its project, provider folder and source ticket, and reconcile both run panels with the tree.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Knowledge Base",
+            "tags": [
+              "ticket-import",
+              "placement",
+              "read-only"
+            ],
+            "sourceRefs": [],
+            "techniques": [
+              "use_case_testing",
+              "equivalence_partitioning"
+            ]
+          },
+          {
+            "title": "Remove the destination folder after fan-out and reconcile the completed run",
+            "preconditions": "Use an isolated project with an empty existing provider folder F and two fresh selected tickets. Pause ticket workers while allowing fan-out to complete. A member can remove folders. A fixture can remove a project's local ticket row.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Start the import. When both jobs are queued at building_documents and neither has run, remove F through the tree. Remove only the local ticket row for Q-302 and verify Q-301 is still available.\", \"expectedResult\": \"Capture the folder-removal outcome, F's ID, both queued ticket IDs and the local presence or absence of each row. No mirror has been built yet.\"}, {\"stepNumber\": 2, \"action\": \"Resume both jobs and allow retries to settle. Refresh the project tree, inspect active mirror records by external ID, and record the final run panel.\", \"expectedResult\": \"Q-302 creates no mirror and contributes 1 processed, 0 created and 0 updated. For Q-301, record whether a mirror exists, its actual parent ID and whether a member can open it from the refreshed tree.\"}, {\"stepNumber\": 3, \"action\": \"Reconcile the panel counts with the two job outcomes and the stored documents, then record the folder-removal disposition alongside the evidence.\", \"expectedResult\": \"If Q-301 is successfully created, totals are 2 processed, 1 created, 0 updated and its mirror must be reachable. If Q-301 fails, the panel must not claim its creation or update. Clarify the intended behavior when F is removed while work is queued: block removal, recreate the folder, use an explicit fallback, or surface a failed import. Until decided, report the actual destination and outcome separately from the counter checks.\"}]",
+            "testData": "Run with Q-301 (retained local ticket) and Q-302 (local ticket vanishes after fan-out). No prior mirrors, comments or decisions.",
+            "expectedSummary": "A missing ticket counts as processed without a document. The evidence identifies where the surviving ticket landed and whether reported writes correspond to stored, reachable mirrors.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Knowledge Base",
+            "tags": [
+              "ticket-import",
+              "queued-work",
+              "progress"
+            ],
+            "sourceRefs": [],
+            "techniques": [
+              "state_testing",
+              "error_guessing",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Repeat the import in a new run without rewriting the original mirror",
+            "preconditions": "Complete an initial import of one ticket. Record the active mirror ID, parent ID, title, exact stored content and document modification timestamp or revision. Enable observation of worker completion for that ticket.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Start a separate import selecting R-401 again with the same title and content. Verify it reaches ticket processing in this new run and let it finish.\", \"expectedResult\": \"The new run processes R-401 and shows 1 processed, 0 created and 0 updated.\"}, {\"stepNumber\": 2, \"action\": \"Refresh the tree and compare the stored mirror to the initial snapshot.\", \"expectedResult\": \"Exactly one active read-only R-401 mirror exists. Its ID, parent, title, full content and document modification timestamp or revision match the snapshot.\"}, {\"stepNumber\": 3, \"action\": \"Advance only the provider's Updated timestamp, keeping all other ticket data fixed. Run a third independent import, verify the worker processes R-401, and repeat the comparison.\", \"expectedResult\": \"This run also reports 1 processed, 0 created and 0 updated. Even the previously stored Updated line and the document modification timestamp or revision remain unchanged.\"}]",
+            "testData": "R-401, title 'Review import', body 'Release candidate'. Initial Updated 2026-05-01T09:00:00Z. Metadata-only repeat 2026-05-02T09:00:00Z.",
+            "expectedSummary": "An unchanged repeat and a change confined to the volatile Updated line each leave the existing document intact, with processed-only progress in their own runs.",
+            "priority": "P1",
+            "severity": "Medium",
+            "component": "Knowledge Base",
+            "tags": [
+              "ticket-import",
+              "repeat-import",
+              "idempotency"
+            ],
+            "sourceRefs": [],
+            "techniques": [
+              "equivalence_partitioning",
+              "use_case_testing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "L42",
+      "condition": "coordinator and worker",
+      "gradeAlias": "Linden",
+      "ranges": [
+        "192–192",
+        "194–196",
+        "202–207",
+        "215–216",
+        "264–265",
+        "451–453",
+        "455–461",
+        "535–550",
+        "567–575",
+        "583–587",
+        "606–612"
+      ],
+      "inputDigest": "sha256:04c529e3cfe7f83ce9a2683ffbefdf337ad8ac1eda1e750157e314df3ba4e816",
+      "messagesDigest": "sha256:0ab15b1773ee52bc64fb93158476521c921188fb66e9651c185d2025bcd76fa3",
+      "normalizedDigest": "sha256:8c67f99bc3085783127ab08b4ce622d6539b9a1f67b89682da361bd05b6c707c",
+      "originalReply": {
+        "drafts": [
+          {
+            "title": "Fresh tickets appear under the provider folder and match the run totals",
+            "preconditions": "Use two isolated projects connected to the same provider. Project A already has its provider folder (record its ID) and an unrelated folder. Project B has an empty tree. Neither contains mirrors of the two fixture tickets.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Start a manual import scoped to both tickets in each project. Wait for each run to settle and refresh both trees.\", \"expectedResult\": \"Project A uses the original provider folder ID without creating a second provider folder. Project B now has one provider folder.\"}, {\"stepNumber\": 2, \"action\": \"Open both ticket entries in each tree. Compare their source links, titles and contents with the two provider records, then check their parent folder and editing controls.\", \"expectedResult\": \"Each project has exactly one published, read-only mirror per source ticket. Both belong directly to that project's provider folder and open the correct source record. Neither appears at the root or in the unrelated folder.\"}, {\"stepNumber\": 3, \"action\": \"Compare the terminal run panel for each project with the two newly visible mirror IDs in that project.\", \"expectedResult\": \"Each run reports 2 processed, 2 created and 0 updated.\"}]",
+            "testData": "Project A: Alpha. Project B: Beta. Provider tickets REL-101 ('Export summary', body 'Summary fixture') and REL-102 ('Import history', body 'History fixture').",
+            "expectedSummary": "Both the pre-existing and newly created provider folders contain the expected two mirrors, and each run's creation total matches its own tree.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Knowledge Base",
+            "tags": [
+              "ticket-import",
+              "release"
+            ],
+            "sourceRefs": [],
+            "techniques": [
+              "equivalence_partitioning",
+              "use_case_testing"
+            ]
+          },
+          {
+            "title": "Remove the selected folder after queueing and reconcile the report with the surviving mirror",
+            "preconditions": "Use an isolated project with an existing empty provider folder, a member who normally removes folders, one fresh ticket and a worker pause point after enqueue and before document processing. Record the folder ID.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Pause ticket consumption, start the import and wait until the ticket job is queued and the panel reaches building_documents.\", \"expectedResult\": \"One ticket is awaiting document processing and its mirror does not yet exist.\"}, {\"stepNumber\": 2, \"action\": \"As the member, remove the provider folder through the tree and refresh it before releasing the worker. Record whether removal was accepted or blocked.\", \"expectedResult\": \"The member can verify the outcome from the tree and any message. Record whether the original folder ID is still active.\"}, {\"stepNumber\": 3, \"action\": \"Release the worker. After the run settles, refresh the panel and tree, then look up active mirrors by project, provider and source ticket ID. Check each returned parent against the visible tree.\", \"expectedResult\": \"At most one active mirror exists. If created, it is reachable at a visible location and reports 1 created, 0 updated and 1 processed. If none was saved, created and updated are both 0 and the panel communicates the actual outcome. A success count for an unreachable or missing mirror fails reconciliation.\"}]",
+            "testData": "Ticket REL-103 ('Folder removed while import waits'). No other tickets, mirrors or runs in the project.",
+            "expectedSummary": "Clarification needed: should the tree block removal during import, should the worker recreate or select a visible destination, or should the ticket be skipped or fail? Confirm the intended destination and how a skipped or failed ticket contributes to processed. Record the observed behavior against that decision.",
+            "priority": "P1",
+            "severity": "High",
+            "component": "Knowledge Base",
+            "tags": [
+              "ticket-import",
+              "release"
+            ],
+            "sourceRefs": [],
+            "techniques": [
+              "state_testing",
+              "error_guessing"
+            ]
+          },
+          {
+            "title": "A later run processes unchanged input without rewriting the existing mirror",
+            "preconditions": "Use a project with one fresh provider ticket. Keep the source title, body, comments and provider timestamps fixed. Allow distinct manual and nightly runs through the normal scheduler.",
+            "stepsJson": "[{\"stepNumber\": 1, \"action\": \"Import the ticket manually. Open its mirror and capture its document ID, parent ID, title, stored content, updated_at and source_synced_at via the tree and a read-only document inspection.\", \"expectedResult\": \"Exactly one active read-only mirror is visible, and the first run reports 1 processed, 1 created and 0 updated.\"}, {\"stepNumber\": 2, \"action\": \"After a measurable time gap, run a nightly import of the same ticket with a new run ID. Confirm the ticket reached document processing in this run and read its completed panel.\", \"expectedResult\": \"The repeat reports 1 processed, 0 created and 0 updated. A ticket filtered before document processing does not exercise this check.\"}, {\"stepNumber\": 3, \"action\": \"Refresh the tree, reopen the document and compare its stored fields with the captured values. Count active mirrors for the source ID again.\", \"expectedResult\": \"The same single mirror opens in the same folder with identical title and content. Both stored timestamps are unchanged.\"}]",
+            "testData": "Ticket REL-104 ('Daily audit', body 'Audit fixture v1', no comments). Two distinct runs against the same provider connection and project.",
+            "expectedSummary": "The repeat accounts for the ticket while preserving the existing mirror's identity, location, content and write timestamps.",
+            "priority": "P1",
+            "severity": "Medium",
+            "component": "Knowledge Base",
+            "tags": [
+              "ticket-import",
+              "release"
+            ],
+            "sourceRefs": [],
+            "techniques": [
+              "state_testing",
+              "use_case_testing",
+              "equivalence_partitioning"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "blindReview": {
+    "Linden": {
+      "target": {
+        "score": 1,
+        "evidence": "“wait until the ticket job is queued” / “remove the provider folder through the tree and refresh it before releasing the worker”"
+      },
+      "observation": {
+        "score": 1,
+        "evidence": "“REL-103” / “look up active mirrors by project, provider and source ticket ID. Check each returned parent against the visible tree.”"
+      },
+      "policy": {
+        "score": 1,
+        "evidence": "“A success count for an unreachable or missing mirror fails reconciliation.” / “should the worker recreate or select a visible destination, or should the ticket be skipped or fail?”"
+      },
+      "control": {
+        "score": 1,
+        "evidence": "“capture its document ID” / “The same single mirror opens in the same folder with identical title and content. Both stored timestamps are unchanged.”"
+      }
+    },
+    "Cedar": {
+      "target": {
+        "score": 1,
+        "evidence": "“When both jobs are queued at building_documents and neither has run, remove F through the tree.”"
+      },
+      "observation": {
+        "score": 1,
+        "evidence": "“inspect active mirror records by external ID” / “For Q-301, record whether a mirror exists, its actual parent ID and whether a member can open it from the refreshed tree.”"
+      },
+      "policy": {
+        "score": 1,
+        "evidence": "“its mirror must be reachable.” / “block removal, recreate the folder, use an explicit fallback, or surface a failed import.”"
+      },
+      "control": {
+        "score": 1,
+        "evidence": "“selecting R-401 again with the same title and content” / “Its ID, parent, title, full content and document modification timestamp or revision match the snapshot.”"
+      }
+    }
+  }
+}
