@@ -23465,6 +23465,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // A governed document candidate is the exact artifact the owner reviews. Deleting its only
       // operation would destroy that artifact and rewrite the review revision.
       this.assertOrdinaryProposalMutation(existing.rows[0]);
+      // Request preflight is not authority after a task-row wait. Hold current membership
+      // and the write credential through commit, using the same boundary as proposal staging.
+      if (principal?.kind === "api_token") {
+        const uid = this.requireUser(userId);
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "delete_testcase_draft");
+      }
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -23507,6 +23514,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
       // under the reviewer without changing the exact revision they approved.
       this.assertOrdinaryProposalMutation(existing.rows[0]);
+      // Request preflight is not authority after a task-row wait. Hold current membership
+      // and the write credential through commit, using the same boundary as proposal staging.
+      if (principal?.kind === "api_token") {
+        const uid = this.requireUser(userId);
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "edit_testcase_draft");
+      }
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }
