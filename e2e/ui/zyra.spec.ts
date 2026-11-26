@@ -1516,7 +1516,7 @@ test.describe("zyra / agents (UI)", () => {
         requestKey: `ui-governed-${suffix}`, title,
         operations: [
           { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Applied from the native task review.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
-          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle } },
+          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/ui/zyra.spec.ts", automationFramework: "Playwright" } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
         ]
       } });
@@ -1530,6 +1530,7 @@ test.describe("zyra / agents (UI)", () => {
       const apply = panel.getByTestId("requirement-bundle-apply");
       await expect(apply).toBeVisible();
       await expect(page.getByText("3 proposal operations · 1 case candidate · 0 Draft cases created ·")).toBeVisible();
+      await expect(page.getByText("Set up an automation handoff")).toHaveCount(0);
       await apply.click();
       await expect(apply).toHaveCount(0);
       const after = await api.get(`${base}/requirements/proposals/${taskId}`);
@@ -1538,6 +1539,11 @@ test.describe("zyra / agents (UI)", () => {
       expect(caseId).not.toBe("");
       expect(await after.json()).toMatchObject({ taskStatus: "done", requirementApplyReceipt: { testcase: { id: caseId } } });
       await expect(page.getByText("3 proposal operations · 1 case candidate · 1 Draft case created ·")).toBeVisible();
+      await page.getByText("Set up an automation handoff").click();
+      await expect(page.getByRole("button", {name: "Copy handoff command"})).toBeVisible();
+      await expect(page.locator("details[open] pre")).toContainText(`/projects/${tenant!.mainProjectId}/agents/tasks/${taskId}`);
+      await expect(page.locator("details[open] pre")).toContainText("--revision");
+
       requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(requirementId).not.toBe("");
     } finally {

@@ -47,6 +47,9 @@ export class ProjectWriteLockGuard implements CanActivate {
     // membership before the opt-in flag/body; entering billing enforcement here would notify
     // and write billing history before that authorization. Other KB mutations stay guarded.
     if (req.method === "POST" && /^\/knowledge-base\/requirements\/preview\/?$/i.test(rest ?? "")) return true;
+    // The authenticated handoff reads an exact approved bundle; billing enforcement can itself
+    // emit notifications or history. Its adjacent apply/approval routes still enforce the lock.
+    if (req.method === "POST" && /^\/requirements\/proposals\/[^/]+\/automation-handoff\/?$/i.test(rest ?? "")) return true;
     // Archiving the project is the documented way out of the lock — never block it.
     if (req.method === "DELETE" && (!rest || rest === "/")) return true;
 

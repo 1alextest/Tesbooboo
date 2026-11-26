@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { expect, request as newRequest, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { env } from "../utils/env";
@@ -264,6 +264,7 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
 
     const title = `E2E governed requirement ${suffix}`;
     const caseTitle = `E2E governed case ${suffix}`;
+    const reviewedCriterion = "After application, the requirement lists exactly one linked Draft case";
     const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
     const regressionSteps = [
       { stepNumber: 1, action: "Stage a requirement and case bundle through project-bound MCP",
@@ -272,7 +273,7 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
         expectedResult: "One native Draft case is linked to the reviewed requirement revision" }
     ];
     const operations = [
-      { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Published through the governed path.", criteria: [{ key: "AC-1", text: "The obligation is observable" }, { key: "AC-2", text: "The second obligation is observable" }] },
+      { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Published through the governed path.", criteria: [{ key: "AC-1", text: reviewedCriterion }, { key: "AC-2", text: "The second obligation is observable" }] },
       { opType: "testcase_create", operationId: testcaseOperationId, draft: {
         title: caseTitle, description: "Regression case authored alongside application automated tests.",
         preconditions: "Project-owned agent grant and approved requirement/test-case methods are available.",
@@ -345,12 +346,15 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     // and only the bounded identities — never the proposal snapshot or decision digest.
     const reloaded = await (await request.get(`${base}/requirements/proposals/${staged.id}`)).json();
     expect(reloaded.requirementApplyReceipt).toMatchObject({
+      id: applied.receipt.id, proposalRevision: staged.proposalRevision, selectedIndex: 1,
       requirement: { documentId: requirementId, versionId: requirementVersionId, versionNumber: applied.receipt.requirement.versionNumber },
       testcase: { id: caseId },
       link: { id: applied.receipt.link.id }
     });
     expect(reloaded.requirementApplyReceipt.proposalSnapshot).toBeUndefined();
     expect(reloaded.requirementApplyReceipt.decisionKey).toBeUndefined();
+    expect(reloaded).not.toHaveProperty("saveEvents");
+    expect(reloaded.proposalSnapshot.operations[1].operationId).toBe(testcaseOperationId);
 
     // A stale submitted version is refused after the requirement content moves on. Restoring the
     // exact reviewed content makes the original version approvable again without rewriting it.
@@ -423,6 +427,92 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
       testcaseRevision: caseAfter.editRevision, testcaseApprovalRevision: caseAfter.approvalRevision,
       requirementVersionId: requirementApproval.approvedVersionId
     });
+
+    const handoffUrl = `${base}/requirements/proposals/${staged.id}/automation-handoff`;
+    const basis = {
+      receiptId: reloaded.requirementApplyReceipt.id, proposalRevision: staged.proposalRevision,
+      selectedIndex: reloaded.requirementApplyReceipt.selectedIndex, requirementId, requirementVersionId: requirementApproval.approvedVersionId,
+      linkId: activation.link.id, testcaseId: caseId, testcaseRevision: caseAfter.editRevision,
+      testcaseApprovalRevision: caseAfter.approvalRevision, criterionKeys: ["AC-1"]
+    };
+    const handoff = await request.post(handoffUrl, { data: basis });
+    expect(handoff.status(), await handoff.text()).toBe(200);
+    const exported = await handoff.json();
+    expect(exported).toMatchObject({ ...basis, criteria: [{ key: "AC-1", text: reviewedCriterion }],
+      testcase: { id: caseId, title: caseTitle, steps: regressionSteps, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/api/requirements.spec.ts" },
+      provenance: { operationId: testcaseOperationId, reviewerId: applied.receipt.reviewerId, producer: { kind: "api_token", tokenId },
+        appliedSkillDigest: applied.receipt.skillContext.digest, submittedVersionId: requirementVersionId }
+    });
+    expect(await (await request.post(handoffUrl, { data: basis })).json()).toEqual(exported);
+    if (process.env.QA_INVESTIGATION_HARNESS_ROOT) {
+      await test.step("Join the approved native case to the pinned investigation and committed Git target", async () => {
+        const { createHandoffFixture, fixtureGit } = await import(path.join(__dirname, "../../scripts/qa-handoff-fixture.mjs"));
+        const { prepareHandoff } = await import(path.join(__dirname, "../../scripts/qa-approved-handoff.mjs"));
+        const { HARNESS_REVISION } = await import(path.join(__dirname, "../../scripts/qa-investigation-mapping.mjs"));
+        const repository = "1alextest/Tesbooboo", targetPath = "e2e/api/requirements.spec.ts";
+        const fixture = await createHandoffFixture({
+          repository, targetPath, harnessRoot: process.env.QA_INVESTIGATION_HARNESS_ROOT,
+          targetContent: fs.readFileSync(__filename),
+          plan: {
+            key: "AC-1", title: caseTitle, oracle: reviewedCriterion,
+            risk: "The requirement lists an extra, missing or incorrectly linked case after application",
+            action: "Apply the reviewed proposal, open the requirement and count its linked Draft cases",
+            observation: "Synthetic reviewer fixture for the requirement's linked cases list",
+          },
+        });
+        try {
+          const routes: string[] = [], pins: unknown[] = [];
+          let confirmations = 0;
+          const read = async (method: string, url: string, data?: Record<string, unknown>) => {
+            routes.push(method + " " + url);
+            if (method === "POST") pins.push(data);
+            const response = await request.fetch(url, { method, data, maxRedirects: 0 });
+            expect(response.status(), await response.text()).toBe(200);
+            return response.json();
+          };
+          const consent = async (preview: any, hash: string) => {
+            confirmations++;
+            expect(preview.native).toEqual(exported);
+            expect(preview.target).toEqual({ repository, branch: "main", path: targetPath, revision: fixture.selected.repoRevision });
+            expect(preview.investigation).toMatchObject({
+              upstreamCase: "TC-01", harnessRevision: HARNESS_REVISION, repoRevision: fixture.selected.repoRevision,
+              targetBlob: fixtureGit(fixture.repo, "rev-parse", "HEAD:" + targetPath), plan: { title: caseTitle },
+              risks: [{ oracle: reviewedCriterion, decisionId: "D1", requirements: [{ id: "AC-1" }] }],
+            });
+            expect(hash).toBe(createHash("sha256").update(JSON.stringify(preview)).digest("hex"));
+            return true; // Explicit test-operator consent for exactly this preview.
+          };
+          const selection = { ...fixture.selected, projectId: ctx.projectId, taskId: staged.id };
+          const bridge = { request: read, confirm: consent, checkTarget: fixture.checkTarget };
+          const packet = await prepareHandoff(selection, bridge);
+          const replay = await prepareHandoff(selection, bridge);
+          expect(replay).toEqual(packet);
+          expect(confirmations).toBe(2);
+          const cycle = [
+            "GET " + base + "/requirements/proposals/" + staged.id,
+            "GET " + base + "/requirements/" + requirementId + "/coverage",
+            "POST " + handoffUrl, "POST " + handoffUrl,
+          ];
+          expect(routes).toEqual([...cycle, ...cycle]);
+          expect(pins).toEqual([basis, basis, basis, basis]);
+          expect(fixtureGit(fixture.repo, "status", "--porcelain")).toBe("");
+          expect(activationState()).toBe(afterActivation);
+        } finally {
+          await fixture.cleanup();
+        }
+      });
+    }
+    for (const invalid of [{ receiptId: randomUUID() }, { selectedIndex: 0 }, { criterionKeys: ["AC-2"] }, { linkId: approvedLink.linkId },
+      { requirementVersionId }, { testcaseRevision: "0".repeat(64) }, { proposalRevision: "1".repeat(64) }]) {
+      const refused = await request.post(handoffUrl, { data: { ...basis, ...invalid } });
+      expect(refused.status(), await refused.text()).toBe(409);
+      expect((await refused.json()).code).toBe("AUTOMATION_HANDOFF_UNAVAILABLE");
+    }
+    const machineHandoff = await mcp.post(handoffUrl, { headers: { Authorization: `Bearer ${agentCredential.token}` }, data: basis });
+    expect(machineHandoff.status(), await machineHandoff.text()).toBe(403);
+    const foreignHandoff = await request.post(`/api/projects/${randomUUID()}/requirements/proposals/${staged.id}/automation-handoff`, { data: basis });
+    expect(foreignHandoff.status(), await foreignHandoff.text()).toBe(403);
+    expect(activationState()).toBe(afterActivation);
 
     // Fixture setup only: the human publication/approval decisions above were API calls. The
     // persisted attempt is created in the native Run/execution tables so the coverage reader is
@@ -586,6 +676,12 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     readings = await coverage();
     expect(readings.readings).toMatchObject({ authored: true, approved: true, executed: false, passing: false });
     expect(readings.pendingCarryForwardCases).toHaveLength(0);
+    // The amended case was approved and rebound. Its good current link cannot authorize
+    // exporting a different definition under the original human-applied operation.
+    const substituted = await request.post(handoffUrl, { data: { ...basis, requirementVersionId: carryApproval.approvedVersionId,
+      linkId: rebound.link.id, testcaseRevision: currentRevisions.expectedCaseRevision, testcaseApprovalRevision: currentRevisions.expectedApprovalRevision } });
+    expect(substituted.status(), await substituted.text()).toBe(409);
+    expect((await substituted.json()).code).toBe("AUTOMATION_HANDOFF_UNAVAILABLE");
     expect(historicalAttempts()).toBe(immutableAttemptHistory);
     expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(ctx.projectId)} AND title=${literal(caseTitle)};`)).toBe("1");
   } finally {

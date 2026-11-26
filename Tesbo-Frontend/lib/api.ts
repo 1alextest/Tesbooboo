@@ -1096,6 +1096,9 @@ export interface ZyraTask {
 }
 
 export interface RequirementApplyReceipt {
+  id?: string;
+  proposalRevision?: string;
+  selectedIndex?: number;
   requirement: { documentId: string; versionId: string; versionNumber: number | null; editRevision: string | null };
   testcase: { id: string; title: string | null; editRevision: string | null } | null;
   link: { id: string; criterionKeys: string[] } | null;

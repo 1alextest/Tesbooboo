@@ -16,6 +16,7 @@ import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContex
 import { parseProviderUsage, type ProviderUsage } from "../observability/provider-usage";
 import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
+import { isDeepStrictEqual } from "node:util";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
 import { externallyReachableBaseUrl } from "../common/external-url.util";
 import { escapeHtml, jiraDescriptionToText } from "../common/integration-text.util";
@@ -17813,6 +17814,126 @@ export class LegacyService implements OnModuleInit {
     return { ...toCamel(result.doc), decidedVersionId: result.decidedVersionId, sourceVersionId: result.sourceVersionId, replayed: result.replayed };
   }
 
+  private isApprovedRequirementCase(row: Body, approvedVersionId: string | null): boolean {
+    return approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId
+      && row.testcase_revision === row.current_edit_revision && row.testcase_approval_revision != null
+      && row.testcase_approval_revision === row.current_approval_revision && row.approval_current === true;
+  }
+
+  /** Export one native, human-applied bundle item at its current approved basis. Read-only. */
+  async requirementAutomationHandoff(projectId: string, userId: string | null | undefined, taskId: string, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    if (!isUuid(projectId) || !isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    return this.db.transaction(async client => {
+      // Hold membership until the read finishes. All material basis data below shares one
+      // PostgreSQL statement snapshot, including the current case and both historical receipts.
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const { receiptId, proposalRevision, selectedIndex, requirementId, requirementVersionId, linkId,
+        testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = body ?? {};
+      const ids = [receiptId, requirementId, requirementVersionId, linkId, testcaseId];
+      const revisions = [proposalRevision, testcaseRevision, testcaseApprovalRevision];
+      if (!ids.every(id => typeof id === "string" && isUuid(id)) ||
+          !revisions.every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)) ||
+          !Number.isSafeInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= MAX_TESTCASE_PROPOSAL_OPERATIONS ||
+          !Array.isArray(criterionKeys) || !criterionKeys.length || criterionKeys.length > REQUIREMENT_MAX_CRITERIA ||
+          !criterionKeys.every(key => typeof key === "string" && key.length > 0) ||
+          new Set(criterionKeys).size !== criterionKeys.length) {
+        throw new BadRequestException({ error: "Supply one exact applied operation, approved requirement and case link with their revisions and criterion keys" });
+      }
+      const unavailable = () => new ConflictException({ code: "AUTOMATION_HANDOFF_UNAVAILABLE",
+        error: "This selection has no current approved automation handoff. Review the selected bundle, requirement, case and link again." });
+      const row = (await client.query(
+        `SELECT r.requested_by, r.proposal_provenance, saved.receipt,
+                d.reviewed_version_id, v.snapshot_metadata AS version_metadata,
+                case_decision.id AS case_approval_receipt_id, case_decision.actor_id AS case_approver_id,
+                l.criterion_keys, l.requirement_version_id, l.testcase_revision, l.testcase_approval_revision,
+                testcases.id, testcases.title, testcases.description, testcases.preconditions, testcases.steps,
+                testcases.postconditions, testcases.test_data, testcases.automation_repo, testcases.automation_path,
+                testcases.automation_framework, testcases.automation_test_name,
+                ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
+                ${TESTCASE_APPROVAL_REVISION_SQL} AS current_approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
+           FROM ai_generation_requests r
+           CROSS JOIN LATERAL jsonb_array_elements(r.save_events) saved(receipt)
+           JOIN knowledge_documents d ON d.project_id=r.project_id AND d.id=$4 AND d.is_deleted=false
+             AND d.document_type='requirement_note' AND d.source_provider IS NULL AND d.status='approved'
+           JOIN knowledge_document_versions v ON v.document_id=d.id AND v.id=d.reviewed_version_id
+             AND v.id=$5 AND v.snapshot_kind='approved' AND v.snapshot_metadata->>'authority'='requirement_review'
+             AND v.snapshot_metadata->>'actorKind'='human_session'
+           JOIN requirement_case_links l ON l.project_id=r.project_id AND l.requirement_id=d.id
+             AND l.id=$6 AND l.requirement_version_id=v.id AND l.state='active'
+           JOIN testcases ON testcases.id=l.testcase_id AND testcases.id=$7 AND testcases.project_id=r.project_id AND testcases.deleted_at IS NULL
+           JOIN requirement_case_links original_link ON original_link.id::text=saved.receipt->'link'->>'id'
+             AND original_link.requirement_id=d.id AND original_link.project_id=r.project_id
+             AND original_link.requirement_version_id::text=v.snapshot_metadata->>'sourceVersionId'
+             AND original_link.testcase_id=l.testcase_id AND original_link.criterion_keys=l.criterion_keys
+           JOIN LATERAL (SELECT ar.id, ar.actor_id FROM testcase_approval_receipts ar
+             WHERE ar.project_id=r.project_id AND ar.testcase_id=testcases.id AND ar.semantic_revision=$8
+               AND ar.principal_kind='human_session' AND ar.reviewed_snapshot IS NOT NULL
+             ORDER BY ar.created_at DESC, ar.id DESC LIMIT 1) case_decision ON TRUE
+           WHERE r.project_id=$1 AND r.id=$2 AND r.provider='external_requirement_proposal' AND r.task_status='done'
+             AND saved.receipt->>'id'=$3 AND saved.receipt->>'action'='requirement_bundle_apply'
+             AND saved.receipt->>'principalKind'='human_session'`,
+        [projectId, taskId, receiptId, requirementId, requirementVersionId, linkId, testcaseId, testcaseApprovalRevision]
+      )).rows[0];
+      if (!row || !this.isApprovedRequirementCase(row, row.reviewed_version_id)) throw unavailable();
+
+      const receipt = row.receipt, metadata = row.version_metadata;
+      const operations = normalizeJsonArray(receipt.proposalSnapshot?.operations);
+      const selected = operations[selectedIndex];
+      const link = operations.find(op => op.opType === "requirement_case_link");
+      const requirement = operations.find(op => op.opType === "requirement_revision");
+      // Native apply creates exactly one case and links its operation ID. Formal case approval
+      // changes the edit digest (Draft -> Approved); its semantic digest must still match the
+      // case returned by the original apply, including custom-field and tag dependencies.
+      if (receipt.proposalRevision !== proposalRevision || !isUuid(receipt.reviewerId) ||
+          selected?.opType !== "testcase_create" || !isUuid(selected.operationId) ||
+          link?.testcaseOperationId !== selected.operationId || !requirement || link.requirementOperationId !== requirement.operationId ||
+          receipt.testcase?.id !== row.id || receipt.testcase.approvalRevision !== row.current_approval_revision ||
+          receipt.requirement?.documentId !== requirementId || receipt.requirement.versionId !== metadata.sourceVersionId ||
+          receipt.link?.testcaseId !== row.id || receipt.link.requirementVersionId !== metadata.sourceVersionId ||
+          ![receipt.link.criterionKeys, link.criterionKeys, row.criterion_keys].every(keys => isDeepStrictEqual(keys, criterionKeys)) ||
+          row.current_edit_revision !== testcaseRevision || row.current_approval_revision !== testcaseApprovalRevision ||
+          !row.automation_repo?.trim() || !row.automation_path?.trim() ||
+          row.automation_framework?.trim().toLowerCase() !== "playwright") throw unavailable();
+
+      // The native writer accepts legacy action/result aliases and preserves arbitrary extra
+      // fields. Only a complete manual step can be handed to this generator. A richer shape,
+      // including a shared-step reference, needs its own resolver and review basis.
+      const manualStepFields = new Set(["stepNumber", "action", "step", "description", "expectedResult", "expected"]);
+      const steps = this.safeSteps(row.steps).map((entry, index) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw unavailable();
+        const step = entry as Body;
+        if (Object.keys(step).some(key => !manualStepFields.has(key))) throw unavailable();
+        const { action, expectedResult, stepNumber = index + 1 } = step;
+        if (typeof action !== "string" || !action.trim() || typeof expectedResult !== "string" || !expectedResult.trim() ||
+            !Number.isSafeInteger(stepNumber) || stepNumber < 1 ||
+            [step.step, step.description].some(alias => alias != null && alias !== "" && alias !== action) ||
+            (step.expected != null && step.expected !== "" && step.expected !== expectedResult)) throw unavailable();
+        return { stepNumber, action, expectedResult };
+      });
+      if (!steps.length) throw unavailable();
+      const producer = row.proposal_provenance ?? {};
+      const criteria = criterionKeys.map(key => normalizeJsonArray(metadata.criteria).find(item => item.key === key));
+      if (criteria.some(criterion => !criterion || typeof criterion.text !== "string" || !criterion.text.trim())) throw unavailable();
+      return {
+        projectId, taskId, receiptId, proposalRevision, selectedIndex, requirementId, requirementVersionId, linkId,
+        testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys, criteria: criteria.map(({ key, text }) => ({ key, text })),
+        testcase: { id: row.id, title: row.title, description: row.description, preconditions: row.preconditions, steps,
+          postconditions: row.postconditions, testData: row.test_data, automationRepo: row.automation_repo, automationPath: row.automation_path,
+          automationFramework: row.automation_framework, automationTestName: row.automation_test_name },
+        provenance: { requestedBy: row.requested_by,
+          producer: { kind: producer.kind, issuerId: producer.issuerId, tokenId: producer.tokenId, actorId: producer.actorId },
+          reviewerId: receipt.reviewerId, requirementApproverId: metadata.actorId, caseApprovalReceiptId: row.case_approval_receipt_id,
+          caseApproverId: row.case_approver_id, exportedBy: uid, exporterRole: this.normalizeRole(authority.caller_role),
+          operationId: selected.operationId, submittedVersionId: metadata.sourceVersionId, appliedSkillDigest: receipt.skillContext?.digest ?? null,
+          appliedSkills: normalizeJsonArray(receipt.skillContext?.assignments).map(({ target, assignmentId, skillDocumentId, skillVersionId, contentDigest }) =>
+            ({ target: { module: target.module, subtype: target.subtype, operation: target.operation },
+              assignmentId, skillDocumentId, skillVersionId, contentDigest })) }
+      };
+    });
+  }
+
   /** Authored/approved/executed/passing remain distinct; only persisted exact-basis attempts qualify. */
   async requirementCoverage(projectId: string, userId: string | null | undefined, documentId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
@@ -17866,9 +17987,7 @@ export class LegacyService implements OnModuleInit {
     const criteria = normalizeJsonArray((doc.content_json as Body | null)?.criteria);
     const projectCase = (row: Body) => {
       const onApprovedVersion = approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId;
-      const approved = onApprovedVersion && String(row.testcase_revision) === String(row.current_edit_revision)
-        && row.testcase_approval_revision !== null && String(row.testcase_approval_revision) === String(row.current_approval_revision)
-        && row.approval_current === true;
+      const approved = this.isApprovedRequirementCase(row, approvedVersionId);
       const executed = approved && Number(row.attempt_count || 0) > 0;
       return {
         linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
@@ -17993,6 +18112,17 @@ export class LegacyService implements OnModuleInit {
     return row.provider === "external_requirement_proposal" || this.taskHasRequirementBundle(row.generated_payload);
   }
 
+  private taskRowForRead(row: Body): Body {
+    const item = toCamel(row as QueryResultRow);
+    if (this.isRequirementBundleTask(row)) {
+      // The historical save events contain the original snapshots and decision digests. Both
+      // the task detail and history expose the bounded receipt used to reopen the applied case.
+      item.requirementApplyReceipt = this.requirementApplyReceipt(row);
+      delete item.saveEvents;
+    }
+    return item;
+  }
+
   private requirementDecisionReceipt(row: Body): Body | null {
     return normalizeJsonArray(row.activity_log).find((entry: Body) => entry.kind === "requirement_bundle_decision")?.decisionReceipt || null;
   }
@@ -18012,7 +18142,12 @@ export class LegacyService implements OnModuleInit {
     const requirement = receipt.requirement as Body;
     const testcase = receipt.testcase as Body | null;
     const link = receipt.link as Body | null;
+    const operations = normalizeJsonArray(receipt.proposalSnapshot?.operations);
+    const linkIntent = operations.find(op => op.opType === "requirement_case_link");
+    const selectedIndex = operations.findIndex(op => op.opType === "testcase_create" && op.operationId === linkIntent?.testcaseOperationId);
     return {
+      ...(selectedIndex >= 0 && testcase?.id && link?.id && receipt.principalKind === "human_session" ?
+        { id: receipt.id, proposalRevision: receipt.proposalRevision, selectedIndex } : {}),
       requirement: {
         documentId: String(requirement.documentId),
         versionId: String(requirement.versionId),
@@ -23145,8 +23280,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const limit = pageNumber(query.limit, 50, 0, 100);
     const offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
-    // This generic history returns rows verbatim. While the governed document proposal surface is
-    // disabled, keep staged candidates out of it rather than exposing their payload and receipts.
+    // While the governed document proposal surface is disabled, keep staged candidates out
+    // of generic history rather than exposing their payload and receipts.
     const managedPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     const res = await this.db.query(
       `SELECT * FROM ai_generation_requests WHERE project_id = $1
@@ -23154,7 +23289,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
        ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
       [projectId, limit, offset, managedPreview]
     );
-    return { list: res.rows.map(toCamel) };
+    return { list: res.rows.map(row => this.taskRowForRead(row)) };
   }
 
   async aiSave(projectId: string, userId: string | null | undefined, requestId: string, body: Body, principal?: ReviewPrincipal) {
@@ -29097,7 +29232,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * site already gets right) is returned completely untouched — no risk of regressing it.
    */
   private async formatAiTask(row: Body): Promise<Body> {
-    const item = toCamel(row as QueryResultRow);
+    const item = this.taskRowForRead(row);
     const snapshot = row.proposal_snapshot as Body | undefined;
     const rawDrafts = normalizeJsonArray(snapshot?.operations || row.generated_payload);
     // Work Package A Slice 1 keeps its typed requirement/link entries in the same reviewed
@@ -29120,10 +29255,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
     if (this.isRequirementBundleTask(row)) {
       item.requirementDecision = this.requirementDecisionReceipt(row);
-      // Apply is the only moment the submitted requirement version identity is chosen. Persist it
-      // in the task payload so the review surface can reopen the exact version after a reload
-      // without re-deriving it from the mutable requirement document.
-      item.requirementApplyReceipt = this.requirementApplyReceipt(row);
     }
     const managedPreview = (row.provider !== "external_document_proposal" && managedEntries.length === 0) || process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     if (snapshot && managedPreview) {
