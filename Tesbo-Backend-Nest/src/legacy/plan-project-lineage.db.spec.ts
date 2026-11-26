@@ -347,6 +347,54 @@ const url = process.env.DATABASE_URL ?? "";
         [locked, JSON.stringify({ enabled: true, revision: 1, clients })]);
     }
 
+    it("CL-T03 refuses write credential issuance after a manager is demoted while issuance waits on membership", async () => {
+      const manager = randomUUID();
+      const name = `CL-T03-${manager}`;
+      await setup.query("INSERT INTO users (id,email,name,active_organization_id) VALUES ($1,$2,'CL-T03 manager',$3)", [manager, `cl-t03-${manager}@tesbo.invalid`, organization]);
+      await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'manager')", [organization, manager]);
+      await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'manager')", [project, manager]);
+      // Actual LegacyService authorization and actual token persistence, with no mocked role or SQL.
+      const issuer = makeLegacy(db, { config, apiTokens: tokens });
+      const control = await issuer.createApiKey(manager, project, { name: name + "-control", scopes: ["read", "write"] });
+      expect(control.scopes).toEqual(["read", "write"]);
+      const rows = async () => (await setup.query("SELECT id,name,scopes FROM api_tokens WHERE project_id=$1 AND user_id=$2 ORDER BY id", [project, manager])).rows;
+      const before = await rows();
+      const blocker = new Client({ connectionString: url });
+      await blocker.connect();
+      let pending: Promise<{ error: unknown }> | undefined;
+      try {
+        await blocker.query("BEGIN");
+        await blocker.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        const pid = (await blocker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+        // The uncommitted demotion leaves the old manager role visible to ordinary preflight SELECT.
+        pending = issuer.createApiKey(manager, project, { name, scopes: ["write"] })
+          .then(() => ({ error: null }), (error: unknown) => ({ error }));
+        const deadline = Date.now() + 5000;
+        let blocked = false;
+        while (Date.now() < deadline && !blocked) {
+          blocked = (await setup.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$2 AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))", [pid, poolApplicationName])).rowCount! > 0;
+          if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(blocked).toBe(true);
+        expect(await rows()).toEqual(before);
+        await blocker.query("COMMIT");
+        const outcome = await pending;
+        expect(outcome.error).toMatchObject({ status: 403 });
+        expect(await rows()).toEqual(before);
+        // Current QA role may still mint a read credential; do not solve by denying all issuance.
+        const read = await issuer.createApiKey(manager, project, { name: name + "-read", scopes: ["read"] });
+        expect(read.scopes).toEqual(["read"]);
+      } finally {
+        await blocker.query("ROLLBACK");
+        await pending;
+        await blocker.end();
+        await setup.query("DELETE FROM api_tokens WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2", [organization, manager]);
+        await setup.query("DELETE FROM users WHERE id=$1", [manager]);
+      }
+    }, 15_000);
+
     const routes = ["dynamic", "project-prefixed"] as const;
     const business = async () => (await setup.query("SELECT * FROM bugs WHERE project_id=$1 ORDER BY id", [locked])).rows;
     type Options = { token?: string | null; project?: string; session?: string; notification?: boolean };
