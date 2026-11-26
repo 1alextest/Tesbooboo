@@ -303,6 +303,17 @@ test.describe("knowledge base v2 — files", () => {
     expect(fileCount()).toBe(0);
   });
 
+  test("KBF-A-86 a duplicated requestKey field is refused rather than silently dropped", async () => {
+    const folder = await createFolder(stamp("Duplicate key"));
+    const form = filesFormWith({ folderId: folder.id }, [textFile("duplicate-key.txt", "bytes")]);
+    form.append("requestKey", "first-key");
+    form.append("requestKey", "second-key");
+    const res = await asOwner.post(kbUrl("/files/upload"), { multipart: form, failOnStatusCode: false });
+    expect(res.status()).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("single string");
+    expect(fileCount()).toBe(0);
+  });
+
   test("KBF-A-05 two files with the same name in one folder are kept apart by a numbered suffix", { tag: '@tesbo.testId("TES-TC-310")' }, async () => {
     const folder = await createFolder(stamp("Collisions"));
     const first = await uploadOne(textFile("report.txt", "first"), folder.id);

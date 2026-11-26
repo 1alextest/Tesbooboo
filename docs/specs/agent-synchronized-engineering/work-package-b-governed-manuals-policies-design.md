@@ -765,11 +765,13 @@ from filenames or content alone.
   each buffer). Reusing a key for different bytes, a different folder or a different order is a
   `409 UPLOAD_REQUEST_CONFLICT`; it never overwrites or adopts the earlier row.
 - A fully committed request returns the original rows with `replayed: true` and performs no storage
-  write, insert or audit. A partially committed batch returns `replayed: false` and writes only the
-  missing positions. A committed row whose file was later deleted refuses replay with
+  write, insert or audit; the original folder need not still exist for that answer. A partially
+  committed batch returns `replayed: false`, rechecks the destination, and writes only the missing
+  positions. A committed row whose file was later deleted refuses replay with
   `409 UPLOAD_REQUEST_CLOSED`; the upload does not resurrect deleted content under an old key.
   A changed manifest is evaluated before plan storage, so a replay is not refused because the workspace
-  has since filled its storage allowance.
+  has since filled its storage allowance. A duplicated multipart `requestKey` field is refused rather
+  than silently treated as absent.
 - A concurrent retry that loses the unique-index race reconciles by the authoritative keyed row,
   deletes only its own unreferenced object, and returns that row. A lost COMMIT acknowledgement still
   skips reconciliation and compensation entirely; the client retries with the same key instead.
@@ -789,7 +791,8 @@ from filenames or content alone.
   idempotency key — so recovery is at-least-once externally and exactly-once in persisted state. A
   missing object becomes terminal `failed`; a transient byte-read failure (including a bounded read
   timeout) releases the claim to `pending` and records the attempt time so the next sweep does not
-  keep the same rows at the head. This complements, and does not replace,
+  keep the same rows at the head. In-flight `processing` is surfaced to Zyra as "still in progress",
+  not as an unsupported file type. This complements, and does not replace,
   `RagIngestionService.resumeInterruptedEmbeddings`: that sweep still covers ordinary-file embeddings
   whose extraction already completed, while a pending transcript has no text to embed and is recovered
   here.
@@ -804,8 +807,9 @@ from filenames or content alone.
   deliberate duplicate under a new key, partial-batch resume after a pre-COMMIT audit failure,
   committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
   exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
-  deleted/archived exclusion, terminal missing-object failure, transient read-release, and stale-token
-  fencing. HTTP coverage is KBF-A-81–85; browser coverage KBU-80 lets the backend commit and then
+  deleted/archived exclusion, terminal missing-object failure, transient read-release, stale-token
+  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–86
+  (including duplicated and whitespace-only keys); browser coverage KBU-80 lets the backend commit and then
   replaces the acknowledgement with a 503, so the second request is a real replay and a missing key
   would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
   acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.

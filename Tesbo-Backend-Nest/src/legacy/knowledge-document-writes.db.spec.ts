@@ -6,6 +6,7 @@ import { summarizeDocumentChange } from "../common/text-diff.util";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import * as ragAiAllocation from "../rag/rag-ai-allocation";
+import * as aiTrace from "../observability/ai-trace";
 import { RAG_EMBEDDING_DIMENSION } from "../rag/rag.constants";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -1449,6 +1450,33 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
         expect(f.fetchProvider).toHaveBeenCalledTimes(1);
         expect((await statuses([row.id]))[0].extracted_text).toBe("recovered transcript");
       } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("describes an in-flight transcription as in progress rather than as an unsupported type", () => {
+      const f = fileService();
+      const content = (f.svc as unknown as { knowledgeFileFallbackContent: (ext: string, status: string) => string })
+        .knowledgeFileFallbackContent("mp3", "processing");
+      expect(content).toContain("in progress");
+      expect(content).not.toContain("no extractable text");
+    });
+
+    it("does not record a stale claim owner's failure after a takeover", async () => {
+      const row = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const staleToken = randomUUID();
+      const currentToken = randomUUID();
+      await setup.query("UPDATE knowledge_files SET extraction_claim_token = $2 WHERE id = $1", [row.id, currentToken]);
+      const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+      const f = transcriptionService();
+      f.fetchProvider.mockRejectedValueOnce(new Error("synthetic provider failure"));
+      try {
+        await f.transcribe(projectId, row.id, staleToken);
+        expect(recorded).not.toHaveBeenCalled();
+        expect((await setup.query("SELECT extraction_status, extraction_claim_token FROM knowledge_files WHERE id = $1", [row.id])).rows[0])
+          .toEqual({ extraction_status: "processing", extraction_claim_token: currentToken });
+      } finally {
+        recorded.mockRestore();
         await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
       }
     });

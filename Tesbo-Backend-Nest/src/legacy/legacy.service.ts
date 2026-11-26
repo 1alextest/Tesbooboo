@@ -13687,11 +13687,11 @@ export class LegacyService implements OnModuleInit {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
-      await this.db.query(
-        "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing'",
+      const failed = await this.db.query(
+        "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing' RETURNING id",
         [fileId, claimToken]
-      ).catch(() => undefined);
-      if (requestAttempted) void recordStandaloneGeneration({
+      ).catch(() => null);
+      if (requestAttempted && failed?.rows[0]) void recordStandaloneGeneration({
         traceSeed,
         name: "knowledge.transcription",
         provider: "openai",
@@ -13766,7 +13766,6 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
-    await this.kbFolder(projectId, folderId);
     if (batchFiles.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     const rawRequestKey = typeof requestKeyInput === "string" ? requestKeyInput.trim() : "";
     // An explicitly supplied empty key is a client mistake, not "no key": silently treating it as
@@ -13828,6 +13827,9 @@ export class LegacyService implements OnModuleInit {
       }
     }
 
+    // A full replay is answered above without requiring the original folder to still exist. Only a
+    // request that still has positions to write needs a live destination.
+    await this.kbFolder(projectId, folderId);
     const missing = batchFiles.filter((_, index) => !existingByIndex.has(index));
     await this.planLimits.assertStorageAvailable(
       project.organization_id,
@@ -24712,7 +24714,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
 
   private knowledgeFileFallbackContent(fileExtension: string | null, extractionStatus: string | null): string {
     const ext = fileExtension || "file";
-    if (extractionStatus === "pending") {
+    if (extractionStatus === "pending" || extractionStatus === "processing") {
       return `Uploaded file (.${ext}) — transcription is still in progress; mention it exists but do not invent its contents yet.`;
     }
     if (extractionStatus === "failed") {
