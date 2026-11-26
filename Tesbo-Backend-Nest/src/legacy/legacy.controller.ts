@@ -2163,7 +2163,7 @@ export class LegacyController {
     @Body() body: Record<string, any>,
     @UploadedFiles() files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>
   ) {
-    return this.legacy.uploadKnowledgeFiles(projectId, req.userId, body.folderId, files);
+    return this.legacy.uploadKnowledgeFiles(projectId, req.userId, body.folderId, files, body.requestKey);
   }
 
   @Get("/api/projects/:projectId/knowledge-base/files/:fileId/download")

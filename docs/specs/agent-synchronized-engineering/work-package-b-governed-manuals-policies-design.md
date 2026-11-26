@@ -748,9 +748,71 @@ or eventual processing. Distinguish the following unresolved decisions and test 
 These are source-level risks; runtime reproduction and severity/ownership disposition remain open.
 Do not describe them as resolved by #288, or claim native execution before the tests actually run.
 
+### 13.1 Upload request identity and restart-safe processing (implementation)
+
+`V166_knowledge_file_upload_recovery.sql` adds optional request identity and a transcription lease to
+`knowledge_files`. The contract is deliberately caller-driven because the service cannot infer intent:
+a retry of one logical upload and a deliberate second upload of identical bytes are indistinguishable
+from filenames or content alone.
+
+- The upload route accepts an optional multipart `requestKey` (trimmed, 1–160 characters when present).
+  It is scoped to `(project_id, uploaded_by)`; a key from another project or another uploader is a
+  different request. Omitting it preserves the previous non-idempotent behaviour, so existing clients
+  remain compatible.
+- Request identity is the key plus the zero-based batch position, protected by
+  `UNIQUE(project_id, uploaded_by, upload_request_key, upload_request_file_index)`. The stored digest
+  covers the destination folder and the ordered manifest (name, declared size, MIME type and SHA-256 of
+  each buffer). Reusing a key for different bytes, a different folder or a different order is a
+  `409 UPLOAD_REQUEST_CONFLICT`; it never overwrites or adopts the earlier row.
+- A fully committed request returns the original rows with `replayed: true` and performs no storage
+  write, insert or audit. A partially committed batch returns `replayed: false` and writes only the
+  missing positions. A committed row whose file was later deleted refuses replay with
+  `409 UPLOAD_REQUEST_CLOSED`; the upload does not resurrect deleted content under an old key.
+  A changed manifest is evaluated before plan storage, so a replay is not refused because the workspace
+  has since filled its storage allowance.
+- A concurrent retry that loses the unique-index race reconciles by the authoritative keyed row,
+  deletes only its own unreferenced object, and returns that row. A lost COMMIT acknowledgement still
+  skips reconciliation and compensation entirely; the client retries with the same key instead.
+- Audio/video extraction now has an explicit claim (`extraction_status = 'processing'` plus
+  `extraction_claimed_at`) taken by an atomic conditional UPDATE that rechecks the file is live and the
+  project is not archived. The claim has a five-minute lease, refreshed every minute while the provider
+  call is running, so a healthy slow call cannot be taken over. A provider failure remains terminal
+  `failed`; a missing OpenAI allocation remains terminal `unsupported`. A deleted file or archived
+  project is never claimed, and a project archived between claim and dispatch is released to `pending`.
+- `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes. It claims before
+  reading bytes or dispatching, so overlapping sweeps and a live worker cannot double-charge the
+  provider. If the stored bytes cannot be read the row becomes `failed`, never silently stuck pending.
+  This complements, and does not replace, `RagIngestionService.resumeInterruptedEmbeddings`: that sweep
+  still covers ordinary-file embeddings whose extraction already completed, while a pending transcript
+  has no text to embed and is recovered here.
+- Database regressions in `knowledge-document-writes.db.spec.ts` cover full replay, digest conflict,
+  deliberate duplicate under a new key, partial-batch resume after a pre-COMMIT audit failure,
+  committed-but-unacknowledged retry, deleted-row refusal, concurrent sweep claiming, a live claim being
+  left alone, deleted/archived exclusion, and terminal failure when stored bytes are unreadable. HTTP
+  coverage is KBF-A-81–84. Fault injection is disclosed where used: the uncertain-COMMIT tests fault
+  the acknowledgement delivery, not PostgreSQL itself.
+
+**Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
+than mandatory; requiring them would give every client automatic retry safety but breaks existing
+integrations until all callers send one. Replay returns the original rows rather than a `202`-style
+"already accepted" response, because callers need the file IDs. A key is closed after deletion rather
+than reusable. Transcription failure is terminal instead of automatically retried, because a provider
+rejection is not evidence that a restart would succeed; manual re-upload remains the recovery path. The
+owner may still choose mandatory keys, an explicit reconciliation endpoint, or automatic bounded retries
+for provider failures.
+
+**Separate dispositions (unchanged, not silently fixed here).** Filename uniqueness is still computed
+outside the insert lock; per-file batch atomicity still permits committed prefixes before a later file
+fails (resume now makes that state recoverable but does not make the batch all-or-nothing); storage
+deletion is still best-effort with no retry queue; rows stranded by the pre-V166 code receive no
+one-time repair. These remain follow-ups outside this bounded correction.
+
 Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
 `e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
+REQ-WPB-08 is staged as task `f0463d10-7acc-4b1d-8103-46cd2be3a40d`, revision
+`b5ed3de2541662f8dffdfbc2d8f075fc74809857e0772690a07b8aa4534b82b4`, `in_review`, unassigned, with
+its linked cases still **UNRUN**; this session had no native execution-evidence writer.
 
 PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`. Production
 `/api/health` returned the #288 merge SHA and the deployed MCP catalog/proposal-preview tool set was
