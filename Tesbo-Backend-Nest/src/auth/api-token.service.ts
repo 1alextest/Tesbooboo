@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
 import { DatabaseService } from "../database/database.service";
 
@@ -155,11 +155,19 @@ export class ApiTokenService {
          JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
          JOIN organization_members om ON om.organization_id = p.organization_id AND om.user_id = $1
         WHERE p.id = $2 AND p.archived_at IS NULL
+          AND (NOT ('write' = ANY(string_to_array($5::text, ',')))
+            OR replace(replace(lower(btrim(pm.role::text)), '-', '_'), ' ', '_')
+              IN ('owner', 'manager', 'admin', 'test_manager'))
         FOR SHARE OF p, pm, om
        RETURNING id, name, scopes, token_hash, last_used_at, created_at`,
       [userId, projectId, name, tokenHash, scopes]
     );
     if (!res.rows[0]) {
+      // The locked SELECT rechecks the current project role after a concurrent update.
+      // Never return a write credential when membership or issuance authority vanished.
+      if (scopes.split(",").includes("write")) {
+        throw new ForbiddenException({ error: "Current project owner or manager authority is required to issue a write-scoped credential" });
+      }
       throw new BadRequestException({ error: "Current project membership is required to issue a credential" });
     }
     return { ...this.toSummary(res.rows[0] as never), token: rawToken };

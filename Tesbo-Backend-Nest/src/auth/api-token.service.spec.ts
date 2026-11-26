@@ -44,6 +44,8 @@ describe("ApiTokenService", () => {
       expect(sql).toContain("project_membership_id, organization_membership_id");
       expect(sql).toContain("pm.id, om.id");
       expect(sql).toContain("FOR SHARE OF p, pm, om");
+      expect(sql).toContain("NOT ('write' = ANY(string_to_array($5::text, ',')))");
+      expect(sql).toContain("IN ('owner', 'manager', 'admin', 'test_manager')");
       // Params: [userId, projectId, name, tokenHash, scopes]
       expect(params[0]).toBe("user-1");
       expect(params[1]).toBe("proj-1");
@@ -56,6 +58,12 @@ describe("ApiTokenService", () => {
     it("refuses issuance when the membership-bound insert returns no row", async () => {
       const { db, query } = makeDb([]);
       await expect(new ApiTokenService(db).issueToken("u", "p", "n", ["read"])).rejects.toMatchObject({ status: 400 });
+      expect(query).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["write", "read,write"])("refuses write issuance when locked authority is absent (%p)", async (scopes) => {
+      const { db, query } = makeDb([]);
+      await expect(new ApiTokenService(db).issueToken("u", "p", "n", scopes)).rejects.toMatchObject({ status: 403 });
       expect(query).toHaveBeenCalledTimes(1);
     });
 
