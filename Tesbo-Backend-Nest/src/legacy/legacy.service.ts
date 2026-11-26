@@ -13651,19 +13651,25 @@ export class LegacyService implements OnModuleInit {
         // Reconcile by the unique storage key first: delete only when the row is known not to have
         // committed. If the check itself fails, preserve the object and surface the error rather
         // than risk deleting bytes a committed row still references.
-        let persisted: boolean | null = null;
-        try {
-          const row = await this.db.query<{ id: string }>(
-            "SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
-            [projectId, storageKey]
-          );
-          persisted = Boolean(row.rows[0]);
-        } catch (reconcileError) {
-          this.logger.warn(`Could not reconcile upload ${storageKey} after failure: ${reconcileError}`);
-        }
-        if (persisted === false) {
-          await this.storage.delete(storageKey).catch((storageError) =>
-            this.logger.warn(`Failed to compensate storage object ${storageKey}: ${storageError}`));
+        // A COMMIT whose acknowledgement was lost is never treated as proof of rollback: the row
+        // may be committed and an absent observation (replica lag, fault-injected lookup) cannot
+        // establish otherwise. Only a failure before COMMIT permits compensation.
+        const commitUncertain = Boolean(error && typeof error === "object" && (error as { commitUncertain?: boolean }).commitUncertain);
+        if (!commitUncertain) {
+          let persisted: boolean | null = null;
+          try {
+            const row = await this.db.query<{ id: string }>(
+              "SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
+              [projectId, storageKey]
+            );
+            persisted = Boolean(row.rows[0]);
+          } catch (reconcileError) {
+            this.logger.warn(`Could not reconcile upload ${storageKey} after failure: ${reconcileError}`);
+          }
+          if (persisted === false) {
+            await this.storage.delete(storageKey).catch((storageError) =>
+              this.logger.warn(`Failed to compensate storage object ${storageKey}: ${storageError}`));
+          }
         }
         throw error;
       }

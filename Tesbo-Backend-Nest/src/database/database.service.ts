@@ -80,7 +80,16 @@ export class DatabaseService {
     try {
       await client.query("BEGIN");
       const result = await fn(client);
-      await client.query("COMMIT");
+      try {
+        await client.query("COMMIT");
+      } catch (commitError) {
+        // The transaction may have committed even though the acknowledgement was lost. Callers that
+        // compensate external effects need to distinguish this from a rollback.
+        if (commitError && typeof commitError === "object") {
+          Object.defineProperty(commitError, "commitUncertain", { value: true, configurable: true });
+        }
+        throw commitError;
+      }
       return result;
     } catch (error) {
       // A ROLLBACK on a connection that has already died throws in its own right. Letting that
