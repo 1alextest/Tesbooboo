@@ -592,34 +592,46 @@ for (const membership of ["project", "organization"] as const) {
     const t = tenant!;
     const projectId = t.mainProjectId;
     const projectPath = `/api/projects/${projectId}`;
+    const secondProjectId = t.secondProjectId;
     const owner = await loginAs(t.owner);
     const qa = await loginAs(t.qa);
     const machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] } });
-    const issued: string[] = [];
-    const issue = async (human: APIRequestContext, label: string) => {
-      const response = await human.post(`${projectPath}/apikeys`, {
+    const issued: Array<{ id: string; projectId: string }> = [];
+    const issue = async (human: APIRequestContext, label: string, target = projectId) => {
+      const response = await human.post(`/api/projects/${target}/apikeys`, {
         data: { name: `CL lifecycle ${label} ${Date.now()}`, scopes: ["read"] }
       });
       expect(response.status(), "read-only issuance must succeed").toBe(201);
       const credential = await response.json() as { id: string; token: string; name: string; scopes: string[] };
-      issued.push(credential.id);
-      await approveMcpTestClient(owner, projectId, credential);
+      issued.push({ id: credential.id, projectId: target });
+      await approveMcpTestClient(owner, target, credential);
       return credential;
     };
-    const projectMembership = () => scalar(`SELECT id FROM project_members WHERE project_id=${literal(projectId)} AND user_id=${literal(t.qa.userId)}`);
+    const projectMembership = (target = projectId) => scalar(`SELECT id FROM project_members WHERE project_id=${literal(target)} AND user_id=${literal(t.qa.userId)}`);
     const orgMembership = () => scalar(`SELECT id FROM organization_members WHERE organization_id=${literal(t.organizationId)} AND user_id=${literal(t.qa.userId)}`);
-    const observe = async (token: string) => {
+    const observe = async (token: string, target = projectId) => {
       const headers = { Authorization: `Bearer ${token}` };
-      const rest = await machine.get(`${projectPath}/testcases`, { headers, failOnStatusCode: false });
+      const targetPath = `/api/projects/${target}`;
+      const rest = await machine.get(`${targetPath}/testcases`, { headers, failOnStatusCode: false });
       const restBody = await rest.json().catch(() => null);
-      const mcp = await machine.post(`${projectPath}/mcp`, {
+      const mcp = await machine.post(`${targetPath}/mcp`, {
         headers, failOnStatusCode: false,
         data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_testcases", arguments: {} } }
       });
       const rpc = await mcp.json().catch(() => null);
+      const alias = await machine.post("/api/mcp", {
+        headers, failOnStatusCode: false,
+        data: { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_projects", arguments: {} } }
+      });
+      const aliasRpc = await alias.json().catch(() => null);
+      let aliasProject: unknown = null;
+      try { const projects = JSON.parse(aliasRpc?.result?.content?.[0]?.text).projects; if (Array.isArray(projects) && projects.length === 1) aliasProject = projects[0].id; } catch { /* unexpected payload is not success */ }
       // No credential, raw body, or provider payload in assertion diagnostics.
       return {
         restStatus: rest.status(), mcpStatus: mcp.status(), rpcCode: rpc?.error?.code ?? null,
+        aliasStatus: alias.status(), aliasCode: aliasRpc?.error?.code ?? null,
+        aliasAllowed: alias.ok() && !aliasRpc?.error && aliasRpc?.result?.isError === false && aliasProject === target,
+        aliasDenied: alias.status() === 401 || (alias.ok() && aliasRpc?.error?.code === -32001 && aliasRpc?.result === undefined),
         restAllowed: rest.ok(),
         restDenied: [401, 403, 404].includes(rest.status()) ||
           (rest.status() === 400 && restBody?.error === "Authentication required"),
@@ -632,12 +644,25 @@ for (const membership of ["project", "organization"] as const) {
     const allowed = (value: Observation) => {
       expect(value.restAllowed, JSON.stringify(value)).toBe(true);
       expect(value.mcpAllowed, JSON.stringify(value)).toBe(true);
+      expect(value.aliasAllowed, JSON.stringify(value)).toBe(true);
     };
     const denied = (value: Observation) => {
       expect(value.restDenied, JSON.stringify(value)).toBe(true);
       expect(value.mcpDenied, JSON.stringify(value)).toBe(true);
+      expect(value.aliasDenied, JSON.stringify(value)).toBe(true);
     };
     try {
+      // The existing fixture reset removes this additional membership after the test.
+      expect((await owner.post(`/api/projects/${secondProjectId}/members`, {
+        data: { userId: t.qa.userId, role: "qa_engineer" }
+      })).ok()).toBe(true);
+      const secondOld = await issue(qa, "second project member", secondProjectId);
+      const oldSecondMembership = projectMembership(secondProjectId);
+      expect(oldSecondMembership).toBeTruthy();
+      allowed(await observe(secondOld.token, secondProjectId));
+      const wrongTarget = await observe(secondOld.token, projectId);
+      expect(wrongTarget.restDenied, JSON.stringify(wrongTarget)).toBe(true);
+      expect(wrongTarget.mcpDenied, JSON.stringify(wrongTarget)).toBe(true);
       const old = await issue(qa, "departing member");
       const unaffected = await issue(owner, "unaffected member");
       const oldProjectMembership = projectMembership();
@@ -654,6 +679,13 @@ for (const membership of ["project", "organization"] as const) {
       expect(membership === "project" ? projectMembership() : orgMembership()).toBe("");
       denied(await observe(old.token));
       allowed(await observe(unaffected.token));
+      if (membership === "organization") {
+        expect(projectMembership(secondProjectId)).toBe("");
+        denied(await observe(secondOld.token, secondProjectId));
+      } else {
+        expect(projectMembership(secondProjectId)).toBe(oldSecondMembership);
+        allowed(await observe(secondOld.token, secondProjectId));
+      }
 
       if (membership === "organization") {
         const rejoin = await owner.post("/api/workspace/members", {
@@ -670,6 +702,18 @@ for (const membership of ["project", "organization"] as const) {
         expect(rejoin.ok(), "actual project member add API").toBe(true);
       }
       expect(projectMembership()).toBeTruthy();
+      if (membership === "organization") {
+        const rejoinSecond = await owner.post(`/api/projects/${secondProjectId}/members`, {
+          data: { userId: t.qa.userId, role: "qa_engineer" }
+        });
+        expect(rejoinSecond.ok()).toBe(true);
+        expect(projectMembership(secondProjectId)).toBeTruthy();
+        expect(projectMembership(secondProjectId)).not.toBe(oldSecondMembership);
+        denied(await observe(secondOld.token, secondProjectId));
+      } else {
+        expect(projectMembership(secondProjectId)).toBe(oldSecondMembership);
+        allowed(await observe(secondOld.token, secondProjectId));
+      }
       if (membership === "project") expect(projectMembership()).not.toBe(oldProjectMembership);
       const oldAfterRejoin = await observe(old.token);
       // New credential is an independent positive control, not reapproval of the old one.
@@ -678,6 +722,14 @@ for (const membership of ["project", "organization"] as const) {
         const fresh = await issue(freshHuman, "rejoined member");
         expect(fresh.id).not.toBe(old.id);
         allowed(await observe(fresh.token));
+        if (membership === "organization") {
+          const secondFresh = await issue(freshHuman, "second project rejoined member", secondProjectId);
+          expect(secondFresh.id).not.toBe(secondOld.id);
+          allowed(await observe(secondFresh.token, secondProjectId));
+          denied(await observe(secondOld.token, secondProjectId));
+        } else {
+          allowed(await observe(secondOld.token, secondProjectId));
+        }
       } finally {
         await freshHuman.dispose();
       }
@@ -689,10 +741,11 @@ for (const membership of ["project", "organization"] as const) {
       for (const observation of [oldAfterRejoin, oldAfterFresh]) {
         expect.soft(observation.restDenied, JSON.stringify(observation)).toBe(true);
         expect.soft(observation.mcpDenied, JSON.stringify(observation)).toBe(true);
+        expect.soft(observation.aliasDenied, JSON.stringify(observation)).toBe(true);
       }
     } finally {
       try {
-        for (const id of issued) await owner.delete(`${projectPath}/apikeys/${id}`, { failOnStatusCode: false });
+        for (const entry of issued) await owner.delete(`/api/projects/${entry.projectId}/apikeys/${entry.id}`, { failOnStatusCode: false });
         resetRbacMembership(t);
       } finally {
         await Promise.all([owner.dispose(), qa.dispose(), machine.dispose()]);
