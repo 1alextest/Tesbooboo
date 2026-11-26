@@ -82,12 +82,12 @@ export function KnowledgeComparison({
         </div>
       </div>
 
-      {result.identical ? (
+      {result.identical && (
         <p className="mt-3 text-xs text-[var(--muted)]" data-testid={`${testId}-identical`}>
-          Every compared field and governance value is byte-identical.
+          No effective field changes. Expand a field to inspect its complete exact values.
         </p>
-      ) : (
-        <div className="mt-3 space-y-3">
+      )}
+      <div className="mt-3 space-y-3">
           {fields.map((field) => (
             <div key={field.key} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3" data-testid={`${testId}-field-${field.key}`} data-status={field.status}>
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -123,8 +123,7 @@ export function KnowledgeComparison({
               </details>
             </div>
           ))}
-        </div>
-      )}
+      </div>
     </section>
   );
 }

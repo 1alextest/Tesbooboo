@@ -50,6 +50,7 @@ import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPane
 import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 
@@ -630,8 +631,9 @@ export default function ZyraTaskDetailPage() {
   // Mirrors the backend guard in zyraFeedback: feedback only makes sense once there's something
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
-  const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
-  const isManagedDocumentProposal = task.provider === "external_document_proposal" || Boolean(task.managedDocumentProposal);
+  const output = summarizeZyraTaskOutput(task);
+  const isRequirementBundle = output.isRequirementBundle;
+  const isManagedDocumentProposal = output.isManagedDocumentProposal;
   const requirementApplyReceipt = task.requirementApplyReceipt;
   // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
   const requirementApplied = done && Boolean(requirementApplyReceipt);
@@ -669,7 +671,8 @@ export default function ZyraTaskDetailPage() {
     ])
   );
   const tabItems: Array<{ key: DetailTab; label: string; count?: number }> = [
-    { key: "testcases", label: t("task.tab.generated"), count: task.drafts.length },
+    { key: "testcases", label: isRequirementBundle || isManagedDocumentProposal ? "Proposal summary" : t("task.tab.generated"),
+      count: isRequirementBundle || isManagedDocumentProposal ? output.operationCount ?? undefined : task.drafts.length },
     { key: "feedback", label: t("task.tab.feedback"), count: feedbackActivities.length },
     { key: "activities", label: t("task.tab.activities"), count: task.activities.length },
     { key: "sources", label: t("task.tab.sources"), count: task.sources.length },
@@ -702,12 +705,14 @@ export default function ZyraTaskDetailPage() {
               </p>
             )}
             <p className="mt-2 text-sm text-[var(--muted)]">
-              {t("task.summary", {
-                generated: task.generatedCount,
-                saved: task.savedCount,
-                tokens: task.tokenUsage.total,
-                date: formatDateTime(task.updatedAt, t.locale),
-              })}
+              {isRequirementBundle || isManagedDocumentProposal
+                ? `${output.primary} · ${output.secondary} · ${task.tokenUsage.total} tokens · ${formatDateTime(task.updatedAt, t.locale)}`
+                : t("task.summary", {
+                  generated: task.generatedCount,
+                  saved: task.savedCount,
+                  tokens: task.tokenUsage.total,
+                  date: formatDateTime(task.updatedAt, t.locale),
+                })}
             </p>
             {zyraTaskTicketKeys(task).length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
@@ -919,6 +924,17 @@ export default function ZyraTaskDetailPage() {
       </div>
 
       {activeTab === "testcases" && (
+        isRequirementBundle || isManagedDocumentProposal ? (
+          <Card className="p-4" data-testid="native-proposal-output-summary">
+            <h3 className="font-semibold text-[var(--foreground)]">{output.primary}</h3>
+            <p className="mt-2 text-sm text-[var(--muted)]">{output.secondary}</p>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              These are proposed artifact operations, not generated Test Cases.
+              The reviewed bundle or document panel above owns the authoritative
+              decision and native receipt. No test case can be saved from this summary.
+            </p>
+          </Card>
+        ) : (
         <div className="space-y-4">
           <Card className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3">
@@ -1017,6 +1033,7 @@ export default function ZyraTaskDetailPage() {
             </div>
           </Card>
         </div>
+        )
       )}
 
       {activeTab === "feedback" && (
@@ -1153,7 +1170,8 @@ export default function ZyraTaskDetailPage() {
             )}
             {!canGiveFeedback && (
               <p className="text-xs text-[var(--muted)]">
-                {isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
+                {isManagedDocumentProposal ? "Document proposals are reviewed through their dedicated panel above. Use its Apply or Reject action on the exact proposal instead of case-generation feedback."
+                  : isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
                   : taskStatusNow === "in_progress" || taskStatusNow === "todo"
                   ? t("task.feedbackLocked")
                   : t("task.feedbackClosed")}

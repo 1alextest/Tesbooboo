@@ -92,10 +92,14 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     });
     return observed;
   }
-  async function waitForBlocker(pid: number) {
+  async function waitForBlocker(pid: number, waitingApplication?: string) {
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      if ((await setup.query("SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))", [pid])).rowCount) return;
+      if ((await setup.query(
+        `SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+           AND $1 = ANY(pg_blocking_pids(pid)) AND ($2::text IS NULL OR application_name = $2)`,
+        [pid, waitingApplication ?? null]
+      )).rowCount) return;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     throw new Error(`No PostgreSQL writer waited behind ${pid}`);
@@ -760,35 +764,52 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     await setup.query("UPDATE knowledge_documents SET title = $2, folder_id = $3 WHERE id = $1", [documentId, title, destination]);
     let release!: () => void;
     const released = new Promise<void>((resolve) => { release = resolve; });
-    let pausedSignal!: () => void;
-    const paused = new Promise<void>((resolve) => { pausedSignal = resolve; });
+    let pausedSignal!: (pid: number) => void;
+    const paused = new Promise<number>((resolve) => { pausedSignal = resolve; });
     let held = false;
-    const observed = observedPool(async (sql) => {
+    const observed = observedPool(async (sql, _values, _result, raw) => {
       if (!held && /FROM projects p JOIN project_members/.test(sql)) {
         held = true;
-        pausedSignal();
+        pausedSignal(Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid));
         await released;
       }
     });
     const duplicating = realService(observed);
-    const deleting = service();
+    const deleteApplication = `kb-ancestor-delete-${randomUUID()}`;
+    const deletePool = new Pool({ connectionString: url, application_name: deleteApplication, max: 2, connectionTimeoutMillis: 3000 });
+    const deleting = service(deletePool);
     try {
       // Hold the duplicate after its source/authority reads. A delete that starts now either
       // waits on the same project advisory lock (fixed) or races the copy insert (pre-fix).
-      const duplicate = duplicating.duplicateKnowledgeDocument(projectId, actor, documentId).then(() => null, (error) => error);
-      await paused;
-      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, ancestor).then(() => null, (error) => error);
-      await waitForAnyLockWait();
+      const duplicate = duplicating.duplicateKnowledgeDocument(projectId, actor, documentId);
+      const duplicatePid = await Promise.race([paused, duplicate.then(() => {
+        throw new Error("The copy completed before its transaction could be paused");
+      })]);
+      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, ancestor);
+      await Promise.race([waitForBlocker(duplicatePid, deleteApplication), deletion.then(() => {
+        throw new Error("The ancestor deletion completed without waiting for the copy");
+      })]);
       release();
-      expect(await deletion).toBeNull();
-      expect(await duplicate).toBeNull();
+      const [copy] = await Promise.all([duplicate, deletion]);
+      expect(copy).toMatchObject({ title: `${title} (copy)`, folderId: destination });
+      expect(copy.id).not.toBe(documentId);
+      const documents = await setup.query(
+        `SELECT id, folder_id, is_deleted FROM knowledge_documents
+         WHERE project_id = $1 AND id = ANY($2::uuid[]) ORDER BY array_position($2::uuid[], id)`,
+        [projectId, [documentId, copy.id, otherDocumentId]]
+      );
+      expect(documents.rows).toEqual([
+        { id: documentId, folder_id: destination, is_deleted: true },
+        { id: copy.id, folder_id: destination, is_deleted: true },
+        { id: otherDocumentId, folder_id: folderId, is_deleted: false }
+      ]);
       expect((await setup.query(
         "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1 AND is_deleted = false",
         [destination]
       )).rows[0].n).toBe(0);
     } finally {
       release();
-      await observed.end();
+      await Promise.all([observed.end(), deletePool.end()]);
       await setup.query("DELETE FROM knowledge_documents WHERE folder_id = $1", [destination]);
       await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[destination, ancestor]]);
     }
