@@ -150,7 +150,7 @@ export class ApiTokenService {
     const res = await this.db.query(
        `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes,
           project_membership_id, organization_membership_id)
-       SELECT $1, $2, $3, $4, $5, pm.id, om.id
+       SELECT $1, $2, $3, $4, $5::text, pm.id, om.id
          FROM projects p
          JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
          JOIN organization_members om ON om.organization_id = p.organization_id AND om.user_id = $1
