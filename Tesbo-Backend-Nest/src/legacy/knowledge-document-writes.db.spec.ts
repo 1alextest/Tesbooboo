@@ -144,11 +144,11 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     jest.spyOn(internals, "notifyKnowledgeItem").mockResolvedValue(undefined);
     return { svc, storage, planLimits, activity };
   }
-  async function seedFile(name = `file-${randomUUID()}.txt`) {
+  async function seedFile(name = `file-${randomUUID()}.txt`, folder = folderId) {
     return (await setup.query<{ id: string }>(
       `INSERT INTO knowledge_files (organization_id,project_id,folder_id,file_name,original_file_name,mime_type,file_extension,file_size,storage_key,uploaded_by)
        VALUES ($1,$2,$3,$4,$4,'text/plain','txt',4,$5,$6) RETURNING id`,
-      [orgId, projectId, folderId, name, `kb/${randomUUID()}`, actor]
+      [orgId, projectId, folder, name, `kb/${randomUUID()}`, actor]
     )).rows[0].id;
   }
   const update = (svc: ReturnType<typeof service>["svc"], text = "Saved body") => svc.updateKnowledgeDocument(projectId, actor, documentId, { contentJson: json(text), contentHtml: `<p>${text}</p>`, contentText: text });
@@ -934,6 +934,24 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       expect((await setup.query("SELECT is_deleted FROM knowledge_folders WHERE id = $1", [child])).rows[0].is_deleted).toBe(true);
     } finally {
       await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[child, parent]]);
+    }
+  });
+
+  it("refuses to restore a file while its folder remains deleted", async () => {
+    const folder = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [orgId, projectId, `File restore folder ${randomUUID()}`, folderId]
+    )).rows[0].id;
+    const fileId = await seedFile(`restore-${randomUUID()}.txt`, folder);
+    const f = fileService();
+    try {
+      await f.svc.deleteKnowledgeFolder(projectId, actor, folder);
+      const restore = f.svc.restoreKnowledgeFile(projectId, actor, fileId).then(() => null, (error) => error);
+      expect(await restore).toMatchObject({ status: 400 });
+      expect((await setup.query("SELECT is_deleted FROM knowledge_files WHERE id = $1", [fileId])).rows[0].is_deleted).toBe(true);
+    } finally {
+      await setup.query("DELETE FROM knowledge_files WHERE id = $1", [fileId]);
+      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [folder]);
     }
   });
 

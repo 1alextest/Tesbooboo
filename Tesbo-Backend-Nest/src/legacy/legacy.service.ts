@@ -13720,15 +13720,30 @@ export class LegacyService implements OnModuleInit {
   async restoreKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireOwnerOrManager(role);
     if (!isUuid(fileId)) throw new NotFoundException({ error: "File not found" });
-    const res = await this.db.query(
-      "UPDATE knowledge_files SET is_deleted = false, deleted_at = NULL, updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING *",
-      [fileId, projectId]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "File not found" });
-    await this.logProjectActivity(projectId, uid, "restored", "knowledge_file", fileId, res.rows[0].original_file_name, {});
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query<Body>(
+        "SELECT * FROM knowledge_files WHERE id = $1 AND project_id = $2 FOR UPDATE",
+        [fileId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "File not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      const folder = await client.query<{ is_deleted: boolean }>(
+        "SELECT is_deleted FROM knowledge_folders WHERE id = $1 AND project_id = $2",
+        [current.folder_id, projectId]
+      );
+      if (!folder.rows[0] || folder.rows[0].is_deleted) {
+        throw new BadRequestException({ error: "Restore the parent folder before restoring this file." });
+      }
+      const updated = await client.query(
+        "UPDATE knowledge_files SET is_deleted = false, deleted_at = NULL, updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING *",
+        [fileId, projectId]
+      );
+      await this.logProjectActivity(projectId, uid, "restored", "knowledge_file", fileId, updated.rows[0].original_file_name, {}, client);
+      return updated;
+    });
     return this.kbFileView(res.rows[0]);
   }
 
