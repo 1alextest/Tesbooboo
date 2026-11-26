@@ -54,9 +54,14 @@ export class DatabaseService {
       `database connection unavailable (pool total=${totalCount} idle=${idleCount} waiting=${waitingCount}): ` +
         `${(error as Error).message}`
     );
-    throw new ServiceUnavailableException({
+    const failure = new ServiceUnavailableException({
       error: "The database is not accepting connections right now. Please retry in a moment."
     });
+    // Preserve the commit-uncertain marker so external-effect compensation can stay conservative.
+    if (error && typeof error === "object" && (error as { commitUncertain?: boolean }).commitUncertain) {
+      Object.defineProperty(failure, "commitUncertain", { value: true, configurable: true });
+    }
+    throw failure;
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
