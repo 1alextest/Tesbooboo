@@ -295,9 +295,9 @@ test.describe("knowledge base v2 — files", () => {
     expect(fileCount()).toBe(0);
   });
 
-  test("KBF-A-85 a supplied empty requestKey is refused rather than silently disabling replay", async () => {
+  test("KBF-A-85 a whitespace-only requestKey is refused rather than silently disabling replay", async () => {
     const folder = await createFolder(stamp("Empty key"));
-    const res = await uploadWithKey([textFile("empty-key.txt", "bytes")], "", folder.id);
+    const res = await uploadWithKey([textFile("empty-key.txt", "bytes")], "   ", folder.id);
     expect(res.status()).toBe(400);
     expect(JSON.stringify(await res.json())).toContain("requestKey");
     expect(fileCount()).toBe(0);

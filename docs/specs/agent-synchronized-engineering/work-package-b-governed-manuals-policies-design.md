@@ -809,8 +809,10 @@ than mandatory; requiring them would give every client automatic retry safety bu
 integrations until all callers send one. Replay returns the original rows rather than a `202`-style
 "already accepted" response, because callers need the file IDs. A key is closed after any of its files
 is deleted, so a deleted position makes the whole logical batch non-replayable rather than silently
-resurrecting or filling around it. An explicitly supplied empty key is a `400`, not an absence, so a
-caller cannot believe it has retry safety it does not have. Transcription failure is terminal instead
+resurrecting or filling around it. An explicitly supplied whitespace-only key is a `400`, not an
+absence, so a caller cannot believe it has retry safety it does not have; an empty multipart value is
+indistinguishable from an omitted field after parsing, so the transport-level case is documented
+rather than guessed at. Transcription failure is terminal instead
 of automatically retried, because a provider rejection is not evidence that a restart would succeed;
 manual re-upload remains the recovery path. The owner may still choose mandatory keys, per-position
 reopening after deletion, an explicit reconciliation endpoint, or automatic bounded retries for
