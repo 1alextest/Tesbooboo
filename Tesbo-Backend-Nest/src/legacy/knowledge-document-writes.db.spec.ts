@@ -1025,6 +1025,55 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
   });
 
+  it("retains upload bytes even if an uncertain COMMIT is followed by an absent-row observation", async () => {
+    const name = `unknown-commit-${randomUUID()}.txt`;
+    let committed = false;
+    const observed = observedPool(async (sql, _values, result) => {
+      if (!committed && sql.trim().toUpperCase() === "COMMIT") {
+        committed = true;
+        throw new Error("Connection terminated unexpectedly");
+      }
+      // Model a reconciliation observation that cannot establish the final outcome:
+      // the actual database has committed, but the application's observation is absent.
+      // This masks only the lookup result; it is NOT a real PostgreSQL visibility race.
+      if (committed && /SELECT id FROM knowledge_files WHERE project_id = \$1 AND storage_key = \$2/.test(sql)) {
+        result.rows.length = 0;
+        result.rowCount = 0;
+      }
+    });
+    const f = fileService(observed);
+    try {
+      await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{
+        buffer: Buffer.from("upload body"), originalname: name, mimetype: "text/plain", size: 11
+      }]).then(() => null, () => null);
+      expect(committed).toBe(true);
+      const key = f.storage.put.mock.calls[0]?.[0];
+      expect(key).toBeTruthy();
+      expect((await setup.query("SELECT storage_key FROM knowledge_files WHERE project_id = $1 AND storage_key = $2", [projectId, key])).rows).toEqual([{ storage_key: key }]);
+      expect(f.storage.delete).not.toHaveBeenCalledWith(key);
+    } finally {
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND original_file_name = $2", [projectId, name]);
+    }
+  });
+
+  it("compensates an upload when its transactional audit fails before COMMIT", async () => {
+    const name = `precommit-audit-${randomUUID()}.txt`;
+    const f = fileService();
+    f.activity.mockRejectedValueOnce(new Error("injected audit fault"));
+    try {
+      await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{
+        buffer: Buffer.from("upload body"), originalname: name, mimetype: "text/plain", size: 11
+      }])).rejects.toThrow("injected audit fault");
+      const key = f.storage.put.mock.calls[0]?.[0];
+      expect(key).toBeTruthy();
+      expect(f.storage.delete).toHaveBeenCalledWith(key);
+      expect((await setup.query("SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2", [projectId, key])).rows).toEqual([]);
+    } finally {
+      await setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND original_file_name = $2", [projectId, name]);
+    }
+  });
+
   it("compensates a file upload when its destination is deleted before the insert", async () => {
     const target = (await setup.query<{ id: string }>(
       "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
