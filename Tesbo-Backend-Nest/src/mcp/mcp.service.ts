@@ -1,3 +1,4 @@
+import { API_TOKEN_CURRENT_GENERATION_SQL } from "../auth/api-token.service";
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional, UnauthorizedException } from "@nestjs/common";
 import { ProjectSourceGraphCoordinator } from "../behavior-graph/project-source-graph.coordinator";
@@ -193,7 +194,7 @@ export class McpService {
     const current = await this.db.query(
       `SELECT p.settings, t.scopes FROM projects p
        JOIN api_tokens t ON t.project_id = p.id AND t.id = $2 AND t.user_id = $3
-       WHERE p.id = $1 AND p.archived_at IS NULL`,
+       WHERE p.id = $1 AND p.archived_at IS NULL AND ${API_TOKEN_CURRENT_GENERATION_SQL}`,
       [principal.projectId, principal.tokenId, principal.userId]
     );
     const row = current.rows[0];
