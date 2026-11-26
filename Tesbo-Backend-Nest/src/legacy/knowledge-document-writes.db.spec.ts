@@ -846,7 +846,20 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
   }
 
-  describe("WPB-04 document mutation and ancestor deletion", () => {
+  async function readFolders() {
+    return (await setup.query(
+      "SELECT id, parent_folder_id, name, is_deleted FROM knowledge_folders WHERE project_id=$1 ORDER BY id", [projectId]
+    )).rows;
+  }
+
+  async function readCreatedFolderAudits(name: string) {
+    return (await setup.query(
+      `SELECT entity_id FROM audit_logs WHERE project_id=$1 AND actor_id=$2
+       AND entity_type='knowledge_folder' AND action='created' AND entity_name=$3`, [projectId, actor, name]
+    )).rows;
+  }
+
+  describe("WPB-04 knowledge writes and ancestor deletion", () => {
     const deletingEditor = randomUUID();
     let ancestor: string;
     let destination: string;
@@ -940,49 +953,75 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       const audits = (await readAudits()).filter(record => record.entity_id === written.id);
       expect(audits.map(record => record.action)).toEqual([operation === "duplicate" ? "duplicated" : "moved"]);
     }, 30000);
+
+    it.each(["delete first", "create first"] as const)("serializes child-folder creation and ancestor deletion: %s", async order => {
+      const name = `Child ${randomUUID()}`;
+      const before = await readFolders();
+      expect(before.find(row => row.id === folderId)).toMatchObject({ is_deleted: false });
+      expect(before.find(row => row.id === ancestor)).toMatchObject({ parent_folder_id: folderId, is_deleted: false });
+      expect(before.find(row => row.id === destination)).toMatchObject({ parent_folder_id: ancestor, is_deleted: false });
+      const expected = before.map(row => row.id === ancestor || row.id === destination ? { ...row, is_deleted: true } : row);
+      const create = (p: Pool) => realService(p).createKnowledgeFolder(projectId, actor, { parentFolderId: destination, name });
+      if (order === "delete first") {
+        await overlap(/UPDATE knowledge_folders SET is_deleted = true/, deleteAncestor, p => expect(create(p)).rejects.toMatchObject({ status: 404 }));
+        expect(await readFolders()).toEqual(expected);
+        expect(await readCreatedFolderAudits(name)).toEqual([]);
+      } else {
+        const [child] = await overlap(/INSERT INTO knowledge_folders/, create, deleteAncestor);
+        expect(child).toMatchObject({ id: expect.any(String), parentFolderId: destination, name, isDeleted: false });
+        expect(before.some(row => row.id === child.id)).toBe(false);
+        const after = await readFolders();
+        expect(after.find(row => row.id === child.id)).toEqual({ id: child.id, parent_folder_id: destination, name, is_deleted: true });
+        expect(after.filter(row => row.id !== child.id)).toEqual(expected);
+        expect(await readCreatedFolderAudits(name)).toEqual([{ entity_id: child.id }]);
+      }
+    }, 30000);
   });
 
-  it("rechecks a parent folder under lock so a concurrent delete cannot strand a new child folder", async () => {
-    const parent = (await setup.query<{ id: string }>(
-      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
-      [orgId, projectId, `Folder race parent ${randomUUID()}`, folderId]
-    )).rows[0].id;
-    const childName = `Child ${randomUUID().slice(0, 8)}`;
-    let release!: () => void;
-    const released = new Promise<void>((resolve) => { release = resolve; });
-    let acquired!: () => void;
-    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
-    let paused = false;
-    const observed = observedPool(async (sql) => {
-      if (!paused && /UPDATE knowledge_folders SET is_deleted = true/.test(sql)) {
-        paused = true;
-        acquired();
-        await released;
+  it("rolls back the created folder and its audit after a native SQL failure in the audit transaction", async () => {
+    const name = `Folder audit ${randomUUID()}`;
+    const before = await readFolders();
+    let insertedId: unknown;
+    let auditAttempted = false;
+    const observed = observedPool(async (sql, _values, result, raw) => {
+      if (/INSERT INTO knowledge_folders/.test(sql)) insertedId = result.rows[0]?.id;
+      if (/INSERT INTO audit_logs/.test(sql)) {
+        auditAttempted = true;
+        await raw("SELECT 1 / 0");
       }
     });
-    const deleting = service(observed);
-    const f = realService();
     try {
-      // The delete has already soft-deleted the parent folder inside its transaction but has not
-      // committed. The create must queue behind the same project lock, then find the folder gone.
-      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, parent).then(() => null, (error) => error);
-      await acquiring;
-      const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
-        .then(() => null, (error) => error);
-      // Observe that the create reached its wait before allowing the delete to commit.
-      await waitForAnyLockWait();
-      release();
-      expect(await deletion).toBeNull();
-      expect(await create).toMatchObject({ status: 404 });
-      expect((await setup.query(
-        "SELECT COUNT(*)::int AS n FROM knowledge_folders WHERE project_id = $1 AND name = $2 AND is_deleted = false",
-        [projectId, childName]
-      )).rows[0].n).toBe(0);
+      await expect(realService(observed).createKnowledgeFolder(projectId, actor, { parentFolderId: folderId, name }))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(insertedId).toEqual(expect.any(String));
+      expect(auditAttempted).toBe(true);
+      expect(await readFolders()).toEqual(before);
+      expect(await readCreatedFolderAudits(name)).toEqual([]);
     } finally {
-      release();
       await observed.end();
-      await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND name = $2", [projectId, childName]);
-      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [parent]);
+    }
+  });
+
+  it("refuses a waiting folder create after a project owner archives the project", async () => {
+    const name = `Folder after archive ${randomUUID()}`;
+    const before = await readFolders();
+    const archiver = makeLegacy(new DatabaseService(pool));
+    try {
+      // An independent connection holds the parent row. The writer must pass real active-project
+      // access and reach its parent lock before the owner archives through the normal service.
+      await overlap(/FROM knowledge_folders WHERE id=\$1 FOR UPDATE/,
+        p => new DatabaseService(p).transaction(async client => {
+          await client.query("SELECT id FROM knowledge_folders WHERE id=$1 FOR UPDATE", [folderId]);
+          await archiver.deleteProjectForUser(actor, projectId);
+        }),
+        p => expect(makeLegacy(new DatabaseService(p)).createKnowledgeFolder(projectId, actor, { parentFolderId: folderId, name }))
+          .rejects.toBeInstanceOf(ForbiddenException));
+      expect((await setup.query("SELECT archived_at IS NOT NULL AS archived FROM projects WHERE id=$1", [projectId])).rows)
+        .toEqual([{ archived: true }]);
+      expect(await readFolders()).toEqual(before);
+      expect(await readCreatedFolderAudits(name)).toEqual([]);
+    } finally {
+      await setup.query("UPDATE projects SET archived_at=NULL WHERE id=$1", [projectId]);
     }
   }, 30000);
 
