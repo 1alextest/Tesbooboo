@@ -9,6 +9,17 @@ const token = "00000000-0000-4000-8000-000000000003";
 const task = "00000000-0000-4000-8000-000000000004";
 const human = {kind:"human_session" as const};
 
+// Deliberately bind the fixture to the actual generation-aware locked lookup.
+// A matcher that recognizes only the pre-change SQL can make denial tests pass
+// for the wrong reason, while rejecting every legitimate producer.
+function isCurrentTokenQuery(sql: string): boolean {
+  if (!sql.startsWith("SELECT t.scopes FROM api_tokens t WHERE")) return false;
+  expect(sql).toContain("pm.id = t.project_membership_id");
+  expect(sql).toContain("om.id = t.organization_membership_id");
+  expect(sql).toContain("FOR SHARE OF t");
+  return true;
+}
+
 describe("native testcase proposal review boundary", () => {
   const previousPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
   afterEach(() => {
@@ -61,7 +72,7 @@ describe("native testcase proposal review boundary", () => {
     expect(f.transaction).not.toHaveBeenCalled();
   });
 
-  it.each(["missing_current_membership","guest_project_role","unknown_workspace_role","token_write_revoked","mcp_grant_expired","mcp_tool_removed"])("rechecks current locked producer authority before any proposal write: %s",async reason=>{
+  it.each(["missing_current_membership","guest_project_role","unknown_workspace_role","token_write_revoked","token_generation_replaced","mcp_grant_expired","mcp_tool_removed"])("rechecks current locked producer authority before any proposal write: %s",async reason=>{
     process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
     const f=fixture();
     const mcp=reason.startsWith("mcp_");
@@ -73,12 +84,16 @@ describe("native testcase proposal review boundary", () => {
     const clientQuery=jest.fn(async(sql:string)=>{
       if(sql.startsWith("SELECT p.*"))return {rows:reason==="missing_current_membership" ? [] : [{id:project,settings,
         caller_role:reason==="guest_project_role" ? "guest" : "owner",workspace_role:reason==="unknown_workspace_role" ? "unexpected-role" : "owner"}]};
-      if(sql.startsWith("SELECT scopes FROM api_tokens"))return {rows:[{scopes:reason==="token_write_revoked" ? "read" : "read,write"}]};
+      if(isCurrentTokenQuery(sql))return {rows:reason==="token_generation_replaced" ? [] : [{scopes:reason==="token_write_revoked" ? "read" : "read,write"}]};
       return {rows:[]};
     });
     f.transaction.mockImplementation((work:(client:unknown)=>Promise<unknown>)=>work({query:clientQuery}));
+    const expectedError = reason==="missing_current_membership" ? "Current project and workspace membership are required"
+      : reason==="guest_project_role" || reason==="unknown_workspace_role" ? "A current authoring role is required"
+      : mcp ? "Current project consent for this MCP proposal client is required"
+      : "A current write-scoped project token is required";
     await expect(f.svc.stageTestcaseChanges(project,user,{requestKey:reason,operations:[{opType:"create",draft:{title:"Denied producer"}}]},
-      {kind:"api_token",tokenId:token,transport:mcp ? "mcp" : "rest"})).rejects.toBeInstanceOf(ForbiddenException);
+      {kind:"api_token",tokenId:token,transport:mcp ? "mcp" : "rest"})).rejects.toMatchObject({status:403,response:{error:expectedError}});
     expect(clientQuery.mock.calls.some(([sql])=>/INSERT INTO (testcases|suites|ai_generation_requests|audit_logs)/.test(sql))).toBe(false);
     const authorityQuery=clientQuery.mock.calls.find(([sql])=>sql.startsWith("SELECT p.*"))?.[0];
     expect(authorityQuery).toContain("u.active_organization_id=p.organization_id");
@@ -91,7 +106,7 @@ describe("native testcase proposal review boundary", () => {
     let stored: Record<string,any> | undefined;
     const clientQuery=jest.fn(async (sql:string,values:unknown[]=[]) => {
       if (sql.startsWith("SELECT p.*")) return {rows:[{id:project,settings:{},caller_role:"owner",workspace_role:"owner"}]};
-      if (sql.startsWith("SELECT scopes FROM api_tokens")) return {rows:[{scopes:"read,write"}]};
+      if (isCurrentTokenQuery(sql)) return {rows:[{scopes:"read,write"}]};
       if (sql.startsWith("SELECT id,proposal_request_digest")) return {rows:stored ? [stored] : []};
       if (sql.includes("INSERT INTO ai_generation_requests")) {
         stored={id:task,project_id:project,generated_payload:JSON.parse(String(values[4])),proposal_request_digest:values[7],proposal_provenance:JSON.parse(String(values[8])),task_status:"in_review"};
@@ -314,13 +329,13 @@ describe("requirement bundle lifecycle boundary", () => {
           expiresAt:reason==="expired"?"2000-01-01T00:00:00Z":null,
           allowedTools:reason==="tool_removed"?["list_testcases"]:null}]
       }}}],rowCount:1};
-      if(sql.startsWith("SELECT scopes FROM api_tokens"))return {rows:[{scopes:"read,write"}],rowCount:1};
+      if(isCurrentTokenQuery(sql))return {rows:[{scopes:"read,write"}],rowCount:1};
       if(sql.includes("INSERT INTO ai_generation_requests"))return {rows:[{id:task}],rowCount:1};
       return {rows:[],rowCount:0};
     });
     jest.spyOn(f.svc,"zyraTask").mockResolvedValue({id:task} as never);
     await expect(f.svc.stageRequirementChangeBundle(project,user,{requestKey:"revoked",operations},
-      {kind:"api_token",tokenId:token,transport:"mcp"})).rejects.toBeInstanceOf(ForbiddenException);
+      {kind:"api_token",tokenId:token,transport:"mcp"})).rejects.toMatchObject({status:403,response:{error:"Current project consent for this MCP proposal client is required"}});
     expect(f.query.mock.calls.some(([sql])=>/INSERT |UPDATE /.test(sql))).toBe(false);
   });
 
@@ -333,7 +348,7 @@ describe("requirement bundle lifecycle boundary", () => {
     const normalized=f.internals.normalizeRequirementBundle(withBase).operations;
     f.query.mockImplementation(async sql => {
       if(sql.startsWith("SELECT p.*"))return {rows:[{id:project,caller_role:"owner",workspace_role:"owner",settings:{}}],rowCount:1};
-      if(sql.startsWith("SELECT scopes FROM api_tokens"))return {rows:[{scopes:"read,write"}],rowCount:1};
+      if(isCurrentTokenQuery(sql))return {rows:[{scopes:"read,write"}],rowCount:1};
       if(sql.startsWith("SELECT id,proposal_request_digest"))return {rows:[{id:task,proposal_request_digest:proposalDigest({title:"Prior staged request",operations:normalized})}],rowCount:1};
       return {rows:[],rowCount:0};
     });
