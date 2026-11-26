@@ -669,7 +669,12 @@ remain distinguishable from the current document binding (`reviewedVersionId`/st
 **Coverage.** `e2e/ui/skills.spec.ts` covers inherited vs cleared vs new-document proposals and a long
 document's bounded excerpt with full-value access. `e2e/ui/knowledge-base.spec.ts` KBU-79 covers first
 submission, current-identical, HTML/JSON-only, metadata-only, digest-bound folder placement, denied-version
-retry and historical-base comparison with exact-version access. Native requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
+retry and historical-base comparison with exact-version access. PR #286 completed the identical-disclosure
+follow-up: the Identical summary stays while every field's full old/new values remain inspectable (failing-first
+KBU-79 run 45708009410; merged 33245701). A corrected native requirement proposal is staged as task
+`1d6995fb-431a-44be-8908-3a92362065d3`, revision
+`3770f45c35b7b6fc192490ee42dfb46fec8ec123bdaff0e66a57c049802d4a7f`, in_review/unassigned. Original
+requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
 `1c957dfea4cc767b14bfe7c8f49906256e8a1de5d8ba13db31dcd18ba596c037`, `in_review`, unassigned. Manual
 execution remains **UNRUN**; native execution-evidence writing remains unavailable.
 
@@ -709,7 +714,15 @@ Evidence: failing-first DB run `45731230795` (upload, move and folder-restore re
 pre-fix; 3 failed / 728 passed); the later tests-only commit `8f5e0d9d` characterized the lost-COMMIT
 compensation defect (database-integrity failed with one test). Green runs: `45732950964`, `45734330589`
 (file-restore parent regression added with the fix; its pre-fix failure is deterministic — the old
-code returned 200), and the final run after the reconciliation/e2e additions recorded in the PR. Native REQ-WPB-07 is staged as task
+code returned 200), `45742031601` (735 DB tests incl. uncertain-COMMIT reconciliation) and the final
+exact-head `46ec5644`, where database-integrity passed and smoke ran and passed KB-A-80 + KBF-A-80
+(46 tests in 3 files, run 45748345549). Remaining LOWs: filename uniqueness outside the lock, per-file
+batch atomicity, storage-delete retry, DB-global lock-wait helper, and no one-time repair of rows
+stranded by the old code. Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
 `e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
-Manual execution remains **UNRUN**; native execution-evidence writing remains unavailable.
+
+PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`. Production
+`/api/health` returned the #288 merge SHA and the deployed MCP catalog/proposal-preview tool set was
+verified at that SHA. Manual execution remains **UNRUN**; native execution-evidence writing remains
+unavailable.
