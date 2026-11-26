@@ -509,7 +509,7 @@ test.describe("knowledge base v2 — files", () => {
 
   test("KBF-A-80 upload and move refuse a folder that was deleted", async () => {
     const folder = await createFolder(stamp("Deleted file destination"));
-    const file = await uploadOne(textFile(stamp("kept.txt"), "kept bytes"));
+    const file = await uploadOne(textFile(`${stamp("kept")}.txt`, "kept bytes"));
     await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
 
     const refusedUpload = await upload([textFile("late.txt", "late bytes")], folder.id);
