@@ -384,6 +384,42 @@ test.describe("knowledge base (UI)", () => {
     expect(summary.files, "the summary counts the uploaded file").toBe(1);
   });
 
+  test("KBU-80 an upload whose response is lost after commit lands exactly one file", async ({ browser }) => {
+    const page = await openKb(browser);
+    const fileName = `kbu-80-${Date.now()}.txt`;
+    let attempts = 0;
+    await page.route(/\/knowledge-base\/files/, async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts += 1;
+      if (attempts === 1) {
+        // Let the real backend commit the upload, then replace its acknowledgement with a 503.
+        // The browser can only recover because the retry carries the same requestKey; without it
+        // the second request would create a second file and the summary assertion below would fail.
+        await route.fetch();
+        return route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Simulated lost upload acknowledgement" }),
+        });
+      }
+      return route.continue();
+    });
+
+    await newMenu(page, "Upload file");
+    const dialog = modal(page, "Upload files");
+    await dialog.locator('input[type="file"]').setInputFiles({
+      name: fileName,
+      mimeType: "text/plain",
+      buffer: Buffer.from("KBU-80 retry fixture"),
+    });
+    await dialog.getByRole("button", { name: /Upload/ }).click();
+
+    await expect(row(page, fileName)).toBeVisible();
+    expect(attempts, "the upload was attempted twice").toBe(2);
+    const summary = await (await api.get(kbUrl("/summary"))).json();
+    expect(summary.files, "the retry did not duplicate the file").toBe(1);
+  });
+
   // ─── Validation ────────────────────────────────────────────────────────────
 
   test("KBU-05 the create button stays disabled for an empty or whitespace-only folder name", { tag: '@tesbo.testId("TES-TC-1004")' }, async ({

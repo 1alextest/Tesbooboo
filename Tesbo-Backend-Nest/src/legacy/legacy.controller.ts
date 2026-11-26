@@ -2169,7 +2169,12 @@ export class LegacyController {
     @Body() body: Record<string, any>,
     @UploadedFiles() files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>
   ) {
-    return this.legacy.uploadKnowledgeFiles(projectId, req.userId, body.folderId, files);
+    // A duplicated multipart field arrives as an array. Dropping it would silently turn the
+    // upload back into a non-replayable request, so refuse the ambiguous shape instead.
+    if (body.requestKey !== undefined && typeof body.requestKey !== "string") {
+      throw new BadRequestException({ error: "requestKey must be a single string" });
+    }
+    return this.legacy.uploadKnowledgeFiles(projectId, req.userId, body.folderId, files, body.requestKey);
   }
 
   @Get("/api/projects/:projectId/knowledge-base/files/:fileId/download")

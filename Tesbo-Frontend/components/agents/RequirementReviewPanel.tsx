@@ -573,6 +573,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                     <tr key={criterion.key} className="border-t border-[var(--border)]" data-testid={`requirement-coverage-criterion-${criterion.key}`}>
                       <td className="px-2 py-2 align-top">
                         <span className="font-mono text-xs text-[var(--muted)]">{criterion.key}</span>
+                        {!criterion.normative && <span className="ml-2 text-xs text-[var(--muted)]">Context only in the reviewed version</span>}
                         <div className="text-[var(--foreground)]">{criterion.text}</div>
                       </td>
                       <td className="px-2 py-2 align-top">{criterion.caseCount}</td>

@@ -350,6 +350,63 @@ const url = process.env.DATABASE_URL ?? "";
       const response = await send(route, method, params, options);
       return { status: response.status, body: await response.json() as Record<string, any> };
     }
+    it("CL-T04 refuses foreign credential revocation after concurrent manager demotion", async () => {
+      const manager = randomUUID();
+      const name = `CL-T04-${manager}`;
+      const tokenIds: string[] = [];
+      await setup.query("INSERT INTO users (id,email,name,active_organization_id) VALUES ($1,$2,'CL-T04 manager',$3)", [manager, `cl-t04-${manager}@tesbo.invalid`, organization]);
+      await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'manager')", [organization, manager]);
+      await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'manager')", [project, manager]);
+      const revoker = makeLegacy(db, { config, apiTokens: tokens });
+      const blocker = new Client({ connectionString: url });
+      await blocker.connect();
+      let pending: Promise<{ error: unknown }> | undefined;
+      try {
+        const control = await tokens.issueToken(owner, project, name + "-manager-control", ["read"]);
+        tokenIds.push(control.id);
+        expect(await revoker.revokeApiKey(manager, project, control.id)).toEqual({ ok: true });
+        expect(await tokens.issuerOf(project, control.id)).toEqual({ exists: false, userId: null });
+        const target = await tokens.issueToken(owner, project, name + "-foreign", ["read"]);
+        tokenIds.push(target.id);
+        const own = await tokens.issueToken(manager, project, name + "-own", ["read"]);
+        tokenIds.push(own.id);
+        const rows = async () => (await setup.query("SELECT id,user_id,name,scopes FROM api_tokens WHERE id=ANY($1::uuid[]) ORDER BY id", [tokenIds])).rows;
+        const before = await rows();
+        await blocker.query("BEGIN");
+        // Hold both locks in the same transaction: old preflight sees the committed manager role,
+        // while either the old DELETE or a corrected membership-locking mutation must wait.
+        await blocker.query("UPDATE project_members SET role='qa_engineer' WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await blocker.query("SELECT id FROM api_tokens WHERE id=$1 FOR UPDATE", [target.id]);
+        const pid = (await blocker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+        pending = revoker.revokeApiKey(manager, project, target.id)
+          .then(() => ({ error: null }), (error: unknown) => ({ error }));
+        const deadline = Date.now() + 5000;
+        let blocked = false;
+        while (Date.now() < deadline && !blocked) {
+          blocked = (await setup.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$2 AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))", [pid, poolApplicationName])).rowCount! > 0;
+          if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(blocked).toBe(true);
+        expect(await rows()).toEqual(before);
+        await blocker.query("COMMIT");
+        expect((await pending).error).toMatchObject({ status: 403 });
+        expect(await rows()).toEqual(before);
+        await expect(revoker.revokeApiKey(manager, project, target.id)).rejects.toMatchObject({ status: 403 });
+        expect(await rows()).toEqual(before);
+        expect(await revoker.revokeApiKey(manager, project, own.id)).toEqual({ ok: true });
+        expect(await tokens.issuerOf(project, own.id)).toEqual({ exists: false, userId: null });
+        expect(await tokens.issuerOf(project, target.id)).toEqual({ exists: true, userId: owner });
+      } finally {
+        await blocker.query("ROLLBACK");
+        await pending;
+        await blocker.end();
+        await setup.query("DELETE FROM api_tokens WHERE id=ANY($1::uuid[])", [tokenIds]);
+        await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2", [organization, manager]);
+        await setup.query("DELETE FROM users WHERE id=$1", [manager]);
+      }
+    }, 15_000);
+
     it.each(routes)("keeps discovery available on a locked project through %s", async (route) => {
       const before = await business(), response = await rpc(route, "tools/list");
       expect(await business()).toEqual(before);

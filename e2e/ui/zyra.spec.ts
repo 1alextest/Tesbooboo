@@ -1400,12 +1400,16 @@ test.describe("zyra / agents (UI)", () => {
     const requirementOperationId = randomUUID(), testcaseOperationId = randomUUID();
     const operations = [
       { opType: "requirement_revision", operationId: requirementOperationId, title,
-        description: "A staged requirement revision.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+        description: "A staged requirement revision.", criteria: [
+          { key: "AC-1", text: "The obligation is observable" },
+          { key: "AC-2", text: "A previous run supplies historical context", normative: false },
+          { key: "AC-3", text: "Another obligation needs a separate case", normative: true },
+        ] },
       { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle,
         description: "The full candidate must be reviewable", preconditions: "A prepared review account",
         steps: [{ action: "Open the native bundle", expectedResult: "Every staged field is readable" }],
         postconditions: "No official case has been created", testData: "The reviewed candidate remains inert" } },
-      { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
+      { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-2", "AC-1"] },
     ];
     const staged = await api.post(`/api/projects/${tenant!.mainProjectId}/requirements/proposals`, {
       data: { requestKey: `ui-requirement-bundle-${Date.now()}`, operations, title },
@@ -1447,8 +1451,50 @@ test.describe("zyra / agents (UI)", () => {
       await expect(complete.locator("pre")).toContainText(requirementOperationId);
       await expect(complete.locator("pre")).toContainText(testcaseOperationId);
       await expect(complete.locator("pre")).toContainText("A prepared review account");
-      await expect(page.getByTestId("requirement-bundle-link")).toContainText("AC-1");
+      await expect(panel.getByRole("list", { name: "Proposed case link criteria" }).getByRole("listitem")).toHaveText([
+        "AC-2 · Context only", "AC-1 · Acceptance criterion",
+      ]);
       await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("Publication is blocked");
+      const skillGate = page.getByTestId("requirement-bundle-publication-gate");
+      const stagedAssignments = skillGate.getByRole("list", { name: "Skill assignments at staging" });
+      for (const target of ["requirements / functional / requirement_revision", "requirements / functional / requirement_case_link", "test_cases / manual / testcase_create"]) {
+        await expect(stagedAssignments.getByText(`${target} · Unassigned`, { exact: true })).toBeVisible();
+      }
+      const assignmentsLink = skillGate.getByRole("link", { name: "View current Skill assignments" });
+      await expect(assignmentsLink).toHaveAttribute("href", `/projects/${tenant!.mainProjectId}/settings/skills?tab=assignments`);
+      await assignmentsLink.click();
+      await expect(page.getByRole("tab", { name: /^Assignments/ })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByTestId("skill-readiness-testcase_create")).toBeVisible();
+      await page.goBack();
+      await expect(assignmentsLink).toBeVisible();
+      await test.step("Review conflicting assignments and a legacy proposal without staged Skill details", async () => {
+        const snapshotPage = await page.context().newPage();
+        const taskRead = `**/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${task.id}`;
+        const gate = snapshotPage.getByTestId("requirement-bundle-publication-gate");
+        const target = { module: "requirements", subtype: "functional", operation: "requirement_revision" };
+        const caseTarget = { module: "test_cases", subtype: "manual", operation: "testcase_create" };
+        for (const skillContext of [{ status: "conflict", missing: [caseTarget], conflicts: [{ ...target, matches: 2 }] }, undefined]) {
+          await snapshotPage.route(taskRead, async route => {
+            const response = await route.fetch();
+            await route.fulfill({ response, json: { ...await response.json(), skillContext } });
+          });
+          await snapshotPage.goto(page.url());
+          if (skillContext) {
+            await expect(gate).toContainText("Multiple Skill assignments matched");
+            await expect(gate.getByRole("listitem")).toHaveText([
+              "test_cases / manual / testcase_create · Unassigned",
+              "requirements / functional / requirement_revision · 2 matching assignments",
+            ]);
+          } else {
+            await expect(gate).toContainText("no verified record of the required Skill assignments");
+            await expect(gate.getByRole("listitem")).toHaveCount(0);
+          }
+          await expect(gate).toContainText("each required operation resolves to exactly one approved Skill, stage a refreshed proposal");
+          await expect(snapshotPage.getByTestId("requirement-bundle-apply")).toHaveCount(0);
+          await snapshotPage.unroute(taskRead);
+        }
+        await snapshotPage.close();
+      });
       await expect(page.getByRole("button", { name: "Close task", exact: true })).toHaveCount(0);
       await page.getByRole("button", { name: /^Feedback(?: \(\d+\))?$/ }).click();
       await page.locator("textarea").first().fill("Regenerate this exact requirement bundle with different content");
@@ -1460,6 +1506,7 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByTestId("requirement-bundle-recorded-decision")).toContainText("Recorded outcome: rejected");
       // Rejected and withdrawn bundles also end as taskStatus "done"; that must never read as applied/published.
       await expect(page.getByTestId("requirement-bundle-publication-gate")).toContainText("not published");
+      await expect(assignmentsLink).toHaveCount(0);
       await expect(page.getByTestId("requirement-bundle-publication-gate")).not.toContainText("This bundle is published");
       await expect(panel).not.toContainText("Applied. The exact submitted requirement version");
       const after = await api.get(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}`);
@@ -1515,7 +1562,10 @@ test.describe("zyra / agents (UI)", () => {
       const stagedResponse = await api.post(`${base}/requirements/proposals`, { data: {
         requestKey: `ui-governed-${suffix}`, title,
         operations: [
-          { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Applied from the native task review.", criteria: [{ key: "AC-1", text: "The obligation is observable" }] },
+          { opType: "requirement_revision", operationId: requirementOperationId, title, description: "Applied from the native task review.", criteria: [
+            { key: "AC-1", text: "The obligation is observable", normative: true },
+            { key: "AC-2", text: "Historical run output", normative: false },
+          ] },
           { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/ui/zyra.spec.ts", automationFramework: "Playwright" } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
         ]
@@ -1544,6 +1594,12 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.locator("details[open] pre")).toContainText(`/projects/${tenant!.mainProjectId}/agents/tasks/${taskId}`);
       await expect(page.locator("details[open] pre")).toContainText("--revision");
 
+      const contextRow = page.getByTestId("requirement-coverage-criterion-AC-2");
+      await expect(contextRow.getByText("Context only in the reviewed version", { exact: true })).toBeVisible();
+      await expect(contextRow.getByRole("cell").nth(1)).toHaveText("0");
+      const obligationRow = page.getByTestId("requirement-coverage-criterion-AC-1");
+      await expect(obligationRow).not.toContainText("Context only");
+      await expect(obligationRow.getByRole("cell").nth(1)).toHaveText("1");
       requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(requirementId).not.toBe("");
     } finally {
