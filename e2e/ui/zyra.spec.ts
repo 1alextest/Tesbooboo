@@ -1413,7 +1413,26 @@ test.describe("zyra / agents (UI)", () => {
     expect(staged.status(), await staged.text()).toBe(201);
     const task = await staged.json();
     try {
-      const page = await open(browser, `/agents/tasks/${task.id}`);
+      const page = await open(browser, "/agents/tasks");
+      const operationsLabel = "3 proposal operations";
+      const casesLabel = "1 case candidate · 0 Draft cases created";
+      const taskCard = page.getByRole("button").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+      for (const view of ["Task window", "Kanban board"]) {
+        await page.getByRole("tab", { name: view, exact: true }).click();
+        await expect(taskCard.getByText(operationsLabel, { exact: true })).toBeVisible();
+        await expect(taskCard.getByText(casesLabel, { exact: true })).toBeVisible();
+      }
+
+      await taskCard.click();
+      await expect(page.getByRole("button", { name: "Proposed changes (3)", exact: true })).toBeVisible();
+      const operationTypes = page.getByRole("list", { name: "Proposed operation types" });
+      await expect(operationTypes.getByRole("listitem")).toHaveText(["Requirement revision", "Draft case candidate", "Requirement-to-case link"]);
+      const quickSummary = operationTypes.locator("..");
+      await expect(quickSummary.getByText(operationsLabel, { exact: true })).toBeVisible();
+      await expect(quickSummary.getByText(casesLabel, { exact: true })).toBeVisible();
+      await quickSummary.getByRole("link", { name: "Open full proposal review and authoritative outcome" }).click();
+      await expect(page).toHaveURL(new RegExp(`/agents/tasks/${task.id}$`));
+      await expect(page.getByText(`${operationsLabel} · ${casesLabel} ·`)).toBeVisible();
       const panel = page.getByTestId("requirement-change-bundle");
       await expect(panel).toBeVisible();
       await expect(page.getByTestId("requirement-bundle-candidate")).toContainText(title);
@@ -1446,6 +1465,7 @@ test.describe("zyra / agents (UI)", () => {
       const after = await api.get(`/api/projects/${tenant!.mainProjectId}/requirements/proposals/${task.id}`);
       expect(after.ok(), await after.text()).toBe(true);
       expect(await after.json()).toMatchObject({ taskStatus: "done", requirementDecision: { decision: "rejected", proposalRevision: task.proposalRevision } });
+      await expect(page.getByText(`${operationsLabel} · ${casesLabel} ·`)).toBeVisible();
       expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("0");
     } finally {
       exec(`DELETE FROM ai_generation_requests WHERE id=${literal(task.id)} AND project_id=${literal(tenant!.mainProjectId)};`);
@@ -1509,12 +1529,15 @@ test.describe("zyra / agents (UI)", () => {
       await expect(panel.getByTestId("requirement-bundle-skills")).toContainText("requirements/functional/requirement_revision");
       const apply = panel.getByTestId("requirement-bundle-apply");
       await expect(apply).toBeVisible();
+      await expect(page.getByText("3 proposal operations · 1 case candidate · 0 Draft cases created ·")).toBeVisible();
       await apply.click();
       await expect(apply).toHaveCount(0);
       const after = await api.get(`${base}/requirements/proposals/${taskId}`);
       expect(after.ok(), await after.text()).toBe(true);
-      expect(await after.json()).toMatchObject({ taskStatus: "done" });
-      expect(scalar(`SELECT COUNT(*)::int FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`)).toBe("1");
+      const caseId = scalar(`SELECT id FROM testcases WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(caseTitle)};`);
+      expect(caseId).not.toBe("");
+      expect(await after.json()).toMatchObject({ taskStatus: "done", requirementApplyReceipt: { testcase: { id: caseId } } });
+      await expect(page.getByText("3 proposal operations · 1 case candidate · 1 Draft case created ·")).toBeVisible();
       requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(requirementId).not.toBe("");
     } finally {
