@@ -384,7 +384,7 @@ test.describe("knowledge base (UI)", () => {
     expect(summary.files, "the summary counts the uploaded file").toBe(1);
   });
 
-  test("KBU-48 a lost upload response is retried once and lands exactly one file", async ({ browser }) => {
+  test("KBU-80 a lost upload response is retried once and lands exactly one file", async ({ browser }) => {
     const page = await openKb(browser);
     const fileName = `kbu-48-${Date.now()}.txt`;
     let attempts = 0;
@@ -401,7 +401,7 @@ test.describe("knowledge base (UI)", () => {
     await dialog.locator('input[type="file"]').setInputFiles({
       name: fileName,
       mimeType: "text/plain",
-      buffer: Buffer.from("KBU-48 retry fixture"),
+      buffer: Buffer.from("KBU-80 retry fixture"),
     });
     await dialog.getByRole("button", { name: /Upload/ }).click();
 

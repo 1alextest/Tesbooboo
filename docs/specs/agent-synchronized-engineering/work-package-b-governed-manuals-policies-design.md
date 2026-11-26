@@ -800,7 +800,7 @@ from filenames or content alone.
   committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
   exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
   deleted/archived exclusion, terminal missing-object failure, transient read-release, and stale-token
-  fencing. HTTP coverage is KBF-A-81–85; browser coverage is KBU-48. Fault injection is disclosed where
+  fencing. HTTP coverage is KBF-A-81–85; browser coverage is KBU-80. Fault injection is disclosed where
   used: the uncertain-COMMIT tests fault acknowledgement delivery, and the race test pauses after the
   INSERT, not inside PostgreSQL.
 
