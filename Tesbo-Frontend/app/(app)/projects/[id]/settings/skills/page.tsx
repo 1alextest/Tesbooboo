@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconBook, IconPlus, IconRefresh, IconShieldCheck } from "@tabler/icons-react";
@@ -112,7 +112,13 @@ export default function SkillsSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [tab, setTab] = useState<"library" | "assignments">("library");
+  const tab = useSearchParams().get("tab") === "assignments" ? "assignments" : "library";
+  function setTab(next: "library" | "assignments") {
+    const url = new URL(window.location.href);
+    if (next === "assignments") url.searchParams.set("tab", next);
+    else url.searchParams.delete("tab");
+    window.history.replaceState(null, "", url);
+  }
   const [query, setQuery] = useState("");
   const [moduleFilter, setModuleFilter] = useState("");
   const [subtypeFilter, setSubtypeFilter] = useState("");
@@ -173,7 +179,6 @@ export default function SkillsSettingsPage() {
     setReviewSelection(null);
     setReviewVersion(null);
     setAssignmentSelection(null);
-    setTab("library");
     setQuery(""); setModuleFilter(""); setSubtypeFilter(""); setAssignmentFilter(""); setReviewFilter("");
     setCandidateOpen(false);
     setMessage(null);
