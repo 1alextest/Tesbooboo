@@ -72,37 +72,15 @@ Operational contract for engineering principle 18 in [AGENTS.md](../AGENTS.md). 
 
 ### Evidence-bound disposition and closure (candidate refinement)
 
-Use the existing finding record, not a new authority or an alternative gate. For every occurrence, retain the producer's original identifier, rule and version (or explicitly unknown), observation revision, path/region, affected artifact and scan execution reference. Group repeated occurrences by demonstrated mechanism only; preserve every alert/thread ID and the mapping to the shared investigation.
+This refines steps 3–6 above; use their existing finding record, not a second record authority, receipt format, evaluator or publisher. For each occurrence, extend the evidence only where necessary:
 
-Separate these dimensions in the existing record:
+- **Binding:** producer/rule/version (or explicitly unknown), occurrence ID, scan/job and exact candidate/base, source path and affected artifact. Record the actual control/data flow, relevant build/configuration and environment, and evidence that would falsify the classification. Multiple occurrences may share an investigation only if each remains individually traceable and the causal mechanism and context are demonstrated equivalent.
+- **Decision:** identify the required decision owner for the classification and any residual risk. Keep the investigation author's proposed classification distinct from independently accepted/rejected/superseded decisions; bind the decision to the occurrence(s), reviewed candidate, evidence and scope. An authenticated coordinator's import of actual independent analytical receipts is not itself a human GitHub approval, scanner dismissal or authorization to accept residual risk.
+- **Closure:** reconcile the live scanner alert, review thread, linked defect and retest independently. Verify authorized changes by readback; if any operation is unavailable or fails, preserve the decision and identify the remaining blocker. A changed rule, relevant caller/configuration/build boundary, new occurrence or conflicting observation requires reassessment of the affected conclusion; retain history and reopen when warranted. Blob equality alone is insufficient to establish unchanged reachability.
 
-| Dimension | Required evidence or state |
-|---|---|
-| Observation | Exact producer occurrence and source/scan revision; coverage complete, partial, unavailable or pending |
-| Technical assessment | Claimed mechanism, actual data/control flow, reachable sink or its absence, affected environment, severity, confidence, counterexample and evidence links |
-| Classification | Confirmed defect, false positive, intentional test condition, protective implementation, residual risk or unknown; never infer classification from the workflow conclusion |
-| Decision | Proposed, independently accepted, rejected or superseded; attributable authorized reviewer, reviewed revision, scope, rationale and expiry/reassessment for residual risk |
-| Execution | Remediation and regression result, or explicit reason a change is unnecessary; NOT RUN remains distinct from pass |
-| Reconciliation | Individual scanner alert state, review thread state, linked defect state, and final candidate revalidation; unknown is not closed |
+For a protective guard or intentional fixture, prove the claimed refusal or test oracle, production/build isolation where applicable, and absence of unintended effects in its own environment. A test-only path can still contain a genuine security defect. Incomplete scan execution is a coverage gap, not a false-positive classification.
 
-An investigation author may propose a disposition but may not impersonate the independent decision owner. For a protective guard or intentional fixture, demonstrate both its security purpose and its actual boundary: a guard must reject the prohibited input at the authoritative path; a fixture must be isolated from production artifacts, avoid unintended external effects, and exercise its claimed oracle. A scanner warning about a test may still identify a genuine issue in test infrastructure. A scanner that fails to parse or emits incomplete results is a coverage failure, not a false-positive finding.
-
-When a new scan emits a duplicate, reuse prior reasoning only after checking the rule, mechanism, source and relevant deployment/control-flow assumptions are unchanged. Link the new occurrence, revalidate its applicability and obtain any required current-candidate disposition; do not globally dismiss by rule or filename. Source equality alone does not establish equivalent reachability when build configuration or callers change.
-
-At closure, verify the independently accepted disposition is still applicable to the candidate, then reconcile the actual producer and review-thread states using authorized operations. If one operation is unavailable or fails, preserve the accepted decision and record the remaining operational blocker rather than claiming all states closed. A later conflicting observation reopens the affected assessment; retain prior records. A protected merge, scanner dismissal or risk exception is never implied by this procedure.
-
-#### Case study: OAuth PR #246 (observations, not independent acceptance)
-
-At inspected head [e3e8027](https://github.com/1alextest/Tesbooboo/commit/e3e8027d576aa0e36bddb4fa76b5c625e6198786), DevSkim alerts 3332–3338 span four mechanisms:
-
-| Occurrences | Proposed assessment | Evidence needed for independent disposition |
-|---|---|---|
-| 3334 | Protective localhost rejection in mcp-access.ts | Trace validation to the owning authorization path; verify hostile input rejection and legitimate canonical HTTPS acceptance |
-| 3332, 3333 | Intentional negative URL fixtures in mcp-oauth-grants.spec.ts | Verify throwing assertion, actual test execution and production exclusion |
-| 3335, 3336 | Isolated ephemeral loopback HTTP fixture in mcp-oauth-joined.http.integration.spec.ts | Verify bind address/port, request target, teardown, production exclusion and real fixture execution |
-| 3337, 3338 | Protective disposable PostgreSQL test boundary in mcp-oauth-grant-binding.db.spec.ts | Verify CI/environment/database guard, refusal outside permitted scope, actual guarded run and production exclusion |
-
-The inspected source supports these candidate classifications. All 14 workflow groups on that inspected head reported success; this is not per-test execution evidence, an authoritative alert dismissal or independent approval. Re-read the live head and each producer occurrence before closure. The original PR remains responsible for its OAuth acceptance, reviewer authority and feature-off posture; this case study does not waive any of those gates.
+**Existing enforcement owners:** [assurance evaluator](../scripts/assurance-pr-gate.mjs) already blocks all unresolved native threads (including outdated threads), incomplete inventories and invalid exact-head Independent/White imports on protected paths; [trusted publisher](../scripts/publish-assurance-status.mjs) rechecks the evidence digest around publication; [ruleset preflight](../scripts/branch-rulesets.mjs) already verifies the reviewed scanner producer, category and branch revision. Preserve those contracts and [#191's](https://github.com/1alextest/Tesbooboo/pull/191) separate installation/activation authority. Do not infer comprehensive alert inventory or authorized dispositions from thread state, preflight availability, a green workflow or analytical status. The refinement is procedural, not a claim that the gate validates every disposition. Any future executable disposition enforcement must first establish producer inventory, authority, receipt-version compatibility and final-candidate binding at the existing owners, with failing-first tests; no parallel gate or implicit waiver.
 
 ### Acceptance examples (proposed regression oracles; NOT RUN)
 
