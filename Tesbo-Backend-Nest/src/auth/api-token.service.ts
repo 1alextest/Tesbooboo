@@ -94,10 +94,9 @@ export class ApiTokenService {
    */
   async issuerOf(projectId: string, tokenId: string, client?: PoolClient): Promise<{ exists: boolean; userId: string | null }> {
     // With a transaction client, retain the issuer/target lock through the authorized delete.
-    const res = await (client ?? this.db).query(
-      `SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2${client ? " FOR UPDATE" : ""}`,
-      [tokenId, projectId]
-    );
+    const sql = `SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2${client ? " FOR UPDATE" : ""}`;
+    const params = [tokenId, projectId];
+    const res = client ? await client.query(sql, params) : await this.db.query(sql, params);
     const row = res.rows[0] as { user_id: string | null } | undefined;
     return { exists: Boolean(row), userId: row?.user_id ?? null };
   }
@@ -157,10 +156,9 @@ export class ApiTokenService {
 
   /** Deletes a token belonging to the given project. Returns whether a row was removed. */
   async revokeToken(projectId: string, tokenId: string, client?: PoolClient): Promise<boolean> {
-    const res = await (client ?? this.db).query(
-      `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`,
-      [tokenId, projectId]
-    );
+    const sql = `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`;
+    const params = [tokenId, projectId];
+    const res = client ? await client.query(sql, params) : await this.db.query(sql, params);
     return (res.rowCount ?? 0) > 0;
   }
 
