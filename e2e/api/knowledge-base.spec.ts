@@ -855,6 +855,23 @@ test.describe("knowledge base v2 — folders and documents", () => {
     expect(after.documents.map((d: any) => d.id)).not.toContain(doc.id);
   });
 
+  test("KB-A-80 a child folder cannot be restored directly while its parent remains deleted", async () => {
+    const parent = await createFolder({ name: stamp("Orphan parent") });
+    const child = await createFolder({ name: stamp("Orphan child"), parentFolderId: parent.id });
+    await asOwner.delete(kbUrl(`/folders/${parent.id}`), { failOnStatusCode: false });
+    expect(isDeleted("knowledge_folders", child.id)).toBe(true);
+
+    const direct = await asOwner.patch(kbUrl(`/folders/${child.id}/restore`), { failOnStatusCode: false });
+    expect(direct.status()).toBe(400);
+    expect(JSON.stringify(await direct.json())).toContain("Restore the parent folder");
+    expect(isDeleted("knowledge_folders", child.id)).toBe(true);
+
+    // Restoring the parent brings the child back with it, rather than leaving it stranded.
+    const restored = await asOwner.patch(kbUrl(`/folders/${parent.id}/restore`), { failOnStatusCode: false });
+    expect(restored.status(), await restored.text()).toBe(200);
+    expect(isDeleted("knowledge_folders", child.id)).toBe(false);
+  });
+
   test("KB-A-51 a document cannot be restored while its folder is deleted", { tag: '@tesbo.testId("TES-TC-3032")' }, async () => {
     const folder = await createFolder({ name: stamp("Trash blocked folder") });
     const doc = await createDocument({ title: stamp("Trash independent doc"), folderId: folder.id });

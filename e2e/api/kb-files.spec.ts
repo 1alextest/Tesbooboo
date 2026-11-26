@@ -507,6 +507,21 @@ test.describe("knowledge base v2 — files", () => {
 
   // ─── Authorization ────────────────────────────────────────────────────────
 
+  test("KBF-A-80 upload and move refuse a folder that was deleted", async () => {
+    const folder = await createFolder(stamp("Deleted file destination"));
+    const file = await uploadOne(textFile(stamp("kept.txt"), "kept bytes"));
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const refusedUpload = await upload([textFile("late.txt", "late bytes")], folder.id);
+    expect(refusedUpload.status()).toBe(404);
+    const refusedMove = await asOwner.patch(kbUrl(`/files/${file.id}/move`), {
+      data: { folderId: folder.id }, failOnStatusCode: false,
+    });
+    expect(refusedMove.status()).toBe(404);
+    const unchanged = await (await asOwner.get(kbUrl(`/files/${file.id}`))).json();
+    expect(unchanged.folderId).toBe(rootFolderId);
+  });
+
   test("KBF-A-21 no file route answers a caller with no session", { tag: '@tesbo.testId("TES-TC-326")' }, async () => {
     const folder = await createFolder(stamp("Guarded"));
     const file = await uploadOne(textFile("guarded.txt", "secret"), folder.id);

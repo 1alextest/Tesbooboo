@@ -691,17 +691,25 @@ manual execution of the native case remains **UNRUN**.
 - `moveKnowledgeFile` now locks the file and destination in one transaction, revalidates current
   authority and the file's creator rights, rechecks the destination is live and writes its audit with
   the move. Existing preflight reads remain only as fast failures.
-- `restoreKnowledgeFolder` refuses (400) while the folder's parent remains deleted, so restoring a
-  child cannot create a live-but-invisible folder under a deleted ancestor; restoring the parent first
-  still restores the child subtree and documents.
-- `restoreKnowledgeFile` applies the same parent-folder rule and revalidates owner/manager authority
-  under the project lock; its restore + audit are transactional.
+- `restoreKnowledgeFolder` recursively checks the whole ancestor chain under the project lock and
+  refuses (400) while any ancestor remains deleted, so restoring a child cannot create a
+  live-but-invisible folder under a deleted ancestor; restoring the parent first still restores the
+  child subtree and documents. Its restore and audit now share one transaction.
+- `restoreKnowledgeFile` applies the same recursive ancestry rule, is idempotent for an already-live
+  file, revalidates owner/manager authority under the project lock, and writes its audit transactionally.
+- Upload compensation reconciles by the unique storage key after a failed transaction: a lost COMMIT
+  acknowledgement leaves the committed row and its object intact; only a known-uncommitted row causes
+  the newly written object to be deleted. If reconciliation itself fails, the object is preserved.
+- New HTTP contracts run in smoke: KB-A-80 (direct child restore refused, parent restore returns it)
+  and KBF-A-80 (upload/move into a deleted folder refused, existing file unchanged).
 - Existing integration-disconnect non-restorable refusals, storage-key cleanup on file delete, and the
   document/folder/memory/sync protections are unchanged.
 
 Evidence: failing-first DB run `45731230795` (upload, move and folder-restore regressions all resolved
-pre-fix; 3 failed / 728 passed) and green run `45732950964`; the file-restore parent regression was
-added and the final green database run `45734330589` includes it. Native REQ-WPB-07 is staged as task
+pre-fix; 3 failed / 728 passed); the later tests-only commit `8f5e0d9d` characterized the lost-COMMIT
+compensation defect (database-integrity failed with one test). Green runs: `45732950964`, `45734330589`
+(file-restore parent regression added with the fix; its pre-fix failure is deterministic — the old
+code returned 200), and the final run after the reconciliation/e2e additions recorded in the PR. Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
 `e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
 Manual execution remains **UNRUN**; native execution-evidence writing remains unavailable.
