@@ -268,7 +268,6 @@ export default function ApiTokensPage() {
 
   const mcpUrl = getMcpUrl(projectId);
   // Never embed a secret in copied shell/config snippets: it can outlive the one-time reveal.
-  const tokenForSnippets = "<YOUR_API_TOKEN>";
 
   /*
    * `--scope user`, not the CLI's default `local` scope. A local-scope server is stored in
@@ -277,18 +276,18 @@ export default function ApiTokensPage() {
    * `d:/repo`, so the server shows "Connected" in `claude mcp list` yet never appears in the IDE
    * extension. User scope isn't keyed by path, so every surface on the machine sees it.
    */
-  const claudeCodeCli = `claude mcp add --transport http --scope user tesbo ${mcpUrl} --header "Authorization: Bearer ${tokenForSnippets}"`;
+  const claudeCodeCli = `claude mcp add --transport http --scope user tesbo ${mcpUrl} --header 'Authorization: Bearer \${TESBO_API_TOKEN}'`;
   const mcpJsonSnippet = `{
   "mcpServers": {
     "tesbo": {
       "type": "http",
       "url": "${mcpUrl}",
-      "headers": { "Authorization": "Bearer ${tokenForSnippets}" }
+      "headers": { "Authorization": "Bearer \${TESBO_API_TOKEN}" }
     }
   }
 }`;
   const curlSnippet = `curl -X POST '${mcpUrl}' \\
-  -H 'Authorization: Bearer ${tokenForSnippets}' \\
+  -H "Authorization: Bearer $TESBO_API_TOKEN" \\
   -H 'Content-Type: application/json' \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`;
 
@@ -298,7 +297,7 @@ export default function ApiTokensPage() {
    * "A parameter cannot be found that matches parameter name 'X'." This is PowerShell-native
    * instead, so a Windows user has something that actually runs as pasted.
    */
-  const powershellSnippet = `$headers = @{ Authorization = "Bearer ${tokenForSnippets}" }
+  const powershellSnippet = `$headers = @{ Authorization = "Bearer $env:TESBO_API_TOKEN" }
 $body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 Invoke-RestMethod -Uri "${mcpUrl}" -Method Post -Headers $headers -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 10`;
 
@@ -450,7 +449,7 @@ export default defineConfig({
           <p className="mt-1 text-sm text-[var(--muted)]">
             {revealedToken
               ? "Your new token was shown once. Keep it in a secret store; the examples use placeholders."
-              : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> with a token saved securely when it was created. Existing tokens cannot be viewed again.</>}
+              : <>Use a separately issued and project-approved token for each personal client. Set <code className="font-mono text-xs">TESBO_API_TOKEN</code> in the client process or secret store; examples never contain the secret. Existing tokens cannot be viewed again.</>}
           </p>
         </div>
 
@@ -493,23 +492,20 @@ export default defineConfig({
           </button>
         </div>
 
-        {connectTab !== "opencode" && connectTab !== "other" && (
+        {connectTab === "claudeCode" && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Registering a new MCP server doesn&apos;t reach a session that&apos;s already running — it&apos;s only
-          picked up on startup. Start a new Claude Code session (or, in the VS Code / JetBrains extension, run{" "}
-          <strong>Developer: Reload Window</strong>) before the new tools show up in{" "}
-          <code className="font-mono">/mcp</code>.
+          Set the secret in the environment of Claude Code or its IDE host before connecting. The CLI example is for POSIX shells and PowerShell; keep the variable reference quoted literally. Check <code className="font-mono">/mcp</code> and reconnect or restart the client after credential or configuration changes. IDE hosts may require a reload.
         </div>
         )}
 
         {connectTab === "claudeCode" && (
           <div className="space-y-3">
-            <p className="text-sm text-[var(--muted)]">Run this once from your terminal:</p>
+            <p className="text-sm text-[var(--muted)]">Register this server from your terminal (user scope). Review existing entries first; use a distinct name and a separate secret variable for another Tesbo project.</p>
             <div className="relative">
               <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto">{claudeCodeCli}</pre>
               <CopyButton value={claudeCodeCli} iconOnly className="absolute right-2 top-2" />
             </div>
-            <p className="text-sm text-[var(--muted)]">Or add this to <code className="font-mono text-xs">.mcp.json</code> (project) or <code className="font-mono text-xs">~/.claude.json</code> (user):</p>
+            <p className="text-sm text-[var(--muted)]">Or merge this entry into <code className="font-mono text-xs">.mcp.json</code> (project) or <code className="font-mono text-xs">~/.claude.json</code> (user). Share the configuration, not the credential. Do not replace unrelated servers:</p>
             <div className="relative">
               <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpJsonSnippet}</pre>
               <CopyButton value={mcpJsonSnippet} iconOnly className="absolute right-2 top-2" />
@@ -520,19 +516,31 @@ export default defineConfig({
         {connectTab === "claudeDesktop" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Add this to your Claude Desktop config — macOS: <code className="font-mono text-xs">~/Library/Application Support/Claude/claude_desktop_config.json</code>, Windows: <code className="font-mono text-xs">%APPDATA%\Claude\claude_desktop_config.json</code>
+              For a remote connector in Claude Desktop or Claude on the web, open Customize → Connectors → Add custom connector.
+              Enter this project&apos;s MCP URL. Choose no sign-in for the fixed-header setup and add the request header below using a token from your secret store.
+              The remote connector uses Anthropic&apos;s cloud network, so the server must be reachable over public HTTPS.
             </p>
             <div className="relative">
-              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpJsonSnippet}</pre>
-              <CopyButton value={mcpJsonSnippet} iconOnly className="absolute right-2 top-2" />
+              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpUrl}</pre>
+              <CopyButton value={mcpUrl} iconOnly className="absolute right-2 top-2" />
             </div>
+            <div className="relative">
+              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">Authorization: Bearer &lt;YOUR_API_TOKEN&gt;</pre>
+              <CopyButton value="Authorization: Bearer <YOUR_API_TOKEN>" iconOnly className="absolute right-2 top-2" />
+            </div>
+            <p className="text-xs text-[var(--muted-soft)]">
+              Organization-wide fixed headers are shared credentials, not individual member attribution. Do not use a personal write token as a shared connector.
+              Local Claude Desktop stdio configuration is a separate mechanism; the Claude Code HTTP JSON above is not a verified local Desktop configuration.
+              After replacing or revoking a token, update the connector and verify access again.
+              See <a href="https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp" target="_blank" rel="noreferrer" className="text-[var(--primary)] hover:underline">Claude remote connector documentation</a>.
+            </p>
           </div>
         )}
 
         {connectTab === "opencode" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Merge this server entry into <code className="font-mono">opencode.jsonc</code> in your project, preserving other settings.
+              For OpenCode V2, merge this server entry into <code className="font-mono">opencode.jsonc</code> in your project, preserving other settings. Older client versions may use a different schema.
               Set <code className="font-mono">TESBO_API_TOKEN</code> in your local environment or secrets manager, not in source control.
             </p>
             <div className="relative">
@@ -548,7 +556,7 @@ export default defineConfig({
         {connectTab === "other" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Any MCP-compatible client can call the JSON-RPC 2.0 endpoint directly:
+              Clients that support custom Authorization headers can call the JSON-RPC endpoint directly. These examples perform a Tesbo-specific discovery probe, not a complete MCP handshake. Inspect the JSON-RPC error as well as the HTTP status.
             </p>
             <div className="space-y-1">
               <p className="text-xs font-medium text-[var(--muted-soft)]">macOS / Linux (curl)</p>
@@ -559,7 +567,7 @@ export default defineConfig({
             </div>
             <div className="space-y-1">
               <p className="text-xs font-medium text-[var(--muted-soft)]">
-                Windows (PowerShell) — <code className="font-mono">curl</code> here is aliased to Invoke-WebRequest and rejects curl-style flags, so use this instead
+                Windows (PowerShell) — Windows PowerShell may alias <code className="font-mono">curl</code> to Invoke-WebRequest. Use this native example or curl.exe.
               </p>
               <div className="relative">
                 <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{powershellSnippet}</pre>
@@ -567,7 +575,7 @@ export default defineConfig({
               </div>
             </div>
             <p className="text-xs text-[var(--muted-soft)]">
-              Protocol methods: <code className="font-mono">initialize</code>, <code className="font-mono">ping</code>, <code className="font-mono">tools/list</code>, <code className="font-mono">tools/call</code>. An MCP client discovers its permitted tools and schemas through <code className="font-mono">tools/list</code>. The 47 tools below describe the default catalog; token scopes, project consent and named-client grants can narrow it. Live discovery is authoritative.
+              Protocol methods: <code className="font-mono">initialize</code>, <code className="font-mono">ping</code>, <code className="font-mono">tools/list</code>, <code className="font-mono">tools/call</code>. An MCP client discovers its permitted tools and schemas through <code className="font-mono">tools/list</code>. The reference below is illustrative; token scopes, project consent and named-client grants can narrow the actual catalog. Live discovery is authoritative.
             </p>
             <p className="text-xs text-[var(--muted-soft)]">
               Agents cannot publish official test-case changes directly. The proposal review preview is disabled by default.
