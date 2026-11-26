@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Client, Pool } from "pg";
 import { DatabaseService } from "../database/database.service";
+import { ApiTokenService } from "../auth/api-token.service";
 import { CustomFieldsService } from "../custom-fields/custom-fields.service";
 import { CustomTagsService } from "../custom-tags/custom-tags.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
@@ -89,6 +90,65 @@ type Body=Record<string,any>;
       if(attempt)await attempt;
       await blocker.end();
       await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[tokenId,project]);
+    }
+  },15000);
+
+  it.each(["project","organization"] as const)("CL-T10 generation replacement while native staging waits (%s)", async membership => {
+    const issuer = new ApiTokenService(new DatabaseService(pool));
+    const old = await issuer.issueToken(user,project,"Native generation barrier",["read","write"]);
+    const oldPrincipal = {kind:"api_token",tokenId:old.id,transport:"rest"};
+    const blocker = new Client({connectionString:url});
+    let attempt:Promise<unknown>|undefined, freshId:string|undefined;
+    await blocker.connect();
+    const before = (await tasks()).rows;
+    const casesBefore = (await nativeCases()).rows;
+    const operations = [{opType:"create",draft:{title:"Retired generation cannot stage"}}];
+    const key = randomUUID();
+    const restore = async () => {
+      await admin.query("INSERT INTO organization_members(organization_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[org,user]);
+      await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'owner') ON CONFLICT DO NOTHING",[project,user]);
+    };
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",[`suite-tree:${project}`]);
+      attempt = stage(operations,key,oldPrincipal).then(()=>null,(error:unknown)=>error);
+      const deadline=Date.now()+5000; let waiting=false;
+      while(Date.now()<deadline){
+        waiting=!!(await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND query LIKE '%pg_advisory_xact_lock%'",
+          [applicationName])).rowCount;
+        if(waiting)break;
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(waiting).toBe(true);
+      const removed = membership==="project"
+        ? await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2 RETURNING id",[project,user])
+        : await admin.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2 RETURNING id",[org,user]);
+      expect(removed.rowCount).toBe(1);
+      await restore();
+      // The original token and the current member both still exist. This isolates generation
+      // continuity from ordinary absent-membership or deleted-token refusal.
+      expect((await admin.query("SELECT id FROM api_tokens WHERE id=$1",[old.id])).rowCount).toBe(1);
+      await blocker.query("COMMIT");
+      expect(await attempt).toMatchObject({status:403});
+      expect((await tasks()).rows).toEqual(before);
+      expect((await nativeCases()).rows).toEqual(casesBefore);
+      await expect(stage(operations,key,oldPrincipal)).rejects.toMatchObject({status:403});
+      const fresh = await issuer.issueToken(user,project,"Fresh generation control",["read","write"]);
+      freshId=fresh.id;
+      const freshPrincipal = {kind:"api_token",tokenId:fresh.id,transport:"rest"};
+      const freshTask = await stage(operations,key,freshPrincipal);
+      expect(freshTask.proposalProvenance).toMatchObject({kind:"api_token",tokenId:fresh.id,issuerId:user});
+      expect((await stage(operations,key,freshPrincipal)).id).toBe(freshTask.id);
+      await expect(stage(operations,key,oldPrincipal)).rejects.toMatchObject({status:403});
+      expect((await nativeCases()).rows).toEqual(casesBefore);
+    } finally {
+      await blocker.query("ROLLBACK");
+      if(attempt)await attempt;
+      await blocker.end();
+      await restore();
+      await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[old.id,project]);
+      if(freshId)await admin.query("DELETE FROM api_tokens WHERE id=$1 AND project_id=$2",[freshId,project]);
     }
   },15000);
 
