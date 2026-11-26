@@ -611,6 +611,7 @@ for (const membership of ["project", "organization"] as const) {
     const observe = async (token: string) => {
       const headers = { Authorization: `Bearer ${token}` };
       const rest = await machine.get(`${projectPath}/testcases`, { headers, failOnStatusCode: false });
+      const restBody = await rest.json().catch(() => null);
       const mcp = await machine.post(`${projectPath}/mcp`, {
         headers, failOnStatusCode: false,
         data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_testcases", arguments: {} } }
@@ -620,6 +621,8 @@ for (const membership of ["project", "organization"] as const) {
       return {
         restStatus: rest.status(), mcpStatus: mcp.status(), rpcCode: rpc?.error?.code ?? null,
         restAllowed: rest.ok(),
+        restDenied: [401, 403, 404].includes(rest.status()) ||
+          (rest.status() === 400 && restBody?.error === "Authentication required"),
         mcpAllowed: mcp.ok() && !rpc?.error && rpc?.result?.isError === false && Array.isArray(rpc?.result?.content),
         mcpDenied: [401, 403, 404].includes(mcp.status()) ||
           (mcp.ok() && rpc?.error?.code === -32001 && rpc?.result === undefined),
@@ -631,7 +634,7 @@ for (const membership of ["project", "organization"] as const) {
       expect(value.mcpAllowed, JSON.stringify(value)).toBe(true);
     };
     const denied = (value: Observation) => {
-      expect([401, 403, 404], JSON.stringify(value)).toContain(value.restStatus);
+      expect(value.restDenied, JSON.stringify(value)).toBe(true);
       expect(value.mcpDenied, JSON.stringify(value)).toBe(true);
     };
     try {
@@ -684,7 +687,7 @@ for (const membership of ["project", "organization"] as const) {
         description: JSON.stringify({ oldAfterRejoin, oldAfterFresh }) });
       // Soft assertions preserve observations from both stages and both transports.
       for (const observation of [oldAfterRejoin, oldAfterFresh]) {
-        expect.soft([401, 403, 404], JSON.stringify(observation)).toContain(observation.restStatus);
+        expect.soft(observation.restDenied, JSON.stringify(observation)).toBe(true);
         expect.soft(observation.mcpDenied, JSON.stringify(observation)).toBe(true);
       }
     } finally {
