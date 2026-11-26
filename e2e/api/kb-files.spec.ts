@@ -314,6 +314,20 @@ test.describe("knowledge base v2 — files", () => {
     expect(fileCount()).toBe(0);
   });
 
+  test("KBF-A-87 concurrent uploads of one name are allocated distinct displayed names", async () => {
+    const folder = await createFolder(stamp("Concurrent names"));
+    const name = `parallel-${Date.now()}.txt`;
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, (_, index) => upload([textFile(name, `body ${index}`)], folder.id)),
+    );
+    for (const response of responses) expect(response.status(), await response.text()).toBe(201);
+    const names = (await Promise.all(responses.map(async (response) => (await response.json()).list[0].originalFileName))).sort();
+    expect(new Set(names).size, `duplicate display names: ${names.join(", ")}`).toBe(10);
+    expect(names).toContain(name);
+    expect(names).toContain(`${name.slice(0, -4)} (9).txt`);
+    expect(fileCount()).toBe(10);
+  });
+
   test("KBF-A-05 two files with the same name in one folder are kept apart by a numbered suffix", { tag: '@tesbo.testId("TES-TC-310")' }, async () => {
     const folder = await createFolder(stamp("Collisions"));
     const first = await uploadOne(textFile("report.txt", "first"), folder.id);

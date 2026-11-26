@@ -812,8 +812,8 @@ from filenames or content alone.
   committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
   exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
   deleted/archived exclusion, terminal missing-object failure, transient read-release, stale-token
-  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–86
-  (including duplicated and whitespace-only keys); browser coverage KBU-80 lets the backend commit and then
+  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–87
+  (including duplicated and whitespace-only keys, and ten concurrent same-name uploads); browser coverage KBU-80 lets the backend commit and then
   replaces the acknowledgement with a 503, so the second request is a real replay and a missing key
   would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
   acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
@@ -840,11 +840,21 @@ manual re-upload remains the recovery path. The owner may still choose mandatory
 reopening after deletion, an explicit reconciliation endpoint, or automatic bounded retries for
 provider failures.
 
-**Separate dispositions (unchanged, not silently fixed here).** Filename uniqueness is still computed
-outside the insert lock; per-file batch atomicity still permits committed prefixes before a later file
-fails (resume now makes that state recoverable but does not make the batch all-or-nothing); storage
-deletion is still best-effort with no retry queue; rows stranded by the pre-V166 code receive no
-one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
+**Upload filename allocation (fixed).** The displayed-name suffix used to be computed before the
+transaction, so concurrent uploads of the same name could both choose the unsuffixed one. It is now
+allocated on the transaction's own client after the project mutation advisory lock, so the second
+writer observes the first committed row and takes the next suffix. No new unique index or second
+naming owner is introduced; the upload writer is the only path using this allocation. This closes
+the upload-vs-upload race only: move, rename and restore still do not reallocate a displayed name,
+so the broader folder-wide uniqueness invariant remains a separate disposition. Native
+coverage is staged as task `5a9fa3ab-5fc9-468a-b673-bb7c1cbac3e9`, revision
+`d7da6e4267199877a951068f5555fe23cd3248c47a8f6f1413e27cc666646847`, `in_review`, one unpublished
+Draft case; manual execution remains **UNRUN**.
+
+**Separate dispositions (unchanged, not silently fixed here).** Per-file batch atomicity still
+permits committed prefixes before a later file fails (resume now makes that state recoverable but
+does not make the batch all-or-nothing); storage deletion is still best-effort with no retry queue;
+rows stranded by the pre-V166 code receive no one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
 a share lock on `knowledge_files` during deployment; that is the repository's established migration
 pattern, not a change in this PR. The global sweep still sees every tenant, matching the existing
 embedding sweep; a local backend booted against shared infrastructure can therefore recover another
