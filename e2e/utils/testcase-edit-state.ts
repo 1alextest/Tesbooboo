@@ -3,5 +3,5 @@
  */
 export function testcaseEditState(row: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row).filter(([key]) =>
-    !["embeddingStatus", "embeddingContentHash", "updatedAt"].includes(key)));
+    !["embeddingStatus", "embeddingContentHash", "embeddingQueuedAt", "updatedAt"].includes(key)));
 }

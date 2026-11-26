@@ -581,6 +581,23 @@ test("write-scoped project tokens require an owner/manager and carry explicit ta
   }
 });
 
+test("MCP-P07 edit-state oracle ignores only asynchronous embedding queue time while retaining protected case state", () => {
+  const committed = {
+    id: "case-a", title: "Original title", attachments: "Human Notes",
+    editRevision: "revision-a", createdBy: "author-a", updatedBy: "editor-a",
+    embeddingQueuedAt: "2026-11-26T03:37:13.124Z",
+  };
+  const queued = { ...committed, embeddingQueuedAt: "2026-11-26T03:37:13.166Z" };
+  expect(testcaseEditState(queued)).toEqual(testcaseEditState(committed));
+  for (const change of [
+    { id: "case-b" }, { title: "Changed title" }, { attachments: "Overwritten Notes" },
+    { editRevision: "revision-b" }, { createdBy: "author-b" }, { updatedBy: "editor-b" },
+    { unrelatedFutureField: "unexpected mutation" },
+  ]) {
+    expect(testcaseEditState({ ...queued, ...change })).not.toEqual(testcaseEditState(committed));
+  }
+});
+
 test("MCP-P07 revision preconditions refuse stale and malformed edits without overwriting human Notes", async ({ request }) => {
   const created = await createCase(request, { attachments: "Original Notes" });
   const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
