@@ -13691,11 +13691,14 @@ export class LegacyService implements OnModuleInit {
     files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>,
     requestKeyInput?: string | null
   ) {
+    // The multipart interceptor normally supplies an array, but an HTTP field can arrive in other
+    // shapes; normalize once so every later array operation has a real array, not a tainted value.
+    const batchFiles = Array.isArray(files) ? files : [];
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
     await this.kbFolder(projectId, folderId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    if (batchFiles.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     const rawRequestKey = typeof requestKeyInput === "string" ? requestKeyInput.trim() : "";
     if (rawRequestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
     // Optional for backward compatibility: clients that do not send one keep the old
@@ -13708,7 +13711,7 @@ export class LegacyService implements OnModuleInit {
     const requestDigest = requestKey
       ? createHash("sha256").update(JSON.stringify({
           folderId,
-          files: files.map((file, index) => ({
+          files: batchFiles.map((file, index) => ({
             index,
             name: file.originalname,
             size: file.size,
@@ -13721,7 +13724,7 @@ export class LegacyService implements OnModuleInit {
     // Files are held in memory (never touch disk) until the whole batch passes validation,
     // so a single unsupported file rejects the batch atomically with nothing left behind —
     // this holds regardless of storage backend (local disk or S3-compatible).
-    const invalid = files.find((file) => !LegacyService.KB_ALLOWED_EXTENSIONS.has(path.extname(file.originalname).replace(/^\./, "").toLowerCase()));
+    const invalid = batchFiles.find((file) => !LegacyService.KB_ALLOWED_EXTENSIONS.has(path.extname(file.originalname).replace(/^\./, "").toLowerCase()));
     if (invalid) {
       throw new BadRequestException({ error: `This file type is not supported: ${invalid.originalname}` });
     }
@@ -13736,7 +13739,7 @@ export class LegacyService implements OnModuleInit {
       );
       for (const row of prior.rows) {
         const index = Number(row.upload_request_file_index);
-        if (!Number.isInteger(index) || index < 0 || index >= files.length || row.upload_request_digest !== requestDigest) {
+        if (!Number.isInteger(index) || index < 0 || index >= batchFiles.length || row.upload_request_digest !== requestDigest) {
           throw new ConflictException({ code: "UPLOAD_REQUEST_CONFLICT", error: "This requestKey already belongs to a different upload" });
         }
         if (row.is_deleted) {
@@ -13744,16 +13747,16 @@ export class LegacyService implements OnModuleInit {
         }
         existingByIndex.set(index, row);
       }
-      if (existingByIndex.size === files.length) {
+      if (existingByIndex.size === batchFiles.length) {
         return {
-          list: files.map((_, index) => this.kbFileView(existingByIndex.get(index) as Body)),
-          total: files.length,
+          list: batchFiles.map((_, index) => this.kbFileView(existingByIndex.get(index) as Body)),
+          total: batchFiles.length,
           replayed: true
         };
       }
     }
 
-    const missing = files.filter((_, index) => !existingByIndex.has(index));
+    const missing = batchFiles.filter((_, index) => !existingByIndex.has(index));
     await this.planLimits.assertStorageAvailable(
       project.organization_id,
       missing.reduce((sum, file) => sum + file.size, 0)
@@ -13762,8 +13765,8 @@ export class LegacyService implements OnModuleInit {
     const created: Body[] = [];
     let wroteNew = false;
     let adoptedReplay = false;
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
+    for (let index = 0; index < batchFiles.length; index += 1) {
+      const file = batchFiles[index];
       const prior = existingByIndex.get(index);
       if (prior) {
         created.push(this.kbFileView(prior));
