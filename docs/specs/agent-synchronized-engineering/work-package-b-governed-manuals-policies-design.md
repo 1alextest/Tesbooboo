@@ -702,9 +702,10 @@ manual execution of the native case remains **UNRUN**.
   child subtree and documents. Its restore and audit now share one transaction.
 - `restoreKnowledgeFile` applies the same recursive ancestry rule, is idempotent for an already-live
   file, revalidates owner/manager authority under the project lock, and writes its audit transactionally.
-- Upload compensation reconciles by the unique storage key after a failed transaction: a lost COMMIT
-  acknowledgement leaves the committed row and its object intact; only a known-uncommitted row causes
-  the newly written object to be deleted. If reconciliation itself fails, the object is preserved.
+- Upload compensation never deletes bytes when the transaction outcome is uncertain after an attempted
+  COMMIT. For a failure before COMMIT, reconciliation by the unique storage key must establish that
+  the upload row is absent before deleting only the new object. If reconciliation fails or finds a row,
+  the object is preserved. This protects referenced bytes; it does not establish complete upload recovery.
 - New HTTP contracts run in smoke: KB-A-80 (direct child restore refused, parent restore returns it)
   and KBF-A-80 (upload/move into a deleted folder refused, existing file unchanged).
 - Existing integration-disconnect non-restorable refusals, storage-key cleanup on file delete, and the
@@ -718,7 +719,32 @@ code returned 200), `45742031601` (735 DB tests incl. uncertain-COMMIT reconcili
 exact-head `46ec5644`, where database-integrity passed and smoke ran and passed KB-A-80 + KBF-A-80
 (46 tests in 3 files, run 45748345549). Remaining LOWs: filename uniqueness outside the lock, per-file
 batch atomicity, storage-delete retry, DB-global lock-wait helper, and no one-time repair of rows
-stranded by the old code. Native REQ-WPB-07 is staged as task
+stranded by the old code.
+
+**Open lifecycle follow-ups (source inspection, not executed acceptance).** On merged development
+`6ea0b839a1037032dcfa8104504776f0e93dfd83`, `uploadKnowledgeFiles` generates a new storage key
+per attempt, propagates an uncertain COMMIT error, and dispatches transcription/embedding only after
+the transaction returns successfully. A database connectivity error can still instruct the caller to
+retry. The completed compensation regression verifies preservation of bytes, not request idempotency
+or eventual processing. Distinguish the following unresolved decisions and test obligations:
+
+- **Ambiguous upload retry:** establish the intended client/request identity and reconciliation contract
+  before implementing idempotency; the same logical retry must not create another committed file or
+  duplicate audit/effect, but a deliberate second upload must remain possible under the chosen policy.
+  Fault-inject both a committed-but-unacknowledged operation and a definite rollback, then retry and
+  check record IDs, stored objects, audit activity and caller-visible outcome. Do not infer identity
+  from filename or content equality alone.
+- **Dependent processing recovery:** the existing `RagIngestionService.resumeInterruptedEmbeddings`
+  can re-enqueue eligible files at restart, but its file query excludes pending extraction. Audio/video
+  transcription currently dispatches after the successful transaction return. Verify recovery of both
+  ordinary files and pending audio/video extraction after lost COMMIT acknowledgement and after process
+  restart, including current authority, duplicate work/external cost, and terminal unsupported/failed
+  outcomes. The restart embedding sweep is partial mitigation, not evidence that transcription resumes.
+
+These are source-level risks; runtime reproduction and severity/ownership disposition remain open.
+Do not describe them as resolved by #288, or claim native execution before the tests actually run.
+
+Native REQ-WPB-07 is staged as task
 `1a403a7e-db47-40dd-9e30-a54536615b85`, revision
 `e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
 
