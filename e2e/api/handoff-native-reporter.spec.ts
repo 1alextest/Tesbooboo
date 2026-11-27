@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -112,6 +112,91 @@ test("AUT-HANDOFF-01 diagnostic distinguishes the actual uniqueness assertion fr
   expect(isReviewedUniquenessFailure(report("Error: " + label + "\nExpected length: 1\nReceived length: 2"))).toBe(true);
 });
 
+type DisposableTargetProof = {
+  api: string; database: string; backendDatabase: string; hosted: string;
+  runId: string; attempt: string; backendRunId: string; backendAttempt: string;
+  pid: string; listeners: string; backendCwd: string; expectedCwd: string; command: string[];
+};
+
+function disposableTargetMatches(p: DisposableTargetProof): boolean {
+  try {
+    const api = new URL(p.api);
+    const db = new URL(p.database);
+    const listeners = p.listeners.trim().split(/\r?\n/).filter(Boolean);
+    const owners = listeners.flatMap(row => Array.from(row.matchAll(/\bpid=(\d+)\b/g), match => match[1]));
+    return p.hosted === "true"
+      && /^\d+$/.test(p.runId) && /^\d+$/.test(p.attempt)
+      && p.backendRunId === p.runId && p.backendAttempt === p.attempt
+      && api.origin === "http://127.0.0.1:7000" && api.pathname === "/"
+      && !api.username && !api.password && !api.search && !api.hash
+      && (db.protocol === "postgresql:" || db.protocol === "postgres:")
+      && ["localhost", "127.0.0.1"].includes(db.hostname) && db.port === "5432"
+      && db.pathname === "/tesbo_ci" && !db.search && !db.hash
+      && p.backendDatabase === p.database
+      && /^\d+$/.test(p.pid) && listeners.length > 0
+      && listeners.every(row => /\bpid=\d+\b/.test(row))
+      && owners.length > 0 && owners.every(owner => owner === p.pid)
+      && p.backendCwd === p.expectedCwd
+      && p.command.length === 2 && p.command[0].split("/").pop() === "node"
+      && p.command[1] === "dist/main.js";
+  } catch {
+    return false;
+  }
+}
+
+// Bind this mutation-capable pilot to the existing hosted disposable job's
+// backend process, rather than an address that could be a local tunnel.
+// This is a fixture admission check, not attestation against a compromised
+// runner. Other local environments need their own reviewed admission proof.
+// Do not log process environments or database connection strings.
+function verifyDisposableTarget(): void {
+  let verified = false;
+  try {
+    const pid = fs.readFileSync("/tmp/tesbo-backend.pid", "utf8").trim();
+    if (!/^\d+$/.test(pid) || process.env.GITHUB_ACTIONS !== "true") throw new Error("No hosted fixture");
+    const processRoot = "/proc/" + pid;
+    const entries = fs.readFileSync(processRoot + "/environ", "utf8").split("\0");
+    const readVariable = (name: string) => {
+      const values = entries.filter(item => item.startsWith(name + "="));
+      return values.length === 1 ? values[0].slice(name.length + 1) : "";
+    };
+    verified = disposableTargetMatches({
+      api: env.apiBaseUrl, database: env.dbUrl, backendDatabase: readVariable("DATABASE_URL"),
+      hosted: process.env.GITHUB_ACTIONS ?? "", runId: process.env.GITHUB_RUN_ID ?? "",
+      attempt: process.env.GITHUB_RUN_ATTEMPT ?? "", backendRunId: readVariable("GITHUB_RUN_ID"),
+      backendAttempt: readVariable("GITHUB_RUN_ATTEMPT"), pid,
+      listeners: execFileSync("ss", ["-H", "-ltnp", "sport = :7000"], { encoding: "utf8", timeout: 5_000 }),
+      backendCwd: fs.realpathSync(processRoot + "/cwd"),
+      expectedCwd: fs.realpathSync(path.resolve(__dirname, "../../Tesbo-Backend-Nest")),
+      command: fs.readFileSync(processRoot + "/cmdline", "utf8").split("\0").filter(Boolean),
+    });
+  } catch {
+    // Missing or ambiguous process evidence is not permission to mutate.
+  }
+  expect(verified, "Native reporter fixture requires the current hosted disposable backend and database").toBe(true);
+}
+
+test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process authority", () => {
+  const proof: DisposableTargetProof = {
+    api: "http://127.0.0.1:7000", database: "postgresql://localhost:5432/tesbo_ci",
+    backendDatabase: "postgresql://localhost:5432/tesbo_ci", hosted: "true",
+    runId: "123", attempt: "1", backendRunId: "123", backendAttempt: "1", pid: "41",
+    listeners: 'LISTEN 0 511 *:7000 *:* users:(("node",pid=41,fd=12))',
+    backendCwd: "/workspace/Tesbo-Backend-Nest", expectedCwd: "/workspace/Tesbo-Backend-Nest",
+    command: ["node", "dist/main.js"],
+  };
+  expect(disposableTargetMatches(proof)).toBe(true);
+  expect(disposableTargetMatches({ ...proof, listeners: 'LISTEN 0 511 127.0.0.1:7000 0.0.0.0:* users:(("ssh",pid=42,fd=12))' }), "loopback tunnel").toBe(false);
+  expect(disposableTargetMatches({ ...proof, backendDatabase: "postgresql://remote.invalid:5432/tesbo_ci" }), "foreign database").toBe(false);
+  expect(disposableTargetMatches({ ...proof, backendRunId: "122" }), "previous job").toBe(false);
+  expect(disposableTargetMatches({ ...proof, listeners: proof.listeners + '\nLISTEN 0 511 *:7000 *:* users:(("node",pid=42,fd=13))' }), "ambiguous owners").toBe(false);
+  expect(disposableTargetMatches({ ...proof, listeners: "LISTEN 0 511 *:7000 *:*" }), "no process ownership").toBe(false);
+  expect(disposableTargetMatches({ ...proof, api: "http://127.0.0.1:7000/proxy" }), "unexpected base path").toBe(false);
+  expect(disposableTargetMatches({ ...proof, hosted: "false" }), "not hosted").toBe(false);
+  expect(disposableTargetMatches({ ...proof, backendCwd: "/other" }), "wrong cwd").toBe(false);
+  expect(disposableTargetMatches({ ...proof, database: "postgresql://localhost:5432/tesbo_prod", backendDatabase: "postgresql://localhost:5432/tesbo_prod" }), "alternate database").toBe(false);
+});
+
 /**
  * End-to-end reporter seam, not a claim of human approval of a live requirement:
  * the case is Draft then approved through the real native API by the disposable
@@ -122,9 +207,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   test.setTimeout(240_000);
   // This proof grants a disposable API token and approves a fixture case. It must
   // never run against a staging/production Tesbo project by accidental E2E_ENV selection.
-  const target = new URL(env.apiBaseUrl);
-  expect(["127.0.0.1", "localhost", "[::1]"], "Native reporter fixture requires a disposable loopback API")
-    .toContain(target.hostname);
+  verifyDisposableTarget();
   const projectId = stored.projectId;
   const runIds: string[] = [];
   let testcaseId: string | undefined;
