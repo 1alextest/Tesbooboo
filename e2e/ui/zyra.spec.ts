@@ -1803,6 +1803,10 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByText("3 proposal operations · 1 case candidate · 1 Draft case created ·")).toBeVisible();
       await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact submitted requirement first");
       await page.getByText("Set up an automation handoff").click();
+      const approvedTarget = page.getByTestId("automation-handoff-approved-target");
+      await expect(approvedTarget).toContainText("1alextest/Tesbooboo");
+      await expect(approvedTarget).toContainText("e2e/ui/zyra.spec.ts");
+      await expect(approvedTarget).toContainText("Playwright");
       await expect(page.getByRole("button", {name: "Copy handoff command"})).toBeVisible();
       await expect(page.locator("details[open] pre")).toContainText(`/projects/${tenant!.mainProjectId}/agents/tasks/${taskId}`);
       await expect(page.locator("details[open] pre")).toContainText("--revision");
