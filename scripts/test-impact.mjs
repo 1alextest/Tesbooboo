@@ -6,7 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { resolveBase, changedPaths as gitChangedPaths } from "./git-quality.mjs";
+import { resolveBase, changedPaths as gitChangedPaths, exactCommitMergeBase, committedChangedPaths, listGitTree, readGitBlob } from "./git-quality.mjs";
 
 const GROUPS = ["api", "ui", "regression", "smoke"];
 const sorted = values => [...new Set(values)].sort();
@@ -352,10 +352,152 @@ export function planImpact({ changedPaths, config, availablePaths, graph, verifi
   };
 }
 
+/**
+ * Compare supplied candidate deltas using one target mapping. This is a source
+ * selection aid, not a merge simulation, semantic conflict or coverage verdict.
+ * The CLI below establishes the committed input inventory; callers of this
+ * pure helper must independently establish its provenance.
+ */
+export function compareCandidateImpact({ target, candidates, config, availablePaths, graph }) {
+  const exact = value => typeof value === "string" && [40, 64].includes(value.length) && /^[a-f0-9]+$/.test(value);
+  requireInput(exact(target) && Array.isArray(candidates) && candidates.length >= 2 && candidates.length <= 16,
+    "An exact target and 2–16 candidate heads are required.");
+  validateConfig(config, availablePaths);
+  const seen = new Set();
+  const intersect = (left, right) => {
+    const other = new Set(right);
+    return sorted(left.filter(value => other.has(value)));
+  };
+  const listPaths = (values, label) => {
+    strings(values, label);
+    requireInput(values.length <= 2000, label + " exceeds 2000 paths; narrow the review.");
+    return sorted(values.map(normalizePath));
+  };
+  const rows = candidates.map(candidate => {
+    requireInput(object(candidate) && exact(candidate.head) && exact(candidate.mergeBase) &&
+      candidate.head !== target && !seen.has(candidate.head), "Invalid or duplicate candidate identity.");
+    seen.add(candidate.head);
+    const changedPaths = listPaths(candidate.changedPaths, "Candidate changed paths");
+    const targetPaths = listPaths(candidate.targetChangedPaths, "Target changed paths since candidate ancestor");
+    const impact = planImpact({ changedPaths, config, availablePaths, graph, verifiedEmptyGitDiff: changedPaths.length === 0 });
+    return {
+      head: candidate.head, mergeBase: candidate.mergeBase,
+      targetOverlap: intersect(changedPaths, targetPaths),
+      changedSpecFiles: changedPaths.filter(filename => specGroup(filename) !== null),
+      impact
+    };
+  }).sort((a, b) => a.head.localeCompare(b.head));
+  const pairs = [];
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      const a = rows[i], b = rows[j], x = a.impact, y = b.impact;
+      const directOverlap = intersect(x.changedPaths, y.changedPaths);
+      const aChangedConsumersOfB = intersect(x.changedPaths, y.affectedConsumers);
+      const bChangedConsumersOfA = intersect(y.changedPaths, x.affectedConsumers);
+      const sharedConsumers = intersect(x.affectedConsumers, y.affectedConsumers);
+      const sharedDomains = intersect([...x.owningDomains, ...x.sharedRiskDomains], [...y.owningDomains, ...y.sharedRiskDomains]);
+      const aSelected = Object.values(x.selectedSpecs).flat(), bSelected = Object.values(y.selectedSpecs).flat();
+      const sharedSpecFiles = intersect(aSelected, bSelected);
+      const aChangedSpecsSelectedByB = intersect(a.changedSpecFiles, bSelected);
+      const bChangedSpecsSelectedByA = intersect(b.changedSpecFiles, aSelected);
+      const testEvidenceLead = !!(aChangedSpecsSelectedByB.length || bChangedSpecsSelectedByA.length);
+      const sharedRequiredChecks = intersect(x.requiredChecks.map(c => c.id), y.requiredChecks.map(c => c.id));
+      const structuralLead = !!(directOverlap.length || aChangedConsumersOfB.length || bChangedConsumersOfA.length || sharedConsumers.length);
+      pairs.push({
+        heads: [a.head, b.head], structuralLead, testEvidenceLead, directOverlap,
+        staticConsumerOverlap: graph === undefined ? null : { aChangedConsumersOfB, bChangedConsumersOfA, sharedConsumers },
+        changedSpecOverlap: { aChangedSpecsSelectedByB, bChangedSpecsSelectedByA },
+        sharedDomains, sharedSpecFiles, sharedRequiredChecks
+      });
+    }
+  }
+  return {
+    version: 1,
+    status: rows.some(row => row.targetOverlap.length || row.impact.status === "review-required") ||
+      pairs.some(pair => pair.structuralLead || pair.testEvidenceLead) ? "review-required" : "selection-only",
+    target,
+    verification: { status: "not-run", selectedTestCount: null, executedTestCount: null },
+    graphBasis: graph === undefined ? "not-supplied" : "supplied-unverified",
+    candidates: rows,
+    pairs,
+    limitations: [
+      "Shared changed paths and static consumer overlaps are joint-review leads, not proven merge conflicts or behavior defects.",
+      "Shared domains, spec files and required checks are mapping-derived obligations; a shared file selection alone does not establish a structural conflict.",
+      "A candidate changing a spec file selected for another candidate requires joint evidence review; it is not proof of a changed assertion, broken test or covered behavior.",
+      "Mappings and available evidence files come from one selected target, not a simulated merged candidate or approved product requirements.",
+      "A supplied graph is not revision-attested by this tool; runtime, SQL, HTTP, queue and external consumers require separate investigation.",
+      "No tests were collected or run. No coverage, release readiness, exhaustive PR enumeration or independent AI discovery is asserted."
+    ]
+  };
+}
+
+export function compareCommittedImpact({ target, heads, cwd, graph }) {
+  requireInput(Array.isArray(heads) && heads.length >= 2 && heads.length <= 16 && new Set(heads).size === heads.length &&
+    !heads.includes(target), "Provide 2–16 distinct exact candidate commits, different from the target.");
+  const pairs = heads.map(head => ({ head, mergeBase: exactCommitMergeBase(target, head, { cwd }) }));
+  // The target's committed policy owns selection. Never import a candidate's
+  // config, follow a symlink, or use its uncommitted checkout state.
+  const tree = listGitTree(target, ".", { cwd });
+  const regular = tree.filter(entry => entry.type === "blob" && ["100644", "100755"].includes(entry.mode));
+  const policy = regular.find(entry => entry.path === ".github/test-impact.json");
+  requireInput(policy, "Target has no regular committed test-impact configuration.");
+  const config = JSON.parse(readGitBlob(policy.objectId, { cwd }).toString("utf8"));
+  const canonicalPaths = paths => {
+    requireInput(paths.every(value => normalizePath(value) === value), "Ambiguous committed Git path; cannot normalize exact identity.");
+    return paths;
+  };
+  const availablePaths = canonicalPaths(regular.map(entry => entry.path));
+  const result = compareCandidateImpact({
+    target, config, availablePaths, graph,
+    candidates: pairs.map(pair => ({
+      ...pair,
+      changedPaths: canonicalPaths(committedChangedPaths(pair.mergeBase, pair.head, { cwd })),
+      targetChangedPaths: canonicalPaths(committedChangedPaths(pair.mergeBase, target, { cwd }))
+    }))
+  });
+  return { ...result, input: { mode: "committed-candidate-comparison", target, configBlob: policy.objectId,
+    trackedWorktreeIncluded: false, untrackedFilesIncluded: false } };
+}
+
 const md = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
   .replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("|", "\\|").replaceAll("\n", " ");
 
+export function formatConcurrentMarkdown(report) {
+  const items = list => list.length ? list.map(value => "- " + md(value)).join("\n") : "- None";
+  const lines = ["# Concurrent test impact review", "", "Status: **" + md(report.status) + "**", "",
+    "**Selection only — tests NOT RUN.**", "", "Target: " + md(report.target),
+    "Target config blob: " + md(report.input?.configBlob ?? "unverified supplied configuration"),
+    "Dependency graph: " + md(report.graphBasis), ""];
+  for (const row of report.candidates) {
+    lines.push("## Candidate " + md(row.head), "Merge base: " + md(row.mergeBase), "",
+      "Target/candidate changed-path overlap:", items(row.targetOverlap), "",
+      "Selected spec files: " + row.impact.counts.selectedSpecFileCount,
+      "Directly changed E2E spec files:", items(row.changedSpecFiles), "",
+      "Candidate selection: " + md(row.impact.status), "",
+      "Candidate diagnostics:", items(row.impact.diagnostics.map(item => item.code + ": " + item.message)), "");
+  }
+  for (const pair of report.pairs) {
+    lines.push("## Pair " + pair.heads.map(md).join(" / "), "",
+      pair.structuralLead ? "Joint structural review indicated." : "No detected structural overlap in the supplied inventory.",
+      "", "Direct shared changed paths:", items(pair.directOverlap), "");
+    if (pair.staticConsumerOverlap) {
+      lines.push("First candidate changes consumers of second:", items(pair.staticConsumerOverlap.aChangedConsumersOfB),
+        "Second candidate changes consumers of first:", items(pair.staticConsumerOverlap.bChangedConsumersOfA),
+        "Shared static consumers:", items(pair.staticConsumerOverlap.sharedConsumers), "");
+    }
+    lines.push(pair.testEvidenceLead ? "Joint test-evidence review indicated." : "No detected changed-spec intersection with peer selection.",
+      "First candidate changes spec files selected by second:", items(pair.changedSpecOverlap.aChangedSpecsSelectedByB),
+      "Second candidate changes spec files selected by first:", items(pair.changedSpecOverlap.bChangedSpecsSelectedByA), "",
+      "Shared mapped domains:", items(pair.sharedDomains), "",
+      "Shared selected spec files:", items(pair.sharedSpecFiles), "",
+      "Shared required checks:", items(pair.sharedRequiredChecks), "");
+  }
+  lines.push("## Limitations", items(report.limitations), "");
+  return lines.join("\n");
+}
+
 export function formatMarkdown(plan) {
+  if (plan.input?.mode === "committed-candidate-comparison") return formatConcurrentMarkdown(plan);
   const list = values => values.length ? values.map(value => `- ${md(value)}`).join("\n") : "- None";
   const lines = ["# Test impact plan", "", `Status: **${md(plan.status)}**`, "",
     "**Selection only — tests NOT RUN.** Static spec-file counts are not executed test counts.",
@@ -382,8 +524,9 @@ export function parseNulPaths(output) {
 
 export function parseArgs(args) {
   const options = { paths: [], format: "json" };
-  const flags = new Map([["--base", "base"], ["--graph", "graph"], ["--config", "config"], ["--format", "format"], ["--output", "output"]]);
+  const flags = new Map([["--compare-candidates", "candidateTarget"], ["--base", "base"], ["--graph", "graph"], ["--config", "config"], ["--format", "format"], ["--output", "output"]]);
   const seen = new Set();
+  let explicitPathFlag = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") {
@@ -392,6 +535,7 @@ export function parseArgs(args) {
     }
     if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--path") {
+      explicitPathFlag = true;
       requireInput(args[i + 1] !== undefined && !args[i + 1].startsWith("--"), "--path needs a value.");
       options.paths.push(args[++i]);
     } else if (flags.has(arg)) {
@@ -404,8 +548,14 @@ export function parseArgs(args) {
     }
   }
   requireInput(["json", "markdown"].includes(options.format), "--format must be json or markdown.");
-  requireInput(!(options.base !== undefined && options.paths.length > 0), "Use explicit changed paths OR --base, not both.");
-  if (!options.help) requireInput(options.base !== undefined || options.paths.length > 0, "Changed paths or --base are required; an empty plan is not a pass.");
+  if (options.candidateTarget !== undefined) {
+    requireInput(options.base === undefined && options.config === undefined && !explicitPathFlag,
+      "Concurrent comparison uses only the target committed config and candidate commit arguments.");
+    requireInput(options.paths.length >= 2 && options.paths.length <= 16, "Concurrent comparison needs 2–16 candidate heads.");
+  } else {
+    requireInput(!(options.base !== undefined && options.paths.length > 0), "Use explicit changed paths OR --base, not both.");
+    if (!options.help) requireInput(options.base !== undefined || options.paths.length > 0, "Changed paths or --base are required; an empty plan is not a pass.");
+  }
   if (options.base !== undefined) requireInput(options.base.trim().length > 0 && !options.base.startsWith("-") && !/[\x00-\x1f\x7f]/.test(options.base), "Invalid base ref.");
   return options;
 }
@@ -452,6 +602,8 @@ export function runCli(args = process.argv.slice(2), { cwd = process.cwd(), stdo
     if (options.help) {
       stdout.write("Usage: node scripts/test-impact.mjs [--path] <repo-relative-path>... | --base <git-ref>\n" +
         "  [--graph graph.json] [--config config.json] [--format json|markdown] [--output artifact]\n" +
+        "  --compare-candidates <target-commit-sha> <candidate-sha> <candidate-sha>... [--graph graph.json] [--format json|markdown]\n" +
+        "Concurrent mode compares committed deltas and reads only the target committed policy; no custom config.\n" +
         "Base mode compares the verified merge base to the tracked worktree; never includes untracked files.\n" +
         "A verified empty base comparison reports no-changes, not product coverage; explicit changed paths cannot be empty.\n" +
         "Exit 0: selection-only/non-product/no-changes, 1: review-required, 2: invalid input. No tests run.\n");
@@ -459,28 +611,33 @@ export function runCli(args = process.argv.slice(2), { cwd = process.cwd(), stdo
     }
     const root = gitRunner(cwd)(["rev-parse", "--show-toplevel"]).trim();
     const runGit = gitRunner(root);
-    const config = readJson(options.config ? path.resolve(cwd, options.config) : path.join(root, ".github/test-impact.json"), "config");
-    const tracked = parseNulPaths(runGit(["ls-files", "--cached", "-z", "--"]));
-    const evidence = validateConfig(config, tracked);
-    // Stat ONLY the configured evidence; never scan/read runtime directories.
-    for (const filename of evidence) {
-      let isFile = false;
-      try { isFile = fs.lstatSync(path.join(root, filename)).isFile(); } catch { /* missing evidence fails closed below */ }
-      requireInput(isFile, `Mapped evidence file is missing or not a regular file: ${filename}`);
+    if (options.candidateTarget !== undefined) {
+      const graph = options.graph === undefined ? undefined : readJson(path.resolve(cwd, options.graph), "graph");
+      plan = compareCommittedImpact({ target: options.candidateTarget, heads: options.paths, cwd: root, graph });
+    } else {
+      const config = readJson(options.config ? path.resolve(cwd, options.config) : path.join(root, ".github/test-impact.json"), "config");
+      const tracked = parseNulPaths(runGit(["ls-files", "--cached", "-z", "--"]));
+      const evidence = validateConfig(config, tracked);
+      // Stat ONLY the configured evidence; never scan/read runtime directories.
+      for (const filename of evidence) {
+        let isFile = false;
+        try { isFile = fs.lstatSync(path.join(root, filename)).isFile(); } catch { /* missing evidence fails closed below */ }
+        requireInput(isFile, `Mapped evidence file is missing or not a regular file: ${filename}`);
+      }
+      const graph = options.graph === undefined ? undefined : readJson(path.resolve(cwd, options.graph), "graph");
+      const headCommit = runGit(["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"]).trim();
+      const selection = options.base === undefined ? { paths: options.paths.map(normalizePath) }
+        : changedPathsFromGit({ base: options.base, cwd: root });
+      plan = planImpact({ changedPaths: selection.paths, config, availablePaths: tracked, graph,
+        verifiedEmptyGitDiff: options.base !== undefined && selection.paths.length === 0 });
+      plan.input = {
+        mode: options.base === undefined ? "explicit-paths" : "git-base",
+        headCommit,
+        ...(options.base === undefined ? {} : { baseRef: options.base, baseCommit: selection.baseCommit,
+          trackedWorktreeIncluded: true, untrackedFilesIncluded: false }),
+        graph: options.graph ?? null
+      };
     }
-    const graph = options.graph === undefined ? undefined : readJson(path.resolve(cwd, options.graph), "graph");
-    const headCommit = runGit(["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"]).trim();
-    const selection = options.base === undefined ? { paths: options.paths.map(normalizePath) }
-      : changedPathsFromGit({ base: options.base, cwd: root });
-    plan = planImpact({ changedPaths: selection.paths, config, availablePaths: tracked, graph,
-      verifiedEmptyGitDiff: options.base !== undefined && selection.paths.length === 0 });
-    plan.input = {
-      mode: options.base === undefined ? "explicit-paths" : "git-base",
-      headCommit,
-      ...(options.base === undefined ? {} : { baseRef: options.base, baseCommit: selection.baseCommit,
-        trackedWorktreeIncluded: true, untrackedFilesIncluded: false }),
-      graph: options.graph ?? null
-    };
     exitCode = plan.status === "review-required" ? 1 : 0;
   } catch (error) {
     exitCode = 2;

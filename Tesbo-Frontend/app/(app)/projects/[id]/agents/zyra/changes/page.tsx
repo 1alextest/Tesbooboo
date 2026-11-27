@@ -288,7 +288,7 @@ export default function ZyraChangeReviewPage() {
                       Evidence basis: {receipt.evidence.basis}. Source freshness unverified;
                       execution and coverage unverified. QA must choose and run applicable cases separately.
                     </p>
-                    <GraphConsequencePreview key={`${projectId}:${entry.id}`} projectId={projectId} historyId={entry.id} />
+                    <GraphConsequencePreview key={`${projectId}:${entry.id}:${receipt.id}`} projectId={projectId} historyId={entry.id} receiptId={receipt.id} />
                     <ReviewCaseRunSetup projectId={projectId} receiptId={entry.id}
                       candidateCaseIds={receipt.candidates.map((candidate) =>
                         canonicalReviewCaseId(candidate.caseNodeId, projectId)
