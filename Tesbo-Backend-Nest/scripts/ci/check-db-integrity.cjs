@@ -61,6 +61,21 @@ async function verifyNativeQaTaskKinds(client) {
           [project, requestedBy, provider, kind]);
       return result.rows[0];
     };
+    // Probes that must be refused *by the producer fence* are inserted with the
+    // full coherent external shape, so `native_qa_external_generation_inapplicable`
+    // cannot fire alongside it and the refusal is attributable to the fence.
+    const insertCoherentExternal = (provider, explicitKind) => client.query(
+      "INSERT INTO ai_generation_requests(" +
+      "project_id,requested_by,provider," + (explicitKind ? "task_kind," : "") +
+      "agent_name,task_status,model,user_story,acceptance_criteria,custom_prompt,requested_count," +
+      "generated_count,generated_payload,saved_count,save_events," +
+      "proposal_revision,proposal_request_key,proposal_request_digest,proposal_provenance," +
+      "token_input,token_output,token_total," +
+      "external_work_state,external_work_revision,external_prompt_revision,external_prompt_digest" +
+      ") VALUES ($1,$2,'" + provider + "'," + (explicitKind ? "'external_qa_work'," : "") +
+      "NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL," +
+      "'DRAFT',0,1,$3)",
+      [project, user, "a".repeat(64)]);
     const legacy = await insert("openai");
     assert.equal(legacy.task_kind, "legacy_generation_review");
     assert.equal((await insert("anthropic")).task_kind, "legacy_generation_review");
@@ -121,11 +136,11 @@ async function verifyNativeQaTaskKinds(client) {
         label + " failed for an unrelated constraint: " + failure?.constraint);
       assert.deepEqual(await read(), baseline, label + " must preserve the entire fixture population");
     };
-    await reject("reserved external provider with omitted kind", () => insert("external_qa_work"),
+    await reject("reserved external provider with omitted kind", () => insertCoherentExternal("external_qa_work", false),
       ["native_qa_external_producer_closed"]);
-    await reject("explicit external kind", () => insert("external_qa_work", "external_qa_work"),
+    await reject("explicit external kind", () => insertCoherentExternal("external_qa_work", true),
       ["native_qa_external_producer_closed"]);
-    await reject("external kind disguised as legacy provider", () => insert("openai", "external_qa_work"),
+    await reject("external kind disguised as legacy provider", () => insertCoherentExternal("openai", true),
       ["native_qa_external_producer_closed", "native_qa_task_kind_matches_provider"]);
     await reject("governed kind with legacy provider", () => insert("openai", "governed_proposal"),
       ["native_qa_task_kind_matches_provider"]);
