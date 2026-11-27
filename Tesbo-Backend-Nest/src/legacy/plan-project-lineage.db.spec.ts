@@ -395,6 +395,46 @@ const url = process.env.DATABASE_URL ?? "";
       }
     }, 15_000);
 
+    it("CL-I02 denies stale issuance across project membership replacement after real authorization preflight", async () => {
+      const manager = randomUUID();
+      const name = `CL-I02-issuance-${manager}`;
+      await setup.query("INSERT INTO users (id,email,name,active_organization_id) VALUES ($1,$2,'CL-I02 manager',$3)", [manager, `cl-i02-${manager}@tesbo.invalid`, organization]);
+      await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'manager')", [organization, manager]);
+      const original = (await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'manager') RETURNING id", [project, manager])).rows[0].id;
+      const issuer = makeLegacy(db, { config, apiTokens: tokens });
+      const realAccess = issuer.requireProjectAccess.bind(issuer);
+      let replacement: string | undefined;
+      // Schedule a real generation replacement after the real preflight returns. Only the timing
+      // seam is controlled; neither authority results nor the token INSERT are stubbed.
+      const seam = jest.spyOn(issuer, "requireProjectAccess").mockImplementationOnce(async (uid, id) => {
+        const access = await realAccess(uid, id);
+        expect(access.caller_role).toBe("manager");
+        await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        replacement = (await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'manager') RETURNING id", [project, manager])).rows[0].id;
+        expect(replacement).not.toBe(original);
+        return access;
+      });
+      const rows = async () => (await setup.query("SELECT id,name,project_membership_id FROM api_tokens WHERE project_id=$1 AND user_id=$2 ORDER BY id", [project, manager])).rows;
+      try {
+        const before = await rows();
+        expect(before).toEqual([]);
+        const outcome = await issuer.createApiKey(manager, project, { name, scopes: ["write"] })
+          .then(() => ({ error: null }), (error: unknown) => ({ error }));
+        expect(replacement).toBeDefined();
+        expect(outcome.error).toMatchObject({ status: 403 });
+        expect(await rows()).toEqual(before);
+        // The current membership is still eligible; a new preflight must succeed and bind it.
+        const fresh = await makeLegacy(db, { config, apiTokens: tokens }).createApiKey(manager, project, { name: name + "-fresh", scopes: ["write"] });
+        expect(await rows()).toEqual([{ id: fresh.id, name: name + "-fresh", project_membership_id: replacement }]);
+      } finally {
+        seam.mockRestore();
+        await setup.query("DELETE FROM api_tokens WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM organization_members WHERE organization_id=$1 AND user_id=$2", [organization, manager]);
+        await setup.query("DELETE FROM users WHERE id=$1", [manager]);
+      }
+    }, 15_000);
+
     const routes = ["dynamic", "project-prefixed"] as const;
     const business = async () => (await setup.query("SELECT * FROM bugs WHERE project_id=$1 ORDER BY id", [locked])).rows;
     type Options = { token?: string | null; project?: string; session?: string; notification?: boolean };
