@@ -111,6 +111,177 @@ test("stale editor save retains unsaved Notes until an explicit reload and revie
   }
 });
 
+test("exact linked testcase navigation preserves identity with duplicate titles and withholds unverified case controls", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  let projectId: string | undefined;
+  const title = `E2E exact linked case ${Date.now()}`;
+  try {
+    projectId = (await createProject(api, { name: `Exact link ${Date.now()}` })).id;
+    const base = `/api/projects/${projectId}/testcases`;
+    const create = async (attachments: string) => {
+      const response = await api.post(base, { data: { title, attachments } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+    const first = await create("First case with this title");
+    const selected = await create("Exact linked case with the same title");
+    expect(first.id).not.toBe(selected.id);
+    const firstBefore = testcaseEditState(await (await api.get(`${base}/${first.id}`)).json());
+    const selectedBefore = testcaseEditState(await (await api.get(`${base}/${selected.id}`)).json());
+    const panel = page.getByTestId("testcase-detail-panel");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    const selectedPath = `/projects/${projectId}/testcases?testcaseId=${selected.id}`;
+    // The old detail route redirected to the list, losing tcId. Both entry paths must open
+    // the same native editor by ID, regardless of a same-title case elsewhere in the list.
+    await page.goto(`/projects/${projectId}/testcases/${selected.id}`);
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+    await expect(panel.getByTestId("testcase-detail-identity")).toHaveText(selected.externalId || selected.id);
+    await page.reload();
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+
+    // Exercise a different exact URL while the same repository page remains mounted.
+    // The selected case must not be displayed or made actionable if the response identifies
+    // another record. This controlled read response is not a backend identity/auth claim.
+    const wrongRecord = await (await api.get(`${base}/${selected.id}`)).json();
+    const wrongRoute = `**${base}/${first.id}`;
+    await page.route(wrongRoute, route => route.fulfill({ status: 200, json: wrongRecord }));
+    await page.evaluate(id => {
+      const url = new URL(location.href);
+      url.searchParams.set("testcaseId", id);
+      history.pushState(null, "", url);
+    }, first.id);
+    await expect(panel.getByRole("alert")).toContainText("Failed to load the complete test case details");
+    await expect(panel).not.toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Save changes", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+    await page.unroute(wrongRoute);
+    page.once("dialog", dialog => dialog.accept());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(panel).toHaveAttribute("data-case-id", first.id);
+    await expect(notes).toHaveValue("First case with this title");
+    await panel.getByRole("button", { name: "Close panel", exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.get("testcaseId")).toBeNull();
+    await page.reload();
+    await expect(panel).toHaveCount(0);
+    await page.goto(selectedPath);
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+    expect(testcaseEditState(await (await api.get(`${base}/${first.id}`)).json())).toEqual(firstBefore);
+    expect(testcaseEditState(await (await api.get(`${base}/${selected.id}`)).json())).toEqual(selectedBefore);
+  } finally {
+    if (projectId) await deleteProjects(api, [projectId]);
+    await api.dispose();
+  }
+});
+
+
+test("stale approval GET and pending POST never open or repaint a different linked case", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  let projectId: string | undefined;
+  let releaseGet: (() => void) | undefined;
+  let releasePost: (() => void) | undefined;
+  try {
+    projectId = (await createProject(api, { name: `Review race ${Date.now()}` })).id;
+    const base = `/api/projects/${projectId}/testcases`;
+    const create = async (suffix: string) => {
+      const res = await api.post(base, { data: { title: `Review race ${suffix} ${Date.now()}`, attachments: suffix } });
+      expect(res.ok(), await res.text()).toBe(true);
+      return res.json();
+    };
+    const a = await create("A");
+    const b = await create("B");
+    const panel = page.getByTestId("testcase-detail-panel");
+    const review = page.getByRole("dialog", { name: "Review saved test case" });
+    const routeTo = async (caseId: string) => {
+      await page.evaluate(id => {
+        const url = new URL(location.href);
+        url.searchParams.set("testcaseId", id);
+        history.pushState(null, "", url);
+      }, caseId);
+      await expect(panel).toHaveAttribute("data-case-id", caseId);
+    };
+    await page.goto(`/projects/${projectId}/testcases?testcaseId=${a.id}`);
+    await expect(panel).toHaveAttribute("data-case-id", a.id);
+
+    // Freeze A's full approval snapshot AFTER the server replied, then select B in
+    // the same mounted editor. A's response must never open an approval dialog.
+    let getStarted!: () => void;
+    const pendingGet = new Promise<void>(resolve => { getStarted = resolve; });
+    const getGate = new Promise<void>(resolve => { releaseGet = resolve; });
+    await page.route(`**${base}/${a.id}`, async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      getStarted();
+      await getGate;
+      await route.fulfill({ response });
+    });
+    const observedApprovePosts: string[] = [];
+    page.on("request", request => {
+      if (request.method() === "POST" && request.url().includes("/testcases/") && request.url().endsWith("/approve")) {
+        observedApprovePosts.push(request.url());
+      }
+    });
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await pendingGet;
+    await routeTo(b.id);
+    // Wait for the delayed A response itself, not just the release of its gate:
+    // a zero-modal assertion before the response could conceal the original race.
+    const staleReadSettled = page.waitForResponse(response =>
+      new URL(response.url()).pathname === `${base}/${a.id}`
+      && response.request().method() === "GET");
+    if (!releaseGet) throw new Error("The delayed approval snapshot control was not installed.");
+    releaseGet();
+    releaseGet = undefined;
+    await staleReadSettled;
+    await page.evaluate(() => new Promise<void>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(review).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-case-id", b.id);
+    expect(observedApprovePosts).toEqual([]);
+    await page.unroute(`**${base}/${a.id}`);
+
+    // A fresh B approval may be reviewed. An intentionally delayed B approval
+    // response must not restore B or display B's success after selecting A.
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await expect(review).toBeVisible();
+    let postStarted!: () => void;
+    const pendingPost = new Promise<void>(resolve => { postStarted = resolve; });
+    const postGate = new Promise<void>(resolve => { releasePost = resolve; });
+    await page.route(`**${base}/${b.id}/approve`, async route => {
+      postStarted();
+      await postGate;
+      // No real native approval is performed in this UI interleaving control.
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await pendingPost;
+    await routeTo(a.id);
+    const finished = page.waitForResponse(response => response.url().includes(`${base}/${b.id}/approve`) && response.status() === 200);
+    if (!releasePost) throw new Error("The delayed approval submit control was not installed.");
+    releasePost();
+    releasePost = undefined;
+    await finished;
+    await expect(review).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-case-id", a.id);
+    await expect(panel.getByText("The reviewed version was approved.")).toHaveCount(0);
+    // A remains a new unapproved case: no real POST was allowed to write either record.
+    const afterA = await (await api.get(`${base}/${a.id}`)).json();
+    const afterB = await (await api.get(`${base}/${b.id}`)).json();
+    expect(afterA.approvalCurrent).toBe(false);
+    expect(afterB.approvalCurrent).toBe(false);
+  } finally {
+    releaseGet?.();
+    releasePost?.();
+    if (projectId) await deleteProjects(api, [projectId]);
+    await api.dispose();
+  }
+});
+
 /** Exercise Notes through reviewed MCP publication and the native editor on disposable records. */
 test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page }) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });

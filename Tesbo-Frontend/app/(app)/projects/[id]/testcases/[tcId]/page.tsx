@@ -1,14 +1,17 @@
-import { redirect } from "next/navigation";
+"use client";
 
-// Next 15+ passes route params as a Promise, so this has to be awaited.
-type TestCaseDetailRouteProps = {
-  params: Promise<{
-    id: string;
-    tcId: string;
-  }>;
-};
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useParams } from "@/lib/routeParams";
+import { PageLoader } from "@/components/ui";
 
-export default async function TestCaseDetailPage({ params }: TestCaseDetailRouteProps) {
-  const { id } = await params;
-  redirect(`/projects/${id}/testcases`);
+// The project route provider resolves either readable references or UUIDs. Reuse the
+// existing repository editor, but keep the exact resolved test case instead of dropping it.
+export default function TestCaseDetailPage() {
+  const { id, tcId } = useParams<{ id: string; tcId: string }>();
+  const router = useRouter();
+  useEffect(() => {
+    if (id && tcId) router.replace(`/projects/${encodeURIComponent(id)}/testcases?testcaseId=${encodeURIComponent(tcId)}`);
+  }, [id, tcId, router]);
+  return <PageLoader label="Opening linked test case…" />;
 }

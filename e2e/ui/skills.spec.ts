@@ -1269,7 +1269,8 @@ test.describe("governed skills operator journey (UI)", () => {
       await expect(review.getByTestId("requirement-review-approve")).toBeVisible();
       await expect(review.getByTestId("requirement-coverage-readings")).toContainText("Authored: yes");
       await expect(review.getByTestId("requirement-coverage-readings")).toContainText("Approved: no");
-      await expect(review.getByTestId("requirement-coverage-case-link")).toHaveAttribute("href", new RegExp(`testcases\\?search=${encodeURIComponent(caseTitle)}`));
+      // The link is bound to the applied case receipt, not a title that can change or collide.
+      await expect(review.getByTestId("requirement-coverage-case-link")).toHaveAttribute("href", `/projects/${tenant!.mainProjectId}/testcases?testcaseId=${encodeURIComponent(caseId)}`);
 
       // Reload reopens the exact version from the persisted task receipt.
       await page.reload();
@@ -1523,7 +1524,7 @@ test.describe("governed skills operator journey (UI)", () => {
       await page.getByTestId("requirement-coverage-retry").click();
       await expect(page.getByTestId("requirement-coverage-empty")).toBeVisible();
 
-      // The supporting-case link lands on the repository with the case search applied.
+      // Independent repository search entry remains supported; it is not the exact linked-case navigation.
       const search = encodeURIComponent(caseTitle);
       await page.goto(`/projects/${tenant!.mainProjectId}/testcases?search=${search}`);
       await expect(page.getByPlaceholder("Search by ID, title, or type")).toHaveValue(caseTitle);
