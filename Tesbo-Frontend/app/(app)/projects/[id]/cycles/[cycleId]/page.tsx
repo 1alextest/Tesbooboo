@@ -39,6 +39,7 @@ import {
   getTestRun,
   getModelStudioRunProvenance,
   updateTestRun,
+  closeAutomationRun,
   listCycleExecutions,
   updateExecution,
   bulkAssignExecutions,
@@ -537,6 +538,7 @@ export default function TestRunDetailPage() {
   const [shareToggling, setShareToggling] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [runStatusError, setRunStatusError] = useState<string | null>(null);
+  const [automationClosing, setAutomationClosing] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(() => {
@@ -1025,6 +1027,22 @@ export default function TestRunDetailPage() {
     }
   }
 
+  /** Automation-origin runs are closed by their ingest owner, never by the generic run writer. */
+  async function handleAutomationClose() {
+    if (!run || automationClosing) return;
+    if (!window.confirm("Close this automated run as incomplete? A closed automated run cannot be reopened.")) return;
+    setRunStatusError(null);
+    setAutomationClosing(true);
+    try {
+      const closed = await closeAutomationRun(projectId, cycleId, "incomplete");
+      setRun({ ...run, status: "Completed", closedAt: closed.closedAt, closeStatus: closed.closeStatus });
+    } catch (error) {
+      setRunStatusError(error instanceof Error ? error.message : "Failed to close the automated run.");
+    } finally {
+      setAutomationClosing(false);
+    }
+  }
+
 
   /* ───── Share toggle ───── */
   async function handleShareToggle(enabled: boolean) {
@@ -1240,7 +1258,13 @@ export default function TestRunDetailPage() {
                   Start Execution
                 </Button>
               )}
-              {isInProgress && (
+              {isInProgress && run.source === "automation" && (
+                <Button onClick={handleAutomationClose} disabled={automationClosing} title="Close an automated run whose reporter did not finish">
+                  <IconCircleCheck size={14} />
+                  {automationClosing ? "Closing…" : "Close as incomplete"}
+                </Button>
+              )}
+              {isInProgress && run.source !== "automation" && (
                 <Button
                   onClick={() => handleRunStatusChange("Completed")}
                   disabled={executions.length === 0}
@@ -1250,7 +1274,7 @@ export default function TestRunDetailPage() {
                   Mark Completed
                 </Button>
               )}
-              {isCompleted && (
+              {isCompleted && run.source !== "automation" && (
                 <Button variant="secondary" onClick={() => handleRunStatusChange("In Progress")}>
                   <IconRefresh size={14} />
                   Reopen

@@ -333,6 +333,12 @@ scope = slices 1 + 2 + 3.
   (trigger · branch · commit · build link · Incomplete badge) and per-result duration/retries/error.
   Both render nothing on a manual run.
 - Wired into the run detail drawer, the full-page execute screen, and the runs list.
+- **Run-screen recovery (27 November 2026):** an automation-origin run whose reporter died before
+  closing now offers **Close as incomplete** on the existing run screen, calling the existing
+  automation close owner. The generic **Mark Completed** and **Reopen** controls are not offered for
+  automation runs because the generic writer refuses them; **Add Test Cases** remains available
+  while the run is open, as its owner permits. The UI e2e verifies a confirmation, the visible
+  `Incomplete` badge, the `Completed`/`incomplete` API readback and the closure timestamp.
 
 ### Playwright SDK
 

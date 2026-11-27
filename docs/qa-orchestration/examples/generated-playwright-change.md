@@ -1,10 +1,10 @@
 # Generated Playwright change from an approved handoff
 
 **Status:** the coupled generator/reporter increment is merged as #317 (`8b627402`) and #313
-(`f7788439`) and deployed. Hosted disposable CI executed the generated Playwright test through the
-real Tesbo reporter, and the joined governed scenario used an actual approved requirement/case/link.
-This remains disposable CI engineering evidence, not TESBOPROJECT execution, manual UAT or
-production acceptance.
+(`f7788439`). Hosted disposable CI executed the generated Playwright test through the real Tesbo
+reporter, and the joined governed scenario used a disposable project's approved requirement/case/link
+created by the CI test actor. This remains disposable CI engineering evidence, not a human
+TESBOPROJECT approval, manual UAT or production acceptance.
 
 ## What is implemented
 
@@ -71,8 +71,8 @@ not textual inspection. It is wired into the pinned investigation/handoff CI ste
 - **The standalone script does not report a native Run.** The separate
   `e2e/api/handoff-native-reporter.spec.ts` joins this generator to the existing reporter with both
   synthetic and governed disposable inputs. The hosted run verifies Completed/completed closure
-  with timestamps, exact execution/revisions, every observed attachment byte, failing/open
-  negative controls, the Bug-linked failed occurrence and the separate Untested manual retest.
+  with timestamps, exact execution/revisions, every observed attachment byte, closure-check
+  rejection controls, the Bug-linked failed occurrence and the separate Untested manual retest.
 - **No source-to-code review is automated.** The generated file is a reviewable change; a human must
   review the diff before committing it to the approved target. This script does not push branches or
   approve code.
@@ -81,24 +81,26 @@ not textual inspection. It is wired into the pinned investigation/handoff CI ste
 
 ## Native coverage
 
-A separate Draft case proposal was recorded through the authorized MCP path on 26 November 2026 (America/Bogota).
-These are historical receipt fields, not a fresh read of the current task/revision/status:
+A separate generated-but-unsaved case proposal was recorded through the authorized MCP path on
+26 November 2026 (America/Bogota). It is not a persisted native testcase. These are historical
+receipt fields; the readback is retained in
+[native-handoff-coverage-readback-20261127.md](../reviews/native-handoff-coverage-readback-20261127.md):
 
 - task `2f20c10e-c1d3-4480-ba08-51f4cb04eca7`
 - revision `44cff570c008a8b1b8bb46eb4712f61642c73b5aaf305702e1fd3cd5ffab9dcd`
 - request key `approved-handoff-generated-change-20261127-1795746703915`
-- status `in_review`, one unpublished Draft case in Requirements
+- status `in_review`, one generated/zero saved case proposal (no persisted Draft case)
 - review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/2f20c10e-c1d3-4480-ba08-51f4cb04eca7`
 
 No manual execution is evidenced by that receipt. No new manual execution is performed here.
 Staging is not approval, apply, a Test Run or evidence.
 
-A second, distinct Draft proposal records the governed reporter journey:
+A second, distinct generated-but-unsaved proposal records the governed reporter journey:
 
 - task `601cc4f6-08e8-4fae-8b95-933010f2dc54`
 - revision `72d4982203eec734585ac5560e78fd2c09b0ce1f558b7369654f8241866704cf`
 - request key `governed-handoff-native-run-20261127-1795778472668`
-- status `in_review`, one unpublished Draft case in Requirements
+- status `in_review`, one generated/zero saved case proposal (no persisted Draft case)
 - review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/601cc4f6-08e8-4fae-8b95-933010f2dc54`
 
 It remains separate from task `2f20c10e-…` (generated change/controls) and from #318's Bug/retest
