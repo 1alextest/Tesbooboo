@@ -1,8 +1,13 @@
-# Background recovery execution modes — proposal
+# Graph QA notification recovery execution modes — proposal
 
 **Status:** implementation prepared behind explicit configuration; recommended development/project/global
 policy remains pending owner approval. No live worker scope is changed by this document or by deploying
 the code with no new environment variables.
+
+This document covers **graph QA notification recovery only**. KB transcription restart recovery is a
+separate owner and configuration surface; see
+[knowledge-transcription-recovery-modes.md](knowledge-transcription-recovery-modes.md). The staged
+native case in this document remains attached to graph recovery, not to KB transcription.
 
 **Owner:** the existing T-455 graph QA notification recovery path:
 

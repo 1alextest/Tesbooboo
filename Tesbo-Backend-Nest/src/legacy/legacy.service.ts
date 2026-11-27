@@ -1,5 +1,5 @@
 import { buildAiProviderHeaders, describeAiProviderFailure, isAiProviderTimeout, readAiProviderJson as readProviderJson, withAiProviderIo } from "../common/public-ai-provider-failure";
-import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
 import { retestCreateInput, retestDigest, retestExecutionIds, retestRequestKey } from "./native-retest";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
@@ -1473,8 +1473,9 @@ function isChatCapableModelId(provider: string, id: string): boolean {
 }
 
 @Injectable()
-export class LegacyService implements OnModuleInit {
+export class LegacyService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LegacyService.name);
+  private kbTranscriptionSweepTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly db: DatabaseService,
@@ -2538,17 +2539,49 @@ export class LegacyService implements OnModuleInit {
     this.resumeInterruptedZyraChatPlans().catch((err) => {
       this.logger.warn(`Failed to resume Zyra chat plans on startup: ${err instanceof Error ? err.message : err}`);
     });
-    this.resumeInterruptedKnowledgeTranscriptions().catch((err) => {
-      this.logger.warn(`Failed to resume knowledge transcripts on startup: ${err instanceof Error ? err.message : err}`);
-    });
-    // A claim abandoned after boot (worker death, deploy) has no boot event to notice it. Re-running
-    // the same claim-guarded sweep periodically makes the lease meaningful without a second restart.
-    const transcriptionSweep = setInterval(() => {
-      void this.resumeInterruptedKnowledgeTranscriptions().catch((err) => {
+    this.startKnowledgeTranscriptionRecovery();
+  }
+
+  onModuleDestroy(): void {
+    if (this.kbTranscriptionSweepTimer) {
+      clearInterval(this.kbTranscriptionSweepTimer);
+      this.kbTranscriptionSweepTimer = null;
+    }
+  }
+
+  /**
+   * Background recovery is a separate concern from request-triggered upload transcription: an upload
+   * always dispatches its own transcription, while this method only decides whether the restart sweep
+   * runs and over which project. Unset mode preserves the historical automatic global sweep.
+   */
+  private startKnowledgeTranscriptionRecovery(): void {
+    if (this.kbTranscriptionSweepTimer) return;
+    const mode = this.config.kbTranscriptionRecoveryMode ?? "global";
+    if (mode === "off") return;
+    if (mode !== "project" && mode !== "global") return;
+    let projectId: string | undefined;
+    if (mode === "project") {
+      const configured = this.config.kbTranscriptionRecoveryProjectId;
+      if (!isUuid(configured)) {
+        // Fail closed: a missing/invalid project must not widen into the global sweep.
+        this.logger.warn(
+          "KB transcription recovery is configured as project-scoped but TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID is not a UUID; background recovery is disabled"
+        );
+        return;
+      }
+      projectId = configured ?? undefined;
+    }
+    const run = () => {
+      void this.resumeInterruptedKnowledgeTranscriptions(projectId).catch((err) => {
         this.logger.warn(`Failed to resume knowledge transcripts: ${err instanceof Error ? err.message : err}`);
       });
-    }, 5 * 60 * 1000);
-    transcriptionSweep.unref?.();
+    };
+    run();
+    // A claim abandoned after boot (worker death, deploy) has no boot event to notice it. Re-running
+    // the same claim-guarded sweep periodically makes the lease meaningful without a second restart.
+    this.kbTranscriptionSweepTimer = setInterval(run, 5 * 60 * 1000);
+    this.kbTranscriptionSweepTimer.unref?.();
+    this.logger.log(`KB transcription recovery enabled every 5 minutes (${mode === "project" ? "project" : "global"} scope)`);
   }
 
   // A backend restart kills any in-flight continueZyraChatPlan loop instantly — it's an

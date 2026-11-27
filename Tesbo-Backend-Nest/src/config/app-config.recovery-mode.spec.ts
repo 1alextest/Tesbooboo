@@ -1,4 +1,4 @@
-import { resolveGraphQaRecoveryMode } from "./app-config.service";
+import { resolveGraphQaRecoveryMode, resolveKbTranscriptionRecoveryMode } from "./app-config.service";
 
 describe("graph QA recovery mode configuration", () => {
   it("defaults to off", () => {
@@ -19,5 +19,19 @@ describe("graph QA recovery mode configuration", () => {
     expect(resolveGraphQaRecoveryMode(" PROJECT ", undefined)).toBe("project");
     expect(resolveGraphQaRecoveryMode("GLOBAL", undefined)).toBe("global");
     expect(resolveGraphQaRecoveryMode("everything", "1")).toBe("off");
+  });
+});
+
+describe("KB transcription recovery mode configuration", () => {
+  it("keeps the existing automatic global sweep when unset", () => {
+    expect(resolveKbTranscriptionRecoveryMode(undefined)).toBe("global");
+    expect(resolveKbTranscriptionRecoveryMode("")).toBe("global");
+  });
+
+  it("accepts explicit off/project/global and fails an invalid explicit value closed", () => {
+    expect(resolveKbTranscriptionRecoveryMode(" OFF ")).toBe("off");
+    expect(resolveKbTranscriptionRecoveryMode("project")).toBe("project");
+    expect(resolveKbTranscriptionRecoveryMode("GLOBAL")).toBe("global");
+    expect(resolveKbTranscriptionRecoveryMode("everything")).toBe("off");
   });
 });

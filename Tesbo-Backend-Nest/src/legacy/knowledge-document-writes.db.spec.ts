@@ -1532,6 +1532,36 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       }
     });
 
+    it("project-scoped recovery cannot claim, read or process another project's file", async () => {
+      const otherProject = (await setup.query<{ id: string }>(
+        "INSERT INTO projects (organization_id, key, name) VALUES ($1,$2,'Other KB recovery CI') RETURNING id",
+        [orgId, `KBO${randomUUID().slice(0, 6)}`.toUpperCase()]
+      )).rows[0].id;
+      const otherFolder = (await setup.query<{ id: string }>(
+        "INSERT INTO knowledge_folders (organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id",
+        [orgId, otherProject]
+      )).rows[0].id;
+      const own = await seedMedia({ status: "pending" });
+      const foreign = await seedMedia({ status: "pending", project: otherProject, folder: otherFolder });
+      const f = transcriptionService();
+      try {
+        await f.sweep(projectId);
+        await waitFor(async () => (await statuses([own.id])).every((row) => row.extraction_status === "ready"), "own transcription");
+        expect(await statuses([foreign.id])).toEqual([{ id: foreign.id, extraction_status: "pending", extracted_text: null }]);
+        expect((await setup.query("SELECT extraction_claim_token FROM knowledge_files WHERE id = $1", [foreign.id])).rows[0].extraction_claim_token).toBeNull();
+        expect(f.storage.getBuffer).toHaveBeenCalledTimes(1);
+        expect(f.storage.getBuffer).toHaveBeenCalledWith(own.key);
+        expect(f.storage.getBuffer).not.toHaveBeenCalledWith(foreign.key);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.embedding).toHaveBeenCalledWith(orgId, projectId, "file", own.id, "transcribed");
+        expect(f.embedding).not.toHaveBeenCalledWith(orgId, otherProject, "file", foreign.id, "transcribed");
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[own.id, foreign.id]]);
+        await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [otherFolder]);
+        await setup.query("DELETE FROM projects WHERE id = $1", [otherProject]);
+      }
+    });
+
     it("does not recover transcriptions for a deleted file or an archived project", async () => {
       const deleted = await seedMedia({ status: "pending", deleted: true });
       const archivedProject = (await setup.query<{ id: string }>(
