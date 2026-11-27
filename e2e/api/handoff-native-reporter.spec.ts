@@ -153,12 +153,10 @@ function disposableTargetMatches(p: DisposableTargetProof): boolean {
     return p.hosted === "true"
       && /^\d+$/.test(p.runId) && /^\d+$/.test(p.attempt)
       && p.backendRunId === p.runId && p.backendAttempt === p.attempt
-      && api.origin === "http://127.0.0.1:7000" && api.pathname === "/"
- // DevSkim: ignore DS162092
+      && api.origin === "http://127.0.0.1:7000" && api.pathname === "/" // DevSkim: ignore DS162092
       && !api.username && !api.password && !api.search && !api.hash
       && (db.protocol === "postgresql:" || db.protocol === "postgres:")
-      && ["localhost", "127.0.0.1"].includes(db.hostname) && db.port === "5432"
- // DevSkim: ignore DS162092
+      && ["localhost", "127.0.0.1"].includes(db.hostname) && db.port === "5432" // DevSkim: ignore DS162092
       && db.pathname === "/tesbo_ci" && !db.search && !db.hash
       && p.backendDatabase === p.database
       && /^\d+$/.test(p.pid) && listeners.length > 0
@@ -206,26 +204,23 @@ function verifyDisposableTarget(): void {
 
 test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process authority", () => {
   const proof: DisposableTargetProof = {
-    api: "http://127.0.0.1:7000", database: "postgresql://localhost:5432/tesbo_ci",
- // DevSkim: ignore DS162092
-    backendDatabase: "postgresql://localhost:5432/tesbo_ci", hosted: "true",
+    api: "http://127.0.0.1:7000", database: "postgresql://localhost:5432/tesbo_ci", // DevSkim: ignore DS162092
+    backendDatabase: "postgresql://localhost:5432/tesbo_ci", hosted: "true", // DevSkim: ignore DS162092
     runId: "123", attempt: "1", backendRunId: "123", backendAttempt: "1", pid: "41",
     listeners: 'LISTEN 0 511 *:7000 *:* users:(("node",pid=41,fd=12))',
     backendCwd: "/workspace/Tesbo-Backend-Nest", expectedCwd: "/workspace/Tesbo-Backend-Nest",
     command: ["node", "dist/main.js"],
   };
   expect(disposableTargetMatches(proof)).toBe(true);
-  expect(disposableTargetMatches({ ...proof, listeners: 'LISTEN 0 511 127.0.0.1:7000 0.0.0.0:* users:(("ssh",pid=42,fd=12))' }), "loopback tunnel").toBe(false);
- // DevSkim: ignore DS162092
+  expect(disposableTargetMatches({ ...proof, listeners: 'LISTEN 0 511 127.0.0.1:7000 0.0.0.0:* users:(("ssh",pid=42,fd=12))' }), "loopback tunnel").toBe(false); // DevSkim: ignore DS162092
   expect(disposableTargetMatches({ ...proof, backendDatabase: "postgresql://remote.invalid:5432/tesbo_ci" }), "foreign database").toBe(false);
   expect(disposableTargetMatches({ ...proof, backendRunId: "122" }), "previous job").toBe(false);
   expect(disposableTargetMatches({ ...proof, listeners: proof.listeners + '\nLISTEN 0 511 *:7000 *:* users:(("node",pid=42,fd=13))' }), "ambiguous owners").toBe(false);
   expect(disposableTargetMatches({ ...proof, listeners: "LISTEN 0 511 *:7000 *:*" }), "no process ownership").toBe(false);
-  expect(disposableTargetMatches({ ...proof, api: "http://127.0.0.1:7000/proxy" }), "unexpected base path").toBe(false);
- // DevSkim: ignore DS162092
+  expect(disposableTargetMatches({ ...proof, api: "http://127.0.0.1:7000/proxy" }), "unexpected base path").toBe(false); // DevSkim: ignore DS162092
   expect(disposableTargetMatches({ ...proof, hosted: "false" }), "not hosted").toBe(false);
   expect(disposableTargetMatches({ ...proof, backendCwd: "/other" }), "wrong cwd").toBe(false);
-  expect(disposableTargetMatches({ ...proof, database: "postgresql://localhost:5432/tesbo_prod", backendDatabase: "postgresql://localhost:5432/tesbo_prod" }), "alternate database").toBe(false);
+  expect(disposableTargetMatches({ ...proof, database: "postgresql://localhost:5432/tesbo_prod", backendDatabase: "postgresql://localhost:5432/tesbo_prod" }), "alternate database").toBe(false); // DevSkim: ignore DS162092
 });
 
 
@@ -366,8 +361,7 @@ async function governedPacket(human: APIRequestContext, projectId: string, track
  * as such. A separate governed scenario must exercise a real approved packet.
  */
 async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
-  test.setTimeout(240_000);
- // DevSkim: ignore DS172411
+  test.setTimeout(240_000); // DevSkim: ignore DS172411
   // This proof grants a disposable API token and approves a fixture case. It must
   // never run against a staging/production Tesbo project by accidental E2E_ENV selection.
   verifyDisposableTarget();
@@ -387,8 +381,7 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
   const linkId = randomUUID();
   const targetRevision = "c".repeat(40);
   let currentCase: any;
-  const fixtureCredential = randomUUID();
- // DevSkim: ignore DS173237
+  const fixtureCredential = randomUUID(); // DevSkim: ignore DS173237
   const server = createServer((req, res) => {
     if (req.headers.authorization !== "Bearer " + fixtureCredential) {
       res.writeHead(401).end();
@@ -463,11 +456,9 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
 
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
- // DevSkim: ignore DS162092
+      server.listen(0, "127.0.0.1", resolve); // DevSkim: ignore DS162092
     });
-    const coverageOrigin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
- // DevSkim: ignore DS162092
+    const coverageOrigin = "http://127.0.0.1:" + (server.address() as AddressInfo).port; // DevSkim: ignore DS162092
 
     const packetBody = {
       schemaVersion: 1, purpose: "prepare_automation_change",
@@ -488,8 +479,7 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
       investigation: {
         id: "CONTROLLED-AUT-HANDOFF", upstreamCase: "DISPOSABLE-01",
         targetPath: "tests/journey.spec.mjs", targetBlob: "d".repeat(40),
-        repoRevision: targetRevision, harnessRevision: "a468921c2bead820520a97df897168487b2b4985",
- // DevSkim: ignore DS173237
+        repoRevision: targetRevision, harnessRevision: "a468921c2bead820520a97df897168487b2b4985", // DevSkim: ignore DS173237
         risks: [{ id: "R1", oracle: referenceOracle }],
       },
     };
@@ -541,8 +531,7 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
         TESBO_BASE_URL: env.apiBaseUrl, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: credential.token,
         TESBO_JOURNEY_API_ORIGIN: coverageOrigin, TESBO_JOURNEY_COVERAGE_URL: coverageOrigin + pathname,
         TESBO_JOURNEY_TOKEN: fixtureCredential, TESBO_JOURNEY_EVIDENCE_PATH: evidencePath,
-        NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost",
- // DevSkim: ignore DS162092
+        NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost", // DevSkim: ignore DS162092
       };
       // Re-execute the same emitted spec; a previous report or modified oracle
       // cannot count as a fresh retest of this selection.
@@ -800,8 +789,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
 });
 
 test("AUT-HANDOFF-01 governed packet reaches actual generated pass, Bug-linked fault and corrected automation attempt without inventing manual retest execution", async () => {
-  test.setTimeout(240_000);
- // DevSkim: ignore DS172411
+  test.setTimeout(240_000); // DevSkim: ignore DS172411
   verifyDisposableTarget();
   const human = await screensApi();
   try {
