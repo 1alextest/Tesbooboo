@@ -3127,7 +3127,7 @@ test.describe("zyra / agents (UI)", () => {
         await route.abort("connectionreset");
       });
       await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("button", { name: "Delete", exact: true }).click();
-      await expect(page.getByRole("alert")).toContainText("The draft change was not confirmed");
+      await expect(page.getByRole("alert").filter({ hasText: "The draft change was not confirmed" })).toBeVisible();
       await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
       await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) })).toHaveCount(0);
       await expect(page.getByText("0 of 1 testcase selected")).toBeVisible();
@@ -3181,7 +3181,7 @@ test.describe("zyra / agents (UI)", () => {
       expect(writes).toEqual([{ index: 3, revision: before.proposalRevision }, { index: 1, revision: firstRevision }]);
       expect(firstRevision).not.toBe(before.proposalRevision);
       release();
-      await expect(page.getByRole("alert")).toContainText("The draft change was not confirmed");
+      await expect(page.getByRole("alert").filter({ hasText: "The draft change was not confirmed" })).toBeVisible();
       await expect(page.getByText("0 of 3 testcases selected")).toBeVisible();
       await expect(page.getByRole("button", { name: "Delete selected", exact: true })).toBeDisabled();
       await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
