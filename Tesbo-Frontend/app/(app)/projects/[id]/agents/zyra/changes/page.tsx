@@ -263,7 +263,7 @@ export default function ZyraChangeReviewPage() {
                                 Open existing test case
                               </Link>
                               <CaseCandidateDetails key={`${projectId}:${caseId}`}
-                                projectId={projectId} caseId={caseId} />
+                                projectId={projectId} caseId={caseId} inspectDefectHistory />
                             </>
                           ) : (
                             <div className="space-y-1">

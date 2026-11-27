@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { compareComparableGraphCaptures, type GraphCaptureForComparison } from "./graph-comparison-gate";
 import { deriveQaReviewCandidates, type QaReviewCandidate } from "./qa-review-candidates";
+import { IMPLEMENTATION_PROJECTION_CONTRACT } from "./implementation-observation-graph";
+import { deriveSourceDeclarationReview, type SourceDeclarationReview } from "./qa-source-declaration-review";
 
 /**
  * Internal immutable-data proposal for the existing Tesbo QA review/notification
@@ -26,6 +28,8 @@ export interface QaChangeReviewReceipt {
     modifiedEdgeIds: string[];
     removedEdgeIds: string[];
   };
+  /** Additive receipt-time view; historical receipts may not carry it. */
+  sourceDeclarationReview?: SourceDeclarationReview | null;
   candidates: QaReviewCandidate[];
   unlinkedCaseNodeIds: string[];
   evidence: {
@@ -81,10 +85,13 @@ export function prepareQaChangeReviewReceipt(
       modifiedEdgeIds: delta.modifiedEdges,
       removedEdgeIds: delta.removedEdges
     },
+    ...(after.contractId === IMPLEMENTATION_PROJECTION_CONTRACT ? {
+      sourceDeclarationReview: deriveSourceDeclarationReview(before.snapshot!, after.snapshot!, delta)
+    } : {}),
     candidates: impact.candidates,
     unlinkedCaseNodeIds: impact.unlinkedCaseNodeIds,
     evidence: {
-      basis: after.contractId === "tesbo-implementation-declarations-v1"
+      basis: after.contractId === IMPLEMENTATION_PROJECTION_CONTRACT
         ? ("sourceByteEvidence" in after && after.sourceByteEvidence === "verified_pinned_git"
           ? "verified_source_bytes_unverified_semantics"
           : "source_declaration_unattested")

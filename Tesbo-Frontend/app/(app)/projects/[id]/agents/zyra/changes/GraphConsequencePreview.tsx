@@ -6,6 +6,24 @@ import {
   type GraphQaConsequencePreview
 } from "@/lib/api";
 
+function sourceLabel(id: string | null, index: number): string {
+  if (id === null) return "Not present in this observation";
+  try {
+    const parts: unknown = JSON.parse(id);
+    if (Array.isArray(parts) && typeof parts[index] === "string") return parts[index];
+  } catch { /* preserve unknown rather than render an invented label */ }
+  return "Reference unavailable";
+}
+function investigationPrompt(kind: string, change: string): string {
+  if (change === "removed") return "Determine whether removal is intended, and verify affected callers, user alternatives and retained records.";
+  switch (kind) {
+    case "journey": return "Establish the user goal, approved outcome, alternate path and interrupted-work recovery. Check the durable outcome, not only the last screen.";
+    case "state": return "Check allowed and refused transitions, delayed or repeated events, and the resulting durable state.";
+    case "route": return "Check allowed and refused actors, invalid input, the intended effect and downstream observations.";
+    default: return "Check the approved outcome, a nearby unchanged case, failure recovery and the independent result.";
+  }
+}
+
 /** Existing Zyra project review: an on-demand explanation, never a new AI approval surface. */
 export function GraphConsequencePreview({ projectId, historyId, receiptId }: {
   projectId: string;
@@ -110,6 +128,52 @@ export function GraphConsequencePreview({ projectId, historyId, receiptId }: {
               </p>
             </section>
           ) : <p className="text-xs text-[var(--muted)]">Requirement-level nomination inventory is unavailable for this observation.</p>}
+          {analysis.sourceDeclarationReview?.version === 1 && (
+            <section aria-label="Source behavior review" className="space-y-3 border-b border-[var(--border)] pb-3">
+              <h3 className="font-semibold">Investigate affected user behavior</h3>
+              <p>{analysis.sourceDeclarationReview.declarationLeadCount} declaration review lead(s) and{" "}
+                {analysis.sourceDeclarationReview.changedFileCount} changed source file(s) in the recorded comparison.</p>
+              {analysis.sourceDeclarationReview.filesWithoutDeclarationCount > 0 && (
+                <div className="space-y-1">
+                  <p className="font-medium">{analysis.sourceDeclarationReview.filesWithoutDeclarationCount} changed file(s) have no associated declaration in either observation.</p>
+                  <p>Identify the affected user goals and approved expectations before selecting tests. The absence of a declaration does not establish no impact.</p>
+                  <details><summary className="cursor-pointer underline">Inspect unresolved source files</summary>
+                    <ul className="list-disc pl-5">
+                      {analysis.sourceDeclarationReview.filesWithoutDeclaration.map(id =>
+                        <li key={id} className="break-all">{sourceLabel(id, 3)}</li>)}
+                    </ul>
+                    {analysis.sourceDeclarationReview.filesWithoutDeclarationCount > analysis.sourceDeclarationReview.filesWithoutDeclaration.length &&
+                      <p className="text-xs">Showing the first {analysis.sourceDeclarationReview.filesWithoutDeclaration.length}; additional file references remain in scope.</p>}
+                  </details>
+                </div>
+              )}
+              {analysis.sourceDeclarationReview.leads.map(lead => {
+                const kind = sourceLabel(lead.nodeId, 3);
+                const label = sourceLabel(lead.nodeId, 4);
+                return <div key={lead.nodeId} className="space-y-1 rounded border border-[var(--border)] p-2">
+                  <p className="font-medium break-words">{kind}: {label}</p>
+                  <p className="text-xs text-[var(--muted)]">{lead.change === "related_source_change"
+                    ? "Supporting source changed; declaration itself not recorded as changed."
+                    : "Declaration " + lead.change + " in the recorded comparison."}</p>
+                  <p>{investigationPrompt(kind, lead.change)}</p>
+                  <p className="text-xs">Reconcile these questions against applicable approved requirements and existing test cases. Missing semantic coverage is not established.</p>
+                  <details><summary className="cursor-pointer underline text-xs">Source references</summary>
+                    <p className="break-all text-xs">Before: {sourceLabel(lead.beforeFileId, 3)}</p>
+                    <p className="break-all text-xs">After: {sourceLabel(lead.afterFileId, 3)}</p>
+                    <code className="break-all text-xs">{lead.nodeId}</code>
+                  </details>
+                </div>;
+              })}
+              {analysis.sourceDeclarationReview.declarationLeadCount > analysis.sourceDeclarationReview.leads.length &&
+                <p className="text-xs">Showing the first {analysis.sourceDeclarationReview.leads.length}; additional declaration leads remain in scope.</p>}
+              <p className="text-xs text-[var(--muted)]">
+                Direct declaration changes appear before related-source leads, not as a severity ranking.
+                Declaration inventory, runtime semantics, historical defect relevance and test coverage remain unverified.
+              </p>
+            </section>
+          )}
+          {analysis.source?.contractId === "tesbo-implementation-declarations-v1" && !analysis.sourceDeclarationReview &&
+            <p>Source behavior inventory is unavailable for this observation.</p>}
           <p>Possible test-case review effects, not confirmed business consequences or executed results.</p>
           {analysis.candidateEffects.length > 0 ? (
             <ul className="list-disc space-y-2 pl-5">

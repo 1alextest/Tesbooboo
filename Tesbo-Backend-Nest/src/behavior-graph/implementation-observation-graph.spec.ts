@@ -1,5 +1,6 @@
 import { compareComparableGraphCaptures } from "./graph-comparison-gate";
 import { prepareQaChangeReviewReceipt } from "./qa-change-review-receipt";
+import { explainQaConsequenceReceipt } from "./qa-consequence-preview";
 import { projectImplementationObservations, type TrustedSourceObservation } from "./implementation-observation-graph";
 import type { GraphCaptureForComparison } from "./graph-comparison-gate";
 
@@ -172,5 +173,85 @@ describe("internal implementation source observation projection", () => {
     });
     expect(extended.snapshot?.edges).toHaveLength(4);
     expect(extended.snapshot?.edges.some((e) => e.type === "covers")).toBe(false);
+  });
+});
+
+describe("receipt-time behavioral investigation leads", () => {
+  const fileId = (path: string) => JSON.stringify(["implementation_file", "p1", source.repositoryId, path]);
+  const conceptId = (kind: string, key: string) => JSON.stringify(["source_declaration", "p1", source.repositoryId, kind, key]);
+  it("keeps a journey and unchanged declaration on changed bytes distinct from direct behavior change and unknown file scope", () => {
+    const login = source.files[0].path, session = source.files[1].path, other = "src/unknown.ts";
+    const withJourney: TrustedSourceObservation = {
+      ...source, files: [...source.files, { path: other, contentSha256: hex("a") }],
+      concepts: [...source.concepts, {
+        kind: "journey", key: "sign-in", filePath: login, lineStart: 1, lineEnd: 10, declarationSha256: hex("c")
+      }]
+    };
+    const after = { ...withJourney, commitSha: "b".repeat(40),
+      files: withJourney.files.map(f => f.path === session ? f : { ...f, contentSha256: hex("f") }),
+      concepts: withJourney.concepts.map(c => c.kind === "journey" ? { ...c, declarationSha256: hex("e") } : c)
+    };
+    const receipt = prepareQaChangeReviewReceipt(project(withJourney), project(after))!;
+    const result = explainQaConsequenceReceipt(receipt);
+    expect(result.sourceDeclarationReview).toEqual({
+      version: 1, changedFileCount: 2, declarationLeadCount: 2, filesWithoutDeclarationCount: 1,
+      leads: [
+        { nodeId: conceptId("journey", "sign-in"), change: "modified", beforeFileId: fileId(login), afterFileId: fileId(login) },
+        { nodeId: conceptId("route", "POST /login"), change: "related_source_change", beforeFileId: fileId(login), afterFileId: fileId(login) }
+      ],
+      filesWithoutDeclaration: [fileId(other)]
+    });
+    expect(result.coverageAssertion).toBe("none");
+    expect(result.executionAssertion).toBe("none");
+    expect(receipt.candidates).toEqual([]);
+    // The old preview had only raw changed IDs; the new receipt-time association
+    // keeps the unchanged declaration attached to the actual changed file.
+    expect(receipt.changed.modifiedNodeIds).not.toContain(conceptId("route", "POST /login"));
+    expect(explainQaConsequenceReceipt({ ...receipt, sourceDeclarationReview: undefined }).sourceDeclarationReview).toBeNull();
+    const malformed = { ...receipt.sourceDeclarationReview!,
+      leads: receipt.sourceDeclarationReview!.leads.map((lead, i) => i === 0 ?
+        { ...lead, afterFileId: JSON.stringify(["implementation_file", "foreign", source.repositoryId, login]) } : lead) };
+    expect(explainQaConsequenceReceipt({ ...receipt, sourceDeclarationReview: malformed }).sourceDeclarationReview).toBeNull();
+    const original = JSON.stringify(receipt);
+    expect(explainQaConsequenceReceipt(receipt).sourceDeclarationReview).toEqual(result.sourceDeclarationReview);
+    expect(JSON.stringify(receipt)).toBe(original);
+  });
+
+  it("retains removed declarations, moved support and new behavior with exact before/after references", () => {
+    const login = source.files[0].path, session = source.files[1].path;
+    const after: TrustedSourceObservation = { ...source, commitSha: "b".repeat(40), concepts: [
+      { ...source.concepts[1], filePath: login },
+      { kind: "behavior", key: "login-refusal", filePath: session, lineStart: 1, lineEnd: 2, declarationSha256: hex("e") }
+    ] };
+    const receipt = prepareQaChangeReviewReceipt(project(), project(after))!;
+    const review = explainQaConsequenceReceipt(receipt).sourceDeclarationReview!;
+    expect(review.changedFileCount).toBe(0);
+    expect(review.declarationLeadCount).toBe(3);
+    expect(review.leads).toEqual(expect.arrayContaining([
+      { nodeId: conceptId("route", "POST /login"), change: "removed", beforeFileId: fileId(login), afterFileId: null },
+      { nodeId: conceptId("state", "session:authenticated"), change: "modified", beforeFileId: fileId(session), afterFileId: fileId(login) },
+      { nodeId: conceptId("behavior", "login-refusal"), change: "added", beforeFileId: null, afterFileId: fileId(session) }
+    ]));
+  });
+
+  it("shows ordinary source capture without supplied concepts as unresolved file scope, not no impact", () => {
+    const before = { ...source, concepts: [] };
+    const after = { ...before, commitSha: "b".repeat(40),
+      files: before.files.map(f => ({ ...f, contentSha256: hex("f") })) };
+    const review = explainQaConsequenceReceipt(prepareQaChangeReviewReceipt(project(before), project(after))!).sourceDeclarationReview;
+    expect(review).toMatchObject({ changedFileCount: 2, declarationLeadCount: 0, filesWithoutDeclarationCount: 2 });
+    expect(review?.filesWithoutDeclaration).toEqual(source.files.map(f => fileId(f.path)).sort());
+  });
+
+  it("bounds displayed leads and keeps exact totals rather than silently dropping scope", () => {
+    const many = { ...source, concepts: Array.from({ length: 60 }, (_, i) => ({
+      kind: "journey" as const, key: "journey-" + String(i).padStart(2, "0"), filePath: source.files[0].path,
+      lineStart: 1, lineEnd: 2, declarationSha256: hex("c")
+    })) };
+    const after = { ...many, commitSha: "b".repeat(40),
+      files: many.files.map(f => f === many.files[0] ? { ...f, contentSha256: hex("f") } : f) };
+    const result = explainQaConsequenceReceipt(prepareQaChangeReviewReceipt(project(many), project(after))!).sourceDeclarationReview!;
+    expect(result.declarationLeadCount).toBe(60);
+    expect(result.leads).toHaveLength(50);
   });
 });
