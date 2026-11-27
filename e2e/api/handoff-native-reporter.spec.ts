@@ -866,7 +866,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
 test("AUT-HANDOFF-01 governed packet reaches actual generated pass, Bug-linked fault and corrected automation attempt readable in Test Runs without inventing manual retest execution", async ({ browser }) => {
   test.setTimeout(240_000); // DevSkim: ignore DS172411
   verifyDisposableTarget();
-  expect(new URL(env.webBaseUrl).origin, "Browser readback is confined to the existing hosted disposable frontend").toBe("http://127.0.0.1:3000"); // DevSkim: ignore DS137138
+  expect(new URL(env.webBaseUrl).origin, "Browser readback is confined to the existing hosted disposable frontend").toBe("http://127.0.0.1:3000"); // DevSkim: ignore DS137138,DS162092
   const tenant = screensTenant();
   expect(tenant, "Reuse the governed fixture's screens identity for browser readback").not.toBeNull();
   const human = await screensApi();
