@@ -142,7 +142,19 @@ Add specs to the existing suite; never start a parallel test project.
 - Specs must be **idempotent and order-independent**: `fullyParallel: false` serialises tests within
   a file, but different files still run concurrently across workers.
 - Assert on **user-visible outcomes and persisted state** — the API response after the UI action,
-  not merely that a toast appeared.
+  not merely that a toast appeared. Apply AGENTS.md principles 6, 7, 9 and 10 to the actual contract.
+  For an exact-record journey, use distinct records with the same visible label, materially different
+  values, selection/refresh/return, out-of-order or mismatched reads, unavailable/denied reads and
+  recovery; confirm the selected identity, permitted controls, and preservation of the other record.
+  For a set or cardinality obligation, verify the response's subject and full qualifying group first,
+  then its expected members; include a duplicate with a different identity, wrong scope/version and
+  legitimate unrelated groups where applicable. Preserve any genuinely supported search behavior.
+  On a generated or mutated-test negative control, identify the expected failing assertion and
+  distinguish fixture/runner/reporting failure from actual defect detection. Keep good and faulty
+  runs' identities, outcomes and permitted evidence; use scoped evidence checks that do not
+  confuse source-fixture markers with observed sensitive runtime data. When the governing
+  prerequisites change, verify current-state readback and the continued authoritative refusal of
+  ineligible actions. Do not present source/fixture results as live native acceptance.
 - Never touch Stripe write APIs. Those are gated behind `E2E_BILLING_ALLOW_STRIPE_WRITES` because
   the configured key is frequently a **live** key. Drive billing states via locally signed webhooks
   and the DB helpers in [e2e/utils/](e2e/utils/).
