@@ -5,6 +5,109 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Client } = require("pg");
 
+// Exercise the actual migrated owner with rollback-only disposable fixtures.
+async function verifyNativeQaTaskKinds(client) {
+  await client.query("BEGIN");
+  try {
+    const suffix = require("node:crypto").randomUUID();
+    const user = (await client.query(
+      "INSERT INTO users(email,name) VALUES ($1,'Task kind QA') RETURNING id",
+      ["task-kind-" + suffix + "@tesbo.invalid"]
+    )).rows[0].id;
+    const org = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('Task kind QA',$1) RETURNING id",
+      ["task-kind-" + suffix]
+    )).rows[0].id;
+    const project = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'TKQA','Task kind QA') RETURNING id",
+      [org]
+    )).rows[0].id;
+    const read = async () => (await client.query(
+      "SELECT * FROM ai_generation_requests WHERE project_id=$1 ORDER BY id", [project]
+    )).rows;
+    const insert = async (provider, kind, requestedBy = user) => {
+      const result = kind === undefined
+        ? await client.query(
+          "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status) VALUES ($1,$2,$3,'Disposable kind fixture','in_review') RETURNING id,task_kind,provider,proposal_provenance",
+          [project, requestedBy, provider])
+        : await client.query(
+          "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status,task_kind) VALUES ($1,$2,$3,'Disposable kind fixture','in_review',$4) RETURNING id,task_kind,provider,proposal_provenance",
+          [project, requestedBy, provider, kind]);
+      return result.rows[0];
+    };
+    const legacy = await insert("openai");
+    assert.equal(legacy.task_kind, "legacy_generation_review");
+    assert.equal((await insert("anthropic")).task_kind, "legacy_generation_review");
+    assert.equal((await insert("zyra_chat")).task_kind, "legacy_generation_review");
+    assert.equal((await insert("zyra_archive_sweep", undefined, null)).task_kind, "legacy_generation_review");
+    assert.equal((await insert("legacy")).task_kind, "legacy_generation_review");
+    assert.equal((await insert("openai", "legacy_generation_review")).task_kind, "legacy_generation_review");
+    const governed = [];
+    for (const provider of ["external_proposal", "external_requirement_proposal", "external_document_proposal"]) {
+      const row = await insert(provider);
+      assert.equal(row.task_kind, "governed_proposal");
+      // A historical missing producer receipt must not be manufactured by
+      // classification. Actual governed staging/approval is tested elsewhere.
+      assert.equal(row.proposal_provenance, null);
+      governed.push(row);
+    }
+    assert.equal((await insert("external_proposal", "governed_proposal")).task_kind, "governed_proposal");
+
+    // Ordinary same-lane provider and proposal review writes are legitimate;
+    // neither should rewrite the stable kind or prevent existing state updates.
+    await client.query("UPDATE ai_generation_requests SET provider='anthropic',task_status='todo' WHERE id=$1", [legacy.id]);
+    await client.query("UPDATE ai_generation_requests SET generated_payload='[]'::jsonb,task_status='done' WHERE id=$1", [governed[0].id]);
+    const baseline = await read();
+    assert.equal(baseline.length, 10);
+    assert.equal(baseline.find(row => row.id === legacy.id).task_kind, "legacy_generation_review");
+    assert.equal(baseline.find(row => row.id === legacy.id).provider, "anthropic");
+    assert.equal(baseline.find(row => row.id === governed[0].id).task_kind, "governed_proposal");
+    assert.equal(baseline.find(row => row.id === governed[0].id).task_status, "done");
+
+    const reject = async (label, operation, allowedConstraints) => {
+      await client.query("SAVEPOINT task_kind_probe");
+      let failure;
+      try { await operation(); } catch (error) { failure = error; }
+      await client.query("ROLLBACK TO SAVEPOINT task_kind_probe");
+      await client.query("RELEASE SAVEPOINT task_kind_probe");
+      assert.equal(failure?.code, "23514", label + " must be refused by the actual kind boundary");
+      assert.ok(allowedConstraints.includes(failure?.constraint),
+        label + " failed for an unrelated constraint: " + failure?.constraint);
+      assert.deepEqual(await read(), baseline, label + " must preserve the entire fixture population");
+    };
+    await reject("reserved external provider with omitted kind", () => insert("external_qa_work"),
+      ["native_qa_external_producer_closed"]);
+    await reject("explicit external kind", () => insert("external_qa_work", "external_qa_work"),
+      ["native_qa_external_producer_closed"]);
+    await reject("external kind disguised as legacy provider", () => insert("openai", "external_qa_work"),
+      ["native_qa_external_producer_closed", "native_qa_task_kind_matches_provider"]);
+    await reject("governed kind with legacy provider", () => insert("openai", "governed_proposal"),
+      ["native_qa_task_kind_matches_provider"]);
+    await reject("legacy kind with governed provider", () => insert("external_proposal", "legacy_generation_review"),
+      ["native_qa_task_kind_matches_provider"]);
+    await reject("unknown kind", () => insert("openai", "unknown"),
+      ["native_qa_task_kind_values", "native_qa_task_kind_matches_provider"]);
+    await reject("change stored kind", () => client.query(
+      "UPDATE ai_generation_requests SET task_kind='governed_proposal' WHERE id=$1", [legacy.id]),
+      ["native_qa_task_kind_immutable"]);
+    await reject("erase stored kind", () => client.query(
+      "UPDATE ai_generation_requests SET task_kind=NULL WHERE id=$1", [legacy.id]),
+      ["native_qa_task_kind_immutable"]);
+    await reject("legacy provider switched to governed", () => client.query(
+      "UPDATE ai_generation_requests SET provider='external_proposal' WHERE id=$1", [legacy.id]),
+      ["native_qa_task_kind_matches_provider"]);
+    await reject("governed subtype substituted", () => client.query(
+      "UPDATE ai_generation_requests SET provider='external_document_proposal' WHERE id=$1", [governed[0].id]),
+      ["native_qa_governed_lane_immutable"]);
+    await reject("combined provider and kind conversion", () => client.query(
+      "UPDATE ai_generation_requests SET provider='external_qa_work',task_kind='external_qa_work' WHERE id=$1", [legacy.id]),
+      ["native_qa_task_kind_immutable"]);
+    console.log("Native task kinds: 10 legitimate fixture rows; 11 exact constraint refusals; all prior rows preserved; external producer closed.");
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
 async function main() {
   assert.match(process.env.DATABASE_URL || "", /\/tesbo_ci(?:\?|$)/, "Refusing to run outside the isolated tesbo_ci database");
   const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -59,7 +162,8 @@ async function main() {
     } finally {
       await client.query("ROLLBACK");
     }
-    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership and immutable audit rows.`);
+    await verifyNativeQaTaskKinds(client);
+    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows and native task kinds.`);
   } finally {
     await client.end();
   }
