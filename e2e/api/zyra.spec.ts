@@ -2728,12 +2728,17 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-55 an explicitly empty selection saves nothing and leaves the batch in review", async () => {
     const { taskId } = seedChatReviewTask();
+    // This tenant is reused; earlier successful saves may leave cases behind.
+    const caseIds = () => column(`SELECT id FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} ORDER BY id;`);
+    const beforeIds = caseIds();
+    const beforeTask = draftMutationState(taskId);
     const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [] }, failOnStatusCode: false });
     expect(res.status(), `an explicit empty selection — ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.savedCount, "an explicitly empty selection must not fall back to saving everything").toBe(0);
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
-    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
+    expect(caseIds(), "an empty selection creates or removes no native cases").toEqual(beforeIds);
+    expect(draftMutationState(taskId), "an empty selection leaves the proposal unchanged").toBe(beforeTask);
   });
 
   test("ZYR-A-56 omitting the selection is refused without effects; an explicit reviewed selection applies the batch", async () => {
@@ -2743,14 +2748,23 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         { opType: "create", draft: { suiteId: null, title: `E2E omit-selection B ${Date.now()}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
       ],
     });
+    const caseIds = () => column(`SELECT id FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} ORDER BY id;`);
+    const beforeIds = caseIds();
     const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}/save`));
+    const beforeTask = draftMutationState(taskId);
     const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false });
     expect(res.status(), `an omitted selection — ${await res.text()}`).toBe(400);
-    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
+    expect(caseIds(), "an omitted selection creates or removes no native cases").toEqual(beforeIds);
+    expect(draftMutationState(taskId), "an omitted selection leaves the proposal unchanged").toBe(beforeTask);
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
     const selected = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0, 1] } });
     expect(selected.status(), await selected.text()).toBe(201);
-    expect((await selected.json()).savedCount).toBe(2);
+    const applied = await selected.json();
+    expect(applied.savedCount).toBe(2);
+    const addedIds: string[] = applied.testcases.map((row: { id: string }) => row.id);
+    expect(new Set(addedIds).size).toBe(2);
+    expect(addedIds.every(id => !beforeIds.includes(id))).toBe(true);
+    expect(caseIds(), "only the two explicitly selected cases are added").toEqual([...beforeIds, ...addedIds].sort());
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
   });
 
