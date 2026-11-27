@@ -182,3 +182,59 @@ Point each domain to the corresponding droplet IP as a plain A record.
   It refuses an unapproved origin, a missing or unidentified expected build, or a health/build mismatch before any authenticated request. Missing required tools or authoring fields fail verification. When proposal preview is exposed, the checked `stage_testcase_changes` create/update fields include `attachments`, `postconditions`, `estimatedDuration` and `sourceRefs`, with a required request key and update `expectedRevision`.
 
   It also recomputes the catalog fingerprint from the tools and initialize instructions the server actually returned. Missing instructions, a missing/malformed reported fingerprint, or a mismatch fails verification; an unavailable comparison cannot produce `OK`. A mismatch means the observed catalog differs from the one the server claims. Tool count is informational: capabilities, not the number, are the requirement.
+
+## Connecting ChatGPT to the existing MCP OAuth server
+
+The merged embedded `McpOAuthServer` is disabled by default and currently grants only
+`mcp:read`. A working API token, the API & MCP page's bearer-token connection check, and
+a healthy MCP catalog do not establish OAuth readiness. Keep the existing API-token clients
+and human-only publication/approval rules unchanged.
+
+Choose and verify one canonical public API origin before configuring the client. The documented
+split-host topology uses the backend's public HTTPS origin. The copied project MCP URL,
+`NEXT_PUBLIC_API_URL`, `TESBO_MCP_OAUTH_RESOURCE_ORIGIN` and the issuer must agree with that choice;
+the issuer is that same origin plus `/oauth`. `FRONTEND_URL` remains the web login origin.
+`NEXT_PUBLIC_API_URL` is a frontend build-time setting, so changing a service variable without
+rebuilding the frontend does not update the copied URL or login continuation.
+
+The web app's existing `/api` rewrite alone does **not** expose root `/.well-known` or `/oauth`
+routes. If the web origin is selected instead, an operator must review and verify the complete
+proxy topology: path-aware protected-resource metadata, both issuer discovery forms, issuer
+endpoints, interaction requests, cookies, redirects and forwarded headers. Preserve host-only
+cookies and the configured issuer/resource checks. Do not mix origins, add a broad catch-all
+proxy, or change the canonical token audience merely to make a metadata request succeed.
+
+Before an authorized activation, verify the exact backend/frontend builds, migrated OAuth
+tables, stable operator-managed asymmetric `TESBO_MCP_OAUTH_PRIVATE_JWKS`, distinct
+`TESBO_MCP_OAUTH_COOKIE_KEYS_JSON`, and the existing encryption key. Use the already implemented
+reviewed `TESBO_MCP_OAUTH_REGISTERED_CLIENTS` or separately approved bounded
+`TESBO_MCP_OAUTH_CIMD_ENABLED` mechanism. Obtain the real client identity and callback from the
+client setup; do not guess them or put secrets in source, commands, chat or evidence.
+
+`TESBO_MCP_OAUTH_DISCOVERY_PREVIEW=true` exposes metadata only. It does not mount the issuer.
+`TESBO_MCP_OAUTH_ENABLED=true` requires the complete provider configuration and is a separately
+authorized production access change. A named project OAuth-client preapproval and the user's
+own consent remain separate requirements. Key custody/rotation, refresh policy, client
+compatibility, deployment and rollback retain their existing release decisions.
+
+Verify the public discovery chain using the existing checker in its **unauthenticated** mode:
+
+```bash
+TESBO_MCP_OAUTH_READINESS=1 \
+TESBO_MCP_URL="https://<approved-api-origin>/api/projects/<projectId>/mcp" \
+EXPECTED_GIT_SHA="<exact 40-character deployed backend commit>" \
+node scripts/mcp-deploy-check.mjs
+```
+
+This mode needs no token file and never registers a client, logs in, consents, requests a token
+or invokes a tool. It verifies exact-build health, JSON protected-resource metadata, the same-origin
+read-only issuer/PKCE contract, valid public signing keys and the exact unauthenticated **POST**
+challenge. Redirects, HTML, oversized metadata, foreign endpoints, private key fields and preview-only
+issuers fail. `clientAuthorization: "not_verified"` remains explicit even on success. An expected
+404 on an OAuth-off deployment is a failed readiness check, not permission to enable the provider.
+
+After readiness succeeds, complete the authorized ChatGPT setup in the user's own browser,
+review the actual requested scopes, exercise a permitted project read and verify revocation.
+Retain the actual client protocol and source/build receipts. Metadata alone does not prove
+interoperability or refresh behavior. Read-only OAuth does not enable case-staging writes;
+that capability needs its separately reviewed machine-write scope and producer contract.
