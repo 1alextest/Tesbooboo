@@ -44,6 +44,20 @@ class CodacyInputDiagnosticsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "checkout contains"):
                     assert_clean_checkout(root, head)
 
+    def test_checkout_rejects_flags_that_hide_tracked_changes(self):
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag=flag), TemporaryDirectory() as directory:
+                root = Path(directory)
+                head = self.clean_repo(root)
+                self.assertEqual(assert_clean_checkout(root, head), head)
+                self.git(root, "update-index", flag, "source.txt")
+                (root / "source.txt").write_text("changed", encoding="utf-8")
+                self.assertEqual(self.git(root, "status", "--porcelain=v1",
+                                          "--untracked-files=all", "--ignored=matching",
+                                          "--ignore-submodules=none"), "")
+                with self.assertRaisesRegex(ValueError, "concealing index flags"):
+                    assert_clean_checkout(root, head)
+
     def test_strict_utf8_stream_handles_split_codepoint_and_rejects_truncated_tail(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

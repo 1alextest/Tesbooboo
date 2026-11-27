@@ -18,6 +18,12 @@ def assert_clean_checkout(root, expected):
     ).strip()
     if head != expected:
         raise ValueError("Codacy checkout does not match the event commit")
+    # Git status honors assume-unchanged and skip-worktree, so a clean
+    # result alone cannot establish persistent tracked-file integrity.
+    flags = subprocess.check_output(["git", "ls-files", "-v", "-z"], cwd=root)
+    for record in flags.split(b"\0"):
+        if record and not record.startswith(b"H "):
+            raise ValueError("Codacy checkout contains concealing index flags or nonordinary entries")
     status = subprocess.check_output([
         "git", "status", "--porcelain=v1", "-z", "--untracked-files=all",
         "--ignored=matching", "--ignore-submodules=none",
