@@ -154,7 +154,13 @@ Add specs to the existing suite; never start a parallel test project.
   runs' identities, outcomes and permitted evidence; use scoped evidence checks that do not
   confuse source-fixture markers with observed sensitive runtime data. When the governing
   prerequisites change, verify current-state readback and the continued authoritative refusal of
-  ineligible actions. Do not present source/fixture results as live native acceptance.
+  ineligible actions. For a consequential action with asynchronous preparation or reporting, test
+  pre-execution admission separately from result ingestion (AGENTS.md principle 8). Use a safe,
+  independently observable target-effect sentinel: denied, revoked, stale or unavailable admission
+  must leave the prohibited target untouched; a legitimate admission reaches the intended action.
+  If an action was independently authorized and actually ran but its reporting failed, preserve
+  that observed action and uncertain reporting outcome rather than claiming it never ran.
+  Do not present source/fixture results as live native acceptance.
 - Never touch Stripe write APIs. Those are gated behind `E2E_BILLING_ALLOW_STRIPE_WRITES` because
   the configured key is frequently a **live** key. Drive billing states via locally signed webhooks
   and the DB helpers in [e2e/utils/](e2e/utils/).
