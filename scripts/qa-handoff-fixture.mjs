@@ -1,4 +1,4 @@
-// Disposable Git authoring fixture shared by the CLI contract test and live Playwright regression.
+// Disposable authoring fixtures and report checks shared by handoff verification.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -7,6 +7,42 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { verifyTarget } from './qa-approved-handoff.mjs';
+
+// Read only actual child test outcomes. Git metadata, source snippets and global
+// runner errors cannot establish the requested assertion's failure.
+// Keep this shared with the native reporter fixture after branch integration.
+export function handoffReportResult(report, status) {
+  if (!['passed', 'failed'].includes(status) || !Array.isArray(report?.suites)
+      || !Array.isArray(report.errors ?? []) || (report.errors ?? []).length !== 0) return null;
+  const rows = [];
+  function visit(suite) {
+    for (const spec of suite.specs ?? []) {
+      for (const item of spec.tests ?? []) rows.push(...(item.results ?? []));
+    }
+    for (const child of suite.suites ?? []) visit(child);
+  }
+  try {
+    report.suites.forEach(visit);
+  } catch {
+    return null;
+  }
+  const result = rows[0];
+  const errors = result?.errors ?? [];
+  if (rows.length !== 1 || result?.status !== status || !Array.isArray(errors)
+      || errors.length !== (status === 'failed' ? 1 : 0)
+      || report.stats?.expected !== (status === 'passed' ? 1 : 0)
+      || report.stats?.unexpected !== (status === 'failed' ? 1 : 0)) return null;
+  return result;
+}
+
+export function handoffFailureMatches(report, label, details = []) {
+  const result = handoffReportResult(report, 'failed');
+  const message = result?.errors[0]?.message;
+  if (typeof message !== 'string') return false;
+  const lines = message.replace(/\u001b\[[0-9;]*m/g, '').trimStart().split(/\r?\n/).map(line => line.trim());
+  const first = lines.shift()?.replace(/^Error:\s*/, '');
+  return first === label && details.every(detail => lines.includes(detail));
+}
 
 export function fixtureGit(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trimEnd();

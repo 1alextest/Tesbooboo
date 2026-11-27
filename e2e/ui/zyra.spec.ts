@@ -1566,7 +1566,7 @@ test.describe("zyra / agents (UI)", () => {
             { key: "AC-1", text: "The obligation is observable", normative: true },
             { key: "AC-2", text: "Historical run output", normative: false },
           ] },
-          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/ui/zyra.spec.ts", automationFramework: "Playwright" } },
+          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, attachments: "Exact applied case evidence", steps: [{ stepNumber: 1, action: "Open the linked case", expectedResult: "The exact applied case opens" }], automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/ui/zyra.spec.ts", automationFramework: "Playwright" } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
         ]
       } });
@@ -1589,6 +1589,7 @@ test.describe("zyra / agents (UI)", () => {
       expect(caseId).not.toBe("");
       expect(await after.json()).toMatchObject({ taskStatus: "done", requirementApplyReceipt: { testcase: { id: caseId } } });
       await expect(page.getByText("3 proposal operations · 1 case candidate · 1 Draft case created ·")).toBeVisible();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact submitted requirement first");
       await page.getByText("Set up an automation handoff").click();
       await expect(page.getByRole("button", {name: "Copy handoff command"})).toBeVisible();
       await expect(page.locator("details[open] pre")).toContainText(`/projects/${tenant!.mainProjectId}/agents/tasks/${taskId}`);
@@ -1602,6 +1603,28 @@ test.describe("zyra / agents (UI)", () => {
       await expect(obligationRow.getByRole("cell").nth(1)).toHaveText("1");
       requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(requirementId).not.toBe("");
+
+      // This is a disposable project fixture with an authorized human session, not live acceptance.
+      // Follow the actual link to the exact case instead of reconstructing the ID from its title.
+      await page.getByTestId("requirement-coverage-case-link").click();
+      const casePanel = page.getByTestId("testcase-detail-panel");
+      await expect(casePanel).toHaveAttribute("data-case-id", caseId);
+      await expect(casePanel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs")).toHaveValue("Exact applied case evidence");
+      await page.goBack();
+      await expect(page.getByTestId("requirement-change-bundle")).toBeVisible();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact submitted requirement first");
+
+      await page.getByTestId("requirement-review-approve").click();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact linked test case");
+      await approveTestcase(api, tenant!.mainProjectId, caseId);
+      await page.getByRole("button", { name: "Refresh review and coverage", exact: true }).click();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Verify and activate one current link");
+      const activation = page.getByRole("button", { name: "Activate approved case on approved version", exact: true });
+      await expect(activation).toBeEnabled();
+      await activation.click();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Review prerequisites observed.");
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("CLI must still verify");
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Executed: no");
     } finally {
       if (taskId) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(taskId)} AND project_id=${literal(tenant!.mainProjectId)};`);
       if (requirementId) {
