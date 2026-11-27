@@ -443,8 +443,16 @@ async function verifyPopulatedTaskKindUpgrade(admin, migrationFiles) {
     const after = await retained();
     assert.equal(after.length, before.length);
     for (let i = 0; i < after.length; i++) {
-      const { task_kind, ...original } = after[i].row;
+      const {
+        task_kind, external_work_state, external_work_revision,
+        external_prompt_revision, external_prompt_digest, ...original
+      } = after[i].row;
       assert.equal(task_kind, expected.get(original.provider));
+      // V170 adds the external-work columns as NULL for every historical row.
+      assert.equal(external_work_state, null);
+      assert.equal(external_work_revision, null);
+      assert.equal(external_prompt_revision, null);
+      assert.equal(external_prompt_digest, null);
       assert.deepEqual(original, before[i].row, "upgrade changed historical row " + original.id);
       assert.deepEqual(after[i].snapshot, before[i].snapshot, "upgrade changed review basis " + original.id);
     }
