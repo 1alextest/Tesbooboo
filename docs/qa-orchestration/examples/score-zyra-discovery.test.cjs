@@ -47,3 +47,71 @@ function calibrate(score, check, rejects) {
 test('calibrate discovery accounting and negative receipt controls',()=>{
   calibrate(scoreDiscovery,(condition,message)=>assert.ok(condition,message),(fn,message)=>assert.throws(fn,undefined,message));
 });
+
+// Executable transfer calibration, not model discovery, native acceptance or an active Skill.
+function transferCalibration(check, same) {
+  // These are deliberately small, synthetic domain models. No real financial or inventory system.
+  class ExpectedInvariant extends Error {
+    constructor(id) { super(id); this.id=id; }
+  }
+  function invariant(ok,id) { if (!ok) throw new ExpectedInvariant(id); }
+  function financialRetry(fault, strong) {
+    const rows=[];
+    function credit(invoice, request, amount) {
+      const existing=rows.find(r=>r.invoice===invoice&&r.request===request);
+      if (!existing||fault==='repeat-side-effect') rows.push({id:rows.length+1,invoice,request,amount});
+      return {accepted:true};
+    }
+    const initial=credit('invoice-A','request-1',25);
+    const original=rows[0].id;
+    credit('invoice-B','request-1',40); // same key on another independently scoped subject is legitimate
+    const repeated=credit('invoice-A','request-1',25);
+    invariant(initial.accepted&&repeated.accepted,'credit-ack');
+    if (strong) {
+      const selected=rows.filter(r=>r.invoice==='invoice-A'&&r.request==='request-1');
+      invariant(selected.length===1&&selected[0].id===original&&selected[0].amount===25,'same-subject-single-effect');
+      invariant(rows.filter(r=>r.invoice==='invoice-B').length===1&&rows.find(r=>r.invoice==='invoice-B').amount===40,'neighbor-preserved');
+    }
+    credit('invoice-A','request-2',10);
+    if (strong) invariant(rows.filter(r=>r.invoice==='invoice-A').length===2,'distinct-intent-allowed');
+  }
+  function mobileSelection(fault,strong) {
+    const items=new Map([['A',{revision:1,quantity:5}],['B',{revision:1,quantity:9}]]);
+    let order=['A','B'];
+    const queued={id:order[0],position:0,revision:items.get(order[0]).revision,delta:-2};
+    order=['B','A']; // reorder between selection and the delayed write
+    function apply(op) {
+      const id=fault==='position-rebind'?order[op.position]:op.id;
+      const item=items.get(id);
+      if(item.revision!==op.revision) return {accepted:false,reason:'stale'};
+      item.quantity+=op.delta; item.revision++;
+      return {accepted:true};
+    }
+    const result=apply(queued);
+    invariant(result.accepted,'sync-ack');
+    if(strong) invariant(items.get('A').quantity===3&&items.get('A').revision===2&&items.get('B').quantity===9&&items.get('B').revision===1,'stable-subject-preserved');
+    const snapshot=JSON.stringify([...items]);
+    const stale=apply({id:'A',position:1,revision:1,delta:-1});
+    if(strong) invariant(!stale.accepted&&stale.reason==='stale'&&JSON.stringify([...items])===snapshot,'stale-write-refused');
+    // Independent, current operation on B remains possible.
+    const current=apply({id:'B',position:0,revision:items.get('B').revision,delta:1});
+    if(strong) invariant(current.accepted&&items.get('B').quantity===10,'authorized-neighbor-remains-usable');
+  }
+  function classify(run, expectedId) {
+    try {run();return 'PASS';}
+    catch(e) {return e instanceof ExpectedInvariant&&e.id===expectedId?'INTENDED_ASSERTION_FAILURE':'OTHER_FAILURE';}
+  }
+  for(const [run,fault,id] of [[financialRetry,'repeat-side-effect','same-subject-single-effect'],[mobileSelection,'position-rebind','stable-subject-preserved']]) {
+    same(classify(()=>run(null,true),id),'PASS');
+    same(classify(()=>run(fault,false),id),'PASS'); // weak acknowledgment oracle misses the fault
+    same(classify(()=>run(fault,true),id),'INTENDED_ASSERTION_FAILURE');
+    same(classify(()=>run(null,true),id),'PASS'); // fresh original repeat
+    same(classify(()=>{throw new Error('fixture setup failed')},id),'OTHER_FAILURE');
+    same(classify(()=>{throw new ExpectedInvariant('unrelated-assertion')},id),'OTHER_FAILURE');
+  }
+  check(true,'completed two independent domain fixtures');
+}
+
+test('cross-application calibration distinguishes intended faults from unrelated failures',()=>{
+  transferCalibration((condition,message)=>assert.ok(condition,message),(actual,expected)=>assert.equal(actual,expected));
+});
