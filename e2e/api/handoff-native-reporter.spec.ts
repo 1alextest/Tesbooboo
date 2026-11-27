@@ -257,7 +257,7 @@ async function governedPacket(human: APIRequestContext, projectId: string, track
   const appliedResponse = await human.post(base + "/requirements/proposals/" + task.id + "/apply", {
     data: { expectedProposalRevision: task.proposalRevision }
   });
-  expect(appliedResponse.status(), "Exact bundle applied by disposable reviewer").toBe(201);
+  expect(appliedResponse.ok(), "Exact bundle applied by disposable reviewer").toBe(true);
   const applied = await appliedResponse.json();
   const requirementId = applied.receipt.requirement.documentId as string;
   const submittedVersionId = applied.receipt.requirement.versionId as string;
@@ -400,21 +400,21 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
       nativePacket = await governedPacket(human, projectId, id => { testcaseId = id; });
       currentCase = nativePacket.currentCase;
     } else {
-    const created = await human.post("/api/projects/" + projectId + "/testcases", {
-      data: {
-        title: "Disposable generated reporter " + Date.now(),
-        automationRepo: originRepo,
-        automationPath: "tests/journey.spec.mjs",
-        automationFramework: "Playwright",
-        status: "Draft",
-      },
-    });
-    expect(created.status(), "Disposable draft must be created").toBe(201);
-    const draft = await created.json();
-    testcaseId = draft.id;
-    expect(testcaseId).toBeTruthy();
-    // Register the created ID before approval so a failed review is still cleaned up.
-    currentCase = await approveTestcase(human, projectId, testcaseId!);
+      const created = await human.post("/api/projects/" + projectId + "/testcases", {
+        data: {
+          title: "Disposable generated reporter " + Date.now(),
+          automationRepo: originRepo,
+          automationPath: "tests/journey.spec.mjs",
+          automationFramework: "Playwright",
+          status: "Draft",
+        },
+      });
+      expect(created.status(), "Disposable draft must be created").toBe(201);
+      const draft = await created.json();
+      testcaseId = draft.id;
+      expect(testcaseId).toBeTruthy();
+      // Register the created ID before approval so a failed review is still cleaned up.
+      currentCase = await approveTestcase(human, projectId, testcaseId!);
     }
     expect(currentCase.status).toBe("Approved");
     expect(currentCase.externalId).toBeTruthy();
@@ -482,6 +482,8 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
     await runExecutable(process.execPath, ["--input-type=module", "-e", generatorScript, packetPath, temp], {
       cwd: temp, timeout: 30_000,
     });
+    const generatedPath = path.join(temp, packet.target.path);
+    const generatedDigest = createHash("sha256").update(await readFile(generatedPath)).digest("hex");
 
     const reporterPath = path.resolve(__dirname, "../../sdk/playwright-reporter/dist/index.js");
     const cliPath = path.resolve(__dirname, "../node_modules/@playwright/test/cli.js");
@@ -506,6 +508,9 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
         TESBO_JOURNEY_TOKEN: fixtureCredential, TESBO_JOURNEY_EVIDENCE_PATH: evidencePath,
         NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost",
       };
+      // Re-execute the same emitted spec; a previous report or modified oracle
+      // cannot count as a fresh retest of this selection.
+      expect(createHash("sha256").update(await readFile(generatedPath)).digest("hex")).toBe(generatedDigest);
       await rm(path.join(temp!, "report.json"), { force: true });
       let succeeded = false;
       let stdout = "";
@@ -624,13 +629,18 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
         testcaseId, cycleId: corrected.runId, executionId: corrected.executionId
       } });
       expect(linked.ok()).toBe(true);
-      const links = (await linked.json()).links;
+      const bugRead = await human.get("/api/bugs/" + bugId);
+      expect(bugRead.status()).toBe(200);
+      const links = (await bugRead.json()).links;
       expect(links).toHaveLength(2);
       expect(links).toEqual(expect.arrayContaining([
         expect.objectContaining({ cycleId: defectRun.runId, executionId: defectRun.executionId, testcaseId }),
         expect.objectContaining({ cycleId: corrected.runId, executionId: corrected.executionId, testcaseId })
       ]));
       expect((await readFailure()).results).toEqual(original.results);
+      const correctedRead = await human.get(project + "/automation/runs/" + corrected.runId);
+      expect(correctedRead.status()).toBe(200);
+      expect((await correctedRead.json()).results).toEqual(corrected.detail.results);
       expect(await readManual()).toEqual(pending);
       const retained = await human.get("/api/cycles/" + manualRetestId);
       expect(retained.status()).toBe(200);
