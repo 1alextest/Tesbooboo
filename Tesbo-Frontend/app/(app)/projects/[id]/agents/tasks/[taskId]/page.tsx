@@ -655,6 +655,8 @@ export default function ZyraTaskDetailPage() {
   const bundleCriteria = Array.isArray(bundleRequirement?.criteria) ? bundleRequirement.criteria : [];
   const skillsResolved = task.skillContext?.status === "resolved";
   const bundleSkillAssignments = Array.isArray(task.skillContext?.assignments) ? task.skillContext.assignments : [];
+  const missingSkillTargets = Array.isArray(task.skillContext?.missing) ? task.skillContext.missing : [];
+  const conflictingSkillTargets = Array.isArray(task.skillContext?.conflicts) ? task.skillContext.conflicts : [];
   const allDraftsSelected = task.drafts.length > 0 && selectedDrafts.length === task.drafts.length;
   const copyableDrafts = selectedDrafts.length > 0 ? selectedDrafts.map((i) => task.drafts[i]) : task.drafts;
   const draftsTsv = toTsv(
@@ -828,9 +830,19 @@ export default function ZyraTaskDetailPage() {
               {bundleLink && (
                 <div data-testid="requirement-bundle-link">
                   <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Link intent</p>
-                  <p className="mt-1 text-sm text-[var(--foreground)]">
-                    Criteria: {Array.isArray(bundleLink.criterionKeys) ? bundleLink.criterionKeys.join(", ") : "—"}
-                  </p>
+                  {Array.isArray(bundleLink.criterionKeys) && bundleLink.criterionKeys.length > 0 ? (
+                    <ul aria-label="Proposed case link criteria" className="mt-1 space-y-1 text-sm text-[var(--foreground)]">
+                      {bundleLink.criterionKeys.map((key, index) => {
+                        const criterion = bundleCriteria.find((item) => item.key === key);
+                        return (
+                          <li key={`${key}-${index}`}>
+                            <span className="font-mono">{key}</span>{" · "}
+                            {criterion ? (criterion.normative === false ? "Context only" : "Acceptance criterion") : "Criterion details unavailable"}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : <p className="mt-1 text-sm text-[var(--muted)]">No criterion keys recorded.</p>}
                 </div>
               )}
               {bundleSkillAssignments.length > 0 && (
@@ -858,7 +870,8 @@ export default function ZyraTaskDetailPage() {
                   {task.requirementDecision.reason && ` Reason: ${task.requirementDecision.reason}`}
                 </p>
               )}
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
+                <p>
                 {requirementApplied
                   ? "This bundle is published. Open the exact submitted version and its truthful coverage in the review panel below."
                   : done
@@ -866,9 +879,28 @@ export default function ZyraTaskDetailPage() {
                     : skillsResolved
                       ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates the exact submitted requirement revision and only the case/link candidates included in the bundle. Requirement approval and selected existing link activation remain separate human decisions."
                       : task.skillContext?.status === "conflict"
-                        ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
-                        : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
-              </p>
+                        ? "Publication is blocked. Multiple Skill assignments matched a required operation when this proposal was staged."
+                        : task.skillContext?.status === "unassigned" && missingSkillTargets.length > 0
+                          ? "Publication is blocked. A required operation had no approved Skill assigned when this proposal was staged."
+                          : "Publication is blocked. This proposal has no verified record of the required Skill assignments."}
+                </p>
+                {!done && !skillsResolved && <>
+                  {(missingSkillTargets.length > 0 || conflictingSkillTargets.length > 0) && (
+                    <ul className="mt-2 list-disc pl-5" aria-label="Skill assignments at staging">
+                      {missingSkillTargets.map(({ module, subtype, operation }) => (
+                        <li key={`${module}/${subtype}/${operation}`}>{module} / {subtype} / {operation} · Unassigned</li>
+                      ))}
+                      {conflictingSkillTargets.map(({ module, subtype, operation, matches }) => (
+                        <li key={`${module}/${subtype}/${operation}`}>{module} / {subtype} / {operation} · {matches} matching assignments</li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-2">
+                    A project owner or manager can review the current assignments. Once each required operation resolves to exactly one approved Skill, stage a refreshed proposal for review.
+                  </p>
+                  <Link className="mt-1 inline-block underline" href={`/projects/${projectId}/settings/skills?tab=assignments`}>View current Skill assignments</Link>
+                </>}
+              </div>
             </div>
             {!done && (
               <div className="flex shrink-0 gap-2">

@@ -7,7 +7,13 @@ import { StorageModule } from "../storage/storage.module";
 import { GraphChangeReviewDelivery } from "./graph-change-review.delivery";
 import { GraphReviewRunLinks } from "./graph-review-run-links";
 import { GraphChangeReviewRecovery } from "./graph-change-review.recovery";
-import { GraphReviewRecoveryProcessor, GRAPH_QA_RECOVERY_QUEUE, GRAPH_QA_RECOVERY_JOB, GRAPH_QA_RECOVERY_SCHEDULER } from "./graph-change-review.recovery.processor";
+import {
+  GraphReviewRecoveryProcessor,
+  GraphReviewScopedRecoveryProcessor,
+  GRAPH_QA_RECOVERY_QUEUE,
+  GRAPH_QA_RECOVERY_SCOPED_QUEUE
+} from "./graph-change-review.recovery.processor";
+import { graphRecoveryRegistration } from "./graph-change-review.recovery.mode";
 import { DatabaseService } from "../database/database.service";
 import { CurrentCacheGraphReader } from "./current-cache-graph.reader";
 import { CurrentCacheGraphHistory } from "./current-cache-graph.history";
@@ -51,7 +57,11 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 }
 
 @Module({
-  imports: [LegacyModule, StorageModule, BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE })],
+  imports: [
+    LegacyModule,
+    StorageModule,
+    BullModule.registerQueue({ name: GRAPH_QA_RECOVERY_QUEUE }, { name: GRAPH_QA_RECOVERY_SCOPED_QUEUE })
+  ],
   controllers: [
     GraphChangeReviewController,
     ModelStudioPreviewController,
@@ -67,6 +77,7 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
     GraphReviewRunLinks,
     GraphChangeReviewRecovery,
     GraphReviewRecoveryProcessor,
+    GraphReviewScopedRecoveryProcessor,
     ProjectSourceBindingManagement,
     {
       provide: ProjectSourceBindingReader,
@@ -86,18 +97,33 @@ export function parseApprovedSourceCheckouts(raw: string): ApprovedSourceRegistr
 export class GraphChangeReviewModule implements OnModuleInit {
   private readonly logger = new Logger(GraphChangeReviewModule.name);
 
-  constructor(@InjectQueue(GRAPH_QA_RECOVERY_QUEUE) private readonly recoveryQueue: Queue) {}
+  constructor(
+    @InjectQueue(GRAPH_QA_RECOVERY_QUEUE) private readonly recoveryQueue: Queue,
+    @InjectQueue(GRAPH_QA_RECOVERY_SCOPED_QUEUE) private readonly scopedRecoveryQueue: Queue,
+    private readonly config: AppConfigService
+  ) {}
 
   async onModuleInit(): Promise<void> {
     // Redis scheduler registration is cluster-wide. A disabled instance must
     // never delete the shared scheduler while other instances remain enabled.
-    // The processor itself refuses jobs when this flag is not set.
-    if (process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED !== "1") return;
-    await this.recoveryQueue.upsertJobScheduler(
-      GRAPH_QA_RECOVERY_SCHEDULER,
+    // The processors themselves refuse jobs whose scope does not match this instance.
+    const registration = graphRecoveryRegistration(
+      this.config.graphQaRecoveryMode,
+      this.config.graphQaRecoveryProjectId
+    );
+    if (!registration) return;
+    if ("error" in registration) {
+      // Fail closed: an incomplete project scope must not degrade into a global sweep.
+      this.logger.warn(registration.error);
+      return;
+    }
+    const queue = registration.queue === "project" ? this.scopedRecoveryQueue : this.recoveryQueue;
+    await queue.upsertJobScheduler(
+      registration.scheduler,
       { pattern: "*/10 * * * *", tz: "UTC" },
-      { name: GRAPH_QA_RECOVERY_JOB, data: {} }
-    ).then(() => this.logger.log("QA review notification recovery registered every 10 minutes"))
-      .catch((error: unknown) => this.logger.warn(`Recovery scheduler registration failed: ${String(error)}`));
+      { name: registration.job, data: registration.data }
+    ).then(() => this.logger.log(
+      `QA review notification recovery registered every 10 minutes (${registration.queue} scope)`
+    )).catch((error: unknown) => this.logger.warn(`Recovery scheduler registration failed: ${String(error)}`));
   }
 }
