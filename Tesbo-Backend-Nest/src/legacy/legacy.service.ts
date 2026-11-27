@@ -16665,6 +16665,15 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       : task;
   }
 
+  // All three governed inlets share the existing project/principal/request
+  // uniqueness and lock. Never recover a receipt owned by another task lane,
+  // even when its digest happens to match.
+  private assertNativeProposalRequestReplay(row: Body, digest: string, provider: string): void {
+    if (row.task_kind !== "governed_proposal" || row.provider !== provider || row.proposal_request_digest !== digest) {
+      throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+    }
+  }
+
   /** Native no-model inlet: stores unpublished operations in the existing review task owner. */
   async stageTestcaseChanges(projectId: string, userId: string | null | undefined, body: Body, principal: TestcaseProposalPrincipal) {
     if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
@@ -16710,9 +16719,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       const authority = await this.requireProposalAuthority(client, projectId, uid);
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_testcase_changes");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
-      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
-        if (prior.rows[0].proposal_request_digest !== requestDigest) throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_proposal");
         return String(prior.rows[0].id);
       }
       const ids = Array.from(new Set(operations.filter((op: Body) => op.testcaseId).map((op: Body) => String(op.testcaseId)))).sort();
@@ -16772,11 +16781,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_requirement_change_bundle");
       // Both proposal inlets share the same unique request identity and serialization owner.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
-      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
-        if (prior.rows[0].proposal_request_digest !== requestDigest) {
-          throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
-        }
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_requirement_proposal");
         return String(prior.rows[0].id);
       }
       // A lost response recovers the committed task above even if a reference has since changed.
@@ -16906,12 +16913,10 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority,
         documentType === "user_manual" ? "propose_manual_revision" : "propose_policy_revision");
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`managed-document-proposal:${projectId}:${principalKey}:${requestKey}`]);
-      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
-        if (prior.rows[0].proposal_request_digest !== requestDigest) {
-          throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
-        }
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_document_proposal");
         return String(prior.rows[0].id);
       }
       if (operation.operation === "create") {

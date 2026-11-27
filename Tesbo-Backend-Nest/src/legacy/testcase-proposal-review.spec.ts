@@ -94,7 +94,7 @@ describe("native testcase proposal review boundary", () => {
       if (sql.startsWith("SELECT scopes FROM api_tokens")) return {rows:[{scopes:"read,write"}]};
       if (sql.startsWith("SELECT id,proposal_request_digest")) return {rows:stored ? [stored] : []};
       if (sql.includes("INSERT INTO ai_generation_requests")) {
-        stored={id:task,project_id:project,generated_payload:JSON.parse(String(values[4])),proposal_request_digest:values[7],proposal_provenance:JSON.parse(String(values[8])),task_status:"in_review"};
+        stored={id:task,project_id:project,task_kind:"governed_proposal",provider:"external_proposal",generated_payload:JSON.parse(String(values[4])),proposal_request_digest:values[7],proposal_provenance:JSON.parse(String(values[8])),task_status:"in_review"};
         return {rows:[{id:task}]};
       }
       return {rows:[]};
@@ -116,6 +116,14 @@ describe("native testcase proposal review boundary", () => {
     expect(clientQuery.mock.calls.filter(([sql])=>sql.includes("INSERT INTO audit_logs"))[0][1]?.[1]).toBeNull();
     expect(clientQuery.mock.calls.some(([sql])=>/INSERT INTO (testcases|suites)|workspace_ai_keys/.test(sql))).toBe(false);
     await expect(f.svc.stageTestcaseChanges(project,user,{...request,operations:[{opType:"create",draft:{title:"Different"}}]},principal)).rejects.toMatchObject({status:409});
+    expect(clientQuery.mock.calls.filter(([sql])=>sql.includes("INSERT INTO ai_generation_requests"))).toHaveLength(1);
+    const prior=stored!;
+    const readsBefore=f.query.mock.calls.length;
+    for(const [kind,lane] of [["external_qa_work","external_qa_work"],["governed_proposal","external_document_proposal"],["legacy_generation_review","openai"]]){
+      stored={...prior,task_kind:kind,provider:lane};
+      await expect(f.svc.stageTestcaseChanges(project,user,request,principal)).rejects.toMatchObject({status:409,response:{code:"PROPOSAL_REQUEST_CONFLICT"}});
+    }
+    expect(f.query.mock.calls.length).toBe(readsBefore);
     expect(clientQuery.mock.calls.filter(([sql])=>sql.includes("INSERT INTO ai_generation_requests"))).toHaveLength(1);
   });
 });
@@ -387,7 +395,7 @@ describe("requirement bundle lifecycle boundary", () => {
     f.query.mockImplementation(async sql => {
       if(sql.startsWith("SELECT p.*"))return {rows:[{id:project,caller_role:"owner",workspace_role:"owner",settings:{}}],rowCount:1};
       if(sql.startsWith("SELECT scopes FROM api_tokens"))return {rows:[{scopes:"read,write"}],rowCount:1};
-      if(sql.startsWith("SELECT id,proposal_request_digest"))return {rows:[{id:task,proposal_request_digest:proposalDigest({title:"Prior staged request",operations:normalized})}],rowCount:1};
+      if(sql.startsWith("SELECT id,proposal_request_digest"))return {rows:[{id:task,task_kind:"governed_proposal",provider:"external_requirement_proposal",proposal_request_digest:proposalDigest({title:"Prior staged request",operations:normalized})}],rowCount:1};
       return {rows:[],rowCount:0};
     });
     const validate=jest.spyOn(f.internals,"assertRequirementDocumentBase").mockRejectedValue(new Error("The live document has changed"));
@@ -536,5 +544,21 @@ describe("native task kind mutation boundary", () => {
       expect(params?.slice(0,2)).toEqual([task,project]);
     }
     expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("governed proposal replay ownership", () => {
+  it.each(["external_proposal","external_requirement_proposal","external_document_proposal"])("requires the exact governed producer %s in addition to digest",provider=>{
+    const query=jest.fn(),transaction=jest.fn();
+    const svc=makeLegacy({query,transaction} as unknown as DatabaseService);
+    const guard=(svc as unknown as Record<string,any>).assertNativeProposalRequestReplay.bind(svc);
+    const digest="a".repeat(64), row={task_kind:"governed_proposal",provider,proposal_request_digest:digest};
+    expect(()=>guard(row,digest,provider)).not.toThrow();
+    expect(()=>guard({...row,task_kind:"external_qa_work"},digest,provider)).toThrow();
+    expect(()=>guard({...row,task_kind:undefined},digest,provider)).toThrow();
+    expect(()=>guard({...row,provider:"unrelated_provider"},digest,provider)).toThrow();
+    expect(()=>guard({...row,proposal_request_digest:"b".repeat(64)},digest,provider)).toThrow();
+    expect(query).not.toHaveBeenCalled(); expect(transaction).not.toHaveBeenCalled();
   });
 });
