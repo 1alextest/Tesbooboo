@@ -116,7 +116,7 @@ test("exact linked testcase navigation preserves identity with duplicate titles 
   let projectId: string | undefined;
   const title = `E2E exact linked case ${Date.now()}`;
   try {
-    projectId = (await createProject(api, { name: `Exact linked case ${Date.now()}` })).id;
+    projectId = (await createProject(api, { name: `Exact link ${Date.now()}` })).id;
     const base = `/api/projects/${projectId}/testcases`;
     const create = async (attachments: string) => {
       const response = await api.post(base, { data: { title, attachments } });
