@@ -3,6 +3,111 @@ import type { DatabaseService } from "../database/database.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import { nativeProposalProducerIdentity, proposalDigest } from "./testcase-proposal-review";
 
+describe("ordinary draft actions preserve the reviewed selection", () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  function draftFixture() {
+    let version = 0;
+    const row: Record<string, any> = {
+      id: task, project_id: project, provider: "fixture", task_status: "in_review",
+      generated_payload: ["A", "B", "C"].map(title => ({ opType: "create", draft: { title, stepsJson: "[]" } })),
+      activity_log: [], save_events: [], saved_count: 0,
+    };
+    let afterCommit: (() => void) | undefined;
+    const read = () => ({ ...structuredClone(row), proposal_snapshot: {
+      taskId: task, projectId: project, version, taskStatus: row.task_status,
+      operations: structuredClone(row.generated_payload), targets: [],
+      dependencies: { revision: 0, customFields: [], customTags: [], suites: [] },
+    } });
+    const query = jest.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql.startsWith("SELECT r.*")) return { rows: [read()] };
+      if (sql.includes("FROM ai_generation_requests")) return { rows: [structuredClone(row)] };
+      if (sql.includes("UPDATE ai_generation_requests") && sql.includes("generated_payload = $3")) {
+        row.generated_payload = JSON.parse(String(values[2]));
+        if (sql.includes("activity_log = activity_log")) {
+          const activity = values[sql.includes("saved_count+$4") ? 4 : 3];
+          row.activity_log.push(...JSON.parse(String(activity)));
+        }
+        if (sql.includes("task_status = 'in_review'")) row.task_status = "in_review";
+        version += 1;
+        return { rows: [structuredClone(row)] };
+      }
+      return { rows: [] };
+    });
+    const transaction = jest.fn(async (work: (client: { query: typeof query }) => Promise<unknown>) => {
+      const result = await work({ query });
+      const next = afterCommit;
+      afterCommit = undefined;
+      next?.();
+      return result;
+    });
+    const svc = makeLegacy({ query, transaction } as unknown as DatabaseService);
+    jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: project, caller_role: "owner" } as never);
+    const internals = svc as unknown as Record<string, any>;
+    const mutate = (kind: "edit" | "delete", index: number, revision: unknown, fields = { title: "Changed" }) =>
+      kind === "edit"
+        ? internals.zyraEditDraft(project, user, task, index, { ...fields, expectedProposalRevision: revision }, human)
+        : internals.zyraDeleteDraft(project, user, task, index, { expectedProposalRevision: revision }, human);
+    return { svc, internals, row, query, transaction, mutate,
+      review: () => svc.zyraTask(project, user, task),
+      afterCommit: (callback: () => void) => { afterCommit = callback; },
+      change: () => { version += 1; },
+    };
+  }
+
+  it.each(["edit", "delete"] as const)("refuses a stale %s after an earlier draft was removed", async kind => {
+    const f = draftFixture();
+    const reviewed = await f.review();
+    const removed = await f.mutate("delete", 0, reviewed.proposalRevision);
+    expect(removed.drafts.map((draft: any) => draft.title)).toEqual(["B", "C"]);
+    const before = structuredClone(f.row);
+    await expect(f.mutate(kind, 1, reviewed.proposalRevision)).rejects.toMatchObject({ status: 409, response: { code: "PROPOSAL_REVIEW_CONFLICT" } });
+    expect(f.row).toEqual(before);
+    const fresh = await f.review();
+    const result = await f.mutate(kind, 0, fresh.proposalRevision);
+    expect(result.drafts.map((draft: any) => draft.title)).toEqual(kind === "edit" ? ["Changed", "C"] : ["C"]);
+  });
+
+  it.each(["edit", "delete"] as const)("requires a well-formed reviewed revision for %s", async kind => {
+    for (const revision of [undefined, null, "", "bad", 1]) {
+      const f = draftFixture();
+      const before = structuredClone(f.row);
+      await expect(f.mutate(kind, 0, revision)).rejects.toMatchObject({ status: 400, response: { code: "PROPOSAL_REVIEW_REQUIRED" } });
+      expect(f.row).toEqual(before);
+      expect(f.transaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["edit", "delete"] as const)("keeps a closed batch and its late-generation fence intact after %s", async kind => {
+    const f = draftFixture();
+    f.row.task_status = "done";
+    f.row.activity_log = [{ title: "Closed task" }];
+    const reviewed = await f.review();
+    const before = structuredClone(f.row);
+    await expect(f.mutate(kind, 0, reviewed.proposalRevision)).rejects.toMatchObject({ status: 409 });
+    expect(f.row).toEqual(before);
+    expect(await f.internals.appendZyraReviewProposals(project, "session", task, [{ opType: "create", draft: { title: "Late" } }]))
+      .toEqual({ closed: true, base: 0 });
+    expect(f.row).toEqual(before);
+  });
+
+  it("returns its own committed snapshot rather than adopting another actor's subsequent mutation", async () => {
+    const f = draftFixture();
+    const reviewed = await f.review();
+    f.afterCommit(() => {
+      f.row.generated_payload.unshift({ opType: "create", draft: { title: "Another actor" } });
+      f.change();
+    });
+    const result = await f.mutate("delete", 0, reviewed.proposalRevision);
+    expect(result.drafts.map((draft: any) => draft.title)).toEqual(["B", "C"]);
+    const current = await f.review();
+    expect(current.drafts.map((draft: any) => draft.title)).toEqual(["Another actor", "B", "C"]);
+    expect(result.proposalRevision).not.toBe(current.proposalRevision);
+    await expect(f.mutate("delete", 0, result.proposalRevision)).rejects.toMatchObject({ status: 409 });
+    expect((await f.review()).drafts.map((draft: any) => draft.title)).toEqual(["Another actor", "B", "C"]);
+  });
+});
+
 const project = "00000000-0000-4000-8000-000000000001";
 const user = "00000000-0000-4000-8000-000000000002";
 const token = "00000000-0000-4000-8000-000000000003";

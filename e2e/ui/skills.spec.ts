@@ -2476,7 +2476,7 @@ test.describe("governed skills operator journey (UI)", () => {
       });
       expect(qaApply.status()).toBe(403);
       // The generic draft editor is not the owner/manager decision surface either.
-      const genericDelete = await ownerApi.delete(`${base()}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false });
+      const genericDelete = await ownerApi.delete(`${base()}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false });
       expect(genericDelete.status()).toBe(409);
       expect((await genericDelete.json()).code).toBe("MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE");
 

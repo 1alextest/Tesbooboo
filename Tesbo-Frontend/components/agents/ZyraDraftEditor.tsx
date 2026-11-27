@@ -52,11 +52,13 @@ function parseSteps(raw: unknown): Step[] {
 export function ZyraDraftEditor({
   row,
   saving,
+  saveDisabled = false,
   onCancel,
   onSave,
 }: {
   row: ZyraChatTestcaseRow;
   saving: boolean;
+  saveDisabled?: boolean;
   onCancel: () => void;
   onSave: (values: ZyraDraftEditValues) => void;
 }) {
@@ -169,7 +171,7 @@ export function ZyraDraftEditor({
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="secondary" size="sm" onClick={onCancel} disabled={saving}>{t("cancel")}</Button>
-        <Button size="sm" onClick={handleSave} disabled={saving || !title.trim()}>{saving ? t("savingDots") : t("editor.saveEdit")}</Button>
+        <Button size="sm" onClick={handleSave} disabled={saving || saveDisabled || !title.trim()}>{saving ? t("savingDots") : t("editor.saveEdit")}</Button>
       </div>
     </div>
   );

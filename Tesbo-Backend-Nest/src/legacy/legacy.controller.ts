@@ -1827,9 +1827,10 @@ export class LegacyController {
     @Req() req: AuthenticatedRequest,
     @Param("projectId") projectId: string,
     @Param("taskId") taskId: string,
-    @Param("draftIndex") draftIndex: string
+    @Param("draftIndex") draftIndex: string,
+    @Body() body: Record<string, any>
   ) {
-    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex), {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
+    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex), body ?? {}, {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Patch("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")

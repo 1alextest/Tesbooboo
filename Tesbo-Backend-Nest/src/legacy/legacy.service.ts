@@ -23925,20 +23925,31 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
-  async zyraDeleteDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, principal?: TestcaseProposalPrincipal) {
+  private async lockReviewedZyraDraftBatch(client: PoolClient, projectId: string, taskId: string, revision: string): Promise<Body> {
+    // The index is meaningful only inside the exact snapshot the caller reviewed. Serializing
+    // writers alone would still let a stale index select the next item after a deletion.
+    const result = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
+    const row = result.rows[0];
+    if (!row) throw new NotFoundException({ error: "Zyra task not found" });
+    this.assertGuardedPublicationAvailable(row);
+    this.assertOrdinaryProposalMutation(row);
+    if (row.task_status !== "in_review") {
+      throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This batch is not awaiting review. Reload it before changing drafts." });
+    }
+    const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+    if (reviewed.proposal_review_revision !== revision) {
+      throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The drafts or their dependencies changed since review. Reload and review them before changing a draft." });
+    }
+    return row;
+  }
+
+  async zyraDeleteDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, body: Body = {}, principal?: TestcaseProposalPrincipal) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    await this.db.transaction(async (client) => {
-      // FOR UPDATE serializes this read-modify-write against any concurrent delete/edit/save on the
-      // same row — without it, two concurrent deletes (or a delete racing an edit) each read the same
-      // array, and whichever writes last silently discards the other's change.
-      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
-      if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-      this.assertGuardedPublicationAvailable(existing.rows[0]);
-      // A governed document candidate is the exact artifact the owner reviews. Deleting its only
-      // operation would destroy that artifact and rewrite the review revision.
-      this.assertOrdinaryProposalMutation(existing.rows[0]);
-      const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const committed = await this.db.transaction(async (client) => {
+      const existing = await this.lockReviewedZyraDraftBatch(client, projectId, taskId, revision);
+      const drafts = normalizeJsonArray(existing.generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
       }
@@ -23951,7 +23962,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         detail: String(removed?.title || removed?.draft?.title || `Draft ${draftIndex + 1}`),
         createdAt: now
       }];
-      const res = await client.query(
+      await client.query(
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, generated_count = GREATEST(generated_count,saved_count+$4),
              activity_log = activity_log || $5::jsonb, updated_at = now()
@@ -23959,9 +23970,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), drafts.length, JSON.stringify(activity)]
       );
-      return res.rows[0];
+      // Capture this command's exact result while its lock is held. A later external reread could
+      // adopt another writer's revision and authorize the next queued index against unseen work.
+      return this.readTestcaseProposal(client, projectId, taskId);
     });
-    return await this.zyraTask(projectId,userId,taskId);
+    return this.formatAiTask(committed);
   }
 
   // Inline edit of one pending draft's fields — the review step's "edit" action. Task-board drafts
@@ -23970,20 +23983,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   async zyraEditDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, fields: Body, principal?: TestcaseProposalPrincipal) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
+    const revision = expectedProposalRevision(fields.expectedProposalRevision);
     // Reuses the same field-length limits real testcases enforce, so an edit that would fail at
     // save time (title too long, etc.) is rejected here instead — at the point the user made it.
     this.assertTestcaseFieldLengths(fields);
-    await this.db.transaction(async (client) => {
-      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
-      if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-      this.assertGuardedPublicationAvailable(existing.rows[0]);
-      // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
-      // under the reviewer without changing the exact revision they approved.
-      this.assertOrdinaryProposalMutation(existing.rows[0]);
-      if (existing.rows[0].task_status !== "in_review") {
-        throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
-      }
-      const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
+    const committed = await this.db.transaction(async (client) => {
+      const existing = await this.lockReviewedZyraDraftBatch(client, projectId, taskId, revision);
+      const drafts = normalizeJsonArray(existing.generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
       }
@@ -24005,16 +24011,16 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         detail: String(entry.draft?.title || entry.fields?.title || `Draft ${draftIndex + 1}`),
         createdAt: now
       }];
-      const res = await client.query(
+      await client.query(
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, activity_log = activity_log || $4::jsonb, updated_at = now()
          WHERE id = $1 AND project_id = $2
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), JSON.stringify(activity)]
       );
-      return res.rows[0];
+      return this.readTestcaseProposal(client, projectId, taskId);
     });
-    return await this.zyraTask(projectId,userId,taskId);
+    return this.formatAiTask(committed);
   }
 
   private proposalActivityPrincipal(principal: TestcaseProposalPrincipal | undefined, userId: string | null | undefined) {

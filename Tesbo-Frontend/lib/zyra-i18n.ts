@@ -251,6 +251,10 @@ const EN = {
 
   // ── Review panel ────────────────────────────────────────────────────────────
   "review.checking": "Checking review status…",
+  "draft.refreshRequired": "Reload the proposal and review the remaining rows before continuing.",
+  "draft.mutationUnconfirmed": "The draft change was not confirmed. It may have been saved. Reload the proposal and review the remaining rows before continuing.",
+  "draft.editRecovery": "Your unsaved values are still in this editor. Copy any values you want to keep, then cancel the edit and reload the proposal before editing again.",
+  "draft.reload": "Reload proposal",
   "review.resolved": "This batch was already saved or closed — nothing left here to review.",
   "review.err.discard": "Failed to discard the draft.",
   "review.err.saveEdit": "Failed to save the edit.",
@@ -657,6 +661,10 @@ const RU: Record<ZyraTextKey, Entry> = {
   "composer.send": "Отправить",
 
   "review.checking": "Проверяем состояние пакета…",
+  "draft.refreshRequired": "Обновите предложение и проверьте оставшиеся строки, прежде чем продолжить.",
+  "draft.mutationUnconfirmed": "Изменение черновика не подтверждено. Возможно, оно уже сохранено. Обновите предложение и проверьте оставшиеся строки, прежде чем продолжить.",
+  "draft.editRecovery": "Несохранённые значения остались в редакторе. Скопируйте нужные значения, отмените редактирование и обновите предложение перед повторным редактированием.",
+  "draft.reload": "Обновить предложение",
   "review.resolved": "Этот пакет уже сохранён или закрыт — проверять здесь больше нечего.",
   "review.err.discard": "Не удалось отклонить черновик.",
   "review.err.saveEdit": "Не удалось сохранить изменения.",

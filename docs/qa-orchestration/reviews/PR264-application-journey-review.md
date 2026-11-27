@@ -101,3 +101,119 @@ Review input was PR head `a88fbeb8` and application source `development@97ce6b18
 The service source used by the two baseline probes has Git blob `766c7c48b9beab2a628fe2e9a4898af5e9d2d7e7`. The probes ran the actual ordinary task read, edit, delete and activity paths with synthetic inputs. The accepted new behavior must retain an authorized fresh write, reject a stale or closed write before any persisted or outgoing effect, preserve each contributor’s unpublished revision, and expose the official result on fresh read. [Pinned methods](https://github.com/1alextest/Tesbooboo/blob/97ce6b18143a62bc377f9dd7dd671fe92456d546/Tesbo-Backend-Nest/src/legacy/legacy.service.ts#L23274-L23355)
 
 Independent source and draft reviews checked identity versus Git metadata, semantic merge and compensation, prior acceptance coverage, unpublished history retention, causal attribution on tag changes, and the difference between one-adapter and two-adapter proof. Five source and specification review assignments contributed to this follow-up. The backend remains the authority for native writes. Full authenticated client, PostgreSQL, external delivery and human acceptance evidence still belongs to the implementation pilot.
+
+## Joined application assurance follow-up — 27 November 2026
+
+**Disposition: bounded repairs and verification; complete authoring acceptance remains open.**
+The user authorized the full team review and on-path corrections. This addition preserves the
+older source-pinned receipts above. It does not reinterpret them as current certification or
+introduce a ninth specification package. Every fact retains its existing writer and review owner.
+
+### Reviewed source and moving owners
+
+The independent source reviews began at `development@45ca0de3c6fb708478dbbbe4783dcb183115904a`.
+The local source assembly of #319 and #317 was `f0e865ffa2c270615cffedf018f78a041ae0ffef`;
+it was not an executed integrated release. During review, #312 merged as `5d237376`, #314 as
+`cb5163a9`, and #317 as `8b627402bb6ca6812fba73c2275b6571d0966041`. The ordinary-draft repair
+was reconciled with that development source, preserving the exact-case navigation and handoff UI.
+#319 merged into #313's branch, not directly into development. The last observed #313 head was
+`146ff36bd61b63e720e54a4d2dfb89a18e26f151`; #321 was `9c386e97875e9a68aa6ed91def8c87cb274f57ff`.
+These are observations, not merge actions by this review.
+
+The diagnostic correction is [#322](https://github.com/1alextest/Tesbooboo/pull/322), candidate
+`4f515aee940ab8b007cdb8a323d640c9b45f8a60`. The ordinary draft changes accompany this review
+addition. The wrong-version coverage display correction follows merged #312 in the same
+Requirements UI owner. Open PRs, checks and approvals must be reread before any later decision.
+
+### Eleven independent roles, with distinct evidence boundaries
+
+| Role | Contribution and resulting disposition |
+| --- | --- |
+| Blue | Located the existing draft writer and demonstrated why an array index and actor attribution do not preserve the reviewed target. Confirmed the same revision field can fence this first increment without a new draft store. |
+| Grey | Traced ordinary New task through generation, source collection, review and bulk deletion. Kept model-authored cases distinct from typed governed proposals; identified incomplete regeneration-source history and generic visible contributor labels. |
+| QA | Added stale/fresh, malformed revision, two-reviewer, ABA, wrong-batch and closed-task API discriminators. Strengthened the concurrency test to assert exactly which drafts survive, not only their count. |
+| Purple | Traced Task polling, chat remount/resync, editor state and partial acknowledgements. Required revision-bound selection, read ordering, pinned edits and explicit reconciliation preserving typed work. |
+| Green | Checked the joined handoff/reporter/native writers. Kept exact packet admission, immutable retries, build/cohort provenance and per-criterion proof with existing owners. |
+| Security | Traced human versus machine result paths, Skill metadata versus delivery, and scanner/review evidence. Identified the full-row diagnostic risk subsequently reproduced by Red. |
+| Red | Executed actual emitted Playwright controls. Duplicate rows copied an unrelated runtime response field into the actual error, JSON, console and failure-context bytes even though packet bytes were clean. |
+| Graph | Independently found old criterion text joined to current coverage by criterion key. Distinguished misleading display from the separate exact-version handoff guard and clarified case-level aggregate coverage limits. |
+| Observability/Operability | Executed the real SDK against ambiguous-acknowledgement fixtures; identified duplicate-create risk, lost diagnostics and evidence/closure proof gaps. Reviewed actual hosted job boundaries. |
+| EG | Reproduced additional parser, malformed-field, URL-userinfo and transport-token disclosure. Independently reran eight actual controls after the coupled fix. Also caught refusal tests that needed valid revisions to reach their original owner-specific guards. |
+| White | Reconciled findings and owners, kept source/local/hosted/native/human evidence separate, and required full impacted E2E files rather than treating a passing grep slice as completion. |
+
+All roles participated. Their analytical receipts are not protected human approvals, and the
+frontend implementation assignment is not counted as another independent review. A role's early
+receipt does not automatically clear a later changed head.
+
+### Consolidated findings and acceptance ownership
+
+| Finding | Correction or explicit remaining acceptance |
+| --- | --- |
+| Ordinary edit/delete could mutate a shifted index; a closed delete could alter the late-append sentinel | Require `expectedProposalRevision`, check ordinary owner, `in_review` lifecycle and exact revision under the existing row lock, then return the committed proposal snapshot from inside that transaction. No schema or draft repository is added. |
+| A fresh-looking response could adopt another actor's revision | Do not reread the proposal after committing a mutation. The service regression introduces another writer at that boundary and proves the acknowledgement still describes this mutation. |
+| Task/chat selection, delayed GETs and partial deletion could lose the user's intended target | Bind selection and editor to the reviewed revision. Fence pending reads, avoid joining a pre-write GET during reconciliation, display each committed bulk result, and require explicit reload after uncertainty. Keep unsaved editor text and Cancel. |
+| Generic refusal tests could start passing at the wrong guard | Existing Requirements and Skills callers now submit the staged revision and retain their specific governed-owner 409 assertions. A generic 400 is not equivalent evidence. |
+| Generated-test diagnostics disclosed response fields and credentials | #322 restricts cardinality inputs, validates primitive identities before equality formatting, replaces parser/request errors with fixed categories, and uses boolean URL refusals. Runtime canaries are checked in reports, output and all reported attachment bytes. Native upload/readback remains separate. |
+| Requirement coverage could attach B's evidence to A's reused criterion key | Correct the existing Requirements UI join to require the exact approved basis. Unavailable historical readings must not be rendered as false/zero or borrowed passing evidence. Keep the independent handoff ID guard. WF-23/24 and T-426/427 retain acceptance ownership. |
+| Packet basis is stronger than reporter admission by external ID | Existing handoff/reporter/native admission owner, T-459. Exercise a case edit/reapproval between selection, execution and admission; require the admitted result to retain the correct native identity and basis. A stable one-case fixture does not qualify the race. |
+| Coverage is case-evidence presence, not complete criterion/build proof | Existing T-426/T-459 and GA-AC-02. Current aggregate passing uses at least one qualifying linked case. Add two-required-criterion, old-build, mixed-environment, same-occurrence and missing-provenance acceptance; labels must disclose unknowns and scope. |
+| Three separate Runs do not prove immutable attempts within one Run | Existing T-428/T-459 and automation retry owner. A later retry can update the effective execution row. Qualify retained attempts and effective-result selection separately. |
+| Ambiguous Run/evidence acknowledgment can be retried without a stable operation identity | Existing SDK/automation/T-203/T-408. The actual SDK loopback probe produced two fixture records after a lost create acknowledgment without a key, one with a stable key, and two evidence records after an upload retry. Native duplicate consequence is inferred, not executed. Require replay-safe receipts or truthful uncertainty without breaking the reporter's nonblocking customer-test contract. |
+| Generated child failures and native evidence can be under-observed | Existing #313 owner. Current head `146ff36b` asserts authoritative Run closure and verifies bytes for every child attachment; these earlier findings are resolved in source. Unexpected child exit/timeout still needs a bounded sanitized summary before cleanup. Existing review threads remain authoritative; do not create duplicate findings or retain already-fixed cleanup claims. |
+| Automation-only fencing does not establish all-writer machine attribution | Existing #321/common execution/MCP attribution owner. Current `9c386e97` has successful hosted replay/result/evidence/close refusal coverage and 758 passing database tests across 18 suites; this qualifies its AutomationService boundary. Unchanged legacy MCP paths still pass only `ctx.userId` to the manual-result writer. Whether delegated agents may record observed manual outcomes is a product-policy decision; both allowed and forbidden designs require truthful machine provenance. |
+| Regeneration source display and member activity are incomplete | Existing Task source/provenance owners. Fresh regeneration retrieval is not necessarily appended to the displayed source history; generic user/agent labels do not establish the individual causal actor. Preserve historical unknowns. |
+| Skill resolution is not actual delivery or conformance | Existing T-422, Skills governance and member attribution. Resolve an immutable applicable method, deliver its permitted content, bind the receipt, validate structured output and evaluate semantic conformance. Do not promise identical prose merely because a client fetched a Skill. |
+
+**Lifecycle policy remains explicit.** Close task / chat Discard all currently closes the batch at
+execution time and retains its stored drafts; it does not carry an expected proposal revision.
+Changing that to discard only the snapshot reviewed requires an authorized product decision.
+The edit/delete repair does not silently change this behavior or claim universal conflict protection.
+
+### Executed evidence and unexecuted boundaries
+
+| Evidence | Actual result and scope |
+| --- | --- |
+| Ordinary-draft regression before correction | 6 failed / 1 passed; 57 unrelated tests excluded by the focused selection. Actual service methods with simulated SQL/transaction dependencies. |
+| Three existing service suites after correction | 109 passed / 0 failed / 0 pending. Stale selection, lifecycle and exact post-write response are discriminated; these are not PostgreSQL or browser receipts. |
+| API/UI implementation inventory | Eleven new API cases and nine browser cases in existing Zyra files; existing two-member concurrency and adjacent governed refusals strengthened. Type checking passed before publication. Runtime status is reported by candidate CI, not inferred from discovery. |
+| Diagnostic regression | Original top-level suite: 1 passed / 1 failed before correction. Extended correction: 2 passed / 0 failed / 0 skipped, executing 25 actual generated Playwright attempts. Positive cases and intended faults/refusals are asserted independently. |
+| EG independent final diagnostic check | Eight actual child executions: two valid controls passed; duplicate, malformed JSON, object requirement/link, socket reset and userinfo controls failed in their intended categories. No synthetic marker occurred in actual errors, full reports, stdout/stderr or any reported attachment. Exact generator blob `6079805376a2f9e6a6167a732ddb1c956b61bfda`. |
+| Hosted #319 governed journey | Actual test at `e2e/api/handoff-native-reporter.spec.ts:758` passed in job [140422976505](https://github.com/1alextest/Tesbooboo/actions/runs/45974568700/job/140422976505), head `d5eac248d82762287f103fb36cbdd1477a5d66c1`. It used disposable native Skills/proposal/apply/requirement/case/link/handoff records and actual generated Playwright/reporter execution with good, fault and corrected Runs. |
+
+The hosted governed journey does not start ordinary New task/model generation and does not
+exercise two real external authoring clients. The corrected automated execution is a separate Run;
+the prepared manual retest remains Untested. Native approval, deployment and production acceptance
+are distinct. CI selection for the ordinary-draft repair includes the complete impacted
+`api/zyra.spec.ts`, `ui/zyra.spec.ts`, `api/requirements.spec.ts` and `ui/skills.spec.ts` together,
+with `--workers=10`, after disposable setup and the narrower diagnostic slice. The existing
+PostgreSQL proposal suite remains in Behavioral quality. Product completion requires the actual
+final candidate's relevant API/UI/database results, not a green local type check.
+
+#319's stacked-base check set did not trigger DevSkim or Snyk IaC; that means not triggered, not
+passed. The later #313 head `146ff36b` targets development and DevSkim executed successfully while Snyk discovery found no supported IaC target and skipped the actual scan; its current smoke result must still be checked. Security's source classifications of existing scanner threads are proposed dispositions,
+not authorized dismissals. The full alert inventory and final-head checks retain their own gate.
+The signed App publisher was not verified as activated in this session; draft publication follows
+the existing feature-branch route and does not claim signed-publisher or human-review clearance.
+
+### Seven native domains and concrete handoff
+
+No authorized current Tesbo MCP writer was available in this session. No native IDs, test Runs,
+approvals or statuses have been invented, and no direct REST/DB substitute was used to synchronize
+product records. The following is a reviewable handoff to the existing owners:
+
+| Domain | Disposition |
+| --- | --- |
+| Requirements | Amend existing collaboration and exact-version coverage obligations; retain build/admission acceptance and the unresolved lifecycle/result policy decisions. |
+| Test Cases | Stage the concurrency, lifecycle, partial-acknowledgement, delayed-read, diagnostic and reused-criterion-key controls against those requirements; attach actual execution once available. |
+| Manuals | Explain explicit reload after uncertain draft changes, ordinary versus governed generation, and current coverage labels without implying complete criterion proof. |
+| Policies | Preserve publication and review authority. Do not automatically decide delegated manual-result recording or change what closing a batch authorizes. |
+| Tasks/Bugs | Associate each finding with its existing draft, generator, Requirements UI, reporter, SDK or attribution owner; discover actual native IDs before linking. |
+| Files/Evidence | Retain exact source pins, before/after reports, independent probe bytes and later CI receipts with original scope. |
+| Skills | Unchanged by these narrow mechanism fixes. Preventive guidance changes require the existing immutable-version, review and evaluation process. |
+
+The next bounded qualification is the two-member authoring path after delivered Skill content,
+per-member connection authority and safe existing-draft collaboration are implemented. Define one
+authoring attempt explicitly, use two supported write-capable clients, compare canonical output
+and semantic conformance, then exercise stale refusal and intentional reconciliation. A read-only
+client is a refusal control, not a second qualified author. This does not require another harness
+engine or another architecture review cycle.

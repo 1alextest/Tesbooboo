@@ -1512,7 +1512,9 @@ export async function createZyraTask(
 }
 
 export async function getZyraTask(projectId: string, taskId: string): Promise<ZyraTask> {
-  return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}`);
+  // Review reads have an ordering boundary at every mutation. A new reconciliation must not
+  // join an older in-flight GET whose snapshot predates that write.
+  return apiRequest<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}`, {});
 }
 
 export async function sendZyraFeedback(
@@ -1526,9 +1528,10 @@ export async function sendZyraFeedback(
   });
 }
 
-export async function deleteZyraTaskDraft(projectId: string, taskId: string, draftIndex: number): Promise<ZyraTask> {
+export async function deleteZyraTaskDraft(projectId: string, taskId: string, draftIndex: number, expectedProposalRevision: string): Promise<ZyraTask> {
   return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}`, {
     method: "DELETE",
+    body: { expectedProposalRevision },
   });
 }
 
@@ -1537,11 +1540,12 @@ export async function editZyraTaskDraft(
   projectId: string,
   taskId: string,
   draftIndex: number,
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
+  expectedProposalRevision: string
 ): Promise<ZyraTask> {
   return api<ZyraTask>(`/api/projects/${projectId}/agents/zyra/tasks/${taskId}/drafts/${draftIndex}`, {
     method: "PATCH",
-    body: fields,
+    body: { ...fields, expectedProposalRevision },
   });
 }
 

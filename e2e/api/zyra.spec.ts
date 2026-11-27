@@ -364,6 +364,19 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect([400, 401, 403, 404], `${what} answered with ${res.status()}: ${await res.text()}`).toContain(res.status());
   }
 
+  /** Positive fixtures read once before deciding; a refused mutation is never retried here. */
+  async function reviewedDraftRevision(taskId: string, human = asOwner): Promise<string> {
+    return (await readZyraProposal(human, url(`/agents/zyra/tasks/${taskId}`))).proposalRevision;
+  }
+
+  /** Includes bookkeeping so a refused edit/delete cannot quietly change the batch's history. */
+  function draftMutationState(taskId: string): string {
+    return scalar(`SELECT json_build_object(
+      'payload', generated_payload, 'activity', activity_log, 'revision', proposal_revision,
+      'status', task_status, 'generatedCount', generated_count, 'savedCount', saved_count,
+      'updatedAt', updated_at)::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
+  }
+
   /** A chat session, created through the product's own route. */
   async function createSession(
     title = `E2E session ${Date.now()}`,
@@ -504,7 +517,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   /** Every project-scoped Zyra route, for the authorization sweeps. */
   function zyraRoutes(
     api: APIRequestContext,
-    ids: { sessionId: string; taskId: string },
+    ids: { sessionId: string; taskId: string; proposalRevision: string },
     projectId?: string,
   ): Array<[string, () => Promise<APIResponse>]> {
     const opts = { failOnStatusCode: false } as const;
@@ -549,11 +562,15 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       ],
       [
         "DELETE tasks/:id/drafts/:index",
-        () => api.delete(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), opts),
+        () => api.delete(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), {
+          data: { expectedProposalRevision: ids.proposalRevision }, ...opts,
+        }),
       ],
       [
         "PATCH tasks/:id/drafts/:index",
-        () => api.patch(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), { data: { title: "probe" }, ...opts }),
+        () => api.patch(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), {
+          data: { expectedProposalRevision: ids.proposalRevision, title: "probe" }, ...opts,
+        }),
       ],
       ["POST tasks/:id/close", () => api.post(url(`/agents/zyra/tasks/${ids.taskId}/close`, projectId), { data: {}, ...opts })],
       [
@@ -586,7 +603,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const session = await createSession("Secret planning chat");
     const taskId = seedTask();
 
-    for (const [what, attempt] of zyraRoutes(anon, { sessionId: session.id, taskId })) {
+    for (const [what, attempt] of zyraRoutes(anon, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) })) {
       await expectRefused(await attempt(), `${what} (anonymous)`);
     }
 
@@ -606,7 +623,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const session = await createSession("Not the guest's chat");
     const taskId = seedTask();
 
-    for (const [what, attempt] of zyraRoutes(asGuest, { sessionId: session.id, taskId })) {
+    for (const [what, attempt] of zyraRoutes(asGuest, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) })) {
       await expectRefused(await attempt(), `${what} (non-member)`);
     }
     const sessions = await asGuest.get(url("/agents/zyra/chat/sessions"), { failOnStatusCode: false });
@@ -617,7 +634,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const session = await createSession();
     const taskId = seedTask();
     // The qa_engineer belongs to the main project only.
-    for (const [what, attempt] of zyraRoutes(asQa, { sessionId: session.id, taskId }, tenant!.secondProjectId)) {
+    for (const [what, attempt] of zyraRoutes(asQa, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) }, tenant!.secondProjectId)) {
       await expectRefused(await attempt(), `${what} (wrong project)`);
     }
   });
@@ -625,7 +642,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-04 a malformed project id never produces a 500", { tag: '@tesbo.testId("TES-TC-597")' }, async () => {
     const session = await createSession();
     const taskId = seedTask();
-    for (const [what, attempt] of zyraRoutes(asOwner, { sessionId: session.id, taskId }, "not-a-uuid")) {
+    for (const [what, attempt] of zyraRoutes(asOwner, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) }, "not-a-uuid")) {
       const res = await attempt();
       expect(res.status(), `${what} answered ${res.status()}: ${await res.text()}`).toBeLessThan(500);
     }
@@ -1108,7 +1125,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-18 a draft is discarded from a task without touching the others", { tag: '@tesbo.testId("TES-TC-612")' }, async () => {
     const taskId = seedTask({ drafts: 3 });
-    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), { failOnStatusCode: false });
+    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), {
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId) }, failOnStatusCode: false,
+    });
     expect(res.status(), `deleting a draft — ${await res.text()}`).toBe(200);
 
     // Asserted against the drafts themselves, not the whole payload: deleting a draft appends an
@@ -1132,9 +1151,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
     for (const index of ["9", "-1", "notanumber"]) {
       const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/${index}`), {
-        failOnStatusCode: false,
+        data: { expectedProposalRevision: await reviewedDraftRevision(taskId) }, failOnStatusCode: false,
       });
-      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBeLessThan(500);
+      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBe(400);
     }
     expect(
       scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`),
@@ -1369,7 +1388,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(response.status(), await response.text()).toBe(201);
     const staged = await response.json(), saveUrl = url(`/agents/zyra/tasks/${staged.id}/save`);
     const reviewed = await readZyraProposal(asOwner, saveUrl);
-    const edit = await asOwner.patch(url(`/agents/zyra/tasks/${staged.id}/drafts/0`), { data: { title: `Revised ${marker}` } });
+    const edit = await asOwner.patch(url(`/agents/zyra/tasks/${staged.id}/drafts/0`), { data: { expectedProposalRevision: reviewed.proposalRevision, title: `Revised ${marker}` } });
     expect(edit.status(), await edit.text()).toBe(200);
     const edited = await edit.json();
     expect(edited.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
@@ -2337,7 +2356,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-46 editing a pending chat-staged create draft updates its fields, not just the task-board shape", async () => {
     const { taskId } = seedChatReviewTask();
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { title: "Edited via review", priority: "P0", preconditions: "Signed in", description: "Sees the edited result" },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "Edited via review", priority: "P0", preconditions: "Signed in", description: "Sees the edited result" },
       failOnStatusCode: false,
     });
     expect(res.status(), `editing a chat draft — ${await res.text()}`).toBe(200);
@@ -2362,7 +2381,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         entries: [{ opType: "update", testcaseId, externalId: "E2E-1", fields: { priority: "P1" }, reason: "" }],
       });
       const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-        data: { priority: "P0" },
+        data: { expectedProposalRevision: await reviewedDraftRevision(taskId), priority: "P0" },
         failOnStatusCode: false,
       });
       expect(res.status(), `editing an update proposal — ${await res.text()}`).toBe(200);
@@ -2382,7 +2401,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const { taskId } = seedChatReviewTask();
     const before = scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { title: "x".repeat(600) },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "x".repeat(600) },
       failOnStatusCode: false,
     });
     expect(res.status(), `an overlong title — ${await res.text()}`).toBe(400);
@@ -2397,10 +2416,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const before = scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
     for (const index of ["9", "-1", "notanumber"]) {
       const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/${index}`), {
-        data: { title: "probe" },
+        data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "probe" },
         failOnStatusCode: false,
       });
-      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBeLessThan(500);
+      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBe(400);
     }
     expect(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(before);
   });
@@ -2408,7 +2427,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-50 an edit is refused once the batch is no longer in_review", async () => {
     const { taskId } = seedChatReviewTask({ status: "done" });
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { title: "too late" },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "too late" },
       failOnStatusCode: false,
     });
     expect(res.status(), `editing a resolved batch — ${await res.text()}`).toBe(409);
@@ -2445,7 +2464,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(beforeRow.expectedSummary, "the description must still be served on the review row").toBe("The order is placed");
 
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { testData: "card: 4000 0000 0000 0002" },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), testData: "card: 4000 0000 0000 0002" },
       failOnStatusCode: false,
     });
     expect(res.status(), `editing test data — ${await res.text()}`).toBe(200);
@@ -2462,8 +2481,12 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(before.status()).toBe(200);
     expect((await before.json()).drafts[0].testData, "absent test data must be '' on the row, never undefined").toBe("");
 
-    await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { data: { testData: "temporary" }, failOnStatusCode: false });
-    const cleared = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { data: { testData: "" }, failOnStatusCode: false });
+    const populated = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), testData: "temporary" }, failOnStatusCode: false,
+    });
+    expect(populated.status(), await populated.text()).toBe(200);
+    expect((await populated.json()).drafts[0].testData).toBe("temporary");
+    const cleared = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { data: { expectedProposalRevision: await reviewedDraftRevision(taskId), testData: "" }, failOnStatusCode: false });
     expect(cleared.status(), `clearing test data — ${await cleared.text()}`).toBe(200);
     const stored = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
     expect(stored[0].draft.testData, "clearing must persist as empty, not be ignored").toBe("");
@@ -2801,35 +2824,245 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         { opType: "create", draft: { suiteId: null, title: "E2E chat discard B", description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
       ],
     });
-    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { failOnStatusCode: false });
+    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId) }, failOnStatusCode: false,
+    });
     expect(res.status(), `discarding a chat-staged draft — ${await res.text()}`).toBe(200);
     const stored = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
     expect(stored.map((d: any) => d.draft.title)).toEqual(["E2E chat discard B"]);
   });
 
-  test("ZYR-A-62 two concurrent discards of different drafts from the same batch both take effect", async () => {
-    // Regression coverage for zyraDeleteDraft's read-modify-write, now locked with FOR UPDATE — an
-    // unlocked pair of concurrent deletes can each read the same array and one silently overwrite
-    // the other's removal.
+  test("ZYR-A-62 two reviewers cannot discard a shifted draft from the same reviewed revision", async () => {
+    // A row lock serializes writes but cannot preserve a user's index selection by itself. Both
+    // people select from one version; exactly one wins and the other must inspect the new version.
+    const titles = Array.from({ length: 4 }, (_, i) => `E2E concurrent discard ${i}`);
     const { taskId } = seedChatReviewTask({
-      entries: Array.from({ length: 4 }, (_, i) => ({
+      entries: titles.map(title => ({
         opType: "create",
-        draft: { suiteId: null, title: `E2E concurrent discard ${i}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" },
+        draft: { suiteId: null, title, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" },
         reason: "",
       })),
     });
+    const ownerRevision = await reviewedDraftRevision(taskId, asOwner);
+    const managerRevision = await reviewedDraftRevision(taskId, asManager);
+    expect(managerRevision).toBe(ownerRevision);
     const [a, b] = await Promise.all([
-      asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { failOnStatusCode: false }),
-      asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), { failOnStatusCode: false }),
+      asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+        data: { expectedProposalRevision: ownerRevision }, failOnStatusCode: false,
+      }),
+      asManager.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), {
+        data: { expectedProposalRevision: managerRevision }, failOnStatusCode: false,
+      }),
     ]);
-    expect(a.status(), `first concurrent discard — ${await a.text()}`).toBeLessThan(500);
-    expect(b.status(), `second concurrent discard — ${await b.text()}`).toBeLessThan(500);
-    // Whichever commits first shifts the later indexes down by one, so which two titles survive is
-    // legitimately order-dependent — not asserted here. What FOR UPDATE actually guarantees is that
-    // an unlocked read-modify-write can't lose: both removals apply, landing on exactly 2 remaining,
-    // never 3 (one removal silently overwritten) or corrupted.
+    expect([a.status(), b.status()].sort(), `owner: ${await a.text()}; manager: ${await b.text()}`).toEqual([200, 409]);
+    const winnerIndex = a.status() === 200 ? 0 : 1;
+    const winner = await (winnerIndex === 0 ? a : b).json();
+    const survivingTitles = titles.filter((_, index) => index !== winnerIndex);
+    expect(winner.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(survivingTitles);
+    expect(winner.proposalRevision).not.toBe(ownerRevision);
+    const current = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    expect(current.proposalRevision).toBe(winner.proposalRevision);
+    expect(current.proposalSnapshot).toEqual(winner.proposalSnapshot);
+
+    const losingHuman = winnerIndex === 0 ? asManager : asOwner;
+    const intendedTitle = titles[winnerIndex === 0 ? 1 : 0];
+    const refreshed = await readZyraProposal(losingHuman, url(`/agents/zyra/tasks/${taskId}`));
+    const freshIndex = refreshed.proposalSnapshot.operations.findIndex((op: any) => op.draft.title === intendedTitle);
+    expect(freshIndex).toBeGreaterThanOrEqual(0);
+    const fresh = await losingHuman.delete(url(`/agents/zyra/tasks/${taskId}/drafts/${freshIndex}`), {
+      data: { expectedProposalRevision: refreshed.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(fresh.status(), await fresh.text()).toBe(200);
+    const finished = await fresh.json();
+    expect(finished.proposalRevision).not.toBe(refreshed.proposalRevision);
+    expect(finished.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(titles.slice(2));
     const stored = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
-    expect(stored, "a race between two discards lost one of the removals").toHaveLength(2);
+    expect(stored.map((op: any) => op.draft.title)).toEqual(titles.slice(2));
+    const activity = JSON.parse(scalar(`SELECT activity_log::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
+    const removals = activity.filter((entry: any) => entry.title === "Deleted testcase draft");
+    expect(removals).toHaveLength(2);
+    expect(removals.map((entry: any) => entry.issuerId).sort()).toEqual([tenant!.owner.userId, tenant!.manager.userId].sort());
+  });
+
+  for (const mutation of ["edit", "delete"] as const) {
+    test(`ZYR-DRAFT-REV-01 a reviewer cannot ${mutation} without a valid reviewed revision`, async () => {
+      const taskId = seedTask({ drafts: 3 });
+      const before = draftMutationState(taskId);
+      for (const revision of [undefined, null, "", "not-a-revision", 42, "A".repeat(64)]) {
+        const data = { ...(revision === undefined ? {} : { expectedProposalRevision: revision }),
+          ...(mutation === "edit" ? { title: "Must not replace the reviewed draft" } : {}) };
+        const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/1`);
+        const refused = mutation === "edit"
+          ? await asOwner.patch(endpoint, { data, failOnStatusCode: false })
+          : await asOwner.delete(endpoint, { data, failOnStatusCode: false });
+        expect(refused.status(), `${mutation} with ${String(revision)}: ${await refused.text()}`).toBe(400);
+        expect(draftMutationState(taskId)).toBe(before);
+      }
+    });
+  }
+
+  for (const shape of ["task", "chat"] as const) {
+    for (const mutation of ["edit", "delete"] as const) {
+      test(`ZYR-DRAFT-REV-02 a ${shape} reviewer cannot ${mutation} another item after an index shift`, async () => {
+        const titles = ["E2E reviewed A", "E2E reviewed B", "E2E reviewed C"];
+        const taskId = shape === "task"
+          ? seedTask({ drafts: 3, draftOverrides: titles.map(title => ({ title })) })
+          : seedChatReviewTask({ entries: titles.map(title => ({ opType: "create", draft: {
+              title, priority: "P2", stepsJson: "[]", status: "Draft",
+            } })) }).taskId;
+        const reviewed = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+        const removed = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+          data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false,
+        });
+        expect(removed.status(), await removed.text()).toBe(200);
+        const acknowledged = await removed.json();
+        expect(acknowledged.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(titles.slice(1));
+        expect(acknowledged.proposalRevision).not.toBe(reviewed.proposalRevision);
+        const beforeRefusal = draftMutationState(taskId);
+        // The manager originally selected B at index 1. C has now moved there.
+        const data = { expectedProposalRevision: reviewed.proposalRevision,
+          ...(mutation === "edit" ? { title: "E2E reviewed B, explicitly revised" } : {}) };
+        const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/1`);
+        const refused = mutation === "edit"
+          ? await asManager.patch(endpoint, { data, failOnStatusCode: false })
+          : await asManager.delete(endpoint, { data, failOnStatusCode: false });
+        expect(refused.status(), await refused.text()).toBe(409);
+        expect(draftMutationState(taskId)).toBe(beforeRefusal);
+        const refreshed = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+        expect(refreshed.proposalSnapshot).toEqual(acknowledged.proposalSnapshot);
+        expect(refreshed.proposalRevision).toBe(acknowledged.proposalRevision);
+        const freshIndex = refreshed.proposalSnapshot.operations.findIndex((op: any) => op.draft.title === titles[1]);
+        expect(freshIndex).toBe(0);
+        const freshData = { ...data, expectedProposalRevision: refreshed.proposalRevision };
+        const freshEndpoint = url(`/agents/zyra/tasks/${taskId}/drafts/${freshIndex}`);
+        const accepted = mutation === "edit"
+          ? await asManager.patch(freshEndpoint, { data: freshData, failOnStatusCode: false })
+          : await asManager.delete(freshEndpoint, { data: freshData, failOnStatusCode: false });
+        expect(accepted.status(), await accepted.text()).toBe(200);
+        const result = await accepted.json();
+        expect(result.proposalRevision).not.toBe(refreshed.proposalRevision);
+        const expectedOperations = structuredClone(refreshed.proposalSnapshot.operations);
+        if (mutation === "edit") expectedOperations[freshIndex].draft.title = "E2E reviewed B, explicitly revised";
+        else expectedOperations.splice(freshIndex, 1);
+        expect(result.proposalSnapshot.operations).toEqual(expectedOperations);
+        expect(result.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(
+          mutation === "edit" ? ["E2E reviewed B, explicitly revised", titles[2]] : [titles[2]],
+        );
+        const reopened = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+        expect(reopened.proposalRevision).toBe(result.proposalRevision);
+        expect(reopened.proposalSnapshot).toEqual(result.proposalSnapshot);
+      });
+    }
+  }
+
+  test("ZYR-DRAFT-REV-03 retrying an acknowledged partial deletion cannot discard its shifted neighbor", async () => {
+    const titles = ["A", "B", "C", "D", "E", "F"].map(name => `E2E partial ${name}`);
+    const taskId = seedTask({ drafts: 6, draftOverrides: titles.map(title => ({ title })) });
+    const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    const first = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/3`), {
+      data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(first.status(), await first.text()).toBe(200);
+    const acknowledged = await first.json();
+    const survivors = titles.filter((_, index) => index !== 3);
+    expect(acknowledged.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(survivors);
+    const afterFirst = draftMutationState(taskId);
+    // Model the original command being submitted again after its outcome was uncertain. This is
+    // an API replay control; the separate browser scenario exercises actual partial-response UI.
+    for (const index of [3, 1]) {
+      const stale = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/${index}`), {
+        data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false,
+      });
+      expect(stale.status(), await stale.text()).toBe(409);
+      expect(draftMutationState(taskId)).toBe(afterFirst);
+    }
+    const refreshed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    expect(refreshed.proposalRevision).toBe(acknowledged.proposalRevision);
+    expect(refreshed.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(survivors);
+    const next = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), {
+      data: { expectedProposalRevision: refreshed.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(next.status(), await next.text()).toBe(200);
+    const finished = await next.json();
+    expect(finished.proposalSnapshot.operations).toEqual([0, 2, 4, 5].map(index => reviewed.proposalSnapshot.operations[index]));
+    expect(finished.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual([
+      titles[0], titles[2], titles[4], titles[5],
+    ]);
+  });
+
+  test("ZYR-DRAFT-REV-04 restoring the original draft text does not revive its earlier revision", async () => {
+    const taskId = seedTask({ drafts: 2 });
+    const original = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/0`);
+    const edited = await asOwner.patch(endpoint, {
+      data: { expectedProposalRevision: original.proposalRevision, title: "E2E temporary revision" }, failOnStatusCode: false,
+    });
+    expect(edited.status(), await edited.text()).toBe(200);
+    const changed = await edited.json();
+    const restored = await asOwner.patch(endpoint, {
+      data: { expectedProposalRevision: changed.proposalRevision, title: "E2E draft 1" }, failOnStatusCode: false,
+    });
+    expect(restored.status(), await restored.text()).toBe(200);
+    const current = await restored.json();
+    expect(current.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(["E2E draft 1", "E2E draft 2"]);
+    expect(current.proposalRevision).not.toBe(original.proposalRevision);
+    expect(current.proposalRevision).not.toBe(changed.proposalRevision);
+    const beforeStale = draftMutationState(taskId);
+    const stale = await asManager.delete(endpoint, {
+      data: { expectedProposalRevision: original.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(stale.status(), await stale.text()).toBe(409);
+    expect(draftMutationState(taskId)).toBe(beforeStale);
+  });
+
+  for (const mutation of ["edit", "delete"] as const) {
+    test(`ZYR-DRAFT-REV-05 a closed task refuses ${mutation} without changing its drafts or close history`, async () => {
+      const taskId = seedTask({ drafts: 3 });
+      const beforeClose = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+      const closed = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/close`), { data: {}, failOnStatusCode: false });
+      expect(closed.status(), await closed.text()).toBe(201);
+      const reviewedClosed = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+      expect(reviewedClosed.taskStatus).toBe("done");
+      const beforeMutation = draftMutationState(taskId);
+      for (const revision of [beforeClose.proposalRevision, reviewedClosed.proposalRevision]) {
+        const data = { expectedProposalRevision: revision, ...(mutation === "edit" ? { title: "Too late" } : {}) };
+        const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/1`);
+        const refused = mutation === "edit"
+          ? await asManager.patch(endpoint, { data, failOnStatusCode: false })
+          : await asManager.delete(endpoint, { data, failOnStatusCode: false });
+        expect(refused.status(), await refused.text()).toBe(409);
+        expect(draftMutationState(taskId)).toBe(beforeMutation);
+      }
+      const state = JSON.parse(beforeMutation);
+      expect(state.payload.map((draft: any) => draft.title)).toEqual(["E2E draft 1", "E2E draft 2", "E2E draft 3"]);
+      expect(state.activity.at(-1).title).toBe("Closed task");
+      const reopened = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+      expect(reopened.taskStatus).toBe("done");
+      expect(reopened.proposalRevision).toBe(reviewedClosed.proposalRevision);
+    });
+  }
+
+  test("ZYR-DRAFT-REV-06 a revision from an identical sibling batch cannot authorize a draft mutation", async () => {
+    const firstId = seedTask({ drafts: 2 });
+    const secondId = seedTask({ drafts: 2 });
+    const first = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${firstId}`));
+    const second = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${secondId}`));
+    expect(second.proposalSnapshot.operations).toEqual(first.proposalSnapshot.operations);
+    expect(second.proposalRevision).not.toBe(first.proposalRevision);
+    const beforeFirst = draftMutationState(firstId);
+    const beforeSecond = draftMutationState(secondId);
+    const wrongBatch = await asOwner.delete(url(`/agents/zyra/tasks/${secondId}/drafts/0`), {
+      data: { expectedProposalRevision: first.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(wrongBatch.status(), await wrongBatch.text()).toBe(409);
+    expect(draftMutationState(firstId)).toBe(beforeFirst);
+    expect(draftMutationState(secondId)).toBe(beforeSecond);
+    const currentBatch = await asOwner.delete(url(`/agents/zyra/tasks/${secondId}/drafts/0`), {
+      data: { expectedProposalRevision: second.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(currentBatch.status(), await currentBatch.text()).toBe(200);
+    expect((await currentBatch.json()).proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(["E2E draft 2"]);
+    expect(draftMutationState(firstId)).toBe(beforeFirst);
   });
 
   /*

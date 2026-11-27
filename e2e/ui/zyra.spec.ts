@@ -3055,6 +3055,167 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByRole("button", { name: "Clear selection" })).toBeDisabled();
   });
 
+  function draftTaskPath(taskId: string): string {
+    return `/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${taskId}`;
+  }
+
+  async function readDraftTask(taskId: string) {
+    const response = await api.get(draftTaskPath(taskId));
+    expect(response.ok(), await response.text()).toBeTruthy();
+    return response.json();
+  }
+
+  test("ZYU-DRAFT-REV task refresh clears indexes selected from a different proposal", async ({ browser }) => {
+    const [a, b, c] = [stamp("Revision A"), stamp("Revision B"), stamp("Revision C")];
+    const taskId = seedTask({ drafts: [a, b, c].map(title => ({ title, priority: "P2", steps: [] })) });
+    // A real pending comment enables the existing task readback poll, including while in_review.
+    await seedTicketComment(taskId, { status: "pending" });
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox").check();
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    const after = await removed.json();
+
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toHaveCount(0);
+    await expect(page.getByText("0 of 2 testcases selected")).toBeVisible();
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(c)) }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("button", { name: "Delete selected", exact: true })).toBeDisabled();
+
+    // A deliberate selection after reviewing the new list addresses B's new index, never C's.
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox").check();
+    const sent = page.waitForRequest(request => request.method() === "DELETE" && new URL(request.url()).pathname === `${draftTaskPath(taskId)}/drafts/0`);
+    await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+    expect((await sent).postDataJSON()).toMatchObject({ expectedProposalRevision: after.proposalRevision });
+    await expect.poll(() => draftTitles(taskId)).toEqual([c]);
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(c)) })).toBeVisible();
+  });
+
+  test("ZYU-DRAFT-REV a delayed pre-delete GET cannot restore rows or serve as fresh reconciliation", async ({ browser }) => {
+    const [a, b, c] = [stamp("Delayed A"), stamp("Delayed B"), stamp("Delayed C")];
+    const taskId = seedTask({ drafts: [a, b, c].map(title => ({ title, priority: "P2", steps: [] })) });
+    await seedTicketComment(taskId, { status: "pending" });
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toBeVisible();
+    let ready = false;
+    let held = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route(url => url.pathname === draftTaskPath(taskId), async route => {
+      if (route.request().method() !== "GET" || held) return route.continue();
+      held = true;
+      const oldResponse = await route.fetch();
+      expect((await oldResponse.json()).drafts.map((draft: { title: string }) => draft.title)).toEqual([a, b, c]);
+      ready = true;
+      await gate;
+      await route.fulfill({ response: oldResponse });
+    });
+    try {
+      await expect.poll(() => ready, { message: "hold the actual readback captured before deletion" }).toBe(true);
+      await page.getByRole("row", { name: new RegExp(escapeRegExp(a)) }).getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 2 testcases selected")).toBeVisible();
+      expect(draftTitles(taskId)).toEqual([b, c]);
+
+      // A second write commits without an acknowledgement. Explicit reconciliation must issue
+      // a new GET instead of joining the still-held read through the generic GET deduplicator.
+      await page.route(url => url.pathname === `${draftTaskPath(taskId)}/drafts/0`, async route => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        const committed = await route.fetch();
+        expect(committed.ok(), await committed.text()).toBeTruthy();
+        await route.abort("connectionreset");
+      });
+      await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("alert")).toContainText("The draft change was not confirmed");
+      await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 1 testcase selected")).toBeVisible();
+      const delayed = page.waitForResponse(response => response.request().method() === "GET" && new URL(response.url()).pathname === draftTaskPath(taskId));
+      release();
+      await delayed;
+      // Let the fulfilled response reach React before checking that it was rejected by the fence.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 1 testcase selected")).toBeVisible();
+      expect(draftTitles(taskId)).toEqual([c]);
+    } finally {
+      release();
+    }
+  });
+
+  test("ZYU-DRAFT-REV bulk deletion keeps each acknowledgement and reconciles a lost committed response", async ({ browser }) => {
+    const [a, b, c, d] = [stamp("Bulk A"), stamp("Bulk B"), stamp("Bulk C"), stamp("Bulk D")];
+    const taskId = seedTask({ drafts: [a, b, c, d].map(title => ({ title, priority: "P2", steps: [] })) });
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox").check();
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(d)) }).getByRole("checkbox").check();
+    const before = await readDraftTask(taskId);
+    const writes: Array<{ index: number; revision: string }> = [];
+    let firstRevision = "";
+    let secondCommitted = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route(url => url.pathname.startsWith(`${draftTaskPath(taskId)}/drafts/`), async route => {
+      if (route.request().method() !== "DELETE") return route.continue();
+      writes.push({ index: Number(new URL(route.request().url()).pathname.split("/").at(-1)), revision: route.request().postDataJSON().expectedProposalRevision });
+      const response = await route.fetch();
+      expect(response.ok(), await response.text()).toBeTruthy();
+      if (writes.length === 1) {
+        firstRevision = (await response.json()).proposalRevision;
+        return route.fulfill({ response });
+      }
+      if (writes.length === 2) {
+        // The second write really commits; only its acknowledgement is lost.
+        secondCommitted = true;
+        await gate;
+        return route.abort("connectionreset");
+      }
+      return route.fulfill({ response });
+    });
+    try {
+      await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+      await expect.poll(() => secondCommitted).toBe(true);
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(d)) }), "the first acknowledgement is rendered before the batch completes").toHaveCount(0);
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }), "the unacknowledged response has not changed the visible snapshot").toBeVisible();
+      expect(writes).toEqual([{ index: 3, revision: before.proposalRevision }, { index: 1, revision: firstRevision }]);
+      expect(firstRevision).not.toBe(before.proposalRevision);
+      release();
+      await expect(page.getByRole("alert")).toContainText("The draft change was not confirmed");
+      await expect(page.getByText("0 of 3 testcases selected")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Delete selected", exact: true })).toBeDisabled();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+      expect(writes).toHaveLength(2);
+      expect(draftTitles(taskId)).toEqual([a, c]);
+
+      await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 2 testcases selected")).toBeVisible();
+      const refreshed = await readDraftTask(taskId);
+      await page.getByRole("row", { name: new RegExp(escapeRegExp(a)) }).getByRole("checkbox").check();
+      await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+      await expect.poll(() => draftTitles(taskId)).toEqual([c]);
+      expect(writes).toHaveLength(3);
+      expect(writes[2]).toEqual({ index: 0, revision: refreshed.proposalRevision });
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(c)) })).toBeVisible();
+    } finally {
+      release();
+    }
+  });
+
+  for (const status of ["in_progress", "failed", "done"]) {
+    test(`ZYU-DRAFT-REV ${status} task rows cannot be selected, saved or deleted`, async ({ browser }) => {
+      const title = stamp(`Closed review ${status}`);
+      const taskId = seedTask({ status, drafts: [{ title, priority: "P2", steps: [] }] });
+      const page = await open(browser, `/agents/tasks/${taskId}`);
+      const row = page.getByRole("row", { name: new RegExp(escapeRegExp(title)) });
+      await expect(row.getByRole("checkbox")).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+      expect(draftTitles(taskId)).toEqual([title]);
+    });
+  }
+
   test("ZYU-14 saving a draft into a new suite creates a real test case", { tag: '@tesbo.testId("TES-TC-1099")' }, async ({ browser }) => {
     const taskId = seedTask();
     const suiteName = stamp("Suite");
@@ -3148,7 +3309,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(dialog.locator("pre")).toContainText(originalTitle);
     await dialog.getByRole("combobox").selectOption("new");
     await dialog.getByRole("textbox").fill(suiteName);
-    const changed = await api.patch(`${base}/agents/zyra/tasks/${task.id}/drafts/0`, { data: { title: changedTitle } });
+    const changed = await api.patch(`${base}/agents/zyra/tasks/${task.id}/drafts/0`, { data: { title: changedTitle, expectedProposalRevision: task.proposalRevision } });
     expect(changed.ok(), await changed.text()).toBeTruthy();
     const response = page.waitForResponse((res) => isSaveRequest(task.id)(res.request()));
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -4621,6 +4782,97 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByText(/1 of 1 selected/)).toBeVisible();
   });
 
+  test("ZYU-DRAFT-REV chat remount restores selections only for the same proposal revision", async ({ browser }) => {
+    const [a, b, c] = [stamp("Remembered A"), stamp("Remembered B"), stamp("Remembered C")];
+    const { taskId } = seedChatReviewBatch({ entries: [a, b, c].map(title => ({ opType: "create", draft: { title, priority: "P2", stepsJson: "[]" } })) });
+    const page = await open(browser, "/agents/zyra");
+    await page.getByRole("button", { name: "Unselect all", exact: true }).click();
+    await page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox").check();
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: b })).toHaveCount(0);
+    await page.getByRole("button").filter({ hasText: "E2E chat review" }).first().click();
+    await expect(page.getByText(/1 of 3 selected/)).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox")).toBeChecked();
+
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: b })).toHaveCount(0);
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    await page.getByRole("button").filter({ hasText: "E2E chat review" }).first().click();
+    await expect(page.getByText(/0 of 2 selected/)).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: a })).toHaveCount(0);
+    await expect(page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("listitem").filter({ hasText: c }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("button", { name: /Save .*to repository/ })).toBeDisabled();
+    expect(draftTitles(taskId)).toEqual([b, c]);
+  });
+
+  test("ZYU-DRAFT-REV chat background resync clears stale selected indexes", async ({ browser }) => {
+    const [a, b, c] = [stamp("Polling A"), stamp("Polling B"), stamp("Polling C")];
+    const { taskId } = seedChatReviewBatch({ entries: [a, b, c].map(title => ({ opType: "create", draft: { title, priority: "P2", stepsJson: "[]" } })) });
+    // This is the persisted assistant-message state while more rows are still being generated.
+    // It enables the panel's existing fallback read; this scenario does not call a model.
+    exec(`UPDATE zyra_chat_messages SET status = 'generating' WHERE review_request_id = ${literal(taskId)};`);
+    const page = await open(browser, "/agents/zyra");
+    await expect(page.getByTestId("zyra-review-progress")).toBeVisible();
+    await page.getByRole("button", { name: "Unselect all", exact: true }).click();
+    await page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox").check();
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    await expect(page.getByRole("listitem").filter({ hasText: a })).toHaveCount(0);
+    await expect(page.getByText(/0 of 2 selected/)).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("listitem").filter({ hasText: c }).getByRole("checkbox")).not.toBeChecked();
+    expect(draftTitles(taskId)).toEqual([b, c]);
+  });
+
+  test("ZYU-DRAFT-REV chat pins the editor revision and preserves typed values across a conflict", async ({ browser }) => {
+    const [a, b, c] = [stamp("Editor A"), stamp("Editor B"), stamp("Editor C")];
+    const editedB = stamp("Reviewed B edit");
+    const { taskId } = seedChatReviewBatch({ entries: [a, b, c].map(title => ({ opType: "create", draft: { title, priority: "P2", stepsJson: "[]", testData: "original" } })) });
+    const page = await open(browser, "/agents/zyra");
+    const bRow = page.getByRole("listitem").filter({ hasText: b });
+    await bRow.getByRole("button", { name: "Edit", exact: true }).click();
+    await editorControl(bRow, "Title").fill(editedB);
+    await editorTextarea(bRow, "Test Data").fill("keep this unsaved input");
+    await expect(page.getByRole("listitem").filter({ hasText: a }).getByRole("button", { name: "Discard", exact: true })).toBeDisabled();
+    await expect(page.getByRole("listitem").filter({ hasText: c }).getByRole("button", { name: "Edit", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Discard all", exact: true })).toBeDisabled();
+
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    const current = await removed.json();
+    const sent = page.waitForRequest(request => request.method() === "PATCH" && new URL(request.url()).pathname === `${draftTaskPath(taskId)}/drafts/1`);
+    const rejected = page.waitForResponse(response => response.request().method() === "PATCH" && new URL(response.url()).pathname === `${draftTaskPath(taskId)}/drafts/1`);
+    await bRow.getByRole("button", { name: "Save edit", exact: true }).click();
+    expect((await sent).postDataJSON()).toMatchObject({ expectedProposalRevision: before.proposalRevision, title: editedB });
+    expect((await rejected).status()).toBe(409);
+    await expect(editorControl(bRow, "Title")).toHaveValue(editedB);
+    await expect(editorTextarea(bRow, "Test Data")).toHaveValue("keep this unsaved input");
+    await expect(bRow.getByRole("button", { name: "Save edit", exact: true })).toBeDisabled();
+    await expect(page.getByText(/Your unsaved values are still in this editor/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reload proposal", exact: true })).toBeDisabled();
+    expect(draftTitles(taskId)).toEqual([b, c]);
+    expect(readDraftField(taskId, c, "testData")).toBe("original");
+
+    // Recovery is an explicit cancellation and fresh review, not a silent resubmit onto C.
+    await bRow.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: a })).toHaveCount(0);
+    await expect(page.getByText(/0 of 2 selected/)).toBeVisible();
+    await bRow.getByRole("button", { name: "Edit", exact: true }).click();
+    await editorControl(bRow, "Title").fill(editedB);
+    const fresh = page.waitForRequest(request => request.method() === "PATCH" && new URL(request.url()).pathname === `${draftTaskPath(taskId)}/drafts/0`);
+    await bRow.getByRole("button", { name: "Save edit", exact: true }).click();
+    expect((await fresh).postDataJSON()).toMatchObject({ expectedProposalRevision: current.proposalRevision, title: editedB });
+    await expect(page.getByRole("listitem").filter({ hasText: editedB })).toBeVisible();
+    await expect.poll(() => draftTitles(taskId)).toEqual([editedB, c]);
+    expect(readDraftField(taskId, c, "testData")).toBe("original");
+  });
+
   test("ZYU-66 editing a proposed row updates what's displayed and what's stored", async ({ browser }) => {
     const { taskId } = seedChatReviewBatch();
     const page = await open(browser, "/agents/zyra");
@@ -4844,8 +5096,10 @@ test.describe("zyra / agents (UI)", () => {
     await editorTextarea(row, "Test Data").fill("after");
     await row.getByRole("button", { name: "Save edit" }).click();
 
-    await expect(page.getByText(/Simulated edit failure|Failed to save the edit/)).toBeVisible();
+    await expect(page.getByText(/The draft change was not confirmed/)).toBeVisible();
     await expect(row.getByRole("button", { name: "Save edit" }), "the editor must stay open so the edit isn't lost").toBeVisible();
+    await expect(row.getByRole("button", { name: "Save edit" }), "an unconfirmed write requires reconciliation before another attempt").toBeDisabled();
+    await expect(row.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
     await expect(editorTextarea(row, "Test Data")).toHaveValue("after");
     expect(readDraftField(taskId, title, "testData")).toBe("before");
   });
@@ -5887,7 +6141,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
 
     // Then generation finishes: the progress line goes, every other draft is there exactly once, and
     // the discarded one stays gone.
-    await expect(page.getByText(/19 of 19 selected/)).toBeVisible({ timeout: 60_000 });
+    // Arrival changes the review revision; new rows no longer inherit an earlier selection.
+    await expect(page.getByText(/\d+ of 19 selected/)).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId("zyra-review-progress")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Discard all" }), "available again once generation finishes").toBeEnabled();
     await expect(page.getByText(`E2E live draft 20 ${stamp}`)).toHaveCount(1);
@@ -5961,7 +6216,7 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await expect(page.getByTestId("zyra-review-progress")).toBeVisible({ timeout: 30_000 });
 
     // Generation finishes: every draft exactly once, nothing staged twice.
-    await expect(page.getByText(/20 of 20 selected/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/\d+ of 20 selected/)).toBeVisible({ timeout: 90_000 });
     await expect(page.getByTestId("zyra-review-progress")).toHaveCount(0);
     await expect(page.getByTestId("zyra-review-number")).toHaveText(Array.from({ length: 20 }, (_, i) => `${i + 1}.`));
     for (const n of [1, 10, 20]) await expect(page.getByText(`E2E switch draft ${n} ${stamp}`)).toHaveCount(1);

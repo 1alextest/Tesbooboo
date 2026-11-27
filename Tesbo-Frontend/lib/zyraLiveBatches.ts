@@ -19,7 +19,8 @@ type Listener = (event: ZyraLiveBatchEvent) => void;
 
 const listeners = new Map<string, Set<Listener>>();
 const progress = new Map<string, { staged: number; total: number; done: boolean }>();
-const selections = new Map<string, { selected: number[]; count: number }>();
+type RememberedSelection = { selected: number[]; count: number; proposalRevision: string };
+const selections = new Map<string, RememberedSelection>();
 
 export function publishZyraLiveBatch(reviewRequestId: string, event: ZyraLiveBatchEvent): void {
   if (event.kind === "draft") progress.set(reviewRequestId, { staged: event.staged, total: event.total, done: false });
@@ -52,10 +53,10 @@ export function zyraLiveBatchProgress(reviewRequestId: string): { staged: number
   return current && !current.done ? { staged: current.staged, total: current.total } : null;
 }
 
-export function rememberZyraSelection(reviewRequestId: string, selected: number[], count: number): void {
-  selections.set(reviewRequestId, { selected, count });
+export function rememberZyraSelection(reviewRequestId: string, selected: number[], count: number, proposalRevision: string): void {
+  selections.set(reviewRequestId, { selected: [...selected], count, proposalRevision });
 }
 
-export function recallZyraSelection(reviewRequestId: string): { selected: number[]; count: number } | null {
+export function recallZyraSelection(reviewRequestId: string): RememberedSelection | null {
   return selections.get(reviewRequestId) ?? null;
 }
