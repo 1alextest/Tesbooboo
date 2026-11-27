@@ -411,10 +411,10 @@ jobs:
           # cases and refuses a Draft atomically) alongside that lifecycle.
 
           npx playwright test -c playwright.config.ts \
-            api/cycles.spec.ts api/automation.spec.ts \
+            api/cycles.spec.ts api/automation.spec.ts api/handoff-native-reporter.spec.ts \
             api/executions.spec.ts api/attachments.spec.ts \
             --workers=1 --retries=0 --output=test-results-compatibility \
-            -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
+            -g "supports the create -> read -> update -> list -> delete lifecycle|supports adding and removing test cases|the same id repeated inside one request is added once|AUT-01 a full session|AUT-HANDOFF-01|adding a test case to a cycle auto-creates an Untested execution|an execution attachment uploads and appears in its list|from-cases seeds the run with its cases|from-cases refuses a Draft case"
       - name: Verify fail-closed cache fixture commands
         working-directory: e2e
         run: node --test utils/entitlement-cache-invalidate.test.cjs
