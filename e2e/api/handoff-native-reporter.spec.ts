@@ -26,6 +26,15 @@ function reportResults(report: any): any[] {
   return (report.suites ?? []).flatMap(visit);
 }
 
+function runClosureProblems(detail: any): string[] {
+  const problems: string[] = [];
+  if (detail?.status !== "Completed") problems.push("run is not Completed");
+  if (detail?.closeStatus !== "completed") problems.push("close status is not completed");
+  if (!detail?.closedAt) problems.push("closedAt is absent");
+  if (!detail?.endedAt) problems.push("endedAt is absent");
+  return problems;
+}
+
 function isReviewedUniquenessFailure(report: any): boolean {
   const results = reportResults(report);
   if (results.length !== 1 || results[0].status !== "failed" || (report.errors ?? []).length !== 0) return false;
@@ -40,7 +49,10 @@ function isReviewedUniquenessFailure(report: any): boolean {
 // packet. Playwright may add its own error-context.md on a failed attempt.
 type ReportAttachment = { name: string; path?: string; contentType: string };
 type NativeEvidence = { id: string; fileName: string; kind: string; contentType: string };
-function reconcilePacketEvidence(attachments: ReportAttachment[], evidence: NativeEvidence[]): NativeEvidence {
+function reconcilePacketEvidence(
+  attachments: ReportAttachment[],
+  evidence: NativeEvidence[]
+): { packet: NativeEvidence; observed: Array<{ file: ReportAttachment; native: NativeEvidence }> } {
   const files = attachments.filter(item => item.path);
   const packets = files.filter(item => item.name === "approved-handoff-evidence.json"
     && item.contentType === "application/json");
@@ -49,21 +61,34 @@ function reconcilePacketEvidence(attachments: ReportAttachment[], evidence: Nati
   expect(new Set(expectedNames).size, "Unique child attachment file identities").toBe(files.length);
   expect(evidence, "All observed child file attachments must be retained").toHaveLength(files.length);
   expect(new Set(evidence.map(item => item.id)).size, "Unique native evidence identities").toBe(evidence.length);
-  for (const file of files) {
+  const observed = files.map(file => {
     const matches = evidence.filter(item => item.fileName === path.basename(file.path!));
     expect(matches, "Exactly one native attachment for " + file.name).toHaveLength(1);
     expect(matches[0]).toMatchObject({ kind: "log", contentType: file.contentType });
-  }
-  return evidence.find(item => item.fileName === path.basename(packets[0].path!))!;
+    return { file, native: matches[0] };
+  });
+  const packet = observed.find(item => item.file === packets[0])!.native;
+  return { packet, observed };
 }
+
+test("AUT-HANDOFF-01 requires authoritative Run closure, not only stored results", () => {
+  const closed = { status: "Completed", closeStatus: "completed", closedAt: "2026-11-27T00:00:00Z", endedAt: "2026-11-27T00:00:00Z" };
+  expect(runClosureProblems(closed)).toEqual([]);
+  expect(runClosureProblems({ ...closed, status: "In Progress" })).toContain("run is not Completed");
+  expect(runClosureProblems({ ...closed, closeStatus: "incomplete" })).toContain("close status is not completed");
+  expect(runClosureProblems({ ...closed, closedAt: null })).toContain("closedAt is absent");
+  expect(runClosureProblems({ ...closed, endedAt: undefined })).toContain("endedAt is absent");
+});
 
 test("AUT-HANDOFF-01 reconciles packet evidence and additional failure context without hiding duplicates", () => {
   const packet = { name: "approved-handoff-evidence.json", path: "output/packet.json", contentType: "application/json" };
   const context = { name: "error-context", path: "output/error-context.md", contentType: "text/markdown" };
   const nativePacket = { id: "packet", fileName: "packet.json", kind: "log", contentType: packet.contentType };
   const nativeContext = { id: "context", fileName: "error-context.md", kind: "log", contentType: context.contentType };
-  expect(reconcilePacketEvidence([packet], [nativePacket])).toEqual(nativePacket);
-  expect(reconcilePacketEvidence([packet, context], [nativeContext, nativePacket])).toEqual(nativePacket);
+  expect(reconcilePacketEvidence([packet], [nativePacket]).packet).toEqual(nativePacket);
+  const both = reconcilePacketEvidence([packet, context], [nativeContext, nativePacket]);
+  expect(both.packet).toEqual(nativePacket);
+  expect(both.observed.map(item => item.native)).toEqual([nativePacket, nativeContext]);
   expect(() => reconcilePacketEvidence([packet, context], [nativePacket])).toThrow();
   expect(() => reconcilePacketEvidence([packet, context], [nativeContext, nativeContext])).toThrow();
   expect(() => reconcilePacketEvidence([packet, packet], [nativePacket, nativeContext])).toThrow();
@@ -128,9 +153,11 @@ function disposableTargetMatches(p: DisposableTargetProof): boolean {
       && /^\d+$/.test(p.runId) && /^\d+$/.test(p.attempt)
       && p.backendRunId === p.runId && p.backendAttempt === p.attempt
       && api.origin === "http://127.0.0.1:7000" && api.pathname === "/"
+ // DevSkim: ignore DS162092
       && !api.username && !api.password && !api.search && !api.hash
       && (db.protocol === "postgresql:" || db.protocol === "postgres:")
       && ["localhost", "127.0.0.1"].includes(db.hostname) && db.port === "5432"
+ // DevSkim: ignore DS162092
       && db.pathname === "/tesbo_ci" && !db.search && !db.hash
       && p.backendDatabase === p.database
       && /^\d+$/.test(p.pid) && listeners.length > 0
@@ -179,6 +206,7 @@ function verifyDisposableTarget(): void {
 test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process authority", () => {
   const proof: DisposableTargetProof = {
     api: "http://127.0.0.1:7000", database: "postgresql://localhost:5432/tesbo_ci",
+ // DevSkim: ignore DS162092
     backendDatabase: "postgresql://localhost:5432/tesbo_ci", hosted: "true",
     runId: "123", attempt: "1", backendRunId: "123", backendAttempt: "1", pid: "41",
     listeners: 'LISTEN 0 511 *:7000 *:* users:(("node",pid=41,fd=12))',
@@ -187,11 +215,13 @@ test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process
   };
   expect(disposableTargetMatches(proof)).toBe(true);
   expect(disposableTargetMatches({ ...proof, listeners: 'LISTEN 0 511 127.0.0.1:7000 0.0.0.0:* users:(("ssh",pid=42,fd=12))' }), "loopback tunnel").toBe(false);
+ // DevSkim: ignore DS162092
   expect(disposableTargetMatches({ ...proof, backendDatabase: "postgresql://remote.invalid:5432/tesbo_ci" }), "foreign database").toBe(false);
   expect(disposableTargetMatches({ ...proof, backendRunId: "122" }), "previous job").toBe(false);
   expect(disposableTargetMatches({ ...proof, listeners: proof.listeners + '\nLISTEN 0 511 *:7000 *:* users:(("node",pid=42,fd=13))' }), "ambiguous owners").toBe(false);
   expect(disposableTargetMatches({ ...proof, listeners: "LISTEN 0 511 *:7000 *:*" }), "no process ownership").toBe(false);
   expect(disposableTargetMatches({ ...proof, api: "http://127.0.0.1:7000/proxy" }), "unexpected base path").toBe(false);
+ // DevSkim: ignore DS162092
   expect(disposableTargetMatches({ ...proof, hosted: "false" }), "not hosted").toBe(false);
   expect(disposableTargetMatches({ ...proof, backendCwd: "/other" }), "wrong cwd").toBe(false);
   expect(disposableTargetMatches({ ...proof, database: "postgresql://localhost:5432/tesbo_prod", backendDatabase: "postgresql://localhost:5432/tesbo_prod" }), "alternate database").toBe(false);
@@ -205,6 +235,7 @@ test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process
  */
 test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, execution and evidence on pass and fault", async ({ request: human }) => {
   test.setTimeout(240_000);
+ // DevSkim: ignore DS172411
   // This proof grants a disposable API token and approves a fixture case. It must
   // never run against a staging/production Tesbo project by accidental E2E_ENV selection.
   verifyDisposableTarget();
@@ -221,6 +252,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   const targetRevision = "c".repeat(40);
   let currentCase: any;
   const fixtureCredential = randomUUID();
+ // DevSkim: ignore DS173237
   const server = createServer((req, res) => {
     if (req.headers.authorization !== "Bearer " + fixtureCredential) {
       res.writeHead(401).end();
@@ -267,8 +299,10 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", resolve);
+ // DevSkim: ignore DS162092
     });
     const coverageOrigin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
+ // DevSkim: ignore DS162092
 
     const packetBody = {
       schemaVersion: 1, purpose: "prepare_automation_change",
@@ -290,6 +324,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         id: "CONTROLLED-AUT-HANDOFF", upstreamCase: "DISPOSABLE-01",
         targetPath: "tests/journey.spec.mjs", targetBlob: "d".repeat(40),
         repoRevision: targetRevision, harnessRevision: "a468921c2bead820520a97df897168487b2b4985",
+ // DevSkim: ignore DS173237
         risks: [{ id: "R1", oracle: referenceOracle }],
       },
     };
@@ -339,6 +374,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         TESBO_JOURNEY_API_ORIGIN: coverageOrigin, TESBO_JOURNEY_COVERAGE_URL: coverageOrigin + pathname,
         TESBO_JOURNEY_TOKEN: fixtureCredential, TESBO_JOURNEY_EVIDENCE_PATH: evidencePath,
         NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost",
+ // DevSkim: ignore DS162092
       };
       let succeeded = false;
       let stdout = "";
@@ -361,6 +397,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       const nativeRead = await human.get("/api/projects/" + projectId + "/automation/runs/" + runId);
       expect(nativeRead.ok(), "The reporter-created Run must be readable through the existing API").toBe(true);
       const detail = await nativeRead.json();
+      expect(runClosureProblems(detail), "The reporter must leave a Completed, closed Run with closure timestamps").toEqual([]);
       expect(detail.summary.total).toBe(1);
       expect(detail.summary[expectedPass ? "passed" : "failed"]).toBe(1);
       const row = detail.results.find((item: any) => item.caseId === currentCase.externalId);
@@ -377,7 +414,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       if (!expectedPass) {
         expect(isReviewedUniquenessFailure(output), "The sole actual failed result must identify the reviewed uniqueness assertion and the seeded two-link fault").toBe(true);
       }
-      const packetEvidence = reconcilePacketEvidence(results[0].attachments ?? [], row.evidence);
+      const reconciled = reconcilePacketEvidence(results[0].attachments ?? [], row.evidence);
 
       const regularRead = await human.get("/api/cycles/" + runId + "/executions");
       expect(regularRead.ok()).toBe(true);
@@ -386,10 +423,17 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       expect(executions[0]).toMatchObject({ externalId: currentCase.externalId, reportedBy: "automation" });
       expect(executions[0].evidenceCount).toBe(row.evidence.length);
 
-      const fileRead = await human.get("/api/cycles/" + runId + "/executions/" + row.executionId
-        + "/attachments/" + packetEvidence.id + "/download");
-      expect(fileRead.ok(), "Native evidence must be retrievable, not merely listed").toBe(true);
-      expect(Buffer.from(await fileRead.body())).toEqual(await readFile(evidencePath));
+      // Compare every observed child file, including Playwright's failure context,
+      // with the bytes stored for that exact native attachment. Never compare a
+      // context file to the packet identity bytes.
+      for (const item of reconciled.observed) {
+        const fileRead = await human.get("/api/cycles/" + runId + "/executions/" + row.executionId
+          + "/attachments/" + item.native.id + "/download");
+        expect(fileRead.ok(), "Native evidence must be retrievable for " + item.file.name).toBe(true);
+        expect(Buffer.from(await fileRead.body()), "Stored bytes for " + item.file.name)
+          .toEqual(await readFile(item.file.path!));
+      }
+      expect(reconciled.packet.id).toBeTruthy();
       return runId;
     }
 
