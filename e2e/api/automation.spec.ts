@@ -301,19 +301,34 @@ test.describe("automation ingest - run lifecycle", () => {
         executionId, caseId: approved.externalId, status: "Failed", reportedBy: "automation",
         errorMessage: failureText, evidence: original.evidence
       });
+      const readSourceExecutions = async () => {
+        const response = await api.get(`/api/cycles/${sourceRunId}/executions`);
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const sourceExecutions = await readSourceExecutions();
+      expect(sourceExecutions).toEqual([expect.objectContaining({
+        id: executionId, testcaseId: caseId, externalId: approved.externalId,
+        status: "Failed", reportedBy: "automation", errorMessage: failureText, evidenceCount: 1
+      })]);
       const preview = async () => {
         const response = await api.get(`/api/cycles/${sourceRunId}/retests/preview`, { params: { executionIds: executionId } });
         expect(response.status()).toBe(200);
         return response.json();
       };
       const basis = await preview();
-      expect(basis.sourceRun).toMatchObject({ id: sourceRunId, source: "automation" });
+      expect(basis).toMatchObject({
+        projectId: ctxA.projectId, sourceCycleId: sourceRunId,
+        sourceRun: { id: sourceRunId, source: "automation" }
+      });
+      expect(basis.previewDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(basis.occurrences).toHaveLength(1);
       const occurrence = basis.occurrences[0];
       expect(occurrence).toMatchObject({
         sourceExecutionId: executionId, testcaseId: caseId, eligible: true, definitionChanged: false,
         sourceApprovalRevision: approved.approvalRevision,
-        sourceResult: { id: executionId, status: "Failed", reported_by: "automation" },
+        sourceCycleItemId: sourceExecutions[0].cycleItemId,
+        sourceResult: { id: executionId, status: "Failed", reported_by: "automation", error_message: failureText },
         currentCase: { id: caseId, approvalCurrent: true, approvalRevision: approved.approvalRevision }
       });
       expect(occurrence.sourceEvidence).toEqual([expect.objectContaining({ id: evidenceId })]);
@@ -328,11 +343,24 @@ test.describe("automation ingest - run lifecycle", () => {
       const receipt = await retest.json();
       retestRunId = receipt.cycleId as string;
       expect(retestRunId).not.toBe(sourceRunId);
+      expect(receipt).toMatchObject({
+        outcome: "created", sourceCycleId: sourceRunId, requestKey: reviewedIntent.requestKey,
+        available: true, replayed: false,
+        manifest: {
+          schemaVersion: 1, projectId: ctxA.projectId, sourceCycleId: sourceRunId,
+          cycleId: retestRunId, principalKind: "human_session", sourceRun: basis.sourceRun,
+          sourcePreviewDigest: basis.previewDigest,
+          targetRun: { name: reviewedIntent.name, environment: reviewedIntent.environment, buildVersion: reviewedIntent.buildVersion }
+        }
+      });
+      expect(receipt.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(receipt.manifestDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(receipt.manifest.occurrences).toHaveLength(1);
       const retained = receipt.manifest.occurrences[0];
       expect(retained).toMatchObject({
         ...occurrence, targetApprovalRevision: approved.approvalRevision
       });
+      expect(retained.targetDefinition).toEqual(occurrence.currentCase.reviewedContent);
       const readRetest = async () => {
         const response = await api.get(`/api/cycles/${retestRunId}/executions`);
         expect(response.status()).toBe(200);
@@ -340,7 +368,8 @@ test.describe("automation ingest - run lifecycle", () => {
       };
       const fresh = await readRetest();
       expect(fresh).toHaveLength(1);
-      expect(fresh[0]).toMatchObject({ id: retained.executionId, status: "Untested", executedAt: null, evidenceCount: 0 });
+      expect(fresh[0]).toMatchObject({ id: retained.executionId, cycleItemId: retained.cycleItemId,
+        testcaseId: caseId, externalId: approved.externalId, status: "Untested", executedAt: null, evidenceCount: 0 });
       expect(fresh[0].id).not.toBe(executionId);
       expect(fresh[0].actualResult).toBeFalsy();
 
@@ -350,12 +379,26 @@ test.describe("automation ingest - run lifecycle", () => {
         data: { status: "Passed", actualResult: corrected }
       })).ok()).toBeTruthy();
       expect(await readRetest()).toEqual([expect.objectContaining({
-        id: retained.executionId, status: "Passed", actualResult: corrected, evidenceCount: 0
+        id: retained.executionId, status: "Passed", reportedBy: "human", actualResult: corrected, evidenceCount: 0
       })]);
       const after = await readAutomation();
       expect(after.summary).toEqual(beforeRetest.summary);
       expect(after.results).toEqual(beforeRetest.results);
+      expect(await readSourceExecutions()).toEqual(sourceExecutions);
       expect(await preview()).toEqual(basis);
+      const currentCase = await api.get(`${project}/testcases/${caseId}`);
+      expect(currentCase.status()).toBe(200);
+      expect(await currentCase.json()).toMatchObject({
+        id: caseId, externalId: approved.externalId, status: "Approved", approvalCurrent: true,
+        editRevision: approved.editRevision, approvalRevision: approved.approvalRevision
+      });
+      const recovered = await api.get(`/api/cycles/${sourceRunId}/retests/requests/${reviewedIntent.requestKey}`);
+      expect(recovered.status()).toBe(200);
+      expect(await recovered.json()).toMatchObject({
+        outcome: "created", sourceCycleId: sourceRunId, cycleId: retestRunId,
+        requestKey: reviewedIntent.requestKey, requestDigest: receipt.requestDigest,
+        manifestDigest: receipt.manifestDigest, manifest: receipt.manifest, available: true
+      });
       const downloaded = await api.get(`/api/cycles/${sourceRunId}/executions/${executionId}/attachments/${evidenceId}/download`);
       expect(downloaded.status()).toBe(200);
       expect(await downloaded.body()).toEqual(PNG_1PX);
