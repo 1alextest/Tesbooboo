@@ -2071,16 +2071,19 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
      * the time this runs. It now refuses that status outright.
      */
     const taskId = seedTask({ status: "in_progress" });
+    const initialState = draftMutationState(taskId);
+    const initialCaseCount = scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`);
+    expect(JSON.parse(initialState).status).toBe("in_progress");
     const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
     expect(res.status(), `saving an in-progress task — ${await res.text()}`).toBe(409);
     const body = await res.json();
-    expect(body.error).toContain("generating");
-    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(
-      "in_progress",
-    );
+    expect(body.code).toBe("PROPOSAL_REVIEW_CONFLICT");
+    expect(body.error).toContain("not awaiting review");
+    expect(draftMutationState(taskId), "refused save must preserve the exact task state").toBe(initialState);
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`), "refused save must not create a testcase").toBe(initialCaseCount);
   });
 
   test("ZYR-A-37 closing an already-closed task is a true no-op, not a duplicate activity entry", async () => {
