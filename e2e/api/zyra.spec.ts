@@ -602,6 +602,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     // without a session.
     const session = await createSession("Secret planning chat");
     const taskId = seedTask();
+    const initialDraftState = draftMutationState(taskId);
+    expect(JSON.parse(initialDraftState).status).toBe("in_review");
 
     for (const [what, attempt] of zyraRoutes(anon, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) })) {
       await expectRefused(await attempt(), `${what} (anonymous)`);
@@ -615,8 +617,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       "an anonymous caller created a chat session",
     ).toBe("1");
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(
-      "awaiting_review",
+      "in_review",
     );
+    expect(draftMutationState(taskId), "refused requests must preserve the complete draft state").toBe(initialDraftState);
   });
 
   test("ZYR-A-02 no Zyra route answers a workspace member with no access to the project", { tag: '@tesbo.testId("TES-TC-595")' }, async () => {
@@ -651,6 +654,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-05 a session or task from another project is not reachable through this project's URL", { tag: '@tesbo.testId("TES-TC-598")' }, async () => {
     const session = await createSession();
     const taskId = seedTask();
+    const initialDraftState = draftMutationState(taskId);
+    expect(JSON.parse(initialDraftState).status).toBe("in_review");
 
     // Reached for through the SECOND project's URL by someone who is a member of both.
     for (const attempt of [
@@ -667,8 +672,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       expect(res.status(), `a cross-project id answered ${res.status()}: ${await res.text()}`).toBe(404);
     }
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(
-      "awaiting_review",
+      "in_review",
     );
+    expect(draftMutationState(taskId), "refused requests must preserve the complete draft state").toBe(initialDraftState);
   });
 
   // ─── Agent state with no AI provider configured ───────────────────────────
