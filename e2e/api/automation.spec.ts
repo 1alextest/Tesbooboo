@@ -247,7 +247,7 @@ test.describe("automation ingest - run lifecycle", () => {
       expect(approved.approvalRevision).toMatch(/^[a-f0-9]{64}$/);
       const source = await createRun(api, {
         name: `Original automated failure ${suffix}`, environment: "synthetic",
-        commitSha: "0123456789abcdef0123456789abcdef01234567",
+        commitSha: "0".repeat(40),
         caseIds: [approved.externalId],
       });
       expect(source.status()).toBe(201);
