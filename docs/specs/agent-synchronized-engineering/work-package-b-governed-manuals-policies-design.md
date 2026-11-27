@@ -787,8 +787,18 @@ from filenames or content alone.
   terminal `failed`; a missing OpenAI allocation remains terminal `unsupported`. A deleted file or
   archived project is never claimed, and a project archived between claim and dispatch is released to
   `pending`.
+- Background startup/periodic execution is controlled by `TESBO_KB_TRANSCRIPTION_RECOVERY_MODE` and
+  `TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID`, independently of graph recovery. Unset preserves the
+  existing automatic **global** sweep; explicit `off` registers and dispatches nothing; `project`
+  requires a UUID and constrains the same sweep to it; invalid explicit configuration fails closed.
+  The process-local timer is cleared on module shutdown. Authorized upload transcription is not gated
+  by this flag. See [knowledge-transcription-recovery-modes.md](knowledge-transcription-recovery-modes.md).
+  Native KB recovery coverage is staged separately as task
+  `aa42edf8-585c-49c1-adeb-44430752c0d4`, revision
+  `3ade16efbe499dafc222757f9ea07c18667b9630b2d36902b68047ee38e01565`, `in_review`, one unpublished
+  Draft case; manual execution remains **UNRUN**.
 - `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes, bounded to 25 rows per
-  sweep, ordered by least-recently-claimed, and can be scoped to one project for tests. It claims before
+  sweep, ordered by least-recently-claimed, and can be scoped to one project. It claims before
   reading bytes or dispatching, so overlapping sweeps and a live worker cannot both own the row; fencing
   prevents duplicate state effects. It cannot prevent a *repeat provider call* if the process crashes
   after the provider returned but before the result is persisted — the Whisper endpoint has no

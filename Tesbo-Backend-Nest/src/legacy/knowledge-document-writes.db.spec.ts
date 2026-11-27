@@ -130,14 +130,18 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     jest.spyOn(svc as unknown as { enqueueEmbedding: (...args: unknown[]) => void }, "enqueueEmbedding").mockReturnValue(undefined);
     return svc;
   }
-  function fileService(dbPool = pool) {
+  function fileService(dbPool = pool, config: Record<string, unknown> = {}) {
     const storage = {
       put: jest.fn().mockResolvedValue(undefined),
       getBuffer: jest.fn().mockResolvedValue(Buffer.from("stored body")),
       delete: jest.fn().mockResolvedValue(undefined)
     };
     const planLimits = { assertStorageAvailable: jest.fn().mockResolvedValue(undefined) };
-    const svc = makeLegacy(new DatabaseService(dbPool), { storage: storage as never, planLimits: planLimits as never });
+    const svc = makeLegacy(new DatabaseService(dbPool), {
+      storage: storage as never,
+      planLimits: planLimits as never,
+      config: config as never
+    });
     jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: projectId, organization_id: orgId } as never);
     const activity = jest.spyOn(svc, "logProjectActivity").mockResolvedValue(undefined);
     const internals = svc as unknown as { enqueueEmbedding: (...args: unknown[]) => void; notifyKnowledgeItem: (...args: unknown[]) => Promise<void> };
@@ -1529,6 +1533,86 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
         expect((await setup.query("SELECT extraction_claim_token FROM knowledge_files WHERE id = $1", [abandoned.id])).rows[0].extraction_claim_token).toBeNull();
       } finally {
         await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[deletedPending.id, abandoned.id, live.id]]);
+      }
+    });
+
+    it("project-scoped recovery cannot claim, read or process another project's file", async () => {
+      const otherProject = (await setup.query<{ id: string }>(
+        "INSERT INTO projects (organization_id, key, name) VALUES ($1,$2,'Other KB recovery CI') RETURNING id",
+        [orgId, `KBO${randomUUID().slice(0, 6)}`.toUpperCase()]
+      )).rows[0].id;
+      const otherFolder = (await setup.query<{ id: string }>(
+        "INSERT INTO knowledge_folders (organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id",
+        [orgId, otherProject]
+      )).rows[0].id;
+      const own = await seedMedia({ status: "pending" });
+      const foreign = await seedMedia({ status: "pending", project: otherProject, folder: otherFolder });
+      const f = transcriptionService();
+      try {
+        await f.sweep(projectId);
+        await waitFor(async () => (await statuses([own.id])).every((row) => row.extraction_status === "ready"), "own transcription");
+        expect(await statuses([foreign.id])).toEqual([{ id: foreign.id, extraction_status: "pending", extracted_text: null }]);
+        expect((await setup.query("SELECT extraction_claim_token FROM knowledge_files WHERE id = $1", [foreign.id])).rows[0].extraction_claim_token).toBeNull();
+        expect(f.storage.getBuffer).toHaveBeenCalledTimes(1);
+        expect(f.storage.getBuffer).toHaveBeenCalledWith(own.key);
+        expect(f.storage.getBuffer).not.toHaveBeenCalledWith(foreign.key);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.embedding).toHaveBeenCalledWith(orgId, projectId, "file", own.id, "transcribed");
+        expect(f.embedding).not.toHaveBeenCalledWith(orgId, otherProject, "file", foreign.id, "transcribed");
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[own.id, foreign.id]]);
+        await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [otherFolder]);
+        await setup.query("DELETE FROM projects WHERE id = $1", [otherProject]);
+      }
+    });
+
+    it("global recovery with no filter processes eligible files from both projects", async () => {
+      const otherProject = (await setup.query<{ id: string }>(
+        "INSERT INTO projects (organization_id, key, name) VALUES ($1,$2,'Global KB recovery CI') RETURNING id",
+        [orgId, `KBG${randomUUID().slice(0, 6)}`.toUpperCase()]
+      )).rows[0].id;
+      const otherFolder = (await setup.query<{ id: string }>(
+        "INSERT INTO knowledge_folders (organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id",
+        [orgId, otherProject]
+      )).rows[0].id;
+      const own = await seedMedia({ status: "pending" });
+      const other = await seedMedia({ status: "pending", project: otherProject, folder: otherFolder });
+      const f = transcriptionService();
+      try {
+        await f.sweep();
+        await waitFor(
+          async () => (await statuses([own.id, other.id])).every((row) => row.extraction_status === "ready"),
+          "global transcriptions"
+        );
+        // The no-filter sweep is global by contract; assert our two rows are reached rather than
+        // assuming the shared CI database contains no other eligible row.
+        expect(f.fetchProvider.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(f.storage.getBuffer).toHaveBeenCalledWith(own.key);
+        expect(f.storage.getBuffer).toHaveBeenCalledWith(other.key);
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[own.id, other.id]]);
+        await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [otherFolder]);
+        await setup.query("DELETE FROM projects WHERE id = $1", [otherProject]);
+      }
+    });
+
+    it("off recovery mode does not gate request-triggered upload transcription", async () => {
+      const f = fileService(pool, { kbTranscriptionRecoveryMode: "off" });
+      const transcribe = jest.spyOn(
+        f.svc as unknown as { transcribeKnowledgeFile: (...args: unknown[]) => Promise<void> },
+        "transcribeKnowledgeFile"
+      ).mockResolvedValue(undefined);
+      let fileId = "";
+      try {
+        const uploaded = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{
+          buffer: Buffer.from("audio"), originalname: `upload-${randomUUID()}.mp3`, mimetype: "audio/mpeg", size: 5
+        }]);
+        fileId = uploaded.list[0].id;
+        expect(transcribe).toHaveBeenCalledTimes(1);
+        expect(transcribe.mock.calls[0][0]).toBe(projectId);
+        expect(transcribe.mock.calls[0][1]).toBe(fileId);
+      } finally {
+        if (fileId) await setup.query("DELETE FROM knowledge_files WHERE id = $1", [fileId]);
       }
     });
 
