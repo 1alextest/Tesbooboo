@@ -148,8 +148,8 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
     sameKeys(item.criterionKeys));
   expect(matching, 'exactly one current approved link for the selected case and criteria').toHaveLength(1);
   expect(matching[0].linkId, 'The sole approved link must match the selected native link').toBe(BASIS.linkId);
-  expect(matching[0].testcaseRevision).toBe(BASIS.testcaseRevision);
-  expect(matching[0].testcaseApprovalRevision).toBe(BASIS.testcaseApprovalRevision);
+  expect(matching[0].testcaseRevision, 'The selected case edit revision must match').toBe(BASIS.testcaseRevision);
+  expect(matching[0].testcaseApprovalRevision, 'The selected case approval revision must match').toBe(BASIS.testcaseApprovalRevision);
 });
 `;
 }
