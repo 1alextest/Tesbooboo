@@ -953,12 +953,13 @@ export default function ZyraTaskDetailPage() {
           documentId={requirementApplyReceipt.requirement.documentId}
           versionId={requirementApplyReceipt.requirement.versionId}
           canApprove={canApproveRequirement}
+          automationHandoff={requirementApplied && requirementApplyReceipt.id && requirementApplyReceipt.testcase?.id
+            && requirementApplyReceipt.link?.criterionKeys.length && bundleCase?.draft?.automationRepo && bundleCase.draft.automationPath
+            && String(bundleCase.draft.automationFramework ?? "").trim().toLowerCase() === "playwright"
+            ? { testcaseId: requirementApplyReceipt.testcase.id, criterionKeys: requirementApplyReceipt.link.criterionKeys,
+                setup: <AutomationHandoffInstructions projectId={projectId} taskId={taskId} /> } : undefined}
         />
       )}
-
-      {requirementApplied && requirementApplyReceipt?.id && bundleCase?.draft?.automationRepo && bundleCase.draft.automationPath
-        && String(bundleCase.draft.automationFramework ?? "").trim().toLowerCase() === "playwright"
-        ? <AutomationHandoffInstructions projectId={projectId} taskId={taskId} /> : null}
 
       {isManagedDocumentProposal && task.managedDocumentProposal && (
         <ManagedDocumentProposalPanel

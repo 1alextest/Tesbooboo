@@ -253,6 +253,27 @@ test("docs/tools/test-only inputs yield explicit non-product evidence, not a zer
   assert.ok(workflows.requiredChecks.some(check => check.id === "workflow-lint"));
 });
 
+test("reviewed mutation configurations require the existing mutation job without claiming product coverage", () => {
+  for (const filename of [
+    "Tesbo-Backend-Nest/stryker.ci.config.json", "Tesbo-Backend-Nest/jest.mutation.config.cjs",
+    "Tesbo-Backend-Nest/stryker.qa-handoff.config.cjs", "Tesbo-Backend-Nest/jest.qa-handoff-mutation.config.cjs",
+    "Tesbo-Backend-Nest/stryker.qa-handoff.config.test.cjs"
+  ]) {
+    const result = plan([filename]);
+    assert.equal(result.status, "non-product", filename);
+    assert.equal(result.counts.selectedSpecFileCount, 0);
+    assert.equal(result.verification.status, "not-run");
+    assert.ok(result.requiredChecks.some(check => check.id === "mutation-critical"));
+  }
+  const workflow = plan([".github/workflows/mutation-quality.yml"]);
+  for (const id of ["workflow-lint", "mutation-critical"]) {
+    assert.ok(workflow.requiredChecks.some(check => check.id === id));
+  }
+  const unknown = plan(["Tesbo-Backend-Nest/unknown-runtime.config.cjs"]);
+  assert.equal(unknown.nonProductPaths.length, 0);
+  assert.equal(unknown.owningDomains.length, Object.keys(config.domains).length);
+});
+
 test("shared E2E setup/utils/fixtures/config/dependency edits widen impact instead of masquerading as test-only", () => {
   for (const filename of [
     "e2e/global-setup.ts", "e2e/.env.example", "e2e/utils/env.ts", "e2e/utils/reports-fixture.ts",

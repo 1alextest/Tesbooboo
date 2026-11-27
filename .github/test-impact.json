@@ -68,6 +68,12 @@
       "description": "SQL migration numbering, non-empty migration guard and append-only history against the verified merge base.",
       "evidence": ["scripts/check-migrations.mjs", "scripts/check-migrations.test.mjs"]
     },
+    "mutation-critical": {
+      "workflow": ".github/workflows/mutation-quality.yml",
+      "job": "mutation-critical",
+      "description": "Existing Stryker/Jest mutation job, including the bounded handoff and producer-attribution pilot. Raw mutation outcomes require assertion-level review and do not certify Skill or client conformance.",
+      "evidence": ["Tesbo-Backend-Nest/stryker.ci.config.json", "Tesbo-Backend-Nest/jest.mutation.config.cjs", "Tesbo-Backend-Nest/stryker.qa-handoff.config.cjs", "Tesbo-Backend-Nest/jest.qa-handoff-mutation.config.cjs", "Tesbo-Backend-Nest/stryker.qa-handoff.config.test.cjs"]
+    },
     "workflow-lint": {
       "workflow": ".github/workflows/ci-hygiene.yml",
       "job": "workflow-lint",
@@ -285,6 +291,7 @@
     {"id":"tooling","patterns":["scripts/**",".github/**",".agents/**",".claude/**",".codex/**",".qodo/**",".vscode/**","load/**","reports/quality/**",".dependency-cruiser.*",".jscpd.json",".gitleaks.toml","package.json","package-lock.json","skills-lock.json","sonar-project.properties","**/.gitignore","**/.gitattributes",".mcp.json"],"reason":"Repository tools/configuration are not a product execution pass; require their existing architecture/quality-policy checks separately.","checks":["architecture-quality"]},
     {"id":"automation-handoff-tools","patterns":["scripts/qa-approved-handoff*","scripts/qa-investigation-mapping*","scripts/qa-handoff-fixture.mjs"],"checks":["playwright-smoke","backend-quality"],"reason":"Changes to the consuming-project bridge require the pinned investigation, native requirements, Task browser and authorization regressions in these jobs."},
     {"id":"workflow-tooling","patterns":[".github/workflows/**"],"reason":"Workflow changes additionally require the existing workflow linter.","checks":["workflow-lint"]},
+    {"id":"mutation-configuration","patterns":["Tesbo-Backend-Nest/stryker.ci.config.json","Tesbo-Backend-Nest/jest.mutation.config.cjs","Tesbo-Backend-Nest/stryker.qa-handoff.config.cjs","Tesbo-Backend-Nest/jest.qa-handoff-mutation.config.cjs","Tesbo-Backend-Nest/stryker.qa-handoff.config.test.cjs",".github/workflows/mutation-quality.yml"],"reason":"These exact files configure the existing test-only mutation job. Preserve its actual execution obligation without claiming application E2E coverage or exempting unknown runtime configuration.","checks":["mutation-critical"]},
     {"id":"e2e-specs-and-scripts","patterns":["e2e/**/*.spec.ts","e2e/scripts/**"],"reason":"Individual E2E specs and reporting scripts are test-only, not product verification. Require existing reporter-safety and smoke checks; shared setup/utils/fixtures/configuration are deliberately NOT exempt.","checks":["reporter-safety","playwright-smoke"]},
     {"id":"sdk-test-support","patterns":["sdk/playwright-reporter/scripts/**","sdk/playwright-reporter/test-support/**","sdk/playwright-reporter/**/*.test.ts"],"reason":"Reporter tests, helper extraction and packed consumer fixtures are test-only. Require sdk-quality, including installed-tarball consumers; these are not production import-graph nodes.","checks":["sdk-quality"]},
     {"id":"build-and-test-configuration","patterns":["Tesbo-Frontend/next.config.*","Tesbo-Backend-Nest/jest.*.cjs","Tesbo-Backend-Nest/scripts/ci/**","e2e/tesbo.config.json","e2e/tesbo.config.example.json"],"reason":"Build, test-runner and fixture configuration are not product modules and are absent from the runtime import graph by design (a .mjs/.cjs file is never an import-graph node here). Require the backend/frontend quality jobs, which compile and lint the code these files configure, instead of a consumer closure that cannot exist.","checks":["backend-quality","frontend-quality"]}
