@@ -195,7 +195,8 @@ describe("requirement bundle lifecycle boundary", () => {
     const notify=jest.spyOn(f.internals,"notifyZyraTask").mockResolvedValue(undefined);
     await f.internals.processZyraTask(project,task,{userId:user});
     await f.internals.processZyraFeedback(project,task,{});
-    await f.internals.markZyraTaskFailed(project,task,"Obsolete worker");
+    await f.internals.markZyraTaskFailed(project,task,"Obsolete generation worker");
+    await f.internals.markZyraTaskFailed(project,task,"Obsolete feedback worker",true);
     expect(JSON.stringify(f.row)).toBe(before);
     expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
     expect(provider).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
@@ -253,6 +254,19 @@ describe("requirement bundle lifecycle boundary", () => {
       expect(f.provider).not.toHaveBeenCalled();expect(f.notify).not.toHaveBeenCalled();
     }
   );
+
+  it("does not let an initial generation failure mutate a governed testcase proposal, while preserving admitted feedback failure handling", async()=>{
+    const f=failureFixture("todo"); f.row.provider="external_proposal"; f.row.generated_payload=[];
+    const before=JSON.stringify(f.row);
+    await f.internals.markZyraTaskFailed(project,task,"Obsolete generation worker");
+    expect(JSON.stringify(f.row)).toBe(before);
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT /.test(sql))).toBe(false);
+    expect(f.notify).not.toHaveBeenCalled();
+    await f.internals.markZyraTaskFailed(project,task,"Admitted feedback failed",true);
+    expect(f.row.task_status).toBe("failed");
+    expect(f.row.activity_log).toHaveLength(1);
+    expect(f.notify).toHaveBeenCalledTimes(1);
+  });
 
   it("the shared failure writer preserves an external bundle even after its typed payload was damaged",async()=>{
     const f=failureFixture("in_progress");f.row.generated_payload=[];

@@ -23423,18 +23423,18 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         (allowTestcaseFeedback && row.task_kind === "governed_proposal" && row.provider === "external_proposal"));
   }
 
-  private async markZyraTaskFailed(projectId: string, taskId: string, detail: string) {
+  private async markZyraTaskFailed(projectId: string, taskId: string, detail: string, allowTestcaseFeedback = false) {
     const failedAt = new Date().toISOString();
     const activity = [{ actor: "agent", stage: "failed", title: "Generation failed", detail, createdAt: failedAt }];
     const failed = await this.db.transaction(async client => {
       // The worker's initial task lookup may itself have failed. Re-establish ownership here,
       // under the mutation lock, before either a status change or the late-failure activity.
       const current = await client.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
-      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], true)) return false;
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], allowTestcaseFeedback)) return false;
       const res = await client.query(
         `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status IN ('todo', 'in_progress') RETURNING id`,
-        [taskId, projectId, JSON.stringify(activity)]
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR ($4::boolean AND task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status IN ('todo', 'in_progress') RETURNING id`,
+        [taskId, projectId, JSON.stringify(activity), allowTestcaseFeedback]
       );
       if (res.rowCount) return true;
       const note = [{
@@ -23443,8 +23443,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         createdAt: failedAt
       }];
       await client.query(
-        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
-        [taskId, projectId, JSON.stringify(note)]
+        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR ($4::boolean AND task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
+        [taskId, projectId, JSON.stringify(note), allowTestcaseFeedback]
       );
       return false;
     });
@@ -23930,7 +23930,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }
       // markZyraTaskFailed only marks 'failed' if the row is still 'todo'/'in_progress' — if a
       // concurrent close/save already moved it on, that action wins and this only leaves a note.
-      await this.markZyraTaskFailed(projectId, taskId, detail);
+      await this.markZyraTaskFailed(projectId, taskId, detail, true);
     }
   }
 
