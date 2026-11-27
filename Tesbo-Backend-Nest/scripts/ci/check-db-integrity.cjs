@@ -91,7 +91,7 @@ async function verifyNativeQaTaskKinds(client) {
     const priorMigration = fs.readFileSync(path.resolve("migrations/V159_work_package_a_skills_publication.sql"), "utf8");
     const priorDefinition = priorMigration.match(/CREATE OR REPLACE FUNCTION testcase_proposal_review_snapshot\(request_id UUID\) RETURNS JSONB[\s\S]*?\$\$;/)?.[0];
     assert.ok(priorDefinition, "historical snapshot definition missing");
-    const priorSelect = priorDefinition.split("AS $")[1].split("$;")[0].replace("WHERE r.id=request_id;", "WHERE r.id=$1");
+    const priorSelect = priorDefinition.split("AS $$")[1].split("$$;")[0].replace("WHERE r.id=request_id;", "WHERE r.id=$1");
     assert.ok(priorSelect.includes("WHERE r.id=$1"), "historical snapshot parameter missing");
     const installed = await client.query("SELECT pg_get_functiondef('testcase_proposal_review_snapshot(uuid)'::regprocedure) AS definition");
     assert.match(installed.rows[0].definition, /r\.task_kind IN \('legacy_generation_review','governed_proposal'\)/);
