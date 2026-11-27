@@ -184,6 +184,10 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       expect(Buffer.from(await fileRead.body())).toEqual(await readFile(evidencePath));
       const output = JSON.parse(await readFile(path.join(temp!, "report.json"), "utf8"));
       expect(output.stats[expectedPass ? "expected" : "unexpected"]).toBe(1);
+      if (!expectedPass) {
+        expect(JSON.stringify(output), "The defect must fail on the reviewed uniqueness oracle, not on an unrelated setup/transport error")
+          .toContain("exactly one current approved link");
+      }
       return runId;
     }
 
