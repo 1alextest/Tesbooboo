@@ -260,8 +260,10 @@ test("stale approval GET and pending POST never open or repaint a different link
     await expect(panel).toHaveAttribute("data-case-id", a.id);
     await expect(panel.getByText("The reviewed version was approved.")).toHaveCount(0);
     // A remains a new unapproved case: no real POST was allowed to write either record.
-    expect((await (await api.get(`${base}/${a.id}`)).json()).approvalCurrent).toBeFalsy();
-    expect((await (await api.get(`${base}/${b.id}`)).json()).approvalCurrent).toBeFalsy();
+    const afterA = await (await api.get(`${base}/${a.id}`)).json();
+    const afterB = await (await api.get(`${base}/${b.id}`)).json();
+    expect(afterA.approvalCurrent).toBe(false);
+    expect(afterB.approvalCurrent).toBe(false);
   } finally {
     releaseGet?.();
     releasePost?.();
