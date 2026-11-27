@@ -77,7 +77,7 @@ function scoreDiscovery(manifest, receipts, expectedManifestRef) {
       !receipt?'UNAVAILABLE':receipt.review!=='COMPLETE'||counts.UNRESOLVED>0?'UNKNOWN':
         receipt.disposition===trial.expectedDisposition&&receipt.claims.length===0?'MATCH':'MISMATCH';
     return {id:trial.id,arm:trial.arm,delivery:receipt?'AVAILABLE':'UNAVAILABLE',
-      review:receipt?.review??'NOT_REVIEWED',targets,claims:counts,control};
+      review:receipt?.review??'NOT_REVIEWED',subjectDisposition:receipt?.disposition??'UNAVAILABLE',targets,claims:counts,control};
   });
   const arms = [...new Set(rows.map(r=>r.arm))].map(arm=>{
     const selected = rows.filter(r=>r.arm===arm);
@@ -90,7 +90,10 @@ function scoreDiscovery(manifest, receipts, expectedManifestRef) {
     };
     const claims = Object.fromEntries(verdicts.map(v=>[v,selected.reduce((sum,r)=>sum+r.claims[v],0)]));
     const controls = Object.fromEntries(['MATCH','MISMATCH','UNKNOWN','UNAVAILABLE'].map(v=>[v,selected.filter(r=>r.control===v).length]));
-    return {arm,assigned:selected.length,available:selected.filter(r=>r.delivery==='AVAILABLE').length,
+    // Subject-reported abstention is not the same fact as reviewer uncertainty or missing delivery.
+    // Keep the frozen target recall accounting unchanged; report disposition as an orthogonal count.
+    const subjectDispositions = Object.fromEntries([...dispositions,'UNAVAILABLE'].map(v=>[v,selected.filter(r=>r.subjectDisposition===v).length]));
+    return {arm,assigned:selected.length,available:selected.filter(r=>r.delivery==='AVAILABLE').length,subjectDispositions,
       completeReview:selected.filter(r=>r.review==='COMPLETE').length,risk:byKind('RISK'),requirementGap:byKind('REQUIREMENT_GAP'),
       claims,precision:{confirmed:claims.CONFIRMED,adjudicatedDistinct:claims.CONFIRMED+claims.FALSE+claims.UNSUPPORTED},controls};
   });

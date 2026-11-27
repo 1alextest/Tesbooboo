@@ -115,3 +115,33 @@ function transferCalibration(check, same) {
 test('cross-application calibration distinguishes intended faults from unrelated failures',()=>{
   transferCalibration((condition,message)=>assert.ok(condition,message),(actual,expected)=>assert.equal(actual,expected));
 });
+
+test('retains explicit subject abstention separately from review uncertainty and missing output',()=>{
+  const ref='calibration:subject-disposition';
+  const target={id:'risk',kind:'RISK',oracleRef:'practice:risk'};
+  const ids=['abstained','abstained-with-side','partial','unavailable','negative','found'];
+  const manifest={schemaVersion:1,ref,purpose:'CALIBRATION',trials:ids.map(id=>({
+    id,arm:'ordinary',subjectInputRef:'input:'+id,expectedDisposition:'FINDINGS',targets:[target]
+  }))};
+  const receipt=(trialId,disposition,review='COMPLETE',claims=[])=>({
+    trialId,manifestRef:ref,subjectInputRef:'input:'+trialId,outputRef:'output:'+trialId,
+    reviewRef:'review:'+trialId,disposition,review,claims
+  });
+  const confirmed=(id,targetId)=>({id,targetId,verdict:'CONFIRMED',evidenceRef:'practice:'+id});
+  const result=scoreDiscovery(manifest,[
+    receipt('abstained','UNKNOWN'),
+    receipt('abstained-with-side','UNKNOWN','COMPLETE',[confirmed('side',null)]),
+    receipt('partial','NO_FINDINGS','PARTIAL'),
+    receipt('negative','NO_FINDINGS'),
+    receipt('found','FINDINGS','COMPLETE',[confirmed('matched','risk')])
+  ],ref);
+  assert.deepEqual(result.rows.map(row=>[row.subjectDisposition,row.targets[0].status]),[
+    ['UNKNOWN','MISSED'],['UNKNOWN','MISSED'],['NO_FINDINGS','UNKNOWN'],
+    ['UNAVAILABLE','UNAVAILABLE'],['NO_FINDINGS','MISSED'],['FINDINGS','DISCOVERED']
+  ]);
+  const arm=result.arms[0];
+  assert.deepEqual(arm.subjectDispositions,{FINDINGS:1,NO_FINDINGS:2,UNKNOWN:2,UNAVAILABLE:1});
+  assert.equal(Object.values(arm.subjectDispositions).reduce((sum,count)=>sum+count,0),arm.assigned);
+  assert.deepEqual(arm.risk,{assigned:6,discovered:1,missed:3,unknown:1,unavailable:1});
+  assert.deepEqual(arm.precision,{confirmed:2,adjudicatedDistinct:2});
+});
