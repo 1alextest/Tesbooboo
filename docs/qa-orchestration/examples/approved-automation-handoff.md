@@ -1,6 +1,6 @@
 # Send one approved Tesbo case to a Playwright generator
 
-A tester opens an applied requirement bundle under **Agents → Tasks**, approves its submitted requirement, approves the native test case, and activates the criterion link for that case. **Set up an automation handoff** on the Task page gives the tester the CLI command for that project and task. It appears on applied bundles with a saved case and an automation target. The CLI checks eligibility when the tester uses it.
+A tester opens an applied requirement bundle under **Agents → Tasks**, approves its submitted requirement, approves the native test case, and activates the criterion link for that case. **Set up an automation handoff** on the Task page shows the exact approved automation repository, path and framework read-only, then gives the tester the CLI command for that project and task. It appears on applied bundles with a saved case and an automation target. The CLI checks eligibility when the tester uses it.
 
 Use this when a human wants an automation change for one reviewed case in an existing Playwright spec. The output is a local JSON work item for a generator the project already uses. The tester can compare the native criterion with the proposed test assertion before releasing that work item. Starting a generator, reviewing its code and recording an execution remain separate actions.
 

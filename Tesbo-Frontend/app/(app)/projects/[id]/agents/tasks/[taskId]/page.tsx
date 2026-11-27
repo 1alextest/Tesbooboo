@@ -68,7 +68,11 @@ const TICKET_COMMENT_STATUS: Record<ZyraTicketComment["status"], { label: string
   skipped_not_connected: { label: "Not posted — not connected", tone: "warning" },
 };
 
-function AutomationHandoffInstructions({ projectId, taskId }: { projectId: string; taskId: string }) {
+function AutomationHandoffInstructions({ projectId, taskId, target }: {
+  projectId: string;
+  taskId: string;
+  target: { repository: string; path: string; framework: string };
+}) {
   const [command, setCommand] = useState("");
   const showCommand = () => {
     const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -86,6 +90,9 @@ function AutomationHandoffInstructions({ projectId, taskId }: { projectId: strin
     <details className="rounded-lg border border-[var(--border)] p-3" onToggle={event => { if (event.currentTarget.open) showCommand(); }}>
       <summary className="cursor-pointer text-sm font-medium">Set up an automation handoff</summary>
       <p className="my-2 text-sm">After approving the requirement and test case and activating their link, choose the existing Playwright spec and investigation case to send to your generator.</p>
+      <p className="my-2 text-xs text-[var(--muted)]" data-testid="automation-handoff-approved-target">
+        Approved target: <code className="break-all">{target.repository}</code> · <code className="break-all">{target.path}</code> · {target.framework}. The CLI verifies the local checkout, published branch and full commit against this approved case.
+      </p>
       <a className="text-sm underline" href="https://github.com/1alextest/Tesbooboo/blob/development/docs/qa-orchestration/examples/approved-automation-handoff.md" target="_blank" rel="noreferrer">Setup and command arguments</a>
       {command && <div className="mt-2 space-y-2"><pre className="whitespace-pre-wrap break-all text-xs">{command}</pre><CopyButton value={command} label="Copy handoff command" /></div>}
     </details>
@@ -957,7 +964,11 @@ export default function ZyraTaskDetailPage() {
             && requirementApplyReceipt.link?.criterionKeys.length && bundleCase?.draft?.automationRepo && bundleCase.draft.automationPath
             && String(bundleCase.draft.automationFramework ?? "").trim().toLowerCase() === "playwright"
             ? { testcaseId: requirementApplyReceipt.testcase.id, criterionKeys: requirementApplyReceipt.link.criterionKeys,
-                setup: <AutomationHandoffInstructions projectId={projectId} taskId={taskId} /> } : undefined}
+                setup: <AutomationHandoffInstructions projectId={projectId} taskId={taskId} target={{
+                  repository: String(bundleCase.draft.automationRepo),
+                  path: String(bundleCase.draft.automationPath),
+                  framework: String(bundleCase.draft.automationFramework)
+                }} /> } : undefined}
         />
       )}
 
