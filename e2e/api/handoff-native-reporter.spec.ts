@@ -757,6 +757,15 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean, pa
         await expect(row.getByText("Untested", { exact: true })).toBeVisible();
         await expect(page.getByTestId("run-retest-origin")).toBeVisible();
         await expect(page.getByTitle("Results in this run were reported by an automation SDK, not entered by hand")).toHaveCount(0);
+        const sourceRead = page.waitForResponse(response => response.request().method() === "GET"
+          && new URL(response.url()).pathname === "/api/cycles/" + defectRun.runId);
+        await page.getByTestId("run-retest-origin").getByRole("link", { name: defectRun.detail.name, exact: true }).click();
+        const sourceResponse = await sourceRead;
+        expect(sourceResponse.ok()).toBe(true);
+        expect((await sourceResponse.json()).id).toBe(defectRun.runId);
+        await expect(page.getByRole("heading", { name: defectRun.detail.name, exact: true })).toBeVisible();
+        await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name: currentCase.externalId, exact: true }) })
+          .getByText("Failed", { exact: true })).toBeVisible();
       }
       const originalFile = await human.get("/api/cycles/" + defectRun.runId + "/executions/" + defectRun.executionId
         + "/attachments/" + defectRun.evidenceId + "/download");
