@@ -10,6 +10,8 @@ import { join } from 'node:path';
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const sha = /^[0-9a-f]{40}$/;
 const digest = /^[a-f0-9]{64}$/;
+// One bounded adapter, not a natural-language generator: it only claims the oracle it can assert.
+export const SUPPORTED_ORACLE = 'The requirement exposes exactly one current approved link for the selected case and criteria.';
 
 function fail(message) {
   throw new Error(message);
@@ -37,18 +39,23 @@ export function validateHandoffPacket(packet) {
   for (const value of [native.proposalRevision, native.testcaseRevision, native.testcaseApprovalRevision])
     if (typeof value !== 'string' || !digest.test(value)) fail('The packet is missing an exact revision.');
   const testcase = native.testcase;
-  if (!testcase || testcase.id !== native.testcaseId || typeof testcase.externalId !== 'string' ||
-      !/^[A-Za-z0-9_-]{1,64}$/.test(testcase.externalId)) fail('The approved case needs its Tesbo external id for @tesbo.testId().');
+  if (!testcase || testcase.id !== native.testcaseId || typeof testcase.title !== 'string' || !testcase.title.trim() ||
+      typeof testcase.externalId !== 'string' || !/^[^"')\s]{1,128}$/.test(testcase.externalId))
+    fail('The approved case needs a title and its Tesbo external id for @tesbo.testId().');
   if (typeof testcase.automationPath !== 'string' || testcase.automationPath !== target.path ||
       !/\.(spec|test)\.(?:[cm]?[jt]sx?)$/.test(testcase.automationPath) ||
       testcase.automationPath.startsWith('/') || testcase.automationPath.split('/').some(part => !part || ['.', '..'].includes(part)) ||
       testcase.automationPath.includes('\\')) fail('The target path is not the approved reviewable Playwright file.');
   if (String(testcase.automationFramework ?? '').toLowerCase() !== 'playwright') fail('The approved case does not name Playwright.');
   if (typeof target.repository !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(target.repository) ||
-      typeof target.branch !== 'string' || !sha.test(target.revision ?? '')) fail('The packet has no exact published Git target.');
-  if (investigation.targetPath !== target.path || typeof investigation.targetBlob !== 'string' ||
-      !/^[a-f0-9]{40}$/.test(investigation.targetBlob)) fail('The investigation is not bound to the approved target file.');
-  if (!Array.isArray(investigation.risks) || investigation.risks.length !== 1) fail('This reference consumer accepts exactly one approved risk.');
+      typeof testcase.automationRepo !== 'string' || target.repository.toLowerCase() !== testcase.automationRepo.toLowerCase() ||
+      typeof target.branch !== 'string' || !sha.test(target.revision ?? '')) fail('The packet has no exact published Git target matching the approved case.');
+  if (investigation.targetPath !== target.path || investigation.repoRevision !== target.revision ||
+      typeof investigation.targetBlob !== 'string' || !/^[a-f0-9]{40}$/.test(investigation.targetBlob))
+    fail('The investigation is not bound to the approved target file and revision.');
+  if (!Array.isArray(investigation.risks) || investigation.risks.length !== 1 ||
+      investigation.risks[0]?.oracle !== SUPPORTED_ORACLE)
+    fail('This reference consumer only supports the approved exactly-one-current-link oracle.');
   return packet;
 }
 
@@ -73,6 +80,7 @@ export function generateCoverageSpec(packet) {
   };
   const tag = `@tesbo.testId(${JSON.stringify(native.testcase.externalId)})`;
   return `// Generated from an approved Tesbo automation handoff. Review before committing.
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
 const BASIS = ${literal(constants)};
@@ -84,6 +92,9 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
   expect(coverageUrl, 'TESBO_JOURNEY_COVERAGE_URL').toBeTruthy();
   expect(token, 'TESBO_JOURNEY_TOKEN').toBeTruthy();
   expect(evidence, 'TESBO_JOURNEY_EVIDENCE_PATH').toBeTruthy();
+  const evidenceBody = JSON.parse(readFileSync(evidence, 'utf8'));
+  expect(evidenceBody.selectionDigest).toBe(BASIS.selectionDigest);
+  expect(evidenceBody.target).toEqual(BASIS.target);
 
   const response = await request.get(coverageUrl, { headers: { Authorization: 'Bearer ' + token } });
   expect(response.status(), await response.text()).toBe(200);
@@ -103,8 +114,8 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
 `;
 }
 
-export function writeGeneratedChange(packet, directory, specName = 'generated.spec.mjs') {
+export function writeGeneratedChange(packet, directory) {
   validateHandoffPacket(packet);
   const content = generateCoverageSpec(packet);
-  return { path: join(directory, specName), content, sha256: createHash('sha256').update(content).digest('hex') };
+  return { path: join(directory, packet.target.path), content, sha256: createHash('sha256').update(content).digest('hex') };
 }

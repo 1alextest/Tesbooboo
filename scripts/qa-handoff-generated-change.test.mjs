@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { writeFile, mkdtemp, rm, readFile } from 'node:fs/promises';
+import { writeFile, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { generateCoverageSpec, validateHandoffPacket, writeGeneratedChange } from './qa-handoff-generated-change.mjs';
+import { generateCoverageSpec, SUPPORTED_ORACLE, validateHandoffPacket, writeGeneratedChange } from './qa-handoff-generated-change.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -44,9 +43,15 @@ function packet() {
     investigation: {
       id: 'CASE-300', upstreamCase: 'TC-01', targetPath: 'tests/journey.spec.mjs', targetBlob: BLOB,
       repoRevision: COMMIT, harnessRevision: 'a468921c2bead820520a97df897168487b2b4985',
-      risks: [{ id: 'R1', oracle: 'The requirement lists one linked case' }],
+      risks: [{ id: 'R1', oracle: SUPPORTED_ORACLE }],
     },
   };
+  return { ...body, selectionDigest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+}
+
+function reseal(packet) {
+  const body = structuredClone(packet);
+  delete body.selectionDigest;
   return { ...body, selectionDigest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
 }
 
@@ -62,7 +67,7 @@ const caseObject = {
 async function runSpec(directory, coveragePath) {
   const report = join(directory, 'report.json');
   try {
-    await execFileAsync(process.execPath, [playwrightCli, 'test', 'generated.spec.mjs', '--config=playwright.config.mjs'], {
+    await execFileAsync(process.execPath, [playwrightCli, 'test', 'tests/journey.spec.mjs', '--config=playwright.config.mjs'], {
       cwd: directory, timeout: 60_000,
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -82,7 +87,18 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
   const p = packet();
   assert.doesNotThrow(() => validateHandoffPacket(p));
   assert.throws(() => validateHandoffPacket({ ...p, selectionDigest: '0'.repeat(64) }), /selection digest/);
-  assert.throws(() => validateHandoffPacket({ ...p, native: { ...p.native, testcase: { ...p.native.testcase, externalId: '' } } }), /selection digest|external id/);
+  const noExternal = structuredClone(p);
+  delete noExternal.selectionDigest;
+  noExternal.native.testcase.externalId = '';
+  assert.throws(() => validateHandoffPacket(reseal(noExternal)), /external id/);
+  const wrongTarget = structuredClone(p);
+  delete wrongTarget.selectionDigest;
+  wrongTarget.target.repository = 'other/repo';
+  assert.throws(() => validateHandoffPacket(reseal(wrongTarget)), /Git target/);
+  const wrongOracle = structuredClone(p);
+  delete wrongOracle.selectionDigest;
+  wrongOracle.investigation.risks[0].oracle = 'Some ungenerated oracle';
+  assert.throws(() => validateHandoffPacket(reseal(wrongOracle)), /only supports/);
   const spec = generateCoverageSpec(p);
   assert.ok(spec.includes(String.raw`@tesbo.testId(\"TES-JOURNEY-1\")`), 'the generated test must carry the approved external id');
   assert.match(spec, /exactly one current approved link/u);
@@ -90,15 +106,17 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
   assert.match(spec, /approved-handoff-evidence\.json/u);
 
   const server = createServer((req, res) => {
-    const faulty = req.url === '/faulty';
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(coverage(faulty ? [caseObject, { ...caseObject }] : [caseObject]));
+    if (req.url === '/faulty') res.end(coverage([caseObject, { ...caseObject }]));
+    else if (req.url === '/wrong-revision') res.end(coverage([{ ...caseObject, testcaseApprovalRevision: 'f'.repeat(64) }]));
+    else res.end(coverage([caseObject]));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   const directory = await mkdtemp(join(e2eDir, '.journey-'));
   try {
     const generated = writeGeneratedChange(p, directory);
+    await mkdir(dirname(generated.path), { recursive: true });
     await writeFile(generated.path, generated.content);
     await writeFile(join(directory, 'evidence.json'), JSON.stringify({ selectionDigest: p.selectionDigest, target: p.target }));
     await writeFile(join(directory, 'playwright.config.mjs'), `import { defineConfig } from '@playwright/test';
@@ -112,6 +130,11 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
     assert.equal(faulty.ok, false, 'the duplicated-link control must fail the generated assertion');
     assert.equal(faulty.report.stats.unexpected, 1);
     assert.equal(faulty.report.stats.expected, 0);
+    assert.match(JSON.stringify(faulty.report), /exactly one current approved link/u);
+    const wrongRevision = await runSpec(directory, `http://127.0.0.1:${port}/wrong-revision`);
+    assert.equal(wrongRevision.ok, false, 'the wrong-approval-revision control must fail');
+    assert.equal(wrongRevision.report.stats.unexpected, 1);
+    assert.equal(wrongRevision.report.stats.expected, 0);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
