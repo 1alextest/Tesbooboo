@@ -160,6 +160,121 @@ async function verifyNativeQaTaskKinds(client) {
   }
 }
 
+
+// Reproduce a populated V167 -> current upgrade on a separate disposable
+// database using the actual built migration CLI, never by undoing migrations.
+async function verifyPopulatedTaskKindUpgrade(admin, migrationFiles) {
+  const url = new URL(process.env.DATABASE_URL);
+  assert.ok(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) &&
+    url.pathname === "/tesbo_ci" && !url.search && !url.hash,
+    "Populated upgrade requires the dedicated loopback CI database");
+  const { randomUUID } = require("node:crypto");
+  const { spawnSync } = require("node:child_process");
+  const database = "tesbo_ci_upgrade_" + randomUUID().replaceAll("-", "");
+  const directory = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "tesbo-pre-kind-"));
+  let created = false;
+  let upgrade;
+  const fullDirectory = path.resolve("migrations");
+  const expected = new Map([
+    ["openai", "legacy_generation_review"],
+    ["anthropic", "legacy_generation_review"],
+    ["zyra_chat", "legacy_generation_review"],
+    ["zyra_archive_sweep", "legacy_generation_review"],
+    ["legacy", "legacy_generation_review"],
+    ["external_proposal", "governed_proposal"],
+    ["external_requirement_proposal", "governed_proposal"],
+    ["external_document_proposal", "governed_proposal"]
+  ]);
+  const priorFiles = migrationFiles.filter(name => Number(name.match(/^V(\d+)_/)[1]) <= 167);
+  assert.equal(priorFiles.length, 167, "Expected the exact pre-kind migration sequence");
+  try {
+    for (const name of priorFiles) fs.copyFileSync(path.join(fullDirectory, name), path.join(directory, name));
+    await admin.query('CREATE DATABASE "' + database + '"');
+    created = true;
+    url.pathname = "/" + database;
+    const migrate = (migrationDir, shouldFail = false) => {
+      const env = { ...process.env, DATABASE_URL: url.toString(), MIGRATIONS_DIR: migrationDir };
+      const result = spawnSync(process.execPath, [path.resolve("dist/database/migrate.js")],
+        { env, encoding: "utf8", timeout: 180000, maxBuffer: 4 * 1024 * 1024 });
+      if (result.error) throw result.error;
+      if (shouldFail) {
+        assert.notEqual(result.status, 0, "reserved historical provider must stop the real migrator");
+        assert.match(result.stderr, /native_qa_external_producer_closed/);
+      } else {
+        assert.equal(result.status, 0, "migration CLI failed: " + result.stderr);
+      }
+      return result.stdout;
+    };
+    migrate(directory);
+    upgrade = new Client({ connectionString: url.toString() });
+    await upgrade.connect();
+    const ledger = async () => (await upgrade.query("SELECT version, filename, checksum FROM schema_migrations ORDER BY version")).rows;
+    const beforeLedger = await ledger();
+    assert.equal(beforeLedger.length, 167);
+    const suffix = randomUUID();
+    const user = (await upgrade.query("INSERT INTO users(email,name) VALUES ($1,'Historical task QA') RETURNING id", ["historical-" + suffix + "@tesbo.invalid"])).rows[0].id;
+    const org = (await upgrade.query("INSERT INTO organizations(name,slug) VALUES ('Historical task QA',$1) RETURNING id", ["historical-" + suffix])).rows[0].id;
+    const project = (await upgrade.query("INSERT INTO projects(organization_id,key,name) VALUES ($1,'HTQA','Historical task QA') RETURNING id", [org])).rows[0].id;
+    for (const [provider, kind] of expected) {
+      const governed = kind === "governed_proposal";
+      await upgrade.query(
+        "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status,generated_payload,generated_count,proposal_request_key,proposal_request_digest,proposal_provenance,save_events) VALUES ($1,$2,$3,$4,$5,$6::jsonb,1,$7,$8,$9::jsonb,$10::jsonb)",
+        [project, provider === "zyra_archive_sweep" ? null : user, provider,
+          "Historical " + provider, governed ? "done" : "in_review",
+          JSON.stringify([{ title: "Retained " + provider }]),
+          governed ? "historical-" + provider : null, governed ? "a".repeat(64) : null,
+          governed ? JSON.stringify({ principalKey: "synthetic:" + user, issuerId: user }) : null,
+          governed ? JSON.stringify([{ decisionKey: "synthetic-" + provider, proposalRevision: "b".repeat(64) }]) : "[]"]
+      );
+    }
+    const retained = async () => (await upgrade.query(
+      "SELECT to_jsonb(r) AS row, testcase_proposal_review_snapshot(r.id) AS snapshot FROM ai_generation_requests r WHERE r.project_id=$1 ORDER BY r.id",
+      [project]
+    )).rows;
+    const before = await retained();
+    assert.equal(before.length, expected.size);
+    assert.ok(before.every(x => !Object.hasOwn(x.row, "task_kind") && x.snapshot !== null));
+
+    // An unexpected reserved historical lane must fail the transaction, not
+    // quietly acquire a new ownership classification or migration receipt.
+    const bad = (await upgrade.query(
+      "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status) VALUES ($1,$2,'external_qa_work','Invalid historical reserved lane','in_review') RETURNING id",
+      [project, user]
+    )).rows[0].id;
+    migrate(fullDirectory, true);
+    assert.deepEqual(await ledger(), beforeLedger, "failed upgrade must not advance migration ledger");
+    assert.equal((await upgrade.query("SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='ai_generation_requests' AND column_name='task_kind'")).rowCount, 0);
+    assert.equal((await upgrade.query("SELECT to_regprocedure('native_qa_task_kind_for_provider(text)') AS function")).rows[0].function, null);
+    assert.equal((await upgrade.query("SELECT id FROM ai_generation_requests WHERE id=$1", [bad])).rowCount, 1);
+    await upgrade.query("DELETE FROM ai_generation_requests WHERE id=$1", [bad]);
+    assert.deepEqual(await retained(), before, "failure must preserve all valid historical rows and snapshots");
+
+    migrate(fullDirectory);
+    const afterLedger = await ledger();
+    assert.equal(afterLedger.length, migrationFiles.length);
+    assert.deepEqual(afterLedger.slice(0, 167), beforeLedger);
+    const after = await retained();
+    assert.equal(after.length, before.length);
+    for (let i = 0; i < after.length; i++) {
+      const { task_kind, ...original } = after[i].row;
+      assert.equal(task_kind, expected.get(original.provider));
+      assert.deepEqual(original, before[i].row, "upgrade changed historical row " + original.id);
+      assert.deepEqual(after[i].snapshot, before[i].snapshot, "upgrade changed review basis " + original.id);
+    }
+    assert.match(migrate(fullDirectory), /Database schema is up to date/);
+    assert.deepEqual(await ledger(), afterLedger);
+    assert.deepEqual(await retained(), after);
+    console.log("Populated native task upgrade: 8 historical rows, original IDs/sequence/payloads/receipts/snapshots preserved, reserved history rejected atomically, second migration idempotent.");
+  } finally {
+    try {
+      if (upgrade) await upgrade.end();
+      if (created) await admin.query('DROP DATABASE "' + database + '"');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+}
+
 async function main() {
   assert.match(process.env.DATABASE_URL || "", /\/tesbo_ci(?:\?|$)/, "Refusing to run outside the isolated tesbo_ci database");
   const client = new Client({ connectionString: process.env.DATABASE_URL });
@@ -215,6 +330,7 @@ async function main() {
       await client.query("ROLLBACK");
     }
     await verifyNativeQaTaskKinds(client);
+    await verifyPopulatedTaskKindUpgrade(client, migrationFiles);
     console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows and native task kinds.`);
   } finally {
     await client.end();
