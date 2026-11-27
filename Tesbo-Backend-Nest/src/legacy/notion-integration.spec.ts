@@ -590,6 +590,7 @@ describe("Zyra ticket auto-comment for Notion", () => {
     const updates: unknown[][] = [];
     const { db } = makeDb(
       connectedRoutes([
+        { match: "SELECT 1 FROM integration_ticket_comments c", rows: [{ admitted: 1 }] },
         { match: "UPDATE integration_ticket_comments SET status = 'posted'", handler: (p) => (updates.push(p), { rows: [] }) },
         { match: "SELECT summary FROM notion_pages", rows: [{ summary: "Checkout spec" }] }
       ])
@@ -604,6 +605,7 @@ describe("Zyra ticket auto-comment for Notion", () => {
     const failures: unknown[][] = [];
     const { db } = makeDb(
       connectedRoutes([
+        { match: "SELECT 1 FROM integration_ticket_comments c", rows: [{ admitted: 1 }] },
         { match: "SET status = 'failed'", handler: (p) => (failures.push(p), { rows: [] }) },
         { match: "SELECT summary FROM notion_pages", rows: [{ summary: "Checkout spec" }] }
       ])
@@ -620,6 +622,7 @@ describe("Zyra ticket auto-comment for Notion", () => {
     const failures: unknown[][] = [];
     const { db } = makeDb(
       connectedRoutes([
+        { match: "SELECT 1 FROM integration_ticket_comments c", rows: [{ admitted: 1 }] },
         { match: "SET status = 'failed'", handler: (p) => (failures.push(p), { rows: [] }) },
         { match: "SELECT summary FROM notion_pages", rows: [] }
       ])
@@ -634,6 +637,7 @@ describe("Zyra ticket auto-comment for Notion", () => {
     const failures: unknown[][] = [];
     const { db } = makeDb(
       connectedRoutes([
+        { match: "SELECT 1 FROM integration_ticket_comments c", rows: [{ admitted: 1 }] },
         { match: "SET status = 'failed'", handler: (p) => (failures.push(p), { rows: [] }) },
         { match: "SELECT summary FROM notion_pages", rows: [] }
       ])

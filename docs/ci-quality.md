@@ -134,6 +134,36 @@ Review Board has backend integration coverage, but no matching product E2E
 owner was found in the initial audit. Do not invent a spec filename to make the
 mapping look complete.
 
+#### Concurrent candidate impact
+
+In an authorized Git checkout containing the exact target and candidate
+objects, use the existing impact planner to review joint verification leads:
+
+```sh
+node scripts/test-impact.mjs --compare-candidates <target-sha> <candidate-a-sha> <candidate-b-sha> --format markdown
+```
+
+Supply 2–16 distinct candidate commit SHAs. The comparison uses each candidate's
+unique merge base with the target and the **target's committed** test-impact
+configuration and regular file inventory. It ignores dirty worktree and
+candidate-authored mapping changes. It lists target drift overlapping each
+candidate's changed paths, direct shared changed paths across candidates,
+optional supplied-graph consumer intersections, shared mapped domains,
+selected spec files and required checks. A test-only change may correctly select
+zero product specs; retain its directly changed E2E files and compare those
+with every other candidate's nominated regression evidence. The optional graph is explicitly
+unverified; do not infer runtime dependencies or semantic behavior.
+
+Structural intersections, changed-test/peer-selection intersections or incomplete
+mapping evidence require review. Changed tests remain separate from mapped
+product obligations, and never establish changed behavior or executed coverage. Shared
+mapped obligations alone do not establish a conflict. No merge is simulated,
+no tests run, and no coverage or release verdict is issued. Inspect the actual
+changed behavior and relevant requirements before proposing joint regression
+work. Use the existing Change Packet and authorized test/run owners for the
+next action. This is an opt-in review mode, not a new CI gate, scheduler or
+independent AI finding.
+
 ### Migration history
 
 The existing checker validates the current manifest and compares existing SQL
