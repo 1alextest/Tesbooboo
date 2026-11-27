@@ -7,25 +7,15 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { env } from "../utils/env";
 import { approveTestcase } from "../utils/testcase-approval";
-import { createProject, screensApi } from "../utils/screens-tenant";
+import { createProject, screensApi, screensTenant } from "../utils/screens-tenant";
 
 const runExecutable = promisify(execFile);
 const stored = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf8")) as { projectId: string };
 const originRepo = "1alextest/Tesbooboo";
 const referenceOracle = "The requirement exposes exactly one current approved link for the selected case and criteria.";
-
-function reportResults(report: any): any[] {
-  function visit(suite: any): any[] {
-    return [
-      ...(suite.specs ?? []).flatMap((spec: any) => (spec.tests ?? []).flatMap((item: any) => item.results ?? [])),
-      ...(suite.suites ?? []).flatMap(visit),
-    ];
-  }
-  return (report.suites ?? []).flatMap(visit);
-}
 
 function runClosureProblems(detail: any): string[] {
   const problems: string[] = [];
@@ -34,16 +24,6 @@ function runClosureProblems(detail: any): string[] {
   if (!detail?.closedAt) problems.push("closedAt is absent");
   if (!detail?.endedAt) problems.push("endedAt is absent");
   return problems;
-}
-
-function isReviewedUniquenessFailure(report: any): boolean {
-  const results = reportResults(report);
-  if (results.length !== 1 || results[0].status !== "failed" || (report.errors ?? []).length !== 0) return false;
-  const errors = results[0].errors ?? [];
-  if (errors.length !== 1 || typeof errors[0].message !== "string") return false;
-  const message = errors[0].message.replace(/\u001b\[[0-9;]*m/g, "").trimStart();
-  return /^(?:Error:\s*)?exactly one current approved link for the selected case and criteria(?:\s|$)/.test(message)
-    && /Expected length:\s*1\b/.test(message) && /Received length:\s*2\b/.test(message);
 }
 
 // Reconcile the complete observed attachment population, not just a matching
@@ -125,17 +105,19 @@ test("AUT-HANDOFF-01 cleanup reports non-success and still attempts remaining co
   expect(await runCleanupSteps([{ label: "ok", action: async () => undefined }])).toEqual([]);
 });
 
-test("AUT-HANDOFF-01 diagnostic distinguishes the actual uniqueness assertion from report metadata", () => {
+test("AUT-HANDOFF-01 diagnostic distinguishes the actual uniqueness assertion from report metadata", async () => {
+  const { handoffFailureMatches } = await import(path.join(__dirname, "../../scripts/qa-handoff-fixture.mjs"));
   const label = "exactly one current approved link for the selected case and criteria";
+  const matches = (value: any) => handoffFailureMatches(value, label, ["Expected length: 1", "Received length: 2"]);
   const report = (message: string) => ({
     config: { metadata: { gitDiff: label } },
-    stats: { unexpected: 1 },
+    stats: { expected: 0, unexpected: 1 },
     suites: [{ suites: [{ specs: [{ tests: [{ results: [{ status: "failed", errors: [{ message }] }] }] }] }] }],
   });
-  expect(isReviewedUniquenessFailure(report("Error: Coverage read HTTP status (body deliberately withheld)"))).toBe(false);
-  expect(isReviewedUniquenessFailure(report("Error: unrelated setup\n> expect(matching, '" + label + "').toHaveLength(1);\nExpected length: 1\nReceived length: 2"))).toBe(false);
-  expect(isReviewedUniquenessFailure(report("Error: " + label + "\nExpected length: 1\nReceived length: 3"))).toBe(false);
-  expect(isReviewedUniquenessFailure(report("Error: " + label + "\nExpected length: 1\nReceived length: 2"))).toBe(true);
+  expect(matches(report("Error: Coverage read HTTP status (body deliberately withheld)"))).toBe(false);
+  expect(matches(report("Error: unrelated setup\n> expect(matching, '" + label + "').toHaveLength(1);\nExpected length: 1\nReceived length: 2"))).toBe(false);
+  expect(matches(report("Error: " + label + "\nExpected length: 1\nReceived length: 3"))).toBe(false);
+  expect(matches(report("Error: " + label + "\nExpected length: 1\nReceived length: 2"))).toBe(true);
 });
 
 type DisposableTargetProof = {
@@ -360,11 +342,77 @@ async function governedPacket(human: APIRequestContext, projectId: string, track
  * test actor; the handoff's requirement/receipt/link are synthetic, identified
  * as such. A separate governed scenario must exercise a real approved packet.
  */
-async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
+async function readRunInInterface(
+  page: Page,
+  projectId: string,
+  currentCase: { id: string; externalId: string; title: string },
+  detail: any,
+  execution: { executionId: string; status: string },
+  observed: ReturnType<typeof reconcilePacketEvidence>["observed"]
+) {
+  // Reuse the same native Runs produced by the actual reporter. The separate
+  // execution UI suite owns generic ingest/viewer behavior, not this joined seam.
+  await page.goto(new URL("/projects/" + projectId + "/cycles", env.webBaseUrl).href);
+  await expect(page.getByRole("heading", { name: "Test Runs", exact: true })).toBeVisible();
+  const read = page.waitForResponse(response => response.request().method() === "GET"
+    && new URL(response.url()).pathname === "/api/cycles/" + detail.runId);
+  await page.getByRole("link", { name: detail.name, exact: true }).click();
+  const response = await read;
+  expect(response.ok(), "Opening the Run must read its exact persisted identity").toBe(true);
+  expect((await response.json()).id).toBe(detail.runId);
+  await expect(page.getByRole("heading", { name: detail.name, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reopen", exact: true })).toBeVisible();
+  await expect(page.getByTitle("Results in this run were reported by an automation SDK, not entered by hand")).toBeVisible();
+  await expect(page.getByTitle(detail.commitSha, { exact: true })).toBeVisible();
+  await expect(page.getByText(detail.branch, { exact: true })).toBeVisible();
+
+  // Reload rather than trusting state left in the client after the first read.
+  await page.reload();
+  const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: currentCase.externalId, exact: true }) });
+  await expect(row).toHaveCount(1);
+  await expect(row.getByText(execution.status, { exact: true })).toBeVisible();
+  await test.info().attach("native-run-summary-" + detail.runId, {
+    body: await page.screenshot(), contentType: "image/png"
+  });
+  await row.getByRole("button", { name: currentCase.title, exact: true }).click();
+  await expect(page.getByTestId("result-meta")).toContainText("Automated");
+  if (execution.status === "Failed") {
+    await expect(page.getByTestId("result-meta")).toContainText("exactly one current approved link for the selected case and criteria");
+  } else {
+    await expect(page.getByText("Failure reported by automation", { exact: true })).toHaveCount(0);
+  }
+  await expect(page.getByText("Evidence(" + observed.length + ")", { exact: true })).toBeVisible();
+  const retained = [];
+  for (const item of observed) {
+    const href = "/api/cycles/" + detail.runId + "/executions/" + execution.executionId
+      + "/attachments/" + item.native.id + "/download";
+    const link = page.locator('a[href$="' + href + '"]');
+    await expect(link).toHaveCount(1);
+    await expect(link).toContainText(item.native.fileName);
+    const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
+    expect(await download.failure(), "The evidence link must deliver a file").toBeNull();
+    const downloaded = await download.path();
+    expect(downloaded).not.toBeNull();
+    const bytes = await readFile(downloaded!);
+    expect(bytes, "Browser-downloaded bytes for " + item.native.fileName).toEqual(await readFile(item.file.path!));
+    retained.push({ id: item.native.id, fileName: item.native.fileName, sha256: createHash("sha256").update(bytes).digest("hex") });
+  }
+  await test.info().attach("native-run-evidence-" + detail.runId, {
+    body: await page.screenshot(), contentType: "image/png"
+  });
+  // CI retains this bounded readback after disposable record cleanup. It is
+  // engineering evidence, never a persistent TESBOPROJECT execution receipt.
+  await test.info().attach("native-run-readback-" + detail.runId + ".json", {
+    body: Buffer.from(JSON.stringify({ projectId, testcaseId: currentCase.id, externalId: currentCase.externalId,
+      runId: detail.runId, executionId: execution.executionId, status: execution.status, source: detail.source,
+      closeStatus: detail.closeStatus, closedAt: detail.closedAt, commitSha: detail.commitSha,
+      branch: detail.branch, evidence: retained })),
+    contentType: "application/json"
+  });
+}
+
+async function runHandoffJourney(human: APIRequestContext, governed: boolean, page?: Page) {
   test.setTimeout(240_000); // DevSkim: ignore DS172411
-  // This proof grants a disposable API token and approves a fixture case. It must
-  // never run against a staging/production Tesbo project by accidental E2E_ENV selection.
-  verifyDisposableTarget();
   let projectId = stored.projectId;
   let ownedProjectId: string | undefined;
   let bugId: string | undefined;
@@ -518,16 +566,25 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
       " testDir: '.', testMatch: '**/*.spec.mjs', workers: 1, retries: 0, timeout: 30000,",
       " reporter: [['list'], ['json', { outputFile: 'report.json' }],",
       "  [" + JSON.stringify(reporterPath) + ", { strict: true, requireConfig: true,",
-      "   attachEvidence: 'always', runName: 'Disposable approved-handoff reporter proof' }]],",
+      "   attachEvidence: 'always', runName: process.env.TESBO_JOURNEY_RUN_NAME,",
+      "   buildVersion: process.env.GIT_COMMIT }]],",
       "});",
     ].join("\n");
     await writeFile(path.join(temp, "playwright.config.mjs"), config);
     await mkdir(path.join(temp, "tests"), { recursive: true });
 
     async function execute(pathname: "/good" | "/fault", expectedPass: boolean) {
+      const runName = "Disposable generated " + (expectedPass ? "pass " : "fault ") + randomUUID();
+      const commitSha = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: path.join(__dirname, "../.."), encoding: "utf8"
+      }).trim();
+      const branch = process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME;
+      expect(branch, "The hosted fixture must identify its actual source branch").toBeTruthy();
       const childEnv = {
         ...process.env,
         GITHUB_ACTIONS: "", GITHUB_RUN_ID: "", // two distinct native Runs, not shards of the CI run
+        GIT_COMMIT: commitSha, GIT_BRANCH: branch,
+        TESBO_JOURNEY_RUN_NAME: runName,
         TESBO_BASE_URL: env.apiBaseUrl, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: credential.token,
         TESBO_JOURNEY_API_ORIGIN: coverageOrigin, TESBO_JOURNEY_COVERAGE_URL: coverageOrigin + pathname,
         TESBO_JOURNEY_TOKEN: fixtureCredential, TESBO_JOURNEY_EVIDENCE_PATH: evidencePath,
@@ -558,6 +615,7 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
       const nativeRead = await human.get("/api/projects/" + projectId + "/automation/runs/" + runId);
       expect(nativeRead.ok(), "The reporter-created Run must be readable through the existing API").toBe(true);
       const detail = await nativeRead.json();
+      expect(detail).toMatchObject({ name: runName, commitSha, branch, buildVersion: commitSha });
       expect(runClosureProblems(detail), "The reporter must leave a Completed, closed Run with closure timestamps").toEqual([]);
       expect(detail.summary.total).toBe(1);
       expect(detail.summary[expectedPass ? "passed" : "failed"]).toBe(1);
@@ -568,16 +626,15 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
       expect(row.status).toBe(expectedPass ? "Passed" : "Failed");
       expect(row.reportedBy).toBe("automation");
       const output = JSON.parse(await readFile(path.join(temp!, "report.json"), "utf8"));
-      expect(output.stats[expectedPass ? "expected" : "unexpected"]).toBe(1);
-      expect(output.stats[expectedPass ? "unexpected" : "expected"]).toBe(0);
-      expect(output.errors ?? []).toHaveLength(0);
-      const results = reportResults(output);
-      expect(results).toHaveLength(1);
-      expect(results[0].status).toBe(expectedPass ? "passed" : "failed");
+      const { handoffReportResult, handoffFailureMatches } = await import(path.join(__dirname, "../../scripts/qa-handoff-fixture.mjs"));
+      const result = handoffReportResult(output, expectedPass ? "passed" : "failed");
+      expect(result, "The shared report owner must admit exactly the expected actual result").not.toBeNull();
       if (!expectedPass) {
-        expect(isReviewedUniquenessFailure(output), "The sole actual failed result must identify the reviewed uniqueness assertion and the seeded two-link fault").toBe(true);
+        expect(handoffFailureMatches(output, "exactly one current approved link for the selected case and criteria",
+          ["Expected length: 1", "Received length: 2"]),
+        "The sole actual failed result must identify the reviewed uniqueness assertion and the seeded two-link fault").toBe(true);
       }
-      const reconciled = reconcilePacketEvidence(results[0].attachments ?? [], row.evidence);
+      const reconciled = reconcilePacketEvidence(result.attachments ?? [], row.evidence);
 
       const regularRead = await human.get("/api/cycles/" + runId + "/executions");
       expect(regularRead.ok()).toBe(true);
@@ -596,6 +653,7 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
         expect(Buffer.from(await fileRead.body()), "Stored bytes for " + item.file.name)
           .toEqual(await readFile(item.file.path!));
       }
+      if (page) await readRunInInterface(page, projectId, currentCase, detail, row, reconciled.observed);
       expect(reconciled.packet.id).toBeTruthy();
       return { runId, executionId: row.executionId as string, evidenceId: reconciled.packet.id, detail };
     }
@@ -678,6 +736,14 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
       const retained = await human.get("/api/cycles/" + manualRetestId);
       expect(retained.status()).toBe(200);
       expect(await retained.json()).toMatchObject({ source: "manual", retestSourceCycleId: defectRun.runId, retestManifest: receipt.manifest });
+      if (page) {
+        await page.goto(new URL("/projects/" + projectId + "/cycles/" + manualRetestId, env.webBaseUrl).href);
+        const row = page.getByRole("row").filter({ has: page.getByRole("cell", { name: currentCase.externalId, exact: true }) });
+        await expect(row).toHaveCount(1);
+        await expect(row.getByText("Untested", { exact: true })).toBeVisible();
+        await expect(page.getByTestId("run-retest-origin")).toBeVisible();
+        await expect(page.getByTitle("Results in this run were reported by an automation SDK, not entered by hand")).toHaveCount(0);
+      }
       const originalFile = await human.get("/api/cycles/" + defectRun.runId + "/executions/" + defectRun.executionId
         + "/attachments/" + defectRun.evidenceId + "/download");
       expect(originalFile.status()).toBe(200);
@@ -788,13 +854,18 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   await runHandoffJourney(human, false);
 });
 
-test("AUT-HANDOFF-01 governed packet reaches actual generated pass, Bug-linked fault and corrected automation attempt without inventing manual retest execution", async () => {
+test("AUT-HANDOFF-01 governed packet reaches actual generated pass, Bug-linked fault and corrected automation attempt readable in Test Runs without inventing manual retest execution", async ({ browser }) => {
   test.setTimeout(240_000); // DevSkim: ignore DS172411
   verifyDisposableTarget();
+  expect(new URL(env.webBaseUrl).origin, "Browser readback is confined to the existing hosted disposable frontend").toBe("http://127.0.0.1:3000"); // DevSkim: ignore DS137138
+  const tenant = screensTenant();
+  expect(tenant, "Reuse the governed fixture's screens identity for browser readback").not.toBeNull();
   const human = await screensApi();
+  let context: Awaited<ReturnType<typeof browser.newContext>> | undefined;
   try {
-    await runHandoffJourney(human, true);
+    context = await browser.newContext({ storageState: tenant!.storageStatePath, acceptDownloads: true });
+    await runHandoffJourney(human, true, await context.newPage());
   } finally {
-    await human.dispose();
+    try { await context?.close(); } finally { await human.dispose(); }
   }
 });
