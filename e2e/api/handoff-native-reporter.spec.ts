@@ -7,9 +7,10 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import { env } from "../utils/env";
 import { approveTestcase } from "../utils/testcase-approval";
+import { createProject, screensApi } from "../utils/screens-tenant";
 
 const runExecutable = promisify(execFile);
 const stored = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf8")) as { projectId: string };
@@ -227,19 +228,154 @@ test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process
   expect(disposableTargetMatches({ ...proof, database: "postgresql://localhost:5432/tesbo_prod", backendDatabase: "postgresql://localhost:5432/tesbo_prod" }), "alternate database").toBe(false);
 });
 
+
+// Reuse the actual governed publication and pinned Git/investigation bridge.
+// All decisions here are made by a disposable test actor after hosted-target
+// admission. No human review of customer or persistent TESBOPROJECT data is implied.
+async function governedPacket(human: APIRequestContext, projectId: string, trackCase: (id: string) => void) {
+  const base = "/api/projects/" + projectId;
+  const targetPath = "tests/journey.spec.mjs";
+  const title = "Disposable governed handoff " + randomUUID();
+  const requirementOperationId = randomUUID();
+  const testcaseOperationId = randomUUID();
+  const criterionKeys = ["AC-1"];
+  const createSkill = async (module: string, subtype: string, operation: string) => {
+    const created = await human.post(base + "/skills", { data: {
+      title: "Fixture method " + operation,
+      module, subtype, skillKey: "SKL-" + randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase(),
+      instructions: "Use observable outcomes, retain exact reviewed identities and preserve failed observations."
+    } });
+    expect(created.ok(), "Disposable Skill creation").toBe(true);
+    const doc = await created.json();
+    const submitted = await human.post(base + "/knowledge-base/documents/" + doc.id + "/submissions", { data: {
+      expectedRevision: doc.editRevision, submissionKey: randomUUID()
+    } });
+    expect(submitted.ok(), "Disposable Skill submission").toBe(true);
+    const version = await submitted.json();
+    const approved = await human.patch(base + "/skills/" + doc.id + "/approve", { data: { versionId: version.id } });
+    expect(approved.ok(), "Disposable exact Skill approval").toBe(true);
+    const reviewed = await approved.json();
+    return { skillDocumentId: doc.id, versionId: reviewed.approvedVersionId };
+  };
+  const assign = async (skill: { skillDocumentId: string; versionId: string }, module: string, subtype: string, operation: string) => {
+    const assigned = await human.post(base + "/skill-assignments", { data: { ...skill, module, subtype, operation } });
+    expect(assigned.ok(), "Disposable exact Skill assignment").toBe(true);
+    expect((await assigned.json()).resolution?.status).toBe("resolved");
+  };
+  const reqSkill = await createSkill("requirements", "functional", "requirement_revision");
+  await assign(reqSkill, "requirements", "functional", "requirement_revision");
+  await assign(reqSkill, "requirements", "functional", "requirement_case_link");
+  const caseSkill = await createSkill("test_cases", "manual", "testcase_create");
+  await assign(caseSkill, "test_cases", "manual", "testcase_create");
+
+  const stagedResponse = await human.post(base + "/requirements/proposals", { data: {
+    requestKey: randomUUID(), title, operations: [
+      { opType: "requirement_revision", operationId: requirementOperationId, title,
+        description: "Disposable exact approved-link observation", criteria: [{ key: "AC-1", text: referenceOracle }] },
+      { opType: "testcase_create", operationId: testcaseOperationId, draft: {
+        title: title + " case", automationRepo: originRepo, automationPath: targetPath,
+        automationFramework: "Playwright",
+        steps: [{ stepNumber: 1, action: "Read the approved requirement coverage", expectedResult: referenceOracle }]
+      } },
+      { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys }
+    ]
+  } });
+  expect(stagedResponse.status(), "Governed bundle staged").toBe(201);
+  const task = await stagedResponse.json();
+  expect(task.skillContext).toMatchObject({ status: "resolved" });
+  expect(task.skillContext.assignments).toHaveLength(3);
+  const appliedResponse = await human.post(base + "/requirements/proposals/" + task.id + "/apply", {
+    data: { expectedProposalRevision: task.proposalRevision }
+  });
+  expect(appliedResponse.ok(), "Exact bundle applied by disposable reviewer").toBe(true);
+  const applied = await appliedResponse.json();
+  const requirementId = applied.receipt.requirement.documentId as string;
+  const submittedVersionId = applied.receipt.requirement.versionId as string;
+  const testcaseId = applied.receipt.testcase.id as string;
+  trackCase(testcaseId);
+  const approval = await human.post(base + "/requirements/" + requirementId + "/approve", { data: { versionId: submittedVersionId } });
+  expect(approval.ok(), "Exact requirement submission approved").toBe(true);
+  const requirementVersionId = (await approval.json()).approvedVersionId as string;
+  const currentCase = await approveTestcase(human, projectId, testcaseId);
+  const coveragePath = base + "/requirements/" + requirementId + "/coverage";
+  const readCoverage = async () => {
+    const response = await human.get(coveragePath);
+    expect(response.status(), "Native requirement coverage").toBe(200);
+    return response.json();
+  };
+  const before = await readCoverage();
+  const currentLinks = before.cases.filter((item: any) => item.testcaseId === testcaseId
+    && item.requirementVersionId === requirementVersionId && JSON.stringify(item.criterionKeys) === JSON.stringify(criterionKeys));
+  expect(currentLinks).toHaveLength(1);
+  const activated = await human.post(base + "/requirements/" + requirementId + "/links/" + currentLinks[0].linkId + "/reapply", { data: {
+    expectedRequirementVersionId: requirementVersionId, expectedCaseRevision: currentCase.editRevision,
+    expectedApprovalRevision: currentCase.approvalRevision
+  } });
+  expect(activated.ok(), "Exact case/requirement link activated").toBe(true);
+  const linkId = (await activated.json()).link.id as string;
+  expect((await readCoverage()).readings).toMatchObject({ authored: true, approved: true, executed: false, passing: false });
+
+  const { createHandoffFixture } = await import(path.join(__dirname, "../../scripts/qa-handoff-fixture.mjs"));
+  const { prepareHandoff, createHandoffRequest } = await import(path.join(__dirname, "../../scripts/qa-approved-handoff.mjs"));
+  // The existing earlier smoke step owns this exact pinned checkout. Do not
+  // silently substitute an unpinned checker or skip the governed test.
+  const harnessRoot = process.env.QA_INVESTIGATION_HARNESS_ROOT
+    || (process.env.RUNNER_TEMP && path.join(process.env.RUNNER_TEMP, "qa-investigation-harness"));
+  expect(harnessRoot && fs.existsSync(harnessRoot), "Existing pinned investigation checkout is required").toBeTruthy();
+  const fixture = await createHandoffFixture({
+    repository: originRepo, targetPath, harnessRoot, plan: {
+      key: "AC-1", title, oracle: referenceOracle,
+      risk: "A second current approved link escapes the uniqueness assertion",
+      action: "Read the approved coverage and inspect the selected logical group",
+      observation: "Controlled disposable investigation input, not production behavior"
+    }
+  });
+  try {
+    let confirmations = 0;
+    const packet = await prepareHandoff({ ...fixture.selected, projectId, taskId: task.id }, {
+      request: createHandoffRequest(env.apiBaseUrl, human),
+      checkTarget: fixture.checkTarget,
+      confirm: async (preview: any, digest: string) => {
+        expect(preview.native).toMatchObject({
+          projectId, taskId: task.id, receiptId: applied.receipt.id, proposalRevision: task.proposalRevision,
+          requirementId, requirementVersionId, linkId, testcaseId,
+          testcaseRevision: currentCase.editRevision, testcaseApprovalRevision: currentCase.approvalRevision,
+          criterionKeys, criteria: [{ key: "AC-1", text: referenceOracle }],
+          testcase: { id: testcaseId, externalId: currentCase.externalId, automationPath: targetPath }
+        });
+        expect(preview.target).toEqual({ repository: originRepo, branch: "main",
+          revision: fixture.selected.repoRevision, path: targetPath });
+        expect(preview.investigation.risks).toHaveLength(1);
+        expect(preview.investigation.risks[0].oracle).toBe(referenceOracle);
+        expect(digest).toBe(createHash("sha256").update(JSON.stringify(preview)).digest("hex"));
+        confirmations++;
+        return true;
+      }
+    });
+    expect(confirmations).toBe(1);
+    return { packet, currentCase, requirementId, requirementVersionId, linkId, coveragePath, readCoverage };
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
 /**
  * End-to-end reporter seam, not a claim of human approval of a live requirement:
  * the case is Draft then approved through the real native API by the disposable
  * test actor; the handoff's requirement/receipt/link are synthetic, identified
  * as such. A separate governed scenario must exercise a real approved packet.
  */
-test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, execution and evidence on pass and fault", async ({ request: human }) => {
+async function runHandoffJourney(human: APIRequestContext, governed: boolean) {
   test.setTimeout(240_000);
  // DevSkim: ignore DS172411
   // This proof grants a disposable API token and approves a fixture case. It must
   // never run against a staging/production Tesbo project by accidental E2E_ENV selection.
   verifyDisposableTarget();
-  const projectId = stored.projectId;
+  let projectId = stored.projectId;
+  let ownedProjectId: string | undefined;
+  let bugId: string | undefined;
+  let manualRetestId: string | undefined;
+  let nativePacket: Awaited<ReturnType<typeof governedPacket>> | undefined;
   const runIds: string[] = [];
   let testcaseId: string | undefined;
   let credentialId: string | undefined;
@@ -258,6 +394,25 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       res.writeHead(401).end();
       return;
     }
+    if (nativePacket) {
+      // Read the real application for every child attempt. Only the controlled
+      // faulty response is altered, in this isolated transport; no bad link
+      // is written to the governed project.
+      const selection = nativePacket;
+      void selection.readCoverage().then(body => {
+        const selected = body.cases.filter((row: any) => row.linkId === selection.linkId);
+        if (selected.length !== 1) {
+          res.writeHead(409).end();
+          return;
+        }
+        const cases = req.url === "/fault"
+          ? [...body.cases, { ...selected[0], linkId: randomUUID() }]
+          : body.cases;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ...body, cases }));
+      }).catch(() => res.writeHead(503).end());
+      return;
+    }
     const row = {
       linkId, testcaseId, requirementVersionId, criterionKeys: ["AC-1"], approved: true,
       testcaseRevision: currentCase?.editRevision, testcaseApprovalRevision: currentCase?.approvalRevision,
@@ -268,21 +423,31 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   });
 
   try {
-    const created = await human.post("/api/projects/" + projectId + "/testcases", {
-      data: {
-        title: "Disposable generated reporter " + Date.now(),
-        automationRepo: originRepo,
-        automationPath: "tests/journey.spec.mjs",
-        automationFramework: "Playwright",
-        status: "Draft",
-      },
-    });
-    expect(created.status(), "Disposable draft must be created").toBe(201);
-    const draft = await created.json();
-    testcaseId = draft.id;
-    expect(testcaseId).toBeTruthy();
-    // Register the created ID before approval so a failed review is still cleaned up.
-    currentCase = await approveTestcase(human, projectId, testcaseId!);
+    if (governed) {
+      // Use a fresh project in the existing disposable screens tenant; avoid
+      // changing the smoke project's effective Skill assignments.
+      const project = await createProject(human, { name: "QA journey " + Date.now() });
+      projectId = project.id;
+      ownedProjectId = project.id;
+      nativePacket = await governedPacket(human, projectId, id => { testcaseId = id; });
+      currentCase = nativePacket.currentCase;
+    } else {
+      const created = await human.post("/api/projects/" + projectId + "/testcases", {
+        data: {
+          title: "Disposable generated reporter " + Date.now(),
+          automationRepo: originRepo,
+          automationPath: "tests/journey.spec.mjs",
+          automationFramework: "Playwright",
+          status: "Draft",
+        },
+      });
+      expect(created.status(), "Disposable draft must be created").toBe(201);
+      const draft = await created.json();
+      testcaseId = draft.id;
+      expect(testcaseId).toBeTruthy();
+      // Register the created ID before approval so a failed review is still cleaned up.
+      currentCase = await approveTestcase(human, projectId, testcaseId!);
+    }
     expect(currentCase.status).toBe("Approved");
     expect(currentCase.externalId).toBeTruthy();
     expect(currentCase.editRevision).toMatch(/^[a-f0-9]{64}$/);
@@ -328,8 +493,9 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         risks: [{ id: "R1", oracle: referenceOracle }],
       },
     };
-    const selectionDigest = createHash("sha256").update(JSON.stringify(packetBody)).digest("hex");
-    const packet = { ...packetBody, selectionDigest };
+    const packet = nativePacket?.packet ?? { ...packetBody,
+      selectionDigest: createHash("sha256").update(JSON.stringify(packetBody)).digest("hex") };
+    const selectionDigest = packet.selectionDigest;
 
     // The packet is passed through the actual reference generator, not a
     // handwritten imitation of its test or its Tesbo reporter marker.
@@ -351,6 +517,8 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
     await runExecutable(process.execPath, ["--input-type=module", "-e", generatorScript, packetPath, temp], {
       cwd: temp, timeout: 30_000,
     });
+    const generatedPath = path.join(temp, packet.target.path);
+    const generatedDigest = createHash("sha256").update(await readFile(generatedPath)).digest("hex");
 
     const reporterPath = path.resolve(__dirname, "../../sdk/playwright-reporter/dist/index.js");
     const cliPath = path.resolve(__dirname, "../node_modules/@playwright/test/cli.js");
@@ -376,6 +544,10 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost",
  // DevSkim: ignore DS162092
       };
+      // Re-execute the same emitted spec; a previous report or modified oracle
+      // cannot count as a fresh retest of this selection.
+      expect(createHash("sha256").update(await readFile(generatedPath)).digest("hex")).toBe(generatedDigest);
+      await rm(path.join(temp!, "report.json"), { force: true });
       let succeeded = false;
       let stdout = "";
       try {
@@ -400,6 +572,8 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       expect(runClosureProblems(detail), "The reporter must leave a Completed, closed Run with closure timestamps").toEqual([]);
       expect(detail.summary.total).toBe(1);
       expect(detail.summary[expectedPass ? "passed" : "failed"]).toBe(1);
+      expect(detail.results).toHaveLength(1);
+      expect(detail.source).toBe("automation");
       const row = detail.results.find((item: any) => item.caseId === currentCase.externalId);
       expect(row, "Exactly the native approved case must receive the execution").toBeTruthy();
       expect(row.status).toBe(expectedPass ? "Passed" : "Failed");
@@ -434,12 +608,105 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
           .toEqual(await readFile(item.file.path!));
       }
       expect(reconciled.packet.id).toBeTruthy();
-      return runId;
+      return { runId, executionId: row.executionId as string, evidenceId: reconciled.packet.id, detail };
     }
 
     const correctRun = await execute("/good", true);
     const defectRun = await execute("/fault", false);
-    expect(defectRun).not.toBe(correctRun);
+    expect(defectRun.runId).not.toBe(correctRun.runId);
+    if (nativePacket) {
+      const project = "/api/projects/" + projectId;
+      const bug = await human.post(project + "/bugs", { data: {
+        title: "Controlled duplicate-link failure " + randomUUID(),
+        links: [{ testcaseId, cycleId: defectRun.runId, executionId: defectRun.executionId }]
+      } });
+      expect(bug.status(), "Link actual failed child execution to Bug").toBe(201);
+      bugId = (await bug.json()).id as string;
+      const readFailure = async () => {
+        const response = await human.get(project + "/automation/runs/" + defectRun.runId);
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const original = await readFailure();
+      expect(original.results).toEqual(defectRun.detail.results);
+      const preview = await human.get("/api/cycles/" + defectRun.runId + "/retests/preview", {
+        params: { executionIds: defectRun.executionId }
+      });
+      expect(preview.status()).toBe(200);
+      const reviewed = await preview.json();
+      expect(reviewed.occurrences).toHaveLength(1);
+      const source = reviewed.occurrences[0];
+      expect(source).toMatchObject({
+        sourceExecutionId: defectRun.executionId, testcaseId, eligible: true, definitionChanged: false,
+        sourceResult: { status: "Failed", reported_by: "automation" },
+        sourceApprovalRevision: currentCase.approvalRevision
+      });
+      expect(source.sourceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ id: defectRun.evidenceId })]));
+      expect(source.sourceBugLinks).toEqual([expect.objectContaining({ bugId })]);
+      const retest = await human.post("/api/cycles/" + defectRun.runId + "/retests", { data: {
+        requestKey: randomUUID(), executionIds: [defectRun.executionId], expectedPreviewDigest: reviewed.previewDigest,
+        name: "Reviewed manual retest " + randomUUID(), environment: "controlled-fixture"
+      } });
+      expect(retest.status()).toBe(201);
+      const receipt = await retest.json();
+      manualRetestId = receipt.cycleId as string;
+      expect(receipt.manifest.occurrences).toHaveLength(1);
+      expect(receipt.manifest.occurrences[0]).toMatchObject(source);
+      const readManual = async () => {
+        const response = await human.get("/api/cycles/" + manualRetestId + "/executions");
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const pending = await readManual();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({
+        id: receipt.manifest.occurrences[0].executionId, status: "Untested", executedAt: null, evidenceCount: 0
+      });
+
+      // Remove only the injected transport fault; rerun the actual generated
+      // test and reporter. This is a new automation Run, NOT execution of the
+      // separately reviewed native manual retest.
+      const corrected = await execute("/good", true);
+      expect(new Set([correctRun.runId, defectRun.runId, corrected.runId, manualRetestId]).size).toBe(4);
+      expect(new Set([correctRun.executionId, defectRun.executionId, corrected.executionId, pending[0].id]).size).toBe(4);
+      const linked = await human.post("/api/bugs/" + bugId + "/links", { data: {
+        testcaseId, cycleId: corrected.runId, executionId: corrected.executionId
+      } });
+      expect(linked.ok()).toBe(true);
+      const bugRead = await human.get("/api/bugs/" + bugId);
+      expect(bugRead.status()).toBe(200);
+      const links = (await bugRead.json()).links;
+      expect(links).toHaveLength(2);
+      expect(links).toEqual(expect.arrayContaining([
+        expect.objectContaining({ cycleId: defectRun.runId, executionId: defectRun.executionId, testcaseId }),
+        expect.objectContaining({ cycleId: corrected.runId, executionId: corrected.executionId, testcaseId })
+      ]));
+      expect((await readFailure()).results).toEqual(original.results);
+      const correctedRead = await human.get(project + "/automation/runs/" + corrected.runId);
+      expect(correctedRead.status()).toBe(200);
+      expect((await correctedRead.json()).results).toEqual(corrected.detail.results);
+      expect(await readManual()).toEqual(pending);
+      const retained = await human.get("/api/cycles/" + manualRetestId);
+      expect(retained.status()).toBe(200);
+      expect(await retained.json()).toMatchObject({ source: "manual", retestSourceCycleId: defectRun.runId, retestManifest: receipt.manifest });
+      const originalFile = await human.get("/api/cycles/" + defectRun.runId + "/executions/" + defectRun.executionId
+        + "/attachments/" + defectRun.evidenceId + "/download");
+      expect(originalFile.status()).toBe(200);
+      expect(Buffer.from(await originalFile.body())).toEqual(await readFile(evidencePath));
+      const finalCoverage = await nativePacket.readCoverage();
+      expect(finalCoverage.readings).toMatchObject({ approved: true, executed: true, passing: true, mixed: true });
+      const currentLink = finalCoverage.cases.filter((row: any) => row.linkId === nativePacket!.linkId);
+      expect(currentLink).toHaveLength(1);
+      expect(currentLink[0].latestAttempt).toMatchObject({
+        status: "Passed", cycleId: corrected.runId, executionId: corrected.executionId
+      });
+      const unchangedCase = await human.get(project + "/testcases/" + testcaseId);
+      expect(unchangedCase.status()).toBe(200);
+      expect(await unchangedCase.json()).toMatchObject({
+        id: testcaseId, approvalCurrent: true, approvalRevision: currentCase.approvalRevision,
+        editRevision: currentCase.editRevision
+      });
+    }
   } catch (error) {
     primaryFailed = true;
     throw error;
@@ -460,6 +727,24 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         return undefined;
       } });
     }
+    if (bugId) {
+      const endpoint = "/api/bugs/" + bugId;
+      steps.push({ label: "fixture Bug " + bugId, action: async () => {
+        const removed = await human.delete(endpoint, { failOnStatusCode: false });
+        if (!removed.ok()) return "delete HTTP " + removed.status();
+        const readback = await human.get(endpoint, { failOnStatusCode: false });
+        return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
+      } });
+    }
+    if (manualRetestId) {
+      const endpoint = "/api/cycles/" + manualRetestId;
+      steps.push({ label: "fixture manual retest " + manualRetestId, action: async () => {
+        const removed = await human.delete(endpoint, { failOnStatusCode: false });
+        if (!removed.ok()) return "delete HTTP " + removed.status();
+        const readback = await human.get(endpoint, { failOnStatusCode: false });
+        return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
+      } });
+    }
     for (const runId of new Set(runIds)) {
       steps.push({ label: "run " + runId, action: async () => {
         const removed = await human.delete("/api/cycles/" + runId, { failOnStatusCode: false });
@@ -468,9 +753,20 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
       } });
     }
-    if (testcaseId) {
+    if (testcaseId && !ownedProjectId) {
       const endpoint = project + "/testcases/" + testcaseId;
       steps.push({ label: "case " + testcaseId, action: async () => {
+        const removed = await human.delete(endpoint, { failOnStatusCode: false });
+        if (!removed.ok()) return "delete HTTP " + removed.status();
+        const readback = await human.get(endpoint, { failOnStatusCode: false });
+        return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
+      } });
+    }
+    if (ownedProjectId) {
+      const endpoint = "/api/projects/" + ownedProjectId;
+      // This project was created only after disposable process admission, and
+      // owns all of the governed fixture's Skills, proposal and requirement.
+      steps.push({ label: "governed fixture project " + ownedProjectId, action: async () => {
         const removed = await human.delete(endpoint, { failOnStatusCode: false });
         if (!removed.ok()) return "delete HTTP " + removed.status();
         const readback = await human.get(endpoint, { failOnStatusCode: false });
@@ -496,5 +792,20 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       console.error("Native reporter fixture cleanup incomplete: " + description);
       if (!primaryFailed) throw new Error("Native reporter fixture cleanup incomplete: " + description);
     }
+  }
+}
+
+test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, execution and evidence on pass and fault", async ({ request: human }) => {
+  await runHandoffJourney(human, false);
+});
+
+test("AUT-HANDOFF-01 governed packet reaches actual generated pass, Bug-linked fault and corrected automation attempt without inventing manual retest execution", async () => {
+  test.setTimeout(240_000);
+  verifyDisposableTarget();
+  const human = await screensApi();
+  try {
+    await runHandoffJourney(human, true);
+  } finally {
+    await human.dispose();
   }
 });
