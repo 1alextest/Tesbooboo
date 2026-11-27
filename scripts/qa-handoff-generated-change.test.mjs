@@ -67,7 +67,7 @@ const caseObject = {
   testcaseRevision: REVISION, testcaseApprovalRevision: APPROVAL, approved: true,
 };
 
-async function runSpec(directory, coveragePath) {
+async function runSpec(directory, coveragePath, token = 'test-token') {
   const report = join(directory, 'report.json');
   // Each invocation must produce its own report, not reuse an earlier result.
   await rm(report, { force: true });
@@ -79,7 +79,7 @@ async function runSpec(directory, coveragePath) {
           !/^(?:https?_proxy|all_proxy)$/i.test(key))),
         NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
         TESBO_JOURNEY_COVERAGE_URL: coveragePath, TESBO_JOURNEY_API_ORIGIN: new URL(coveragePath).origin,
-        TESBO_JOURNEY_TOKEN: 'test-token', TESBO_JOURNEY_EVIDENCE_PATH: join(directory, 'evidence.json')
+        TESBO_JOURNEY_TOKEN: token, TESBO_JOURNEY_EVIDENCE_PATH: join(directory, 'evidence.json')
       },
     });
     return { ok: true, report: JSON.parse(await readFile(report, 'utf8')), output: output.stdout + output.stderr };
@@ -146,13 +146,28 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
   let coverageReads = 0;
   const server = createServer((req, res) => {
     coverageReads++;
+    if (req.url === '/private-transport') {
+      req.socket.destroy();
+      return;
+    }
     if (req.url === '/private-error') {
       res.writeHead(503, { 'content-type': 'text/plain' });
       res.end(privateCanary);
       return;
     }
     res.writeHead(200, { 'content-type': 'application/json' });
-    if (req.url === '/faulty') res.end(coverage([caseObject, { ...caseObject }]));
+    if (req.url === '/private-json') res.end('invalid JSON ' + privateCanary);
+    else if (req.url === '/private-requirement') res.end(JSON.stringify({ requirementId: { privateCanary }, approvedVersionId: REQUIREMENT_VERSION, cases: [caseObject] }));
+    else if (req.url === '/private-version') res.end(JSON.stringify({ requirementId: REQUIREMENT, approvedVersionId: { privateCanary }, cases: [caseObject] }));
+    else if (req.url === '/private-link') res.end(coverage([{ ...caseObject, linkId: { privateCanary } }]));
+    else if (req.url === '/private-edit-revision') res.end(coverage([{ ...caseObject, testcaseRevision: { privateCanary } }]));
+    else if (req.url === '/private-approval-revision') res.end(coverage([{ ...caseObject, testcaseApprovalRevision: { privateCanary } }]));
+    else if (req.url === '/private-duplicate') res.end(coverage([
+      { ...caseObject, internalReviewerNote: privateCanary },
+      { ...caseObject, linkId: '00000000-0000-4000-8000-000000000009', internalReviewerNote: privateCanary },
+    ]));
+    else if (req.url === '/private-good') res.end(coverage([{ ...caseObject, internalReviewerNote: privateCanary }]));
+    else if (req.url === '/faulty') res.end(coverage([caseObject, { ...caseObject }]));
     else if (req.url === '/different-link-id') res.end(coverage([caseObject, { ...caseObject, linkId: '00000000-0000-4000-8000-000000000009' }]));
     else if (req.url === '/reversed-only') res.end(coverage([{ ...caseObject, criterionKeys: ['AC-2', 'AC-1'] }]));
     else if (req.url === '/reversed-neighbor') res.end(coverage([caseObject, { ...caseObject,
@@ -191,6 +206,18 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
       assert.equal((await readFile(resolve(directory, attachments[0].path))).equals(expectedBytes), true,
         'the attachment must contain only the canonical identity bytes');
     };
+    const verifyPrivateFieldsWithheld = async (candidate, status) => {
+      assert.equal(JSON.stringify(candidate.report).includes(privateCanary), false,
+        'unreviewed response fields must not appear in child report diagnostics');
+      assert.equal(candidate.output.includes(privateCanary), false,
+        'unreviewed response fields must not appear in child output');
+      for (const attachment of handoffReportResult(candidate.report, status).attachments ?? []) {
+        const bytes = attachment.path ? await readFile(resolve(directory, attachment.path))
+          : Buffer.from(attachment.body ?? '', 'base64');
+        assert.equal(bytes.includes(Buffer.from(privateCanary)), false,
+          'unreviewed response fields must not appear in any child evidence attachment');
+      }
+    };
     const good = await runSpec(directory, `http://127.0.0.1:${port}/good`);
     assert.equal(good.ok, true, 'correct coverage must pass');
     await verifyIdentityAttachment(good.report, 'passed');
@@ -198,6 +225,7 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
     const failureCases = [
       ['faulty', uniquenessLabel, lengths(2)],
       ['different-link-id', uniquenessLabel, lengths(2)],
+      ['private-duplicate', uniquenessLabel, lengths(2)],
       ['wrong-link-id', 'The sole approved link must match the selected native link', comparison(LINK, different)],
       ['wrong-requirement', 'Coverage must be for the reviewed requirement', comparison(REQUIREMENT, different)],
       ['wrong-approved-version', 'Coverage must be for the reviewed approved version', comparison(REQUIREMENT_VERSION, different)],
@@ -212,18 +240,39 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
       assert.equal(handoffFailureMatches(candidate.report, label, details), true,
         `${scenario} must fail at the intended assertion with its expected and received values`);
       await verifyIdentityAttachment(candidate.report, 'failed');
-      // A runtime marker cannot be present in Git-diff metadata. Check the
-      // entire actual report and captured child output without printing either.
-      assert.equal(JSON.stringify(candidate.report).includes(privateCanary), false,
-        'a rejected coverage API body must not appear in the report');
-      assert.equal(candidate.output.includes(privateCanary), false,
-        'a rejected coverage API body must not appear in child output');
+      // The marker comes from the actual controlled response. Inspect derived
+      // failure context as well as the canonical packet attachment and report.
+      await verifyPrivateFieldsWithheld(candidate, 'failed');
     }
-    for (const scenario of ['other-case', 'different-criteria', 'reversed-neighbor']) {
+    for (const scenario of ['other-case', 'different-criteria', 'reversed-neighbor', 'private-good']) {
       const candidate = await runSpec(directory, `http://127.0.0.1:${port}/${scenario}`);
       assert.equal(candidate.ok, true, `${scenario} is a legitimate unrelated link and must not be blocked`);
       await verifyIdentityAttachment(candidate.report, 'passed');
+      await verifyPrivateFieldsWithheld(candidate, 'passed');
     }
+
+    // Exercise parser, matcher and request failures using values that only exist
+    // at runtime. Raw transport errors can contain Authorization header values.
+    for (const [scenario, label] of [
+      ['private-json', 'Coverage response is not valid JSON (body deliberately withheld).'],
+      ['private-requirement', 'Coverage requirement identity must be a UUID'],
+      ['private-version', 'Coverage approved version identity must be a UUID'],
+      ['private-link', 'The selected link identity must be a UUID'],
+      ['private-edit-revision', 'The selected case edit revision must be a digest'],
+      ['private-approval-revision', 'The selected case approval revision must be a digest'],
+      ['private-transport', 'Coverage request failed (request details deliberately withheld).'],
+    ]) {
+      const candidate = await runSpec(directory, `http://127.0.0.1:${port}/${scenario}`, privateCanary);
+      assert.equal(candidate.ok, false, `${scenario} must be refused`);
+      assert.equal(handoffFailureMatches(candidate.report, label), true, `${scenario} must retain its bounded failure category`);
+      await verifyIdentityAttachment(candidate.report, 'failed');
+      await verifyPrivateFieldsWithheld(candidate, 'failed');
+    }
+    const userinfo = await runSpec(directory, `http://${privateCanary}@127.0.0.1:${port}/good`, privateCanary);
+    assert.equal(userinfo.ok, false);
+    assert.equal(handoffFailureMatches(userinfo.report, 'Coverage URLs may not carry credentials'), true);
+    await verifyPrivateFieldsWithheld(userinfo, 'failed');
+    assert.equal(attachmentsOf(handoffReportResult(userinfo.report, 'failed')).length, 0);
 
     // Reject an unreviewed extra evidence field before any coverage read or
     // packet attachment. A rejected input must not become an assertion diagnostic.
