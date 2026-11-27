@@ -75,12 +75,15 @@ export function generateCoverageSpec(packet) {
     testcaseRevision: native.testcaseRevision,
     testcaseApprovalRevision: native.testcaseApprovalRevision,
     selectionDigest: packet.selectionDigest,
-    target: packet.target,
+    // Keep the packet identity attachment bounded to the four reviewed target fields.
+    target: { repository: packet.target.repository, branch: packet.target.branch,
+      revision: packet.target.revision, path: packet.target.path },
     caseExternalId: native.testcase.externalId,
   };
   const tag = `@tesbo.testId(${JSON.stringify(native.testcase.externalId)})`;
   return `// Generated from an approved Tesbo automation handoff. Review before committing.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { test, expect } from '@playwright/test';
 
 const BASIS = ${literal(constants)};
@@ -109,13 +112,21 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
     expect(['127.0.0.1', 'localhost', '[::1]'].includes(destination.hostname),
       'Unencrypted API traffic is allowed only for a loopback disposable fixture').toBe(true);
   }
-  const evidenceBody = JSON.parse(readFileSync(evidence, 'utf8'));
-  expect(evidenceBody.selectionDigest).toBe(BASIS.selectionDigest);
-  expect(evidenceBody.target).toEqual(BASIS.target);
-  // Attach the validated identity before any assertion that could fail. On either
-  // outcome the reporter can retain the packet provenance separately from the
-  // observed outcome. The attachment does not itself attest execution success.
-  await test.info().attach('approved-handoff-evidence.json', { path: evidence, contentType: 'application/json' });
+  const identity = { selectionDigest: BASIS.selectionDigest, target: BASIS.target };
+  try {
+    if (!isDeepStrictEqual(JSON.parse(readFileSync(evidence, 'utf8')), identity)) {
+      throw new Error('Invalid packet identity evidence');
+    }
+  } catch {
+    // Never include the supplied path, parser diagnostic or unverified fields.
+    throw new Error('Packet identity evidence is unavailable or does not match the bounded payload.');
+  }
+  // The existing native reporter uploads file-backed attachments. Materialize
+  // the bounded identity in this attempt's output directory; do not forward
+  // the caller's raw file (which may change or include bytes hidden by parsing).
+  const validatedEvidence = test.info().outputPath('approved-handoff-identity.json');
+  writeFileSync(validatedEvidence, JSON.stringify(identity), { flag: 'wx', mode: 0o600 });
+  await test.info().attach('approved-handoff-evidence.json', { path: validatedEvidence, contentType: 'application/json' });
 
   const response = await request.get(coverageUrl, {
     headers: { Authorization: 'Bearer ' + token }, maxRedirects: 0
@@ -126,11 +137,10 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
   expect(body.requirementId, 'Coverage must be for the reviewed requirement').toBe(BASIS.requirementId);
   expect(body.approvedVersionId, 'Coverage must be for the reviewed approved version').toBe(BASIS.requirementVersionId);
   expect(Array.isArray(body.cases), 'Coverage cases must be a list').toBe(true);
-  const sameKeys = (keys) => Array.isArray(keys)
-    && keys.length === BASIS.criterionKeys.length && new Set(keys).size === keys.length
-    && keys.every(key => BASIS.criterionKeys.includes(key));
-  // Count the logical approved case/requirement/criterion group BEFORE comparing link
-  // identity. Filtering to the expected link ID would miss a second distinct link.
+  // The native link contract preserves the exact ordered criterion array.
+  // Count the logical group first; filtering by the expected link ID would
+  // miss a second distinct link, and sorting keys would collapse valid neighbors.
+  const sameKeys = (keys) => isDeepStrictEqual(keys, BASIS.criterionKeys);
   const matching = body.cases.filter((item) =>
     item.approved === true &&
     item.testcaseId === BASIS.caseId &&
