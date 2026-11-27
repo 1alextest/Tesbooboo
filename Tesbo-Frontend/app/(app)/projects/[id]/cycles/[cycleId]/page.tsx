@@ -39,6 +39,7 @@ import {
   getTestRun,
   getModelStudioRunProvenance,
   updateTestRun,
+  closeAutomationRun,
   listCycleExecutions,
   updateExecution,
   bulkAssignExecutions,
@@ -1025,6 +1026,18 @@ export default function TestRunDetailPage() {
     }
   }
 
+  /** Automation-origin runs are closed by their ingest owner, never by the generic run writer. */
+  async function handleAutomationClose() {
+    if (!run) return;
+    setRunStatusError(null);
+    try {
+      const closed = await closeAutomationRun(projectId, cycleId, "incomplete");
+      setRun({ ...run, status: "Completed", closedAt: closed.closedAt, closeStatus: closed.closeStatus });
+    } catch (error) {
+      setRunStatusError(error instanceof Error ? error.message : "Failed to close the automated run.");
+    }
+  }
+
 
   /* ───── Share toggle ───── */
   async function handleShareToggle(enabled: boolean) {
@@ -1240,7 +1253,13 @@ export default function TestRunDetailPage() {
                   Start Execution
                 </Button>
               )}
-              {isInProgress && (
+              {isInProgress && run.source === "automation" && (
+                <Button onClick={handleAutomationClose} title="Close an automated run whose reporter did not finish">
+                  <IconCircleCheck size={14} />
+                  Close as incomplete
+                </Button>
+              )}
+              {isInProgress && run.source !== "automation" && (
                 <Button
                   onClick={() => handleRunStatusChange("Completed")}
                   disabled={executions.length === 0}
@@ -1250,13 +1269,13 @@ export default function TestRunDetailPage() {
                   Mark Completed
                 </Button>
               )}
-              {isCompleted && (
+              {isCompleted && run.source !== "automation" && (
                 <Button variant="secondary" onClick={() => handleRunStatusChange("In Progress")}>
                   <IconRefresh size={14} />
                   Reopen
                 </Button>
               )}
-              {!isCompleted && (
+              {!isCompleted && run.source !== "automation" && (
                 <Button variant="secondary" onClick={openPicker}>
                   <IconPlus size={14} />
                   Add Test Cases

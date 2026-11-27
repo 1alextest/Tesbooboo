@@ -2198,6 +2198,28 @@ test.describe("execution evidence and automation provenance", () => {
     }
   }
 
+  test("an open automated run can be closed as incomplete from the run screen", async ({ page }) => {
+    const { runId, testcase } = await seedAutomatedRun("close-incomplete");
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    try {
+      await page.goto(`/projects/${ctx.projectId}/cycles/${runId}`);
+      // The generic writer refuses automation runs; showing that button would strand the run after
+      // a reporter crash. The automation-owned close is the only recoverable screen action.
+      await expect(page.getByRole("button", { name: "Mark Completed", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Close as incomplete", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Close as incomplete", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Reopen", exact: true })).toHaveCount(0);
+
+      const detail = await (await api.get(`/api/projects/${ctx.projectId}/automation/runs/${runId}`)).json();
+      expect(detail).toMatchObject({ status: "Completed", closeStatus: "incomplete" });
+      expect(detail.closedAt, "an interrupted run must have an authoritative closure timestamp").toBeTruthy();
+      expect(detail.summary.failed).toBe(1);
+    } finally {
+      await api.dispose();
+      await cleanUp(runId, testcase.id);
+    }
+  });
+
   for (const surface of ["drawer", "full page"]) {
     for (const mode of ["new", "existing"]) {
       test(`a finalized Passed execution keeps its verdict and shows a ${mode} bug in the ${surface}`, async ({ page }) => {
