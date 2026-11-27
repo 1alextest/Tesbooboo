@@ -5,6 +5,34 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Client } = require("pg");
 
+// Generation-only columns that a coherent external QA row must explicitly
+// clear. Defaults are deliberately overridden to NULL rather than inherited:
+// a plausible-looking zero counter or empty generation payload is still a
+// fabricated fact. `model` is generation-specific but optional for legacy
+// non-model producers, so it is only forbidden for external work.
+const EXTERNAL_NULL_COLUMNS = [
+  "agent_name", "task_status", "model", "user_story", "acceptance_criteria", "custom_prompt",
+  "requested_count", "generated_count", "generated_payload", "saved_count", "save_events",
+  "proposal_revision", "proposal_request_key", "proposal_request_digest", "proposal_provenance",
+  "token_input", "token_output", "token_total", "style",
+  "include_happy_flow", "include_negative_flow", "include_multi_tab", "include_cross_browser",
+  "include_boundary", "feedback", "context", "language"
+];
+
+function externalInsertSql(provider, explicitKind, initial = "'DRAFT',0,1") {
+  const columns = ["project_id", "requested_by", "provider"];
+  const values = ["$1", "$2", "'" + provider + "'"];
+  if (explicitKind) {
+    columns.push("task_kind");
+    values.push("'external_qa_work'");
+  }
+  columns.push(...EXTERNAL_NULL_COLUMNS,
+    "external_work_state", "external_work_revision", "external_prompt_revision", "external_prompt_digest");
+  values.push(...EXTERNAL_NULL_COLUMNS.map(() => "NULL"), initial, "$3");
+  return "INSERT INTO ai_generation_requests(" + columns.join(",") + ") VALUES (" + values.join(",") +
+    ") RETURNING id,external_work_state,external_work_revision,external_prompt_revision";
+}
+
 // Exercise the actual migrated owner with rollback-only disposable fixtures.
 async function verifyNativeQaTaskKinds(client) {
   // Assert the real installed boundary before creating fixtures. A fresh empty
@@ -61,6 +89,11 @@ async function verifyNativeQaTaskKinds(client) {
           [project, requestedBy, provider, kind]);
       return result.rows[0];
     };
+    // Probes that must be refused *by the producer fence* are inserted with the
+    // full coherent external shape, so `native_qa_external_generation_inapplicable`
+    // cannot fire alongside it and the refusal is attributable to the fence.
+    const insertCoherentExternal = (provider, explicitKind) => client.query(
+      externalInsertSql(provider, explicitKind), [project, user, "a".repeat(64)]);
     const legacy = await insert("openai");
     assert.equal(legacy.task_kind, "legacy_generation_review");
     assert.equal((await insert("anthropic")).task_kind, "legacy_generation_review");
@@ -121,11 +154,11 @@ async function verifyNativeQaTaskKinds(client) {
         label + " failed for an unrelated constraint: " + failure?.constraint);
       assert.deepEqual(await read(), baseline, label + " must preserve the entire fixture population");
     };
-    await reject("reserved external provider with omitted kind", () => insert("external_qa_work"),
+    await reject("reserved external provider with omitted kind", () => insertCoherentExternal("external_qa_work", false),
       ["native_qa_external_producer_closed"]);
-    await reject("explicit external kind", () => insert("external_qa_work", "external_qa_work"),
+    await reject("explicit external kind", () => insertCoherentExternal("external_qa_work", true),
       ["native_qa_external_producer_closed"]);
-    await reject("external kind disguised as legacy provider", () => insert("openai", "external_qa_work"),
+    await reject("external kind disguised as legacy provider", () => insertCoherentExternal("openai", true),
       ["native_qa_external_producer_closed", "native_qa_task_kind_matches_provider"]);
     await reject("governed kind with legacy provider", () => insert("openai", "governed_proposal"),
       ["native_qa_task_kind_matches_provider"]);
@@ -155,6 +188,326 @@ async function verifyNativeQaTaskKinds(client) {
       "UPDATE ai_generation_requests SET provider='external_qa_work',task_kind='external_qa_work' WHERE id=$1", [legacy.id]),
       ["native_qa_task_kind_immutable"]);
     console.log("Native task kinds: 10 legitimate fixture rows; 13 exact constraint refusals; all prior rows preserved; external producer closed.");
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
+
+// V170 prepares the conditional shape an external QA task must have once the
+// producer is admitted. The producer stays physically closed, so every probe
+// that needs an external row temporarily drops that one fence inside a
+// savepoint and rolls the savepoint back. The fence is asserted closed again
+// afterwards; nothing here can persist an external row.
+async function verifyExternalWorkShape(client) {
+  const names = [
+    "native_qa_external_work_shape",
+    "native_qa_external_work_state_values",
+    "native_qa_external_work_revision_nonnegative",
+    "native_qa_external_prompt_revision_positive",
+    "native_qa_external_prompt_digest_format",
+    "native_qa_generation_fields_required",
+    "native_qa_external_generation_inapplicable"
+  ];
+  const constraints = await client.query(
+    "SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'public.ai_generation_requests'::regclass AND conname = ANY($1::text[])",
+    [names]
+  );
+  assert.deepEqual(constraints.rows.map((row) => row.conname).sort(), [...names].sort(),
+    "external work shape constraints missing");
+  assert.ok(constraints.rows.every((row) => row.convalidated), "external work shape constraints must be validated");
+  const trigger = await client.query(
+    "SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'public.ai_generation_requests'::regclass AND tgname = 'native_qa_external_work_revision' AND NOT tgisinternal"
+  );
+  assert.equal(trigger.rowCount, 1, "external work revision trigger missing");
+  const nullable = await client.query(
+    "SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'public.ai_generation_requests'::regclass AND attname = ANY($1::text[]) AND NOT attisdropped",
+    [["agent_name", "task_status", "user_story", "requested_count", "generated_count",
+      "generated_payload", "saved_count", "save_events", "proposal_revision",
+      "token_input", "token_output", "token_total", "external_work_state",
+      "external_work_revision", "external_prompt_revision", "external_prompt_digest",
+      "style", "include_happy_flow", "include_negative_flow", "include_multi_tab",
+      "include_cross_browser", "include_boundary", "feedback", "context", "language"]]
+  );
+  assert.equal(nullable.rowCount, 25, "conditional external work columns missing");
+  assert.ok(nullable.rows.every((row) => !row.attnotnull), "conditional external work columns must be kind-conditionally nullable");
+
+  await client.query("BEGIN");
+  try {
+    const suffix = require("node:crypto").randomUUID();
+    const user = (await client.query(
+      "INSERT INTO users(email,name) VALUES ($1,'External shape QA') RETURNING id",
+      ["external-shape-" + suffix + "@tesbo.invalid"]
+    )).rows[0].id;
+    const org = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('External shape QA',$1) RETURNING id",
+      ["external-shape-" + suffix]
+    )).rows[0].id;
+    const project = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'EXQA','External shape QA') RETURNING id",
+      [org]
+    )).rows[0].id;
+    const chatSession = (await client.query(
+      "INSERT INTO zyra_chat_sessions(project_id,user_id,title) VALUES ($1,$2,'External shape chat') RETURNING id",
+      [project, user]
+    )).rows[0].id;
+    const testcase = (await client.query(
+      "INSERT INTO testcases(project_id,external_id,title) VALUES ($1,$2,'External shape case') RETURNING id",
+      [project, "EXQA-" + suffix.slice(0, 8)]
+    )).rows[0].id;
+    const legacy = (await client.query(
+      "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status) VALUES ($1,$2,'openai','Legacy fixture','in_review') RETURNING id",
+      [project, user]
+    )).rows[0].id;
+    // Legitimate legacy ownership stays allowed and intact.
+    const legacyChat = (await client.query(
+      "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status,chat_session_id) VALUES ($1,$2,'zyra_chat','Legacy chat fixture','in_review',$3) RETURNING id,chat_session_id",
+      [project, user, chatSession]
+    )).rows[0];
+    const legacySweep = (await client.query(
+      "INSERT INTO ai_generation_requests(project_id,requested_by,provider,user_story,task_status,sweep_testcase_id) VALUES ($1,$2,'zyra_archive_sweep','Legacy sweep fixture','in_review',$3) RETURNING id,sweep_testcase_id",
+      [project, user, testcase]
+    )).rows[0];
+    assert.equal(legacyChat.chat_session_id, chatSession, "legacy chat ownership must remain valid");
+    assert.equal(legacySweep.sweep_testcase_id, testcase, "legacy archive-sweep ownership must remain valid");
+
+    const externalInsert = externalInsertSql("external_qa_work", true);
+
+    const reject = async (label, operation, allowedConstraints) => {
+      await client.query("SAVEPOINT external_shape_probe");
+      let failure;
+      try { await operation(); } catch (error) { failure = error; }
+      await client.query("ROLLBACK TO SAVEPOINT external_shape_probe");
+      await client.query("RELEASE SAVEPOINT external_shape_probe");
+      assert.equal(failure?.code, "23514", label + " must be refused by the actual conditional shape");
+      assert.ok(allowedConstraints.includes(failure?.constraint),
+        label + " failed for an unrelated constraint: " + failure?.constraint);
+    };
+
+    // The shape constraints themselves do not open the producer.
+    await reject("reserved external provider while the producer is closed", () => client.query(
+      externalInsert, [project, user, "a".repeat(64)]),
+      ["native_qa_external_producer_closed"]);
+
+    await client.query("SAVEPOINT external_shape_open");
+    await client.query("ALTER TABLE ai_generation_requests DROP CONSTRAINT native_qa_external_producer_closed");
+    try {
+      // A producer may only create the canonical initial state.
+      for (const [label, initial] of [
+        ["outside DRAFT", "'READY',0,1"],
+        ["at a nonzero revision", "'DRAFT',5,1"],
+        ["at a later prompt revision", "'DRAFT',0,2"]
+      ]) {
+        await reject("external work inserted " + label, () => client.query(
+          externalInsertSql("external_qa_work", true, initial), [project, user, "a".repeat(64)]),
+          ["native_qa_external_work_initial_state"]);
+      }
+
+      const external = (await client.query(
+        externalInsert, [project, user, "a".repeat(64)]
+      )).rows[0];
+      assert.equal(external.external_work_state, "DRAFT");
+      assert.equal(Number(external.external_work_revision), 0);
+      assert.equal(Number(external.external_prompt_revision), 1);
+
+      // Row-level CAS: a governed change must present exactly the next revision.
+      await client.query("UPDATE ai_generation_requests SET external_work_state='READY',external_work_revision=1 WHERE id=$1", [external.id]);
+      await client.query("UPDATE ai_generation_requests SET external_work_state='ASSIGNED',external_work_revision=2 WHERE id=$1", [external.id]);
+      let row = (await client.query("SELECT external_work_state,external_work_revision FROM ai_generation_requests WHERE id=$1", [external.id])).rows[0];
+      assert.equal(row.external_work_state, "ASSIGNED");
+      assert.equal(Number(row.external_work_revision), 2);
+
+      await reject("governed change without an expected revision", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='CLAIMED' WHERE id=$1", [external.id]),
+        ["native_qa_external_work_revision_stale"]);
+      await reject("governed change with a stale revision", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='CLAIMED',external_work_revision=2 WHERE id=$1", [external.id]),
+        ["native_qa_external_work_revision_stale"]);
+      await reject("governed change with a wrong next revision", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='CLAIMED',external_work_revision=9 WHERE id=$1", [external.id]),
+        ["native_qa_external_work_revision_stale"]);
+      await reject("revision changed without a governed change", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_revision=3 WHERE id=$1", [external.id]),
+        ["native_qa_external_work_revision_advance"]);
+      await reject("direct lifecycle skip", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='CLOSED',external_work_revision=3 WHERE id=$1", [external.id]),
+        ["native_qa_external_work_transition"]);
+
+      // Prompt identity is fixed at and after assignment.
+      await reject("prompt swapped while entering claim", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='CLAIMED',external_work_revision=3,external_prompt_revision=2 WHERE id=$1", [external.id]),
+        ["native_qa_external_prompt_immutable"]);
+      await reject("prompt swapped on an assigned task", () => client.query(
+        "UPDATE ai_generation_requests SET external_prompt_revision=2,external_work_revision=3 WHERE id=$1", [external.id]),
+        ["native_qa_external_prompt_immutable"]);
+
+      // Classification: every remaining generation default is refused.
+      for (const [label, assignment] of [
+        ["a style", "style='strict'"],
+        ["an include flag", "include_happy_flow=true"],
+        ["legacy feedback", "feedback=''"],
+        ["legacy context", "context=''"],
+        ["a generation language", "language='en'"]
+      ]) {
+        await reject("external row carrying " + label, () => client.query(
+          "UPDATE ai_generation_requests SET " + assignment + " WHERE id=$1", [external.id]),
+          ["native_qa_external_generation_inapplicable"]);
+      }
+      await reject("external row attached to a chat session", () => client.query(
+        "UPDATE ai_generation_requests SET chat_session_id=$2 WHERE id=$1", [external.id, chatSession]),
+        ["native_qa_external_generation_inapplicable"]);
+      await reject("external row attached to an archive-sweep case", () => client.query(
+        "UPDATE ai_generation_requests SET sweep_testcase_id=$2 WHERE id=$1", [external.id, testcase]),
+        ["native_qa_external_generation_inapplicable"]);
+
+      // Canonical clarification: revise the prompt pre-assignment, then resume.
+      await client.query("UPDATE ai_generation_requests SET external_work_state='NEEDS_CLARIFICATION',external_work_revision=3 WHERE id=$1", [external.id]);
+      await client.query("UPDATE ai_generation_requests SET external_prompt_revision=2,external_work_revision=4 WHERE id=$1", [external.id]);
+      await client.query("UPDATE ai_generation_requests SET external_work_state='ASSIGNED',external_work_revision=5 WHERE id=$1", [external.id]);
+      row = (await client.query("SELECT external_work_state,external_work_revision,external_prompt_revision FROM ai_generation_requests WHERE id=$1", [external.id])).rows[0];
+      assert.equal(row.external_work_state, "ASSIGNED");
+      assert.equal(Number(row.external_work_revision), 5);
+      assert.equal(Number(row.external_prompt_revision), 2);
+
+      await client.query("UPDATE ai_generation_requests SET external_work_state='CANCELLED',external_work_revision=6 WHERE id=$1", [external.id]);
+      await reject("terminal external work rewound", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='DRAFT',external_work_revision=7 WHERE id=$1", [external.id]),
+        ["native_qa_external_work_terminal"]);
+
+      // Non-external rows still require the generation facts.
+      await reject("legacy row omitting a generation fact", () => client.query(
+        "UPDATE ai_generation_requests SET user_story=NULL WHERE id=$1", [legacy]),
+        ["native_qa_generation_fields_required"]);
+      await reject("legacy row omitting an include flag", () => client.query(
+        "UPDATE ai_generation_requests SET include_happy_flow=NULL WHERE id=$1", [legacy]),
+        ["native_qa_generation_fields_required"]);
+      await reject("legacy row acquiring external work fields", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='DRAFT' WHERE id=$1", [legacy]),
+        ["native_qa_external_work_shape"]);
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT external_shape_open");
+      await client.query("RELEASE SAVEPOINT external_shape_open");
+    }
+    // The saved rollback must have restored the physical producer fence.
+    const fence = await client.query(
+      "SELECT convalidated FROM pg_constraint WHERE conrelid = 'public.ai_generation_requests'::regclass AND conname = 'native_qa_external_producer_closed'"
+    );
+    assert.equal(fence.rowCount, 1, "external producer fence must remain installed");
+    assert.ok(fence.rows[0].convalidated, "external producer fence must remain validated");
+    console.log("External work shape: 1 coherent DRAFT fixture, row-level CAS, canonical transitions, 22 exact conditional refusals, legacy chat/sweep ownership preserved; producer fence restored closed.");
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
+
+// Gate A foundation slice 1: installation identity, project capability
+// grants and credential binding. Nothing here admits a producer or an
+// execution route; the checks prove the identity/scope/retention invariants.
+async function verifyInstallationFoundation(client) {
+  const tables = await client.query(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('agent_installations','agent_installation_project_grants')"
+  );
+  assert.deepEqual(tables.rows.map((row) => row.table_name).sort(),
+    ["agent_installation_project_grants", "agent_installations"]);
+  const tokenColumn = await client.query(
+    "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='api_tokens' AND column_name='installation_id'"
+  );
+  assert.equal(tokenColumn.rowCount, 1, "api_tokens.installation_id missing");
+
+  await client.query("BEGIN");
+  try {
+    const suffix = require("node:crypto").randomUUID();
+    const user = (await client.query(
+      "INSERT INTO users(email,name) VALUES ($1,'Installation QA') RETURNING id",
+      ["installation-" + suffix + "@tesbo.invalid"]
+    )).rows[0].id;
+    const orgA = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('Installation A',$1) RETURNING id",
+      ["installation-a-" + suffix]
+    )).rows[0].id;
+    const orgB = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('Installation B',$1) RETURNING id",
+      ["installation-b-" + suffix]
+    )).rows[0].id;
+    const projectA = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'INA','Installation A') RETURNING id",
+      [orgA]
+    )).rows[0].id;
+    const projectB = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'INB','Installation B') RETURNING id",
+      [orgB]
+    )).rows[0].id;
+    const agentA = (await client.query(
+      "INSERT INTO agents(slug,display_name) VALUES ($1,'Workstation A') RETURNING id",
+      ["workstation-a-" + suffix.slice(0, 8)]
+    )).rows[0].id;
+    const agentB = (await client.query(
+      "INSERT INTO agents(slug,display_name) VALUES ($1,'Workstation B') RETURNING id",
+      ["workstation-b-" + suffix.slice(0, 8)]
+    )).rows[0].id;
+    const shared = (await client.query("SELECT id FROM agents WHERE slug='tesbo-mcp'")).rows[0].id;
+    assert.ok(shared, "the shared Tesbo MCP agent must exist");
+
+    const installationA = (await client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name,created_by) VALUES ($1,$2,'opencode-workstation-a','Workstation A',$3) RETURNING id,status",
+      [orgA, agentA, user]
+    )).rows[0];
+    assert.equal(installationA.status, "active");
+    // The same stable key is meaningful only inside its organization.
+    await client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'opencode-workstation-a','Workstation B')",
+      [orgB, agentB]
+    );
+
+    const reject = async (label, operation, sqlstate, constraints) => {
+      await client.query("SAVEPOINT installation_probe");
+      let failure;
+      try { await operation(); } catch (error) { failure = error; }
+      await client.query("ROLLBACK TO SAVEPOINT installation_probe");
+      await client.query("RELEASE SAVEPOINT installation_probe");
+      assert.equal(failure?.code, sqlstate, label + " must be refused: " + (failure?.message || "succeeded"));
+      if (constraints) {
+        assert.ok(constraints.includes(failure?.constraint),
+          label + " failed for an unrelated constraint: " + failure?.constraint);
+      }
+    };
+
+    await reject("shared Tesbo MCP actor as an installation", () => client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'shared-actor','Shared')",
+      [orgA, shared]), "23514", ["agent_installations_not_shared_actor"]);
+    await reject("duplicate installation key in one organization", () => client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'opencode-workstation-a','Duplicate')",
+      [orgA, agentB]), "23505", ["agent_installations_key_unique"]);
+    await reject("reusing one agent identity for two installations", () => client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'second-key','Reuse')",
+      [orgA, agentA]), "23505", ["agent_installations_agent_unique"]);
+
+    const grant = (await client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities,granted_by) VALUES ($1,$2,ARRAY['task.claim.assigned','report.submit.assigned'],$3) RETURNING id",
+      [installationA.id, projectA, user]
+    )).rows[0];
+    await reject("unknown capability in a grant", () => client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities) VALUES ($1,$2,ARRAY['task.everything'])",
+      [installationA.id, projectA]), "23514");
+    await reject("grant crossing an organization boundary", () => client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities) VALUES ($1,$2,ARRAY['task.claim.assigned'])",
+      [installationA.id, projectB]), "23514", ["agent_installation_grants_same_organization"]);
+
+    await client.query(
+      "INSERT INTO api_tokens(user_id,project_id,name,token_hash,installation_id) VALUES ($1,$2,'Installation credential',$3,$4)",
+      [user, projectA, "c".repeat(64), installationA.id]
+    );
+    await reject("deleting an installation with grants and credentials", () => client.query(
+      "DELETE FROM agent_installations WHERE id=$1", [installationA.id]), "23503");
+    await reject("deleting an agent identity an installation depends on", () => client.query(
+      "DELETE FROM agents WHERE id=$1", [agentA]), "23503");
+
+    // Deactivation preserves attribution rather than deleting history.
+    await client.query("UPDATE agent_installations SET status='deactivated',updated_at=now() WHERE id=$1", [installationA.id]);
+    const state = (await client.query("SELECT status FROM agent_installations WHERE id=$1", [installationA.id])).rows[0];
+    assert.equal(state.status, "deactivated");
+    console.log("Installation foundation: shared MCP actor rejected, per-organization keys, cross-org grant refused, unknown capability refused, credential binding retained, deactivation preserves attribution.");
   } finally {
     await client.query("ROLLBACK");
   }
@@ -256,8 +609,16 @@ async function verifyPopulatedTaskKindUpgrade(admin, migrationFiles) {
     const after = await retained();
     assert.equal(after.length, before.length);
     for (let i = 0; i < after.length; i++) {
-      const { task_kind, ...original } = after[i].row;
+      const {
+        task_kind, external_work_state, external_work_revision,
+        external_prompt_revision, external_prompt_digest, ...original
+      } = after[i].row;
       assert.equal(task_kind, expected.get(original.provider));
+      // V170 adds the external-work columns as NULL for every historical row.
+      assert.equal(external_work_state, null);
+      assert.equal(external_work_revision, null);
+      assert.equal(external_prompt_revision, null);
+      assert.equal(external_prompt_digest, null);
       assert.deepEqual(original, before[i].row, "upgrade changed historical row " + original.id);
       assert.deepEqual(after[i].snapshot, before[i].snapshot, "upgrade changed review basis " + original.id);
     }
@@ -330,8 +691,10 @@ async function main() {
       await client.query("ROLLBACK");
     }
     await verifyNativeQaTaskKinds(client);
+    await verifyExternalWorkShape(client);
+    await verifyInstallationFoundation(client);
     await verifyPopulatedTaskKindUpgrade(client, migrationFiles);
-    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows and native task kinds.`);
+    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows, native task kinds, external work conditional shape and installation identity foundation.`);
   } finally {
     await client.end();
   }
