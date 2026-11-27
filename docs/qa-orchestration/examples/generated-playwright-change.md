@@ -19,10 +19,15 @@ owner, a native execution, or production acceptance.
 4. Emits one reviewable Playwright test at the approved `testcase.automationPath`. The test carries
    `@tesbo.testId("<externalId>")`, so the existing `@tesbox/playwright-reporter` can attribute a
    later real run to the case without inventing an identity.
-5. Asserts the supported oracle for that case, requirement version, link and criterion keys, with
+5. Requires the coverage read to use the explicitly configured API origin, rejects credentials and
+   non-loopback HTTP, and counts the logical approved case/requirement/criterion group before
+   comparing the sole link's native ID. A distinct second link is therefore caught rather than
+   filtered away.
+6. Asserts the supported oracle for that case, requirement version, link and criterion keys, with
    the recorded case and approval revisions.
-6. Reads and checks the evidence file's packet digest and exact target before attaching it, so an
-   execution carries the confirmed selection identity rather than an arbitrary path.
+7. Reads and checks the evidence file's packet digest and exact target, then attaches it before the
+   first coverage assertion, so a failed attempt still carries the selected packet identity while
+   never attaching the rejected response body.
 
 The handoff packet now exports `native.testcase.externalId`; a generator no longer has to query
 around the contract or guess the reporter tag.
@@ -30,19 +35,20 @@ around the contract or guess the reporter tag.
 ## Verified path
 
 `scripts/qa-handoff-generated-change.test.mjs` runs the generated `.spec.mjs` with the existing
-Playwright installation. It serves three controlled responses:
+Playwright installation. It serves controlled responses for:
 
 - **Correct coverage:** one current approved link matching the packet. The generated assertion
   passes.
-- **Duplicated-link fault:** the same coverage row is duplicated. The generated assertion fails on
-  the exactly-one-link invariant.
-- **Wrong approval revision:** one link with a different approval revision. The generated assertion
-  fails on the pinned case revision.
+- **Faults:** duplicated link, a different or wrong link ID, wrong requirement/approved version,
+  wrong approval revision, and a private 503 body. Each fails the relevant assertion, retains the
+  validated packet-evidence attachment, and never publishes the rejected response body.
+- **Legitimate unrelated links:** another case or different criteria on the same coverage response
+  do not block the selected case.
 
-The test also verifies that a changed selection digest, missing external ID, changed repository or
-unsupported oracle is refused before a change is emitted, including packets whose digest has been
-recomputed. This is real Playwright subprocess execution, not textual inspection. It is wired into
-the pinned investigation/handoff CI step.
+The test also verifies that a changed selection digest, missing/backslash external ID, changed
+repository, investigation revision or unsupported oracle is refused before a change is emitted,
+including packets whose digest has been recomputed. This is real Playwright subprocess execution,
+not textual inspection. It is wired into the pinned investigation/handoff CI step.
 
 ## Boundaries and unsupported associations
 
