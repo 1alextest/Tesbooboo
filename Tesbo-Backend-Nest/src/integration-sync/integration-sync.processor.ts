@@ -562,7 +562,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
       await this.db
         .query("UPDATE integration_sync_runs SET error = COALESCE(error, $2), updated_at = now() WHERE id = $1", [runId, storageCheck.reason])
         .catch(() => undefined);
-      await this.runs.recordTicketResult(runId, { processed: 1, failed: 1 });
+      await this.runs.recordTicketResult(runId, { failed: 1 });
       return;
     }
 

@@ -116,6 +116,17 @@ test.describe("knowledge base v2 — files", () => {
     });
   }
 
+  async function uploadWithKey(
+    files: UploadFile[],
+    requestKey: string,
+    folderId: string = rootFolderId,
+  ): Promise<APIResponse> {
+    return asOwner.post(kbUrl("/files/upload"), {
+      multipart: filesFormWith({ folderId, requestKey }, files),
+      failOnStatusCode: false,
+    });
+  }
+
   /** Uploads one file and fails the test if the product refused it. */
   async function uploadOne(
     file: UploadFile,
@@ -215,6 +226,106 @@ test.describe("knowledge base v2 — files", () => {
     expect(malformedFolder.status(), `a malformed folderId answered ${malformedFolder.status()}`).toBeLessThan(500);
 
     expect(fileCount()).toBe(0);
+  });
+
+  test("KBF-A-81 the same requestKey and bytes replay the committed upload instead of adding a row", async () => {
+    const folder = await createFolder(stamp("Replay"));
+    const requestKey = stamp("request.replay").replace(/\s+/g, "-");
+    const contents = `replay me ${Date.now()}`;
+    const first = await uploadWithKey([textFile("replayed.txt", contents)], requestKey, folder.id);
+    expect(first.status(), await first.text()).toBe(201);
+    const firstBody = await first.json();
+    expect(firstBody).toMatchObject({ total: 1, replayed: false });
+    expect(fileCount()).toBe(1);
+
+    const second = await uploadWithKey([textFile("replayed.txt", contents)], requestKey, folder.id);
+    expect(second.status(), await second.text()).toBe(201);
+    const secondBody = await second.json();
+    expect(secondBody).toMatchObject({ total: 1, replayed: true });
+    expect(secondBody.list[0].id).toBe(firstBody.list[0].id);
+    // Coordination state, including the content digest, never leaves the service.
+    expect(secondBody.list[0].uploadRequestKey).toBeUndefined();
+    expect(secondBody.list[0].uploadRequestDigest).toBeUndefined();
+    expect(secondBody.list[0].extractionClaimToken).toBeUndefined();
+    expect(fileCount()).toBe(1);
+  });
+
+  test("KBF-A-82 reusing a requestKey for different bytes is refused and leaves the original intact", async () => {
+    const folder = await createFolder(stamp("Key conflict"));
+    const requestKey = stamp("request.conflict").replace(/\s+/g, "-");
+    const first = await uploadWithKey([textFile("original.txt", "original bytes")], requestKey, folder.id);
+    expect(first.status(), await first.text()).toBe(201);
+    const original = (await first.json()).list[0];
+
+    const changed = await uploadWithKey([textFile("original.txt", "different bytes")], requestKey, folder.id);
+    expect(changed.status()).toBe(409);
+    const changedBody = await changed.json();
+    expect(changedBody.code).toBe("UPLOAD_REQUEST_CONFLICT");
+
+    expect(fileCount()).toBe(1);
+    const read = await (await asOwner.get(kbUrl(`/files/${original.id}`))).json();
+    expect(read.originalFileName).toBe("original.txt");
+  });
+
+  test("KBF-A-83 identical bytes under a new requestKey are a deliberate second upload", async () => {
+    const folder = await createFolder(stamp("Distinct key"));
+    const contents = `same bytes ${Date.now()}`;
+    const first = await uploadWithKey([textFile("copy.txt", contents)], stamp("request.one").replace(/\s+/g, "-"), folder.id);
+    const second = await uploadWithKey([textFile("copy.txt", contents)], stamp("request.two").replace(/\s+/g, "-"), folder.id);
+    expect(first.status(), await first.text()).toBe(201);
+    expect(second.status(), await second.text()).toBe(201);
+    const firstBody = await first.json();
+    const secondBody = await second.json();
+    expect(secondBody.replayed).toBe(false);
+    expect(secondBody.list[0].id).not.toBe(firstBody.list[0].id);
+    expect(fileCount()).toBe(2);
+  });
+
+  test("KBF-A-84 a requestKey whose committed file was deleted cannot silently resurrect it", async () => {
+    const folder = await createFolder(stamp("Closed request"));
+    const requestKey = stamp("request.closed").replace(/\s+/g, "-");
+    const first = await uploadWithKey([textFile("gone.txt", "gone bytes")], requestKey, folder.id);
+    expect(first.status(), await first.text()).toBe(201);
+    const file = (await first.json()).list[0];
+    expect((await asOwner.delete(kbUrl(`/files/${file.id}`), { failOnStatusCode: false })).status()).toBe(200);
+
+    const retry = await uploadWithKey([textFile("gone.txt", "gone bytes")], requestKey, folder.id);
+    expect(retry.status()).toBe(409);
+    expect((await retry.json()).code).toBe("UPLOAD_REQUEST_CLOSED");
+    expect(fileCount()).toBe(0);
+  });
+
+  test("KBF-A-85 a whitespace-only requestKey is refused rather than silently disabling replay", async () => {
+    const folder = await createFolder(stamp("Empty key"));
+    const res = await uploadWithKey([textFile("empty-key.txt", "bytes")], "   ", folder.id);
+    expect(res.status()).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("requestKey");
+    expect(fileCount()).toBe(0);
+  });
+
+  test("KBF-A-86 a duplicated requestKey field is refused rather than silently dropped", async () => {
+    const folder = await createFolder(stamp("Duplicate key"));
+    const form = filesFormWith({ folderId: folder.id }, [textFile("duplicate-key.txt", "bytes")]);
+    form.append("requestKey", "first-key");
+    form.append("requestKey", "second-key");
+    const res = await asOwner.post(kbUrl("/files/upload"), { multipart: form, failOnStatusCode: false });
+    expect(res.status()).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("single string");
+    expect(fileCount()).toBe(0);
+  });
+
+  test("KBF-A-87 concurrent uploads of one name are allocated distinct displayed names", async () => {
+    const folder = await createFolder(stamp("Concurrent names"));
+    const name = `parallel-${Date.now()}.txt`;
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, (_, index) => upload([textFile(name, `body ${index}`)], folder.id)),
+    );
+    for (const response of responses) expect(response.status(), await response.text()).toBe(201);
+    const names = (await Promise.all(responses.map(async (response) => (await response.json()).list[0].originalFileName))).sort();
+    expect(new Set(names).size, `duplicate display names: ${names.join(", ")}`).toBe(10);
+    expect(names).toContain(name);
+    expect(names).toContain(`${name.slice(0, -4)} (9).txt`);
+    expect(fileCount()).toBe(10);
   });
 
   test("KBF-A-05 two files with the same name in one folder are kept apart by a numbered suffix", { tag: '@tesbo.testId("TES-TC-310")' }, async () => {

@@ -1,11 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from "@nestjs/common";
 import { Client, Pool, type QueryResult } from "pg";
+import type { Job, JobsOptions, Queue } from "bullmq";
 import { DatabaseService } from "../database/database.service";
+import { IntegrationSyncProcessor } from "../integration-sync/integration-sync.processor";
+import { IntegrationSyncService } from "../integration-sync/integration-sync.service";
+import { IntegrationSyncDocumentBuilder } from "../integration-sync/integration-sync-document.builder";
+import type { IntegrationSyncClient } from "../integration-sync/integration-sync.client";
+import type { IntegrationSyncDecisions } from "../integration-sync/integration-sync-decisions";
+import type { RemoteTicket, SyncRunJobPayload, SyncTicketJobPayload } from "../integration-sync/integration-sync.types";
+import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
+import type { RagIngestionService } from "../rag/rag-ingestion.service";
 import { summarizeDocumentChange } from "../common/text-diff.util";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import * as ragAiAllocation from "../rag/rag-ai-allocation";
+import * as aiTrace from "../observability/ai-trace";
 import { RAG_EMBEDDING_DIMENSION } from "../rag/rag.constants";
 
 const url = process.env.DATABASE_URL ?? "";
@@ -114,16 +124,6 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
     throw new Error("No PostgreSQL writer entered a lock wait");
   }
-  async function waitForAdvisoryWait() {
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      if ((await setup.query(
-        "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%pg_advisory_xact_lock%'"
-      )).rowCount) return;
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    throw new Error("No writer waited on the project mutation advisory lock");
-  }
   function realService(dbPool = pool) {
     const svc = makeLegacy(new DatabaseService(dbPool));
     jest.spyOn(svc, "requireProjectAccess").mockResolvedValue({ id: projectId, organization_id: orgId } as never);
@@ -133,6 +133,7 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
   function fileService(dbPool = pool) {
     const storage = {
       put: jest.fn().mockResolvedValue(undefined),
+      getBuffer: jest.fn().mockResolvedValue(Buffer.from("stored body")),
       delete: jest.fn().mockResolvedValue(undefined)
     };
     const planLimits = { assertStorageAvailable: jest.fn().mockResolvedValue(undefined) };
@@ -144,6 +145,39 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     jest.spyOn(internals, "notifyKnowledgeItem").mockResolvedValue(undefined);
     return { svc, storage, planLimits, activity };
   }
+  async function waitFor(check: () => Promise<boolean>, message: string) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Timed out waiting for ${message}`);
+  }
+  async function seedMedia(options: {
+    status: "pending" | "processing";
+    claimedAt?: Date;
+    deleted?: boolean;
+    project?: string;
+    folder?: string;
+  }) {
+    const key = `kb/${randomUUID()}.mp3`;
+    const id = (await setup.query<{ id: string }>(
+      `INSERT INTO knowledge_files (organization_id,project_id,folder_id,file_name,original_file_name,mime_type,file_extension,file_size,storage_key,uploaded_by,extraction_status,extraction_claimed_at,is_deleted)
+       VALUES ($1,$2,$3,$4,$4,'audio/mpeg','mp3',12,$5,$6,$7,$8::timestamptz,$9) RETURNING id`,
+      [
+        orgId,
+        options.project ?? projectId,
+        options.folder ?? folderId,
+        `meeting-${randomUUID()}.mp3`,
+        key,
+        actor,
+        options.status,
+        options.claimedAt ?? null,
+        options.deleted ?? false
+      ]
+    )).rows[0].id;
+    return { id, key };
+  }
   async function seedFile(name = `file-${randomUUID()}.txt`, folder = folderId) {
     return (await setup.query<{ id: string }>(
       `INSERT INTO knowledge_files (organization_id,project_id,folder_id,file_name,original_file_name,mime_type,file_extension,file_size,storage_key,uploaded_by)
@@ -152,6 +186,107 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     )).rows[0].id;
   }
   const update = (svc: ReturnType<typeof service>["svc"], text = "Saved body") => svc.updateKnowledgeDocument(projectId, actor, documentId, { contentJson: json(text), contentHtml: `<p>${text}</p>`, contentText: text });
+
+  it("preserves a provider-folder deletion after fan-out and mirrors the ticket only on the next sync", async () => {
+    const db = new DatabaseService(pool);
+    const { rows: [connection] } = await db.query<{ id: string }>(
+      `INSERT INTO integration_connections (organization_id, provider, site_url, access_token, token_expires_at)
+       VALUES ($1, 'jira', 'https://sync.invalid', '', now()) RETURNING id`, [orgId]
+    );
+    await db.query(
+      `INSERT INTO jira_project_mappings (project_id, jira_connection_id, jira_project_id, jira_project_key, jira_project_name)
+       VALUES ($1,$2,'remote-kb','KBP','KB pilot')`, [projectId, connection.id]
+    );
+    const ticket: RemoteTicket = {
+      issueId: "remote-263", issueKey: "KBP-263", summary: "Verify placement", description: "One source ticket",
+      issueType: "Task", status: "Open", priority: "", assignee: "", reporter: "", labels: "",
+      createdAt: null, updatedAt: null, url: ""
+    };
+    const client = {
+      loadConnection: async () => connection,
+      fetchJiraTickets: async (_connection: unknown, _key: string, onPage: (page: RemoteTicket[]) => Promise<boolean>) => {
+        await onPage([ticket]);
+        return { truncated: false };
+      },
+      fetchComments: async () => []
+    };
+    // Capture what the real producer enqueues. The test controls dispatch so the deletion commits
+    // strictly between coordinator and ticket. PostgreSQL, run accounting and both writers are real.
+    type TicketJob = { name: string; data: SyncTicketJobPayload; opts: JobsOptions };
+    const queue = {
+      add: jest.fn<Promise<void>, [string, SyncRunJobPayload, JobsOptions]>().mockResolvedValue(undefined),
+      addBulk: jest.fn<Promise<void>, [TicketJob[]]>().mockResolvedValue(undefined)
+    };
+    const limits = { checkStorageAvailable: async () => ({ allowed: true }) } as unknown as PlanLimitsService;
+    const runs = new IntegrationSyncService(queue as unknown as Queue, db, limits);
+    const enqueueEmbedding = jest.fn().mockResolvedValue(undefined);
+    const processor = new IntegrationSyncProcessor(db, runs, client as unknown as IntegrationSyncClient,
+      new IntegrationSyncDocumentBuilder(), {} as IntegrationSyncDecisions,
+      { enqueueEmbedding } as unknown as RagIngestionService, limits);
+    async function startAndFanOut() {
+      queue.add.mockClear();
+      queue.addBulk.mockClear();
+      const { run, alreadyRunning } = await runs.startRun(orgId, projectId, "jira", actor, "KBP");
+      expect(alreadyRunning).toBe(false);
+      expect(queue.add).toHaveBeenCalledTimes(1);
+      const [name, data] = queue.add.mock.calls[0];
+      await processor.process({ name, data } as Job);
+      expect(queue.addBulk).toHaveBeenCalledTimes(1);
+      const [jobs] = queue.addBulk.mock.calls[0];
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].data).toMatchObject({ projectId, runId: run.id, issueId: ticket.issueId });
+      return { job: jobs[0], runId: run.id };
+    }
+    const folders = async () => (await db.query<{ id: string; is_deleted: boolean }>(
+      "SELECT id, is_deleted FROM knowledge_folders WHERE project_id=$1 AND source_provider='jira'", [projectId]
+    )).rows;
+    const mirrors = async () => (await db.query<{ id: string; folder_id: string; is_deleted: boolean }>(
+      `SELECT id, folder_id, is_deleted FROM knowledge_documents
+       WHERE project_id=$1 AND source_provider='jira' AND source_external_id=$2 AND source_role='mirror'`,
+      [projectId, ticket.issueId]
+    )).rows;
+    const events = async (run: string) => (await db.query(
+      "SELECT document_id, event_type FROM knowledge_document_sync_events WHERE run_id=$1", [run]
+    )).rows;
+
+    const first = await startAndFanOut();
+    const before = await folders();
+    expect(before).toHaveLength(1);
+    expect(before[0].is_deleted).toBe(false);
+    const oldId = before[0].id;
+    await realService().deleteKnowledgeFolder(projectId, actor, oldId);
+    const attempts = first.job.opts.attempts ?? 1;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const error = await processor.process(first.job as Job).then(() => null, (failure: Error) => failure);
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toContain("folder was deleted or moved");
+      await processor.onFailed({ ...first.job, attemptsMade: attempt, failedReason: error!.message } as Job);
+    }
+    expect(await runs.getRun(first.runId)).toMatchObject({
+      status: "partial", totalTickets: 1, failedTickets: 1, documentsCreated: 0, documentsUpdated: 0
+    });
+    expect(await folders()).toEqual([{ id: oldId, is_deleted: true }]);
+    expect(await mirrors()).toEqual([]);
+    expect(await events(first.runId)).toEqual([]);
+    expect(enqueueEmbedding).not.toHaveBeenCalled();
+
+    const second = await startAndFanOut();
+    expect(second.runId).not.toBe(first.runId);
+    const current = await folders();
+    expect(current).toHaveLength(2);
+    expect(current).toContainEqual({ id: oldId, is_deleted: true });
+    const active = current.filter(folder => !folder.is_deleted);
+    expect(active).toHaveLength(1);
+    await processor.process(second.job as Job);
+    const saved = await mirrors();
+    expect(saved).toEqual([{ id: expect.any(String), folder_id: active[0].id, is_deleted: false }]);
+    expect(await events(second.runId)).toEqual([{ document_id: saved[0].id, event_type: "created" }]);
+    expect(enqueueEmbedding).toHaveBeenCalledTimes(1);
+    expect(enqueueEmbedding).toHaveBeenCalledWith(expect.objectContaining({ projectId, sourceId: saved[0].id }));
+    expect(await runs.getRun(second.runId)).toMatchObject({
+      status: "succeeded", totalTickets: 1, processedTickets: 1, failedTickets: 0, documentsCreated: 1
+    });
+  });
 
   it.each(["new snapshot", "coalesced diff", "restore"])("rolls back the complete %s and actual document UPDATE after a late native SQL fault", async (kind) => {
     const versionId = kind === "new snapshot" ? "" : await seedVersion();
@@ -618,59 +753,6 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
   });
 
-  it("serialises a document move behind the mutation lock before it reads the destination", async () => {
-    const target = (await setup.query<{ id: string }>(
-      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
-      [orgId, projectId, `Move target ${randomUUID()}`, folderId]
-    )).rows[0].id;
-    let release!: () => void;
-    const released = new Promise<void>((resolve) => { release = resolve; });
-    let acquired!: () => void;
-    const acquiredP = new Promise<void>((resolve) => { acquired = resolve; });
-    let paused = false;
-    const observed = observedPool(async (sql) => {
-      if (!paused && /pg_advisory_xact_lock/.test(sql)) {
-        paused = true;
-        acquired();
-        await released;
-      }
-    });
-    const f = service(observed);
-    try {
-      // The delete holds the project mutation lock while the move queues behind it. The move must
-      // read the destination only after that wait, when the folder is already gone.
-      const deletion = f.svc.deleteKnowledgeFolder(projectId, actor, target).then(() => null, (error) => error);
-      await acquiredP;
-      const move = f.svc.moveKnowledgeDocument(projectId, actor, documentId, { folderId: target }).then(() => null, (error) => error);
-      await waitForAdvisoryWait();
-      release();
-      expect(await deletion).toBeNull();
-      expect(await move).toMatchObject({ status: 404 });
-      expect((await setup.query("SELECT folder_id FROM knowledge_documents WHERE id = $1", [documentId])).rows[0].folder_id).toBe(folderId);
-    } finally {
-      release();
-      await observed.end();
-      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
-    }
-  });
-
-  it("cascades a document moved into a folder before that folder is deleted", async () => {
-    const target = (await setup.query<{ id: string }>(
-      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
-      [orgId, projectId, `Move then delete ${randomUUID()}`, folderId]
-    )).rows[0].id;
-    const f = service();
-    try {
-      await f.svc.moveKnowledgeDocument(projectId, actor, documentId, { folderId: target });
-      await f.svc.deleteKnowledgeFolder(projectId, actor, target);
-      const moved = (await setup.query("SELECT folder_id,is_deleted FROM knowledge_documents WHERE id = $1", [documentId])).rows[0];
-      expect(moved).toMatchObject({ folder_id: target, is_deleted: true });
-      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1 AND is_deleted = false", [target])).rows[0].n).toBe(0);
-    } finally {
-      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
-    }
-  });
-
   it("refuses a duplicate whose author loses project membership while waiting on the source", async () => {
     const title = `Duplicate source ${randomUUID()}`;
     await setup.query("UPDATE knowledge_documents SET title = $2 WHERE id = $1", [documentId, title]);
@@ -772,115 +854,213 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     }
   });
 
-  it("does not strand a duplicate copy when an ancestor folder is deleted during the copy", async () => {
-    const ancestor = (await setup.query<{ id: string }>(
-      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
-      [orgId, projectId, `Duplicate ancestor ${randomUUID()}`, folderId]
-    )).rows[0].id;
-    const destination = (await setup.query<{ id: string }>(
-      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
-      [orgId, projectId, `Duplicate destination ${randomUUID()}`, ancestor]
-    )).rows[0].id;
-    const title = `Duplicate orphan ${randomUUID()}`;
-    await setup.query("UPDATE knowledge_documents SET title = $2, folder_id = $3 WHERE id = $1", [documentId, title, destination]);
+  async function overlap<First, Second>(holdAfter: RegExp, first: (p: Pool) => Promise<First>, second: (p: Pool) => Promise<Second>) {
     let release!: () => void;
-    const released = new Promise<void>((resolve) => { release = resolve; });
-    let pausedSignal!: (pid: number) => void;
-    const paused = new Promise<number>((resolve) => { pausedSignal = resolve; });
+    let identify!: (pid: number) => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const paused = new Promise<number>(resolve => { identify = resolve; });
     let held = false;
-    const observed = observedPool(async (sql, _values, _result, raw) => {
-      if (!held && /FROM projects p JOIN project_members/.test(sql)) {
-        held = true;
-        pausedSignal(Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid));
-        await released;
-      }
+    const holder = observedPool(async (sql, _values, _result, raw) => {
+      if (held || !holdAfter.test(sql)) return;
+      held = true;
+      identify(Number((await raw("SELECT pg_backend_pid() AS pid")).rows[0].pid));
+      await released;
     });
-    const duplicating = realService(observed);
-    const deleteApplication = `kb-ancestor-delete-${randomUUID()}`;
-    const deletePool = new Pool({ connectionString: url, application_name: deleteApplication, max: 2, connectionTimeoutMillis: 3000 });
-    const deleting = service(deletePool);
+    const application = `kb-waiter-${randomUUID()}`;
+    const waiter = new Pool({ connectionString: url, application_name: application, max: 2, connectionTimeoutMillis: 3000 });
     try {
-      // Hold the duplicate after its source/authority reads. A delete that starts now either
-      // waits on the same project advisory lock (fixed) or races the copy insert (pre-fix).
-      const duplicate = duplicating.duplicateKnowledgeDocument(projectId, actor, documentId);
-      const duplicatePid = await Promise.race([paused, duplicate.then(() => {
-        throw new Error("The copy completed before its transaction could be paused");
-      })]);
-      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, ancestor);
-      await Promise.race([waitForBlocker(duplicatePid, deleteApplication), deletion.then(() => {
-        throw new Error("The ancestor deletion completed without waiting for the copy");
-      })]);
+      const holding = first(holder);
+      const pid = await Promise.race([paused, holding.then(() => { throw new Error("First writer finished before the pause"); })]);
+      const waiting = second(waiter);
+      await Promise.race([waitForBlocker(pid, application), waiting.then(() => { throw new Error("Second writer completed without waiting"); })]);
       release();
-      const [copy] = await Promise.all([duplicate, deletion]);
-      expect(copy).toMatchObject({ title: `${title} (copy)`, folderId: destination });
-      expect(copy.id).not.toBe(documentId);
-      const documents = await setup.query(
-        `SELECT id, folder_id, is_deleted FROM knowledge_documents
-         WHERE project_id = $1 AND id = ANY($2::uuid[]) ORDER BY array_position($2::uuid[], id)`,
-        [projectId, [documentId, copy.id, otherDocumentId]]
-      );
-      expect(documents.rows).toEqual([
-        { id: documentId, folder_id: destination, is_deleted: true },
-        { id: copy.id, folder_id: destination, is_deleted: true },
-        { id: otherDocumentId, folder_id: folderId, is_deleted: false }
-      ]);
-      expect((await setup.query(
-        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE folder_id = $1 AND is_deleted = false",
-        [destination]
-      )).rows[0].n).toBe(0);
+      return await Promise.all([holding, waiting] as const);
     } finally {
       release();
-      await Promise.all([observed.end(), deletePool.end()]);
-      await setup.query("DELETE FROM knowledge_documents WHERE folder_id = $1", [destination]);
-      await setup.query("DELETE FROM knowledge_folders WHERE id = ANY($1::uuid[])", [[destination, ancestor]]);
+      await Promise.all([holder.end(), waiter.end()]);
+    }
+  }
+
+  async function readFolders() {
+    return (await setup.query(
+      "SELECT id, parent_folder_id, name, is_deleted FROM knowledge_folders WHERE project_id=$1 ORDER BY id", [projectId]
+    )).rows;
+  }
+
+  async function readCreatedFolderAudits(name: string) {
+    return (await setup.query(
+      `SELECT entity_id FROM audit_logs WHERE project_id=$1 AND actor_id=$2
+       AND entity_type='knowledge_folder' AND action='created' AND entity_name=$3`, [projectId, actor, name]
+    )).rows;
+  }
+
+  describe("WPB-04 knowledge writes and ancestor deletion", () => {
+    const deletingEditor = randomUUID();
+    let ancestor: string;
+    let destination: string;
+    let title: string;
+
+    beforeAll(async () => {
+      await setup.query("INSERT INTO users (id,email,name,active_organization_id) VALUES ($1,$2,'Folder editor',$3)",
+        [deletingEditor, `kb-folder-${stamp}@tesbo.invalid`, orgId]);
+      await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$2,'member')", [orgId, deletingEditor]);
+      await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'qa_engineer')", [projectId, deletingEditor]);
+    });
+
+    beforeEach(async () => {
+      const folderInsert = "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id,created_by) VALUES ($1,$2,$3,$4,$5) RETURNING id";
+      title = `Race source ${randomUUID()}`;
+      ancestor = (await setup.query<{ id: string }>(folderInsert, [orgId, projectId, title + " ancestor", folderId, deletingEditor])).rows[0].id;
+      destination = (await setup.query<{ id: string }>(folderInsert, [orgId, projectId, title + " destination", ancestor, deletingEditor])).rows[0].id;
+    });
+
+    afterEach(async () => {
+      await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND folder_id = $2", [projectId, destination]);
+      await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND id = ANY($2::uuid[])", [projectId, [destination, ancestor]]);
+    });
+
+    async function prepareSource(operation: "move" | "duplicate") {
+      // A copy lands next to the source. A move brings the source in from outside the subtree.
+      const initialFolder = operation === "duplicate" ? destination : folderId;
+      await setup.query("UPDATE knowledge_documents SET title = $2, folder_id = $3 WHERE id = $1", [documentId, title, initialFolder]);
+      const documents = await readDocuments();
+      expect(documents.find(doc => doc.id === documentId)).toMatchObject({ folder_id: initialFolder, is_deleted: false });
+      expect(documents.find(doc => doc.id === otherDocumentId)).toMatchObject({ folder_id: folderId, is_deleted: false });
+      return documents;
+    }
+    async function readDocuments() {
+      return (await setup.query(
+        `SELECT id, folder_id, title, content_json, content_html, content_text, is_deleted
+         FROM knowledge_documents WHERE project_id = $1 ORDER BY id`, [projectId]
+      )).rows;
+    }
+    async function expectSubtreeDeleted() {
+      const result = await setup.query(
+        "SELECT is_deleted FROM knowledge_folders WHERE project_id = $1 AND id = ANY($2::uuid[])", [projectId, [ancestor, destination]]
+      );
+      expect(result.rows).toEqual([{ is_deleted: true }, { is_deleted: true }]);
+    }
+    async function readAudits() {
+      return (await setup.query(
+        `SELECT id, entity_id, action FROM audit_logs WHERE project_id = $1 AND actor_id = $2
+         AND entity_type = 'knowledge_document' AND action IN ('moved','duplicated') ORDER BY id`, [projectId, actor]
+      )).rows;
+    }
+    function mutateDocument(operation: "move" | "duplicate", dbPool: Pool) {
+      const svc = realService(dbPool);
+      return operation === "move"
+        ? svc.moveKnowledgeDocument(projectId, actor, documentId, { folderId: destination })
+        : svc.duplicateKnowledgeDocument(projectId, actor, documentId);
+    }
+    function deleteAncestor(dbPool: Pool) {
+      return realService(dbPool).deleteKnowledgeFolder(projectId, deletingEditor, ancestor);
+    }
+
+    it.each(["duplicate", "move"] as const)("refuses %s after a concurrent ancestor deletion without a document or audit write", async operation => {
+      const before = await prepareSource(operation);
+      const auditsBefore = await readAudits();
+      await overlap(/UPDATE knowledge_folders SET is_deleted = true/, deleteAncestor,
+        p => expect(mutateDocument(operation, p)).rejects.toMatchObject({ status: 404 }));
+
+      await expectSubtreeDeleted();
+      const expected = before.map(doc => doc.id === documentId && operation === "duplicate" ? { ...doc, is_deleted: true } : doc);
+      expect(await readDocuments()).toEqual(expected);
+      expect(await readAudits()).toEqual(auditsBefore);
+    }, 30000);
+
+    it.each(["duplicate", "move"] as const)("cascades the exact result of %s when the ancestor deletion waits", async operation => {
+      const before = await prepareSource(operation);
+      const [written] = await overlap(/FROM projects p JOIN project_members/, p => mutateDocument(operation, p), deleteAncestor);
+      expect(written.folderId).toBe(destination);
+      await expectSubtreeDeleted();
+      const after = await readDocuments();
+      const expectedExisting = before.map(doc => doc.id === documentId ? { ...doc, folder_id: destination, is_deleted: true } : doc);
+      if (operation === "duplicate") {
+        const source = before.find(doc => doc.id === documentId)!;
+        expect(written.id).not.toBe(documentId);
+        expect(written.title).toBe(`${title} (copy)`);
+        expect(after.find(doc => doc.id === written.id)).toEqual({ ...source, id: written.id, title: written.title, is_deleted: true });
+        expect(after.filter(doc => doc.id !== written.id)).toEqual(expectedExisting);
+      } else {
+        expect(written.id).toBe(documentId);
+        expect(after).toEqual(expectedExisting);
+      }
+      const audits = (await readAudits()).filter(record => record.entity_id === written.id);
+      expect(audits.map(record => record.action)).toEqual([operation === "duplicate" ? "duplicated" : "moved"]);
+    }, 30000);
+
+    it.each(["delete first", "create first"] as const)("serializes child-folder creation and ancestor deletion: %s", async order => {
+      const name = `Child ${randomUUID()}`;
+      const before = await readFolders();
+      expect(before.find(row => row.id === folderId)).toMatchObject({ is_deleted: false });
+      expect(before.find(row => row.id === ancestor)).toMatchObject({ parent_folder_id: folderId, is_deleted: false });
+      expect(before.find(row => row.id === destination)).toMatchObject({ parent_folder_id: ancestor, is_deleted: false });
+      const expected = before.map(row => row.id === ancestor || row.id === destination ? { ...row, is_deleted: true } : row);
+      const create = (p: Pool) => realService(p).createKnowledgeFolder(projectId, actor, { parentFolderId: destination, name });
+      if (order === "delete first") {
+        await overlap(/UPDATE knowledge_folders SET is_deleted = true/, deleteAncestor, p => expect(create(p)).rejects.toMatchObject({ status: 404 }));
+        expect(await readFolders()).toEqual(expected);
+        expect(await readCreatedFolderAudits(name)).toEqual([]);
+      } else {
+        const [child] = await overlap(/INSERT INTO knowledge_folders/, create, deleteAncestor);
+        expect(child).toMatchObject({ id: expect.any(String), parentFolderId: destination, name, isDeleted: false });
+        expect(before.some(row => row.id === child.id)).toBe(false);
+        const after = await readFolders();
+        expect(after.find(row => row.id === child.id)).toEqual({ id: child.id, parent_folder_id: destination, name, is_deleted: true });
+        expect(after.filter(row => row.id !== child.id)).toEqual(expected);
+        expect(await readCreatedFolderAudits(name)).toEqual([{ entity_id: child.id }]);
+      }
+    }, 30000);
+  });
+
+  it("rolls back the created folder and its audit after a native SQL failure in the audit transaction", async () => {
+    const name = `Folder audit ${randomUUID()}`;
+    const before = await readFolders();
+    let insertedId: unknown;
+    let auditAttempted = false;
+    const observed = observedPool(async (sql, _values, result, raw) => {
+      if (/INSERT INTO knowledge_folders/.test(sql)) insertedId = result.rows[0]?.id;
+      if (/INSERT INTO audit_logs/.test(sql)) {
+        auditAttempted = true;
+        await raw("SELECT 1 / 0");
+      }
+    });
+    try {
+      await expect(realService(observed).createKnowledgeFolder(projectId, actor, { parentFolderId: folderId, name }))
+        .rejects.toMatchObject({ code: "22012" });
+      expect(insertedId).toEqual(expect.any(String));
+      expect(auditAttempted).toBe(true);
+      expect(await readFolders()).toEqual(before);
+      expect(await readCreatedFolderAudits(name)).toEqual([]);
+    } finally {
+      await observed.end();
     }
   });
 
-  it("rechecks a parent folder under lock so a concurrent delete cannot strand a new child folder", async () => {
-    const parent = (await setup.query<{ id: string }>(
-      "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,$3,$4) RETURNING id",
-      [orgId, projectId, `Folder race parent ${randomUUID()}`, folderId]
-    )).rows[0].id;
-    const childName = `Child ${randomUUID().slice(0, 8)}`;
-    let release!: () => void;
-    const released = new Promise<void>((resolve) => { release = resolve; });
-    let acquired!: () => void;
-    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
-    let paused = false;
-    const observed = observedPool(async (sql) => {
-      if (!paused && /UPDATE knowledge_folders SET is_deleted = true/.test(sql)) {
-        paused = true;
-        acquired();
-        await released;
-      }
-    });
-    const deleting = service(observed);
-    const f = realService();
+  it("refuses a waiting folder create after a project owner archives the project", async () => {
+    const name = `Archive ${randomUUID()}`;
+    const before = await readFolders();
+    const archiver = makeLegacy(new DatabaseService(pool));
     try {
-      // The delete has already soft-deleted the parent folder inside its transaction but has not
-      // committed. The create must queue behind the same project lock, then find the folder gone.
-      const deletion = deleting.svc.deleteKnowledgeFolder(projectId, actor, parent).then(() => null, (error) => error);
-      await acquiring;
-      const create = f.createKnowledgeFolder(projectId, actor, { parentFolderId: parent, name: childName })
-        .then(() => null, (error) => error);
-      // Observe that the create reached its wait before allowing the delete to commit.
-      await waitForAnyLockWait();
-      release();
-      expect(await deletion).toBeNull();
-      expect(await create).toMatchObject({ status: 404 });
-      expect((await setup.query(
-        "SELECT COUNT(*)::int AS n FROM knowledge_folders WHERE project_id = $1 AND name = $2 AND is_deleted = false",
-        [projectId, childName]
-      )).rows[0].n).toBe(0);
+      // An independent connection holds the parent row. The writer must pass real active-project
+      // access and reach its parent lock before the owner archives through the normal service.
+      await overlap(/FROM knowledge_folders WHERE id=\$1 FOR UPDATE/,
+        p => new DatabaseService(p).transaction(async client => {
+          await client.query("SELECT id FROM knowledge_folders WHERE id=$1 FOR UPDATE", [folderId]);
+          await archiver.deleteProjectForUser(actor, projectId);
+        }),
+        p => expect(makeLegacy(new DatabaseService(p)).createKnowledgeFolder(projectId, actor, { parentFolderId: folderId, name }))
+          .rejects.toBeInstanceOf(ForbiddenException));
+      expect((await setup.query("SELECT archived_at IS NOT NULL AS archived FROM projects WHERE id=$1", [projectId])).rows)
+        .toEqual([{ archived: true }]);
+      expect(await readFolders()).toEqual(before);
+      expect(await readCreatedFolderAudits(name)).toEqual([]);
     } finally {
-      release();
-      await observed.end();
-      await setup.query("DELETE FROM knowledge_folders WHERE project_id = $1 AND name = $2", [projectId, childName]);
-      await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [parent]);
+      await setup.query("UPDATE projects SET archived_at=NULL WHERE id=$1", [projectId]);
     }
   }, 30000);
 
-  it("keeps Zyra memory out of a folder deleted between resolution and insert", async () => {
+  it("preserves the submitted Zyra memory at the root when deletion of its preferred folder wins", async () => {
     // Earlier fixtures in this shared project may already hold a "Zyra AI Memory" document, which
     // would route this call into the append branch instead of the insert this regression targets.
     await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory'", [projectId]);
@@ -888,34 +1068,26 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       "INSERT INTO knowledge_folders (organization_id,project_id,name,parent_folder_id) VALUES ($1,$2,'AI Memory',$3) RETURNING id",
       [orgId, projectId, folderId]
     )).rows[0].id;
-    let deleted = false;
-    const observed = observedPool(async (sql) => {
-      if (!deleted && /SELECT organization_id FROM projects WHERE id = \$1/.test(sql)) {
-        deleted = true;
-        await setup.query("UPDATE knowledge_folders SET is_deleted = true WHERE id = $1", [memoryFolder]);
-      }
-    });
-    const f = service(observed);
     try {
-      await (f.svc as unknown as { rememberZyraMemory: (projectId: string, userId: string | null, entry: string) => Promise<void> })
-        .rememberZyraMemory(projectId, actor, "- Durable memory note");
-      expect(deleted).toBe(true);
-      // The folder was deleted after the earlier resolution. The memory must not be filed there;
-      // it falls back to the root, which cannot be deleted.
-      expect((await setup.query(
-        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND folder_id = $2 AND is_deleted = false",
-        [projectId, memoryFolder]
-      )).rows[0].n).toBe(0);
-      expect((await setup.query(
-        "SELECT COUNT(*)::int AS n FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND folder_id = $2 AND is_deleted = false",
-        [projectId, folderId]
-      )).rows[0].n).toBe(1);
+      const marker = `- Durable memory note ${randomUUID()}`;
+      await overlap(/UPDATE knowledge_folders SET is_deleted = true/,
+        p => realService(p).deleteKnowledgeFolder(projectId, actor, memoryFolder),
+        p => {
+          const svc = realService(p) as unknown as { rememberZyraMemory: (projectId: string, userId: string, entry: string) => Promise<void> };
+          return svc.rememberZyraMemory(projectId, actor, marker);
+        });
+      expect((await setup.query("SELECT is_deleted FROM knowledge_folders WHERE id = $1", [memoryFolder])).rows)
+        .toEqual([{ is_deleted: true }]);
+      const live = await setup.query(
+        "SELECT folder_id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND is_deleted = false",
+        [projectId]
+      );
+      expect(live.rows).toEqual([{ folder_id: folderId, content_text: expect.stringContaining(marker) }]);
     } finally {
-      await observed.end();
       await setup.query("DELETE FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory'", [projectId]);
       await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [memoryFolder]);
     }
-  });
+  }, 30000);
 
   it("refuses to restore a child folder while its parent remains deleted", async () => {
     const parent = (await setup.query<{ id: string }>(
@@ -1112,5 +1284,363 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
       await observed.end();
       await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [target]);
     }
+  });
+
+  describe("upload request identity", () => {
+    const file = (name: string, body = "upload body") => ({
+      buffer: Buffer.from(body), originalname: name, mimetype: "text/plain", size: Buffer.byteLength(body)
+    });
+    const cleanup = (requestKey: string) => setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+
+    it("replays a fully committed request without writing storage or auditing it twice", async () => {
+      const requestKey = randomUUID();
+      const name = `replay-${randomUUID()}.txt`;
+      const f = fileService();
+      try {
+        const first = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey);
+        expect(first).toMatchObject({ total: 1, replayed: false });
+        expect(f.storage.put).toHaveBeenCalledTimes(1);
+        expect(f.activity).toHaveBeenCalledTimes(1);
+
+        const second = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey);
+        expect(second).toMatchObject({ total: 1, replayed: true });
+        expect(second.list[0].id).toBe(first.list[0].id);
+        expect(f.storage.put).toHaveBeenCalledTimes(1);
+        expect(f.activity).toHaveBeenCalledTimes(1);
+        expect((await setup.query(
+          "SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2",
+          [projectId, requestKey]
+        )).rows[0].n).toBe(1);
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+
+    it("refuses the same request key for different content and leaves the committed row untouched", async () => {
+      const requestKey = randomUUID();
+      const f = fileService();
+      try {
+        const first = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(`original-${randomUUID()}.txt`)], requestKey);
+        const changed = file(`changed-${randomUUID()}.txt`, "different body");
+        await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [changed], requestKey))
+          .rejects.toMatchObject({ status: 409, response: { code: "UPLOAD_REQUEST_CONFLICT" } });
+        expect(f.storage.put).toHaveBeenCalledTimes(1);
+        expect((await setup.query("SELECT id FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows)
+          .toEqual([{ id: first.list[0].id }]);
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+
+    it("treats an identical file under a new request key as a deliberate second upload", async () => {
+      const firstKey = randomUUID();
+      const secondKey = randomUUID();
+      const f = fileService();
+      const name = `same-${randomUUID()}.txt`;
+      try {
+        const first = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], firstKey);
+        const second = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], secondKey);
+        expect(second).toMatchObject({ total: 1, replayed: false });
+        expect(second.list[0].id).not.toBe(first.list[0].id);
+        expect(f.storage.put).toHaveBeenCalledTimes(2);
+        expect((await setup.query(
+          "SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key IN ($2,$3)",
+          [projectId, firstKey, secondKey]
+        )).rows[0].n).toBe(2);
+      } finally {
+        await cleanup(firstKey);
+        await cleanup(secondKey);
+      }
+    });
+
+    it("resumes a partially committed batch without rewriting its committed position", async () => {
+      const requestKey = randomUUID();
+      const first = file(`partial-first-${randomUUID()}.txt`);
+      const second = file(`partial-second-${randomUUID()}.txt`);
+      const f = fileService();
+      f.activity.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("injected second-file audit fault"));
+      try {
+        await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [first, second], requestKey))
+          .rejects.toThrow("injected second-file audit fault");
+        const committed = (await setup.query<{ id: string; upload_request_file_index: number }>(
+          "SELECT id, upload_request_file_index FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2 ORDER BY upload_request_file_index",
+          [projectId, requestKey]
+        )).rows;
+        expect(committed.map((row) => row.upload_request_file_index)).toEqual([0]);
+
+        const retried = await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [first, second], requestKey);
+        expect(retried).toMatchObject({ total: 2, replayed: false });
+        expect(retried.list[0].id).toBe(committed[0].id);
+        expect(retried.list[0].id).not.toBe(retried.list[1].id);
+        expect((await setup.query("SELECT id FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2 ORDER BY upload_request_file_index", [projectId, requestKey])).rows)
+          .toEqual([{ id: retried.list[0].id }, { id: retried.list[1].id }]);
+        // Two initial object writes, one compensated for the refused second file, and only the
+        // missing position written on retry.
+        expect(f.storage.put).toHaveBeenCalledTimes(3);
+        expect(f.storage.delete).toHaveBeenCalledTimes(1);
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+
+    it("retries an upload whose COMMIT acknowledgement was lost without creating a second row", async () => {
+      const requestKey = randomUUID();
+      const name = `uncertain-retry-${randomUUID()}.txt`;
+      let committed = false;
+      const observed = observedPool(async (sql) => {
+        if (!committed && sql.trim().toUpperCase() === "COMMIT") {
+          committed = true;
+          throw new Error("Connection terminated unexpectedly");
+        }
+      });
+      const uncertain = fileService(observed);
+      try {
+        await uncertain.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey).then(() => null, () => null);
+        expect(committed).toBe(true);
+        const stored = (await setup.query<{ id: string; storage_key: string }>(
+          "SELECT id, storage_key FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2",
+          [projectId, requestKey]
+        )).rows;
+        expect(stored).toHaveLength(1);
+
+        const retry = fileService();
+        const replayed = await retry.svc.uploadKnowledgeFiles(projectId, actor, folderId, [file(name)], requestKey);
+        expect(replayed).toMatchObject({ total: 1, replayed: true });
+        expect(replayed.list[0].id).toBe(stored[0].id);
+        expect(retry.storage.put).not.toHaveBeenCalled();
+        expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows[0].n).toBe(1);
+      } finally {
+        await observed.end();
+        await cleanup(requestKey);
+      }
+    });
+
+    it("refuses to replay a request whose committed file was later deleted", async () => {
+      const requestKey = randomUUID();
+      const uploaded = file(`deleted-${randomUUID()}.txt`);
+      const f = fileService();
+      try {
+        await f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [uploaded], requestKey);
+        await setup.query("UPDATE knowledge_files SET is_deleted = true WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+        await expect(f.svc.uploadKnowledgeFiles(projectId, actor, folderId, [uploaded], requestKey))
+          .rejects.toMatchObject({ status: 409, response: { code: "UPLOAD_REQUEST_CLOSED" } });
+      } finally {
+        await cleanup(requestKey);
+      }
+    });
+  });
+
+  it("lets only one of two concurrent same-key uploads create a row", async () => {
+    const requestKey = randomUUID();
+    const name = `concurrent-${randomUUID()}.txt`;
+    const body = { buffer: Buffer.from("upload body"), originalname: name, mimetype: "text/plain", size: 11 };
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    let acquired!: () => void;
+    const acquiring = new Promise<void>((resolve) => { acquired = resolve; });
+    let paused = false;
+    const observed = observedPool(async (sql) => {
+      if (!paused && /INSERT INTO knowledge_files/.test(sql)) {
+        paused = true;
+        acquired();
+        await released;
+      }
+    });
+    const winner = fileService(observed);
+    const loser = fileService();
+    try {
+      const first = winner.svc.uploadKnowledgeFiles(projectId, actor, folderId, [body], requestKey);
+      await acquiring;
+      const second = loser.svc.uploadKnowledgeFiles(projectId, actor, folderId, [{ ...body, buffer: Buffer.from("upload body") }], requestKey);
+      await waitForAnyLockWait();
+      release();
+      const [one, two] = await Promise.all([first, second]);
+      expect(one.list[0].id).toBe(two.list[0].id);
+      expect([one.replayed, two.replayed].sort()).toEqual([false, true]);
+      expect((await setup.query("SELECT COUNT(*)::int AS n FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey])).rows[0].n).toBe(1);
+      expect(winner.storage.put).toHaveBeenCalledTimes(1);
+      expect(loser.storage.put).toHaveBeenCalledTimes(1);
+      expect(loser.storage.delete).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await observed.end();
+      await setup.query("DELETE FROM knowledge_files WHERE project_id = $1 AND upload_request_key = $2", [projectId, requestKey]);
+    }
+  });
+
+  describe("knowledge transcription recovery", () => {
+    function transcriptionService() {
+      const f = fileService();
+      jest.spyOn(f.svc as unknown as { zyraAiAllocation: () => Promise<unknown> }, "zyraAiAllocation").mockResolvedValue({
+        key: {
+          provider: "openai", api_key: "test-key", is_active: true,
+          base_url: "https://api.openai.com/v1/audio/transcriptions", auth_header_name: "Authorization", auth_scheme: "Bearer"
+        },
+        reason: "test allocation"
+      });
+      const fetchProvider = jest.spyOn(
+        f.svc as unknown as { fetchAiProvider: () => Promise<Response> },
+        "fetchAiProvider"
+      ).mockResolvedValue({ ok: true } as Response);
+      jest.spyOn(
+        f.svc as unknown as { readAiProviderJson: () => Promise<Record<string, unknown>> },
+        "readAiProviderJson"
+      ).mockResolvedValue({ text: "recovered transcript" });
+      const sweep = (projectIdFilter?: string) => (f.svc as unknown as { resumeInterruptedKnowledgeTranscriptions: (id?: string) => Promise<void> })
+        .resumeInterruptedKnowledgeTranscriptions(projectIdFilter);
+      const transcribe = (projectId: string, fileId: string, token: string) => (
+        f.svc as unknown as {
+          transcribeKnowledgeFile: (p: string, f: string, b: Buffer, e: string, m: string, n: string, claimed: boolean, token: string) => Promise<void>
+        }
+      ).transcribeKnowledgeFile(projectId, fileId, Buffer.from("audio"), "mp3", "audio/mpeg", "meeting.mp3", true, token);
+      const embedding = (f.svc as unknown as { enqueueEmbedding: jest.Mock }).enqueueEmbedding;
+      return { ...f, fetchProvider, sweep, transcribe, embedding };
+    }
+    const statuses = async (ids: string[]) => (await setup.query<{ id: string; extraction_status: string; extracted_text: string | null }>(
+      "SELECT id, extraction_status, extracted_text FROM knowledge_files WHERE id = ANY($1::uuid[]) ORDER BY array_position($1::uuid[], id)",
+      [ids]
+    )).rows;
+
+    it("claims and finishes pending and abandoned transcriptions exactly once, leaving a live claim alone", async () => {
+      const deletedPending = await seedMedia({ status: "pending", deleted: true });
+      const abandoned = await seedMedia({ status: "processing", claimedAt: new Date(Date.now() - 60 * 60 * 1000) });
+      const live = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const liveBefore = (await setup.query("SELECT extraction_claimed_at FROM knowledge_files WHERE id = $1", [live.id])).rows[0];
+      const f = transcriptionService();
+      try {
+        // A deleted pending row is not recovered. Two concurrent sweeps must not both dispatch.
+        await Promise.all([f.sweep(projectId), f.sweep(projectId)]);
+        await waitFor(async () => (await statuses([abandoned.id])).every((row) => row.extraction_status === "ready"), "abandoned transcription");
+        expect(await statuses([deletedPending.id, abandoned.id, live.id])).toEqual([
+          { id: deletedPending.id, extraction_status: "pending", extracted_text: null },
+          { id: abandoned.id, extraction_status: "ready", extracted_text: "recovered transcript" },
+          { id: live.id, extraction_status: "processing", extracted_text: null }
+        ]);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.storage.getBuffer).toHaveBeenCalledTimes(1);
+        expect(f.storage.getBuffer).toHaveBeenCalledWith(abandoned.key);
+        expect(f.embedding).toHaveBeenCalledTimes(1);
+        expect(f.embedding).toHaveBeenCalledWith(orgId, projectId, "file", abandoned.id, "transcribed");
+        expect((await setup.query("SELECT extraction_claimed_at FROM knowledge_files WHERE id = $1", [live.id])).rows[0])
+          .toEqual(liveBefore);
+
+        await f.sweep(projectId);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect((await setup.query("SELECT extraction_claim_token FROM knowledge_files WHERE id = $1", [abandoned.id])).rows[0].extraction_claim_token).toBeNull();
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[deletedPending.id, abandoned.id, live.id]]);
+      }
+    });
+
+    it("does not recover transcriptions for a deleted file or an archived project", async () => {
+      const deleted = await seedMedia({ status: "pending", deleted: true });
+      const archivedProject = (await setup.query<{ id: string }>(
+        "INSERT INTO projects (organization_id, key, name, archived_at) VALUES ($1,$2,'Archived KB CI',now()) RETURNING id",
+        [orgId, `KBA${randomUUID().slice(0, 6)}`.toUpperCase()]
+      )).rows[0].id;
+      const archivedFolder = (await setup.query<{ id: string }>(
+        "INSERT INTO knowledge_folders (organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id",
+        [orgId, archivedProject]
+      )).rows[0].id;
+      const archived = await seedMedia({ status: "pending", project: archivedProject, folder: archivedFolder });
+      const f = transcriptionService();
+      try {
+        await Promise.all([f.sweep(projectId), f.sweep(archivedProject)]);
+        expect(f.storage.getBuffer).not.toHaveBeenCalledWith(deleted.key);
+        expect(f.storage.getBuffer).not.toHaveBeenCalledWith(archived.key);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+        expect(await statuses([deleted.id, archived.id])).toEqual([
+          { id: deleted.id, extraction_status: "pending", extracted_text: null },
+          { id: archived.id, extraction_status: "pending", extracted_text: null }
+        ]);
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = ANY($1::uuid[])", [[deleted.id, archived.id]]);
+        await setup.query("DELETE FROM knowledge_folders WHERE id = $1", [archivedFolder]);
+        await setup.query("DELETE FROM projects WHERE id = $1", [archivedProject]);
+      }
+    });
+
+    it("marks a claimed transcription failed when its stored bytes cannot be read", async () => {
+      const row = await seedMedia({ status: "pending" });
+      const f = transcriptionService();
+      f.storage.getBuffer.mockRejectedValueOnce(Object.assign(new Error("object missing"), { code: "ENOENT" }));
+      try {
+        await f.sweep(projectId);
+        expect(await statuses([row.id])).toEqual([{ id: row.id, extraction_status: "failed", extracted_text: null }]);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("releases a transient byte-read failure to pending so the next sweep can recover it", async () => {
+      const row = await seedMedia({ status: "pending" });
+      const f = transcriptionService();
+      f.storage.getBuffer.mockRejectedValueOnce(new Error("storage timeout"));
+      try {
+        await f.sweep(projectId);
+        expect(await statuses([row.id])).toEqual([{ id: row.id, extraction_status: "pending", extracted_text: null }]);
+        expect(f.fetchProvider).not.toHaveBeenCalled();
+
+        await f.sweep(projectId);
+        await waitFor(async () => (await statuses([row.id])).every((item) => item.extraction_status === "ready"), "retried transcription");
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect((await statuses([row.id]))[0].extracted_text).toBe("recovered transcript");
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("describes an in-flight transcription as in progress rather than as an unsupported type", () => {
+      const f = fileService();
+      const content = (f.svc as unknown as { knowledgeFileFallbackContent: (ext: string, status: string) => string })
+        .knowledgeFileFallbackContent("mp3", "processing");
+      expect(content).toContain("in progress");
+      expect(content).not.toContain("no extractable text");
+    });
+
+    it("does not record a stale claim owner's failure after a takeover", async () => {
+      const row = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const staleToken = randomUUID();
+      const currentToken = randomUUID();
+      await setup.query("UPDATE knowledge_files SET extraction_claim_token = $2 WHERE id = $1", [row.id, currentToken]);
+      const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+      const f = transcriptionService();
+      f.fetchProvider.mockRejectedValueOnce(new Error("synthetic provider failure"));
+      try {
+        await f.transcribe(projectId, row.id, staleToken);
+        expect(recorded).not.toHaveBeenCalled();
+        expect((await setup.query("SELECT extraction_status, extraction_claim_token FROM knowledge_files WHERE id = $1", [row.id])).rows[0])
+          .toEqual({ extraction_status: "processing", extraction_claim_token: currentToken });
+      } finally {
+        recorded.mockRestore();
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
+
+    it("does not let a stale claim owner overwrite the row after a takeover", async () => {
+      const row = await seedMedia({ status: "processing", claimedAt: new Date() });
+      const staleToken = randomUUID();
+      const currentToken = randomUUID();
+      await setup.query(
+        "UPDATE knowledge_files SET extraction_status = 'processing', extraction_claim_token = $2, extraction_claimed_at = now() WHERE id = $1",
+        [row.id, staleToken]
+      );
+      // A later claim owns the row before the stale worker finishes its provider call.
+      await setup.query("UPDATE knowledge_files SET extraction_claim_token = $2 WHERE id = $1", [row.id, currentToken]);
+      const f = transcriptionService();
+      try {
+        await f.transcribe(projectId, row.id, staleToken);
+        expect(f.fetchProvider).toHaveBeenCalledTimes(1);
+        expect(f.embedding).not.toHaveBeenCalled();
+        const state = (await setup.query(
+          "SELECT extraction_status, extracted_text, extraction_claim_token FROM knowledge_files WHERE id = $1",
+          [row.id]
+        )).rows[0];
+        expect(state).toEqual({ extraction_status: "processing", extracted_text: null, extraction_claim_token: currentToken });
+      } finally {
+        await setup.query("DELETE FROM knowledge_files WHERE id = $1", [row.id]);
+      }
+    });
   });
 });

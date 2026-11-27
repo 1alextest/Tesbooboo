@@ -1,12 +1,12 @@
 import { Logger } from "@nestjs/common";
-import type { Job } from "bullmq";
+import type { Job, Queue } from "bullmq";
 import { DatabaseService } from "../database/database.service";
 import type { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import type { RagIngestionService } from "../rag/rag-ingestion.service";
 import { IntegrationConnectionInvalidError, IntegrationSyncClient, NotionNotSharedError } from "./integration-sync.client";
 import { IntegrationSyncDecisions } from "./integration-sync-decisions";
 import { IntegrationSyncDocumentBuilder } from "./integration-sync-document.builder";
-import { INTEGRATION_SYNC_NIGHTLY_JIRA_JOB, INTEGRATION_SYNC_NIGHTLY_NOTION_JOB, INTEGRATION_SYNC_RUN_JOB, MAX_TICKETS_PER_RUN } from "./integration-sync.constants";
+import { INTEGRATION_SYNC_NIGHTLY_JIRA_JOB, INTEGRATION_SYNC_NIGHTLY_NOTION_JOB, INTEGRATION_SYNC_RUN_JOB, INTEGRATION_SYNC_TICKET_JOB, MAX_TICKETS_PER_RUN } from "./integration-sync.constants";
 import { IntegrationSyncProcessor } from "./integration-sync.processor";
 import { IntegrationSyncService } from "./integration-sync.service";
 import { RemoteTicket, SyncProvider, SyncRunJobPayload } from "./integration-sync.types";
@@ -701,6 +701,52 @@ describe.each<SyncProvider>(["jira", "linear", "notion"])("IntegrationSyncProces
     const again = await h.run();
     expect(again.queued).toHaveLength(0);
     expect(again.finish).toBe("Every ticket in Engineering is already synced.");
+  });
+});
+
+describe("IntegrationSyncProcessor — ticket accounting", () => {
+  it("keeps a two-ticket run active after one quota refusal and finishes after the unchanged ticket", async () => {
+    const builder = new IntegrationSyncDocumentBuilder();
+    const existing = builder.buildMirror(remoteTicket({
+      issueId: "KEEP-2", issueKey: "KEEP-2", summary: "A ticket", issueType: "", status: "", priority: "", url: ""
+    }), [], null);
+    const counts = { processed_tickets: 0, failed_tickets: 0, total_tickets: 2 };
+    const query = jest.fn(async (sql: string, params: unknown[]) => {
+      if (sql.startsWith("SELECT * FROM jira_tickets")) {
+        return { rows: [{ jira_issue_id: params[0], jira_issue_key: params[0], summary: "A ticket" }] };
+      }
+      if (sql.includes("FROM knowledge_documents")) {
+        return { rows: params[2] === "KEEP-2" ? [{ id: "doc-2", title: existing.title, content_text: existing.markdown }] : [] };
+      }
+      if (sql.includes("RETURNING processed_tickets")) {
+        counts.processed_tickets += Number(params[1]);
+        counts.failed_tickets += Number(params[2]);
+        return { rows: [{ ...counts }] };
+      }
+      return { rows: [] };
+    });
+    const db = { query } as unknown as DatabaseService;
+    const limits = { checkStorageAvailable: jest.fn().mockResolvedValue({ allowed: false, reason: "Storage limit reached" }) };
+    const runs = new IntegrationSyncService({} as Queue, db, limits as unknown as PlanLimitsService);
+    const finish = jest.spyOn(runs, "finishRun").mockResolvedValue(undefined);
+    const processor = new IntegrationSyncProcessor(db, runs,
+      { loadConnection: async () => ({ id: "connection" }), fetchComments: async () => [] } as unknown as IntegrationSyncClient,
+      builder, {} as IntegrationSyncDecisions, {} as RagIngestionService, limits as unknown as PlanLimitsService);
+    const processTicket = (issueKey: string) => processor.process(job(INTEGRATION_SYNC_TICKET_JOB, {
+      runId: "run-1", organizationId: "org-1", projectId: "proj-1", provider: "jira", triggeredBy: null,
+      ticketId: issueKey, issueId: issueKey, issueKey
+    }));
+
+    await processTicket("NEW-1");
+    expect(finish).not.toHaveBeenCalled();
+    expect(counts).toEqual({ processed_tickets: 0, failed_tickets: 1, total_tickets: 2 });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("SET error = COALESCE"), ["run-1", "Storage limit reached"]);
+
+    await processTicket("KEEP-2");
+    expect(counts).toEqual({ processed_tickets: 1, failed_tickets: 1, total_tickets: 2 });
+    expect(finish).toHaveBeenCalledTimes(1);
+    expect(finish).toHaveBeenCalledWith("run-1", null);
+    expect(limits.checkStorageAvailable).toHaveBeenCalledTimes(1);
   });
 });
 

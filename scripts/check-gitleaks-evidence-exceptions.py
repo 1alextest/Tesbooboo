@@ -36,14 +36,16 @@ NATIVE_PROSE_SHA256 = "b084c144d6ba7f150c692b6065132cfd45e94309871c4182164044ec7
 # fragments so the test control itself is not mistaken for another unreviewed receipt.
 NATIVE_PROSE_FRAGMENT = "".join(("new-key 404, ", "anonymous/foreign "))
 
-# Canonical originals remain byte-for-byte intact. Only these two ordinary prose
-# matches are excepted, under their exact paths and the generic-api-key rule.
+# Pin the exact reviewed canonical document revisions. Earlier originals remain
+# in Git history. Any subsequent amendment requires a new evidence review and
+# exact digest update. Only these two ordinary prose matches are excepted,
+# under their exact paths and the generic-api-key rule.
 CANONICAL_PROSE = [
     ("technical", Path("docs/qa-orchestration/03_TECHNICAL_DESIGN.md"),
-     "277c8b115ca23904df521ee56df211766217e2b8f09ff488773450978a6ccf9e",
+     "f5006da52db31a71eff58b4337c30af8b77a5d901e71cd7e98ea8a25a45d81ee",
      "".join(("auth, ", "finalization/", "merge ")), "merge", "merge2"),
     ("contracts", Path("docs/qa-orchestration/04_MCP_API_CONTRACTS.md"),
-     "fbe715ec8dc8f21a668d0c8dadfc25b374991a949892d123c17ecbfe218cbfbd",
+     "c95778aa63f6f16dadaf8c765f8db3a4229153bc8e3113607fd9fc4d40f73d7a",
      "".join(("token. Reject cycles, ", "missing/foreign/", "unapproved ")), "unapproved", "unapproved2"),
 ]
 
