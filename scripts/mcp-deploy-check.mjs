@@ -21,14 +21,132 @@
  *   REQUIRE_PROPOSAL_PREVIEW=1  require the isolated, default-off proposal review capability.
  *   TESBO_PILOT_READ_ONLY=1    sample existing project cases/suites through authorized MCP reads ONLY.
  *   TESBO_API_HEALTH_URL     defaults to <origin>/api/health derived from TESBO_MCP_URL.
+ *   TESBO_MCP_OAUTH_READINESS=1 checks public OAuth discovery only, without a token file,
+ *     client registration, login, consent, token issuance or tool calls. API-token success
+ *     does not establish OAuth readiness; this mode does not establish client acceptance.
  *
  * Exit code is 1 on any failed requirement. The token is never printed, and server error text is
  * redacted before it reaches the output.
  */
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { readApprovedMcpCredential, requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
+
+/** Public metadata only. Never read a credential or follow an advertised foreign origin. */
+export async function verifyOAuthDeployment({ endpoint, expectedGitSha, fetcher = fetch }) {
+  let resource;
+  try { resource = new URL(endpoint); } catch { throw new Error("OAuth resource must be a canonical project HTTPS URL"); }
+  if (resource.protocol !== "https:" || resource.href !== endpoint || resource.username || resource.password ||
+      resource.search || resource.hash || !/^\/api\/projects\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/mcp$/.test(resource.pathname)) {
+    throw new Error("OAuth resource must be a canonical project HTTPS URL");
+  }
+  if (!/^[a-f0-9]{40}$/.test(expectedGitSha ?? "")) throw new Error("OAuth readiness requires the exact expected Git SHA");
+  const origin = resource.origin;
+  const issuer = origin + "/oauth";
+  const metadataUrl = origin + "/.well-known/oauth-protected-resource" + resource.pathname;
+  const request = async (url, stage, init = {}) => {
+    try {
+      return await fetcher(url, { ...init, credentials: "omit", redirect: "manual", cache: "no-store",
+        referrerPolicy: "no-referrer", headers: { Accept: "application/json", ...init.headers },
+        signal: AbortSignal.timeout(10_000) });
+    } catch { throw new Error(`OAuth ${stage} request failed (details withheld)`); }
+  };
+  const json = async (url, stage, mediaTypes = ["application/json"]) => {
+    const response = await request(url, stage);
+    let reader;
+    try {
+      if (response.status !== 200) throw new Error(`OAuth ${stage} unavailable (HTTP ${response.status})`);
+      const mediaType = (response.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
+      if (!mediaTypes.includes(mediaType)) throw new Error(`OAuth ${stage} did not return JSON`);
+      // Bound streamed metadata, including responses without Content-Length.
+      reader = response.body?.getReader();
+      if (!reader) throw new Error(`OAuth ${stage} returned no metadata`);
+      let size = 0;
+      const chunks = [];
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 65_536) throw new Error("limit");
+          chunks.push(value);
+        }
+        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch { throw new Error(`OAuth ${stage} metadata was invalid or exceeded its limit`); }
+    } finally {
+      // Status/MIME refusals must discard their bodies too. Preserve the fixed
+      // refusal instead of replacing it with an arbitrary cancellation error.
+      try {
+        if (reader) await reader.cancel();
+        else await response.body?.cancel();
+      } catch { /* no response body or transport error is diagnostic output */ }
+    }
+  };
+  const health = await json(origin + "/api/health", "health");
+  if (health?.gitSha !== expectedGitSha) throw new Error("OAuth health does not match the expected deployment");
+  const metadata = await json(metadataUrl, "protected-resource metadata");
+  if (metadata?.resource !== endpoint || !Array.isArray(metadata.authorization_servers) ||
+      metadata.authorization_servers.length !== 1 || metadata.authorization_servers[0] !== issuer ||
+      !Array.isArray(metadata.scopes_supported) || metadata.scopes_supported.length !== 1 ||
+      metadata.scopes_supported[0] !== "mcp:read") {
+    throw new Error("OAuth resource, issuer or read-only scope does not match the configured connection");
+  }
+  const authorization = await json(origin + "/.well-known/oauth-authorization-server/oauth", "authorization-server metadata");
+  const endpointWithinIssuer = value => {
+    try {
+      const url = new URL(value);
+      return url.href === value && url.origin === origin && url.pathname.startsWith("/oauth/") &&
+        !url.username && !url.password && !url.search && !url.hash;
+    } catch { return false; }
+  };
+  if (authorization?.issuer !== issuer ||
+      ![authorization.authorization_endpoint, authorization.token_endpoint, authorization.jwks_uri].every(endpointWithinIssuer) ||
+      !Array.isArray(authorization.code_challenge_methods_supported) || !authorization.code_challenge_methods_supported.includes("S256") ||
+      !Array.isArray(authorization.response_types_supported) || !authorization.response_types_supported.includes("code") ||
+      !Array.isArray(authorization.grant_types_supported) || !authorization.grant_types_supported.includes("authorization_code") ||
+      !Array.isArray(authorization.token_endpoint_auth_methods_supported) || !authorization.token_endpoint_auth_methods_supported.includes("none")) {
+    throw new Error("OAuth issuer metadata lacks the expected same-origin public-client PKCE contract");
+  }
+  const jwks = await json(authorization.jwks_uri, "public signing keys", ["application/json", "application/jwk-set+json"]);
+  if (!Array.isArray(jwks?.keys) || !jwks.keys.length || jwks.keys.length > 20 ||
+      jwks.keys.some(key => !key || !["RSA", "EC", "OKP"].includes(key.kty) ||
+        ["d", "p", "q", "dp", "dq", "qi", "oth", "k"].some(field => Object.hasOwn(key, field)))) {
+    throw new Error("OAuth public signing keys are unavailable or contain private material");
+  }
+  const verificationKeys = [];
+  try {
+    for (const key of jwks.keys) {
+      const publicKey = createPublicKey({ key, format: "jwk" });
+      const algorithms = {
+        rsa: ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"],
+        "rsa-pss": ["PS256", "PS384", "PS512"],
+        ec: [{ "P-256": "ES256", "P-384": "ES384", "P-521": "ES512", secp256k1: "ES256K" }[key.crv]],
+        ed25519: ["EdDSA", "Ed25519"], ed448: ["EdDSA", "Ed448"]
+      }[publicKey.asymmetricKeyType];
+      if (algorithms && (key.use === undefined || key.use === "sig") &&
+          (key.key_ops === undefined || Array.isArray(key.key_ops) && key.key_ops.includes("verify")) &&
+          (key.alg === undefined || algorithms.includes(key.alg))) verificationKeys.push(publicKey);
+    }
+  }
+  catch { throw new Error("OAuth public signing keys are not valid asymmetric public keys"); }
+  if (!verificationKeys.length) throw new Error("OAuth JWKS has no supported public signature-verification key");
+  // Challenge the actual POST entrance. GET is not the project's MCP dispatch path.
+  const denied = await request(endpoint, "unauthenticated MCP challenge", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1,
+      method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {},
+        clientInfo: { name: "tesbo-oauth-readiness", version: "1" } } }) });
+  const challenge = denied.headers.get("www-authenticate") ?? "";
+  try { await denied.body?.cancel(); }
+  catch { throw new Error("OAuth MCP challenge cleanup failed (details withheld)"); }
+  if (denied.status !== 401 || challenge !== `Bearer resource_metadata="${metadataUrl}", scope="mcp:read"`) {
+    throw new Error("OAuth MCP POST did not refuse with the exact project read-only challenge");
+  }
+  return { ok: true, verification: "oauth_public_metadata", gitSha: health.gitSha,
+    resource: endpoint, issuer, cimdAdvertised: authorization.client_id_metadata_document_supported === true,
+    refreshAdvertised: Array.isArray(authorization.grant_types_supported) && authorization.grant_types_supported.includes("refresh_token"),
+    clientAuthorization: "not_verified", toolCalls: 0, tokenIssuance: "not_attempted" };
+}
 
 export const REQUIRED_TOOLS = [
   "list_projects",
@@ -306,6 +424,24 @@ async function nativeReadOnlyPilot(endpoint, token, session, tools) {
 
 async function main() {
   const endpoint = String(process.env.TESBO_MCP_URL || "").trim();
+  if (process.env.TESBO_MCP_OAUTH_READINESS !== undefined && !["0", "1"].includes(process.env.TESBO_MCP_OAUTH_READINESS)) {
+    console.error("TESBO_MCP_OAUTH_READINESS must be 0 or 1");
+    process.exitCode = 2;
+    return;
+  }
+  if (process.env.TESBO_MCP_OAUTH_READINESS === "1") {
+    try {
+      if (process.env.REQUIRE_PROPOSAL_PREVIEW === "1" || process.env.TESBO_PILOT_READ_ONLY === "1") {
+        throw new Error("OAuth metadata verification cannot be combined with authenticated tool checks");
+      }
+      console.log(JSON.stringify(await verifyOAuthDeployment({ endpoint,
+        expectedGitSha: String(process.env.EXPECTED_GIT_SHA || "").trim() })));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : "OAuth readiness failed (details withheld)");
+      process.exitCode = 1;
+    }
+    return;
+  }
   const tokenFile = String(process.env.TESBO_MCP_TOKEN_FILE || "");
   let token = "";
   const expectedGitSha = String(process.env.EXPECTED_GIT_SHA || "").trim();
