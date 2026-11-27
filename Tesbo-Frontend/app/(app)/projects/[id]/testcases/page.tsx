@@ -347,6 +347,9 @@ export default function TestCasesPage() {
   // Deep link from requirement coverage ("supporting case") and evidence surfaces. It seeds the
   // same search the reviewer would type; it is not a separate filter or authority.
   const activeSearch = searchParams.get("search") || "";
+  // A linked record is a selection, not a title filter. Keep it independent of the current list.
+  const linkedCaseId = searchParams.get("testcaseId");
+  const handledLinkedCase = useRef<{ projectId: string; value: string } | null>(null);
 
   // Take over the shared TopBar with this page's breadcrumb + actions (portaled below),
   // and hide the default global "Search projects" search while this page is mounted.
@@ -410,6 +413,11 @@ export default function TestCasesPage() {
   const [panelMode, setPanelMode] = useState<PanelMode>("closed");
   const [panelTab, setPanelTab] = useState<PanelTab>("overview");
   const [panelTestcaseId, setPanelTestcaseId] = useState<string | null>(null);
+  const [panelLoadedCaseId, setPanelLoadedCaseId] = useState<string | null>(null);
+  const [panelExternalId, setPanelExternalId] = useState<string | null>(null);
+  const panelCaseVerified = panelMode === "edit" && panelTestcaseId !== null
+    && panelLoadedCaseId === panelTestcaseId
+    && (linkedCaseId === null || linkedCaseId.toLowerCase() === panelTestcaseId);
   const [panelLoading, setPanelLoading] = useState(false);
   const panelLoadRequestRef = useRef(0);
   const [panelSaving, setPanelSaving] = useState(false);
@@ -1053,13 +1061,13 @@ export default function TestCasesPage() {
   }
 
   async function openApprovalReview() {
-    if (!panelTestcaseId || panelSaving || hasUnsavedReviewChanges()) return;
+    if (!panelCaseVerified || !panelTestcaseId || panelSaving || hasUnsavedReviewChanges()) return;
     setPanelSaving(true);
     setPanelError(null);
     try {
       const data = await getTestCase(projectId, panelTestcaseId);
       const snapshot = data.approvalSnapshot as TestCaseApprovalSnapshot | undefined;
-      if (typeof data.editRevision !== "string" || typeof data.approvalRevision !== "string" || !snapshot?.case
+      if (data.id !== panelTestcaseId || typeof data.editRevision !== "string" || typeof data.approvalRevision !== "string" || !snapshot?.case
           || !Array.isArray(snapshot.customFields) || !Array.isArray(snapshot.customTags)) {
         throw new Error("The complete reviewed version is unavailable. Reload the case before approving it.");
       }
@@ -1126,6 +1134,9 @@ export default function TestCasesPage() {
 
   async function openCreatePanel() {
     panelLoadRequestRef.current += 1;
+    setPanelLoading(false);
+    setPanelLoadedCaseId(null);
+    setPanelExternalId(null);
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1135,6 +1146,9 @@ export default function TestCasesPage() {
 
   async function openCreatePanelForSuite(targetSuiteId: string) {
     panelLoadRequestRef.current += 1;
+    setPanelLoading(false);
+    setPanelLoadedCaseId(null);
+    setPanelExternalId(null);
     setPanelError(null);
     setPanelTestcaseId(null);
     setPanelMode("create");
@@ -1144,6 +1158,10 @@ export default function TestCasesPage() {
 
   async function openViewPanel(testcaseId: string) {
     const requestId = ++panelLoadRequestRef.current;
+    setPanelLoadedCaseId(null);
+    setPanelExternalId(null);
+    setPanelSuccess(null);
+    setApprovalReview(null);
     setPanelError(null);
     setPanelLoading(true);
     setPanelTestcaseId(testcaseId);
@@ -1168,7 +1186,10 @@ export default function TestCasesPage() {
         getTestCaseTags(projectId, testcaseId),
       ]);
       if (requestId !== panelLoadRequestRef.current) return;
+      if (data.id !== testcaseId) throw new Error("The response did not identify the requested test case.");
       fillFormFromTestCase(data);
+      setPanelLoadedCaseId(testcaseId);
+      setPanelExternalId(typeof data.externalId === "string" && data.externalId ? data.externalId : testcaseId);
       setPanelCustomFields(customFields);
       setCustomFieldValues(Object.fromEntries(customFields.map((f) => [f.id, f.value])));
       setPanelBugs(bugs);
@@ -1181,15 +1202,56 @@ export default function TestCasesPage() {
     }
   }
 
-  function closePanel() {
+  function clearPanelState() {
     panelLoadRequestRef.current += 1;
     setPanelMode("closed");
     setPanelTestcaseId(null);
+    setPanelLoadedCaseId(null);
+    setPanelExternalId(null);
+    setPanelLoading(false);
     setPanelError(null);
+    setPanelSuccess(null);
     setPanelEditRevision(null);
     setApprovalReview(null);
     setSelectedSourceRef(null);
   }
+
+  function closePanel() {
+    clearPanelState();
+    if (linkedCaseId !== null) {
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("testcaseId");
+      const qs = next.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    }
+  }
+
+  // Consume a new exact route selection once, not on each list/editor render. Replacing the URL
+  // on close prevents a reload from reopening a deliberately dismissed panel. Ordinary row
+  // clicks and the existing editor refresh paths retain their existing behavior.
+  useEffect(() => {
+    const previous = handledLinkedCase.current;
+    if (linkedCaseId === null) {
+      handledLinkedCase.current = null;
+      if (previous && panelMode === "edit"
+        && (panelTestcaseId === null || panelTestcaseId === previous.value.toLowerCase())) {
+        clearPanelState();
+      }
+      return;
+    }
+    if (previous?.projectId === projectId && previous.value === linkedCaseId) return;
+    handledLinkedCase.current = { projectId, value: linkedCaseId };
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(linkedCaseId)) {
+      clearPanelState();
+      setPanelMode("edit");
+      setPanelError("The linked test case identifier is invalid. Return to the source and open the linked case again.");
+      return;
+    }
+    void openViewPanel(linkedCaseId.toLowerCase());
+    // The URL selection is the trigger; editor state and the functions closing over it must
+    // not turn ordinary edits or asynchronous reads into a new load that discards those edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, linkedCaseId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2697,7 +2759,8 @@ export default function TestCasesPage() {
             onClick={closePanel}
             className="absolute inset-0 bg-black/35"
           />
-          <aside className="absolute right-0 top-0 flex h-full w-1/2 min-w-[480px] flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-elevated)]">
+          <aside data-testid="testcase-detail-panel" data-case-id={panelCaseVerified ? panelTestcaseId : undefined}
+            aria-busy={panelLoading} className="absolute right-0 top-0 flex h-full w-1/2 min-w-[480px] flex-col border-l border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-elevated)]">
             {/* Panel header */}
             <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--border)] px-6 py-4">
               <div className="min-w-0 flex-1">
@@ -2705,9 +2768,12 @@ export default function TestCasesPage() {
                   {panelMode === "create" ? "New Test Case" : "Test Case"}
                 </p>
                 <h3 className="truncate text-lg font-semibold text-[var(--foreground)]">
-                  {panelMode === "create" ? "Create Test Case" : (title || "Untitled")}
+                  {panelMode === "create" ? "Create Test Case" : panelLoading ? "Loading test case…" : panelCaseVerified ? (title || "Untitled") : "Test case unavailable"}
                 </h3>
-                {panelMode === "edit" && (
+                {panelCaseVerified && (
+                  <p className="mt-1 break-all text-xs text-[var(--muted)]" data-testid="testcase-detail-identity">{panelExternalId}</p>
+                )}
+                {panelCaseVerified && (
                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     {status && <StatusChip tone={statusTone(status)}>{status}</StatusChip>}
                     {priority && <StatusChip tone={priorityTone(priority)}>{priority}</StatusChip>}
@@ -2739,8 +2805,8 @@ export default function TestCasesPage() {
               </div>
             </div>
 
-            {/* Tabs (only for edit mode) */}
-            {panelMode === "edit" && (
+            {/* Do not expose the preceding case's tabs or fields while a different record is unverified. */}
+            {panelCaseVerified && (
               <div className="flex shrink-0 gap-0 border-b border-[var(--border)] px-6">
                 {(["overview", "steps", "customFields", "bugs", "context"] as PanelTab[]).map((tab) => (
                   <button
@@ -2802,7 +2868,7 @@ export default function TestCasesPage() {
                     <p className="text-sm text-[var(--muted)]">Loading test case...</p>
                   </div>
                 </div>
-              ) : (
+              ) : panelMode === "edit" && !panelCaseVerified ? null : (
                 <form onSubmit={handlePanelSubmit} id="panel-form-global">
                   {/* CREATE MODE */}
                   {panelMode === "create" && (
@@ -3224,8 +3290,8 @@ export default function TestCasesPage() {
               )}
             </div>
 
-            {/* Sticky footer */}
-            {!panelLoading && (
+            {/* No mutation or approval actions for an unavailable or mismatched case. */}
+            {!panelLoading && (panelMode === "create" || panelCaseVerified) && (
               <div className="shrink-0 border-t border-[var(--border)] bg-[var(--surface)] px-6 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
