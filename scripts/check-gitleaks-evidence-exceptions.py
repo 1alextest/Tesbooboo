@@ -42,10 +42,10 @@ NATIVE_PROSE_FRAGMENT = "".join(("new-key 404, ", "anonymous/foreign "))
 # under their exact paths and the generic-api-key rule.
 CANONICAL_PROSE = [
     ("technical", Path("docs/qa-orchestration/03_TECHNICAL_DESIGN.md"),
-     "f5006da52db31a71eff58b4337c30af8b77a5d901e71cd7e98ea8a25a45d81ee",
+     "6ad966d7c43d538a2b5cfc067c45e49a3074135671956ee369a73598eabb1dbe",
      "".join(("auth, ", "finalization/", "merge ")), "merge", "merge2"),
     ("contracts", Path("docs/qa-orchestration/04_MCP_API_CONTRACTS.md"),
-     "c95778aa63f6f16dadaf8c765f8db3a4229153bc8e3113607fd9fc4d40f73d7a",
+     "ea1da80900225d32cc136d4f79b9b58effcaf161b201684f5431280ec08b2848",
      "".join(("token. Reject cycles, ", "missing/foreign/", "unapproved ")), "unapproved", "unapproved2"),
 ]
 

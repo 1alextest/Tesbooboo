@@ -1,6 +1,6 @@
 # Tesbo: Shared Human-and-Agent Engineering Platform — Specification Package
 
-**Current package amendment:** 1.4.46 — 26 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.46 section for this update. Earlier revision headers and receipts below retain their historical scope.
+**Current package amendment:** 1.4.47 — 26 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.47 section for this update. Earlier revision headers and receipts below retain their historical scope.
 
 **Revision:** 1.4.45 — 22 November 2026. Derive redesign obligations from each target project. NOT FROZEN.
 **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
@@ -857,3 +857,24 @@ Retain 125 unique scoped ASER definitions, eight supplemental GEX-AC obligations
 **Admission and next slice.** Implement one reviewable read-only comparison for an existing Skill version only after its accountable owner selects authorized tasks, supported configurations, an independently grounded rubric, trial inventory, budget and thresholds. Compare active/candidate methods and repeated unchanged controls; omit optional treatment guidance only in explicitly authorized isolation. Keep mandatory project rules and protected writers in every arm. Persist required trial evidence through the native owners; optional trace loss cannot silently certify process compliance. Unknown or ungraded cases remain visible in assigned accounting. A justified result may retain the active method or recommend no change. Publication, formal approval, assignment activation, execution and release retain their separate native decisions.
 
 **Current completion boundary.** This amendment updates specifications only. No current product acceptance, new model trial, live UI verification, native Requirement/Test Case/Run publication or active Skill change is claimed. **Tesbo sync not performed:** no callable authorized Tesbo project connector is exposed in this session; repository and archive updates cannot impersonate native records. Review the proposed acceptance and supported writer before any future implementation. Neither this review nor earlier historical receipts freezes the package.
+
+## Revision 1.4.47 — bounded agent execution, independent evidence and effective stopping
+
+**26 November 2026; proposed / NOT FROZEN.** This user-authorized specification amendment extends the same eight canonical owners. Preserve the complete saved v1.4.46 input, including its later Skills prototype revision 58 and partial live owner-view observations, and the existing PR #295 evaluation work. No runtime, dependency, active Skill, production policy or acceptance result is introduced. The source checkpoint is development `899543a6625fafebb522783550678324e12ec4c4`; the documentation parent is PR #295 at `21d19243ae54a0fb79d280e3c12ad140444363ce`. They are distinct inputs. Their source observations do not identify the deployed build.
+
+**Distilled principle.** Control over authority, sensitive credentials, required evidence and emergency stopping must remain outside the execution being controlled. Apply this at the real trust boundary: model output is still untrusted even when the model loop runs outside the sandbox. A legitimate external client may lack managed-runtime guarantees; disclose its actual enforcement and observation limits rather than assuming equivalent control.
+
+The complete review covers [Katelyn Lesse's multiagent engineering article](https://x.com/katelyn_lesse/article/2114542280535318557) and its [linked security architecture article](https://www.katelynlesse.com/blog/secure-agents-architecture-and-sandboxing). The [coverage and reuse inventory](reviews/zyra-harness-prior-art.md#26-november-2026--multiagent-control-coverage) maps their substantive concerns to existing owners and proposed acceptance. Their scale examples and preferred infrastructure are research inputs, not Tesbo adoption decisions or benchmarks.
+
+| Canonical owner | Amendment responsibility |
+| --- | --- |
+| 01 | Delegation, continuing authority, untrusted-content containment, attributable execution and truthful stopping outcomes |
+| 02 / 07 | Existing task, consent, progress and evidence journeys, including delayed work and unconfirmed external stopping |
+| 03 | Trust boundaries, durable waiting/recovery, brokered credentials, isolation, egress, evidence integrity and monitoring design |
+| 04 | Logical identity/attempt bindings, capability negotiation, reauthorization, replay and stopping readbacks |
+| 05 | Existing task allocations, discriminating integration fixtures, resource measurements and rollout dependencies |
+| 06 | Principle-first implementation, current-source discovery, bounded comparisons and incident/recovery handoff |
+
+**Maturity reconciliation.** Existing MCP source already checks current membership, credential presence, project/client consent, grant expiry, scope and tool allowlist. Existing opt-in Langfuse/OTel and bounded Zyra traces are partial diagnostics. These are foundations, not evidence of complete per-agent identity, tamper-protected fleet tracing, workload suspension or physical stopping. OAuth #246, credential lifecycle #292/#298 and client setup #297/#299 remain separately tracked work at the inspection checkpoint; do not duplicate or declare them delivered through this text. The recent KB recovery implementation supplies local claim/lease/fencing patterns to inspect and reuse where suitable, not proof of a general agent runtime.
+
+**Delivery boundary.** Extend Zyra, native Tasks, proposals, Runs and Files/Evidence; use the existing authorization/audit/observability owners. No ninth normative specification, new workflow state family, identity platform or scheduler is selected. A managed executor is optional. Existing human/manual and user-managed execution paths remain supported within their real capabilities. All additional runtime acceptance in this amendment is **NOT RUN**; implementation decisions and authorized pilots remain explicit backlog work.
