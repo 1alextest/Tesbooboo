@@ -1592,7 +1592,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   /** A batch's staged drafts, as the review panel and a chat message show them. */
   private async zyraReviewRows(reviewRequestId: string): Promise<{ rows: Body[]; savedCount: number }> {
     const res = await this.db.query<{ generated_payload: unknown; saved_count: number | null }>(
-      "SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1",
+      "SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1 AND task_kind = 'legacy_generation_review'",
       [reviewRequestId]
     );
     const payload = normalizeJsonArray(res.rows[0]?.generated_payload);
@@ -1607,7 +1607,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
    */
   private async appendZyraReviewProposals(projectId: string, sessionId: string, reviewRequestId: string, proposals: Body[]): Promise<{ closed: boolean; base: number }> {
     const result = await this.db.transaction(async (client) => {
-      const res = await client.query("SELECT task_status, generated_payload, activity_log, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [reviewRequestId, projectId]);
+      const res = await client.query("SELECT task_status, generated_payload, activity_log, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [reviewRequestId, projectId]);
       const row = res.rows[0];
       if (!row) return { closed: true, base: 0, reopened: false };
       this.assertOrdinaryProposalMutation(row);
@@ -1621,7 +1621,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
           `UPDATE ai_generation_requests
            SET generated_payload = $3::jsonb, generated_count = GREATEST(generated_count,saved_count+$4), requested_count = GREATEST(requested_count,saved_count+$4),
                task_status = 'in_review', updated_at = now()
-           WHERE id = $1 AND project_id = $2`,
+           WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))`,
           [reviewRequestId, projectId, JSON.stringify(merged), merged.length]
         );
       }
@@ -2045,7 +2045,8 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
           const claim = await this.db.query<{ id: string }>(
             `INSERT INTO integration_ticket_comments
                (project_id, generation_request_id, save_event_id, provider, issue_key, testcase_ids, status, comment_text, posted_by)
-             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
+             SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9
+             WHERE EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=$2 AND r.project_id=$1 AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
              ON CONFLICT (generation_request_id, save_event_id, provider, issue_key) DO NOTHING
              RETURNING id`,
             [
@@ -2294,6 +2295,16 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const label = TICKET_PROVIDER_LABELS[provider];
     try {
+      // A queued delivery must still belong to an admitted testcase-review
+      // task. A claim identifier alone is not permission to post externally.
+      const admitted = await this.db.query(
+        `SELECT 1 FROM integration_ticket_comments c
+          JOIN ai_generation_requests r ON r.id=c.generation_request_id AND r.project_id=c.project_id
+          WHERE c.id=$1 AND c.project_id=$2 AND c.generation_request_id=$3
+            AND c.provider=$4 AND c.issue_key=$5 AND c.status='pending' AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal'))`,
+        [claimId, projectId, taskId, provider, issueKey]
+      );
+      if (!admitted.rows[0]) return;
       const remoteId = provider === "jira"
         ? await this.jiraPostComment(projectId, issueKey, content.adf)
         : provider === "notion"
@@ -2336,6 +2347,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const res = await this.db.query(
       `SELECT id, provider, issue_key, status, reason, testcase_ids, posted_at, created_at, updated_at
        FROM integration_ticket_comments WHERE project_id = $1 AND generation_request_id = $2
+         AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
        ORDER BY created_at ASC`,
       [projectId, taskId]
     );
@@ -2356,13 +2368,14 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const claimed = await this.db.query(
       `UPDATE integration_ticket_comments SET status = 'pending', reason = NULL, posted_by = $4, updated_at = now()
        WHERE id = $1 AND project_id = $2 AND generation_request_id = $3 AND status = 'failed'
+         AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
        RETURNING *`,
       [commentId, projectId, taskId, uid]
     );
     const row = claimed.rows[0];
     if (!row) {
       const existing = await this.db.query(
-        "SELECT status FROM integration_ticket_comments WHERE id = $1 AND project_id = $2 AND generation_request_id = $3",
+        "SELECT status FROM integration_ticket_comments WHERE id = $1 AND project_id = $2 AND generation_request_id = $3 AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))",
         [commentId, projectId, taskId]
       );
       if (!existing.rows[0]) throw new NotFoundException({ error: "Ticket comment not found" });
@@ -2446,7 +2459,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   private async appendZyraTaskActivity(projectId: string, taskId: string, title: string, detail: string): Promise<void> {
     const entry = [{ actor: "system", stage: "info", title, detail, createdAt: new Date().toISOString() }];
     await this.db.query(
-      "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb WHERE id = $1 AND project_id = $2",
+      "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
       [taskId, projectId, JSON.stringify(entry)]
     ).catch(() => undefined);
   }
@@ -4272,8 +4285,8 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       const seq = isUuid(task) ? null : seqOf(task, "TASK");
       if (!isUuid(task) && seq === null) throw new NotFoundException({ error: "Zyra task not found" });
       const res = isUuid(task)
-        ? await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])", [task, projectId, ZYRA_AGENT_NAMES])
-        : await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[])", [seq, projectId, ZYRA_AGENT_NAMES]);
+        ? await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[]) AND task_kind IN ('legacy_generation_review','governed_proposal')", [task, projectId, ZYRA_AGENT_NAMES])
+        : await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[]) AND task_kind IN ('legacy_generation_review','governed_proposal')", [seq, projectId, ZYRA_AGENT_NAMES]);
       if (!res.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       out.taskId = res.rows[0].id;
       out.taskRef = `${prefix}-TASK-${res.rows[0].seq}`;
@@ -6670,7 +6683,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
          FROM (
            SELECT id, task_status, updated_at, jsonb_array_elements_text(${column}) AS key
            FROM ai_generation_requests
-           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL
+           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL AND task_kind IN ('legacy_generation_review','governed_proposal')
          ) t
          ORDER BY key, updated_at DESC`,
       [projectId, ZYRA_AGENT_NAMES]
@@ -16425,9 +16438,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
                 requested_count, generated_count, generated_payload, saved_count, save_events, created_at, updated_at,
                 agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
-                source_summary, activity_log
+                source_summary, activity_log, task_kind
          FROM ai_generation_requests
-         WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL
+         WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL AND task_kind IN ('legacy_generation_review','governed_proposal')
          ORDER BY updated_at DESC LIMIT 50`,
         [projectId, ZYRA_AGENT_NAMES]
       ),
@@ -16464,6 +16477,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         `SELECT COALESCE(SUM(saved_count), 0) AS saved, COALESCE(SUM(generated_count), 0) AS generated
            FROM ai_generation_requests
           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'
+             AND task_kind IN ('legacy_generation_review','governed_proposal')
             -- Only completed testcase proposal batches are eligible. Requirement
             -- bundles count revision/link operations; managed document requests
             -- count documents. Neither is a generated testcase denominator.
@@ -16651,6 +16665,15 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       : task;
   }
 
+  // All three governed inlets share the existing project/principal/request
+  // uniqueness and lock. Never recover a receipt owned by another task lane,
+  // even when its digest happens to match.
+  private assertNativeProposalRequestReplay(row: Body, digest: string, provider: string): void {
+    if (row.task_kind !== "governed_proposal" || row.provider !== provider || row.proposal_request_digest !== digest) {
+      throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+    }
+  }
+
   /** Native no-model inlet: stores unpublished operations in the existing review task owner. */
   async stageTestcaseChanges(projectId: string, userId: string | null | undefined, body: Body, principal: TestcaseProposalPrincipal) {
     if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
@@ -16696,9 +16719,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       const authority = await this.requireProposalAuthority(client, projectId, uid);
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_testcase_changes");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
-      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
-        if (prior.rows[0].proposal_request_digest !== requestDigest) throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_proposal");
         return String(prior.rows[0].id);
       }
       const ids = Array.from(new Set(operations.filter((op: Body) => op.testcaseId).map((op: Body) => String(op.testcaseId)))).sort();
@@ -16758,11 +16781,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_requirement_change_bundle");
       // Both proposal inlets share the same unique request identity and serialization owner.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
-      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
-        if (prior.rows[0].proposal_request_digest !== requestDigest) {
-          throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
-        }
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_requirement_proposal");
         return String(prior.rows[0].id);
       }
       // A lost response recovers the committed task above even if a reference has since changed.
@@ -16892,12 +16913,10 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
       await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority,
         documentType === "user_manual" ? "propose_manual_revision" : "propose_policy_revision");
-      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`managed-document-proposal:${projectId}:${principalKey}:${requestKey}`]);
-      const prior = await client.query("SELECT id,proposal_request_digest FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
       if (prior.rows[0]) {
-        if (prior.rows[0].proposal_request_digest !== requestDigest) {
-          throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
-        }
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_document_proposal");
         return String(prior.rows[0].id);
       }
       if (operation.operation === "create") {
@@ -17034,7 +17053,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException({ error: "operation must be create or update" });
     }
     const search = typeof query.q === "string" ? query.q.trim().slice(0, 200) : "";
-    const conditions = ["project_id=$1", "provider='external_document_proposal'"];
+    const conditions = ["project_id=$1", "task_kind='governed_proposal'", "provider='external_document_proposal'"];
     const params: unknown[] = [projectId];
     const bind = (value: unknown) => { params.push(value); return `$${params.length}`; };
     conditions.push(status === "pending" ? "task_status IN ('in_review','failed')" : `task_status=${bind(status)}`);
@@ -17078,7 +17097,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const decisionKey = proposalDigest({ action: "managed_document_apply", revision, reviewerId: uid });
     const result = await this.db.transaction(async client => {
       await this.lockSkillAssignments(client, projectId);
-      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal' FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       // The provider is the ownership boundary for the operation shape below; do not infer it
       // from an opType another producer could one day emit.
@@ -17169,7 +17188,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
           : "Published one native Draft manual/policy revision. Submission and human approval remain separate decisions.",
         createdAt: receipt.appliedAt, reviewerId: uid, proposalRevision: revision }];
       await client.query(
-        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2",
+        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal'",
         [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]
       );
       await this.logProjectActivity(projectId, uid, "managed_document_proposal_applied", "ai_generation_request", taskId,
@@ -17200,7 +17219,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     // must replay the stored receipt even if the reason field arrived empty on the second attempt.
     const decisionKey = proposalDigest({ action: "managed_document_reject", revision, reviewerId: uid });
     const result = await this.db.transaction(async client => {
-      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal' FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing || existing.provider !== "external_document_proposal") throw new NotFoundException({ error: "Document proposal not found" });
       const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
@@ -17220,7 +17239,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       };
       const activity = [{ actor: "user", stage: "done", title: "Rejected governed document proposal",
         detail: reason || "Nothing was published.", createdAt: receipt.decidedAt, reviewerId: uid, proposalRevision: revision }];
-      await client.query("UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2",
+      await client.query("UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal'",
         [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]);
       await this.logProjectActivity(projectId, uid, "managed_document_proposal_rejected", "ai_generation_request", taskId,
         existing.user_story, { decisionKey, proposalRevision: revision, reason: reason || null }, client);
@@ -17245,6 +17264,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.db.query(
       `SELECT id FROM ai_generation_requests
         WHERE project_id=$1 AND task_status IN ('in_review','failed')
+          AND task_kind IN ('legacy_generation_review','governed_proposal')
           AND generated_payload @> '[{"opType":"requirement_revision"}]'::jsonb
         ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
       [projectId, limit, offset]
@@ -17280,7 +17300,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         throw new ForbiddenException({ error: "A current project and workspace role is required" });
       }
       if (decision === "rejected") this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
-      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
       if (!this.isRequirementBundleTask(existing)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
@@ -17313,7 +17333,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       }];
       await client.query(
         `UPDATE ai_generation_requests SET task_status='done', activity_log=activity_log||$3::jsonb, updated_at=now()
-         WHERE id=$1 AND project_id=$2 AND task_status<>'done' RETURNING *`,
+         WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') AND task_status<>'done' RETURNING *`,
         [taskId, projectId, JSON.stringify(activity)]
       );
       await this.logProjectActivity(projectId, uid, `requirement_proposal_${decision}`, "ai_generation_request", taskId, existing.user_story,
@@ -17823,7 +17843,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       // Use the shared normalized role policy here and after the wait, matching approval and link
       // activation. Legacy admin/test_manager values are the manager interpretation.
       this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
-      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
       // Re-read the full proposal authority after the task wait, before any reviewed content is
@@ -17891,7 +17911,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         detail: "Published the reviewed requirement version, Draft case candidate and exact link in one transaction. Requirement approval remains a separate human decision.",
         createdAt: receipt.appliedAt, reviewerId: uid, proposalRevision: revision }];
       await client.query(
-        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2",
+        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal')",
         [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]
       );
       await this.logProjectActivity(projectId, uid, "requirement_bundle_applied", "ai_generation_request", taskId, existing.user_story,
@@ -18209,7 +18229,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
              WHERE ar.project_id=r.project_id AND ar.testcase_id=testcases.id AND ar.semantic_revision=$8
                AND ar.principal_kind='human_session' AND ar.reviewed_snapshot IS NOT NULL
              ORDER BY ar.created_at DESC, ar.id DESC LIMIT 1) case_decision ON TRUE
-           WHERE r.project_id=$1 AND r.id=$2 AND r.provider='external_requirement_proposal' AND r.task_status='done'
+           WHERE r.project_id=$1 AND r.id=$2 AND r.task_kind='governed_proposal' AND r.provider='external_requirement_proposal' AND r.task_status='done'
              AND saved.receipt->>'id'=$3 AND saved.receipt->>'action'='requirement_bundle_apply'
              AND saved.receipt->>'principalKind'='human_session'`,
         [projectId, taskId, receiptId, requirementId, requirementVersionId, linkId, testcaseId, testcaseApprovalRevision]
@@ -18722,7 +18742,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
 
   async listTestcaseProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
-    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' AND provider IS DISTINCT FROM 'external_document_proposal' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
+    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' AND task_kind IN ('legacy_generation_review','governed_proposal') AND provider IS DISTINCT FROM 'external_document_proposal' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
     return { list: await Promise.all(rows.rows.map(row => this.zyraTask(projectId, userId, String(row.id)))) };
   }
 
@@ -18788,7 +18808,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async readTestcaseProposal(runner: QueryRunner, projectId: string, taskId: string): Promise<Body> {
-    const result = await runner.query("SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2", [taskId,projectId]);
+    const result = await runner.query("SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2 AND r.task_kind IN ('legacy_generation_review','governed_proposal')", [taskId,projectId]);
     if (!result.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     const row = result.rows[0];
     if (row.provider === "external_document_proposal") {
@@ -21283,7 +21303,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       // transaction by the caller (patchZyraPendingBatchSuite), so nothing is held concurrently
       // across this loop today — but a nondeterministic row order is a latent deadlock trap the
       // moment a future change ever does lock more than one of these in the same transaction.
-      "SELECT id, generated_payload FROM ai_generation_requests WHERE id = ANY($1::uuid[]) AND project_id = $2 AND task_status = 'in_review' ORDER BY id",
+      "SELECT id, generated_payload FROM ai_generation_requests WHERE id = ANY($1::uuid[]) AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'in_review' ORDER BY id",
       [ids, projectId]
     ).catch(() => ({ rows: [] as Body[] }));
     return res.rows
@@ -21306,7 +21326,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   private async patchZyraPendingBatchSuite(projectId: string, reviewRequestId: string, suiteId: string | null, suiteName?: string): Promise<{ updatedDrafts: Body[]; patchedCount: number } | null> {
     return this.db.transaction(async (client) => {
       const res = await client.query(
-        "SELECT generated_payload, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_status = 'in_review' FOR UPDATE",
+        "SELECT generated_payload, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') AND task_status = 'in_review' FOR UPDATE",
         [reviewRequestId, projectId]
       );
       if (!res.rows[0]) return null;
@@ -21320,8 +21340,8 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       });
       if (!patchedCount) return null;
       await client.query(
-        "UPDATE ai_generation_requests SET generated_payload = $2::jsonb, updated_at = now() WHERE id = $1",
-        [reviewRequestId, JSON.stringify(updatedDrafts)]
+        "UPDATE ai_generation_requests SET generated_payload = $2::jsonb, updated_at = now() WHERE id = $1 AND project_id = $3 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
+        [reviewRequestId, JSON.stringify(updatedDrafts), projectId]
       );
       return { updatedDrafts, patchedCount };
     });
@@ -23400,7 +23420,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    */
   private async notifyZyraTask(projectId: string, taskId: string, kind: "ready" | "failed" | "reviewed", actorId: string | null = null): Promise<void> {
     try {
-      const res = await this.db.query<{ requested_by: string | null }>("SELECT requested_by FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+      const res = await this.db.query<{ requested_by: string | null }>("SELECT requested_by FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))", [taskId, projectId]);
       const requester = res.rows[0]?.requested_by;
       if (!requester) return;
       const [type, title] =
@@ -23415,18 +23435,26 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
-  private async markZyraTaskFailed(projectId: string, taskId: string, detail: string) {
+  // Gate K: a worker may consume only its existing task lane. The governed
+  // testcase proposal subtype retains its existing feedback continuation.
+  private isLegacyProviderTask(row: Body, allowTestcaseFeedback = false): boolean {
+    return !this.isRequirementBundleTask(row) &&
+      (row.task_kind === "legacy_generation_review" ||
+        (allowTestcaseFeedback && row.task_kind === "governed_proposal" && row.provider === "external_proposal"));
+  }
+
+  private async markZyraTaskFailed(projectId: string, taskId: string, detail: string, allowTestcaseFeedback = false) {
     const failedAt = new Date().toISOString();
     const activity = [{ actor: "agent", stage: "failed", title: "Generation failed", detail, createdAt: failedAt }];
     const failed = await this.db.transaction(async client => {
       // The worker's initial task lookup may itself have failed. Re-establish ownership here,
       // under the mutation lock, before either a status change or the late-failure activity.
-      const current = await client.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
-      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return false;
+      const current = await client.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], allowTestcaseFeedback)) return false;
       const res = await client.query(
         `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
-        [taskId, projectId, JSON.stringify(activity)]
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR ($4::boolean AND task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status IN ('todo', 'in_progress') RETURNING id`,
+        [taskId, projectId, JSON.stringify(activity), allowTestcaseFeedback]
       );
       if (res.rowCount) return true;
       const note = [{
@@ -23435,8 +23463,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         createdAt: failedAt
       }];
       await client.query(
-        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
-        [taskId, projectId, JSON.stringify(note)]
+        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR ($4::boolean AND task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
+        [taskId, projectId, JSON.stringify(note), allowTestcaseFeedback]
       );
       return false;
     });
@@ -23454,7 +23482,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const taskRes = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
       const task = taskRes.rows[0];
       if (!task) return;
-      if (this.isRequirementBundleTask(task)) return;
+      if (!this.isLegacyProviderTask(task)) return;
       const allocation = await this.db.query(
         `SELECT k.provider, k.default_model, k.api_key, k.base_url, k.auth_header_name, k.auth_scheme
          FROM project_ai_key_allocations a
@@ -23480,7 +23508,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }];
       const startRes = await this.db.query(
         `UPDATE ai_generation_requests SET task_status = 'in_progress', activity_log = activity_log || $3::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'todo' RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'todo' RETURNING id`,
         [taskId, projectId, JSON.stringify(startedActivity)]
       );
       if (startRes.rowCount === 0) {
@@ -23555,7 +23583,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
              token_input = $5, token_output = $6, token_total = $7,
              source_summary = $8::jsonb, activity_log = activity_log || $9::jsonb,
              task_status = 'in_review', updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'in_progress' RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'in_progress' RETURNING id`,
         [taskId, projectId, drafts.length, JSON.stringify(drafts), tokenInput, tokenOutput, tokenInput + tokenOutput, JSON.stringify(sourceSummary), JSON.stringify(activity)]
       );
       // Logged regardless of whether the row above actually applied (see the rowCount===0 branch
@@ -23577,7 +23605,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           createdAt: droppedAt
         }];
         await this.db.query(
-          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review'",
           [taskId, projectId, JSON.stringify(note)]
         );
         return;
@@ -23623,6 +23651,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const managedPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     const res = await this.db.query(
       `SELECT * FROM ai_generation_requests WHERE project_id = $1
+         AND task_kind IN ('legacy_generation_review','governed_proposal')
          AND ($4::boolean OR provider IS DISTINCT FROM 'external_document_proposal')
        ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
       [projectId, limit, offset, managedPreview]
@@ -23642,6 +23671,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     this.assertOrdinaryProposalMutation(existing.rows[0]);
+    if (!this.isLegacyProviderTask(existing.rows[0], true)) throw new ConflictException({ code: "TASK_KIND_NOT_ADMITTED", error: "This task is not eligible for legacy provider feedback." });
     const statusBeforeFeedback = String(existing.rows[0].task_status || "");
     // Feedback only makes sense once there is something to review, or to retry after a failure.
     // Without this guard, feedback could be sent while processZyraTask was still mid-flight for
@@ -23700,7 +23730,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // Russian; feedback with no signal ("ok", a ticket key) keeps the task's language.
       `UPDATE ai_generation_requests SET task_status = 'todo', feedback = $3, activity_log = activity_log || $4::jsonb, updated_at = now(),
               language = COALESCE($6, language)
-       WHERE id = $1 AND project_id = $2 AND task_status = $5 RETURNING *`,
+       WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status = $5 RETURNING *`,
       [taskId, projectId, feedback, JSON.stringify(feedbackActivity), statusBeforeFeedback, detectScriptLanguage(feedbackText)]
     );
     if (claimRes.rowCount === 0) {
@@ -23799,8 +23829,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     try {
       // A queued continuation may outlive the request that admitted it. Keep the same immutable
       // task-owner boundary before collecting context or making any billable provider call.
-      const current = await this.db.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
-      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return;
+      const current = await this.db.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], true)) return;
       // These four snapshots are independent reads (knowledge base, Jira, Linear, existing
       // testcases) — gathering them concurrently instead of one after another cuts this stage's
       // wall time down to the slowest of the four instead of their sum, without changing what any
@@ -23857,7 +23887,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
              token_input = token_input + $6, token_output = token_output + $7, token_total = token_total + $8,
              activity_log = activity_log || $9::jsonb, source_summary = $10::jsonb, jira_issue_keys = $11::jsonb,
              linear_issue_keys = $12::jsonb, notion_page_ids = $13::jsonb, task_status = 'in_review', updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'todo'
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status = 'todo'
          RETURNING *`,
         [
           taskId,
@@ -23889,7 +23919,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           createdAt: droppedAt
         }];
         await this.db.query(
-          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
           [taskId, projectId, JSON.stringify(note)]
         );
         return;
@@ -23921,14 +23951,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }
       // markZyraTaskFailed only marks 'failed' if the row is still 'todo'/'in_progress' — if a
       // concurrent close/save already moved it on, that action wins and this only leaves a note.
-      await this.markZyraTaskFailed(projectId, taskId, detail);
+      await this.markZyraTaskFailed(projectId, taskId, detail, true);
     }
   }
 
   private async lockReviewedZyraDraftBatch(client: PoolClient, projectId: string, taskId: string, revision: string): Promise<Body> {
     // The index is meaningful only inside the exact snapshot the caller reviewed. Serializing
     // writers alone would still let a stale index select the next item after a deletion.
-    const result = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
+    const result = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
     const row = result.rows[0];
     if (!row) throw new NotFoundException({ error: "Zyra task not found" });
     this.assertGuardedPublicationAvailable(row);
@@ -23966,7 +23996,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, generated_count = GREATEST(generated_count,saved_count+$4),
              activity_log = activity_log || $5::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), drafts.length, JSON.stringify(activity)]
       );
@@ -24014,7 +24044,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       await client.query(
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, activity_log = activity_log || $4::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), JSON.stringify(activity)]
       );
@@ -24032,7 +24062,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     requireHumanReviewPrincipal(principal);
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+    const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal')", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     this.assertOrdinaryProposalMutation(existing.rows[0]);
     if (existing.rows[0].task_status === "done") {
@@ -24051,14 +24081,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const res = await this.db.query(
       `UPDATE ai_generation_requests
        SET task_status = 'done', activity_log = activity_log || $3::jsonb, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND task_status <> 'done'
+       WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status <> 'done'
        RETURNING *`,
       [taskId, projectId, JSON.stringify(activity)]
     );
     if (!res.rows[0]) {
       // Lost a race to a concurrent close (two tabs, double-click before the button disabled) —
       // return the current state instead of erroring on an action that already succeeded.
-      const fresh = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+      const fresh = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal')", [taskId, projectId]);
+      if (!fresh.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       return await this.formatAiTask(fresh.rows[0]);
     }
     // A review finished without saving: the requester hears about it unless they are the reviewer.
@@ -24092,13 +24123,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     return this.db.transaction(async (client) => {
       await this.lockTestcaseSuiteWrites(client, projectId);
       const authority = await this.requireProposalAuthority(client, projectId, uid);
-      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId,projectId]);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId,projectId]);
       const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Zyra task not found" });
       // Work Package A Slice 1: a requirement change bundle is staging-only until the required
       // approved effective skills can be resolved and pinned. Refuse before any write so the
       // blocked apply creates no requirement version, case, link or approval.
       this.assertGuardedPublicationAvailable(existing);
+      this.assertOrdinaryProposalMutation(existing);
       // A lost response is recovered from the committed native receipt, without another write.
       const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
       if (prior) return { savedCount: prior.testcases.length, suiteId: prior.suiteId, testcases: prior.testcases, remaining: prior.remaining, saveReceipt: prior, replayed: true, touchedActions: [] };
@@ -24184,7 +24216,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         suiteId:batchSuiteId,testcaseIds:touched.map(row => row.id),testcases:touched,remaining:remainingPayload.length,savedAt:new Date().toISOString() };
       const activity = [{actor:"user",stage:remainingPayload.length ? "in_review" : "done",title:"Applied selected testcase proposals",detail:`Applied ${touched.length} proposal(s); ${remainingPayload.length} remain unpublished.`,createdAt:receipt.savedAt,reviewerId:uid,proposalRevision:revision}];
       await client.query(
-        "UPDATE ai_generation_requests SET generated_payload=$3::jsonb,generated_count=GREATEST(generated_count,saved_count+$5+$4),saved_count=saved_count+$5,save_events=save_events||$6::jsonb,activity_log=activity_log||$7::jsonb,task_status=$8,updated_at=now() WHERE id=$1 AND project_id=$2",
+        "UPDATE ai_generation_requests SET generated_payload=$3::jsonb,generated_count=GREATEST(generated_count,saved_count+$5+$4),saved_count=saved_count+$5,save_events=save_events||$6::jsonb,activity_log=activity_log||$7::jsonb,task_status=$8,updated_at=now() WHERE id=$1 AND project_id=$2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
         [taskId,projectId,JSON.stringify(remainingPayload),remainingPayload.length,touched.length,JSON.stringify([receipt]),JSON.stringify(activity),remainingPayload.length ? "in_review" : "done"]);
       await this.logProjectActivity(projectId,uid,"testcase_proposals_applied","ai_generation_request",taskId,existing.user_story,{decisionKey,proposalRevision:revision,selectedDraftIndexes:selectedIndexes,saveEventId,principalKind:"human_session"},client);
       if (existing.chat_session_id) {

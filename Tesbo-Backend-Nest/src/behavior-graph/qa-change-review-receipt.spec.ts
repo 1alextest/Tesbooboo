@@ -1,5 +1,6 @@
 import { projectCurrentCacheGraph, type CurrentSourceProjection } from "./current-cache-graph-projection";
 import { prepareQaChangeReviewReceipt } from "./qa-change-review-receipt";
+import { explainQaConsequenceReceipt } from "./qa-consequence-preview";
 
 const base: CurrentSourceProjection = {
   projectId: "project-a",
@@ -110,5 +111,17 @@ describe("QA graph change-review receipt", () => {
     expect(prepareQaChangeReviewReceipt(capture(base), capture(after)))
       .toEqual(prepareQaChangeReviewReceipt(capture(base), capture(reversed)));
     expect(JSON.stringify(base)).toBe(previous);
+  });
+});
+
+it("projects a mixed linked and unnominated requirement change from real comparable cache captures", () => {
+  const second = { ...base.requirements[0], rowId: "req-2", key: "QA-2", remoteId: "remote-2", summary: "Second" };
+  const rows = { ...base, requirements: [...base.requirements, second] };
+  const after = { ...rows, requirements: rows.requirements.map(r => ({ ...r, summary: r.summary + " changed" })) };
+  const receipt = prepareQaChangeReviewReceipt(capture(rows), capture(after))!;
+  expect(receipt.candidates).toHaveLength(1);
+  expect(explainQaConsequenceReceipt(receipt).cachedRequirementReview).toEqual({
+    changedRequirementCount: 2,
+    withoutNomination: [{ requirementNodeId: JSON.stringify(["cached_requirement", "project-a", "jira", "req-2"]), change: "modified" }]
   });
 });

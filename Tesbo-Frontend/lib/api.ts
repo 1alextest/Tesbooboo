@@ -5350,6 +5350,11 @@ export type GraphQaConsequencePreview = {
     confidence: "candidate_only";
     condition: "independent_expectation_and_applicability_review_required";
   }>;
+  /** Optional for rolling compatibility with older API builds; never infer zero from absence. */
+  cachedRequirementReview?: {
+    changedRequirementCount: number;
+    withoutNomination: Array<{ requirementNodeId: string; change: "added" | "modified" | "removed" }>;
+  } | null;
   unlinkedCaseNodeIds: string[];
   changedNodeIds: string[];
   unlinkedOrUnprovenChange: boolean;

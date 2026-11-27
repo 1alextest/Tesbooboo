@@ -143,6 +143,7 @@ describe("Retry comment follows the same link rules", () => {
       created_at: "2026-09-24T00:00:00Z", updated_at: "2026-09-24T00:00:00Z"
     };
     const query = jest.fn(async (sql: string) => {
+      if (/SELECT 1 FROM integration_ticket_comments c/.test(sql)) return { rows: [{ admitted: 1 }] };
       if (/SET status = 'pending'/.test(sql)) return { rows: [failedRow] };
       if (/FROM testcases WHERE project_id/.test(sql)) return { rows: [{ id: TC1, external_id: "PRO-TC-641", title: "Reject button is visible" }, { id: TC2, external_id: "PRO-TC-640", title: "Reject a pending application" }] };
       if (sql.startsWith("SELECT * FROM integration_ticket_comments")) return { rows: [{ ...failedRow, status: "posted" }] };
