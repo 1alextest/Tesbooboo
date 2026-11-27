@@ -10,6 +10,7 @@ import {
   validateAppendOnly,
   validateMigrationFiles,
   validateMigrationManifest,
+  reviewMigrationAllocations,
 } from "./check-migrations.mjs";
 
 const checker = fileURLToPath(new URL("./check-migrations.mjs", import.meta.url));
@@ -312,4 +313,89 @@ test("importing helpers has no CLI output, validation or exit-code side effects"
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "");
   assert.equal(result.stderr, "");
+});
+
+
+test("pending slot review distinguishes target conflicts, identical work and peer collisions", () => {
+  const baseline = manifest();
+  const mk = files => manifest({ ...initialFiles, ...files });
+  const target = { head: "a".repeat(40), manifest: mk({ "V3_target.sql": "SELECT 3;" }) };
+  const candidate = (head, files) => ({
+    head: head.repeat(40), mergeBase: "b".repeat(40), baseManifest: baseline, manifest: mk(files)
+  });
+  const a = candidate("c", { "V3_pending.sql": "SELECT 31;", "V4_next.sql": "SELECT 41;" });
+  const b = candidate("d", { "V3_pending.sql": "SELECT 31;", "V4_next.sql": "SELECT 42;" });
+  const identical = candidate("e", { "V3_target.sql": "SELECT 3;" });
+  const old = candidate("f", {});
+  const result = reviewMigrationAllocations(target, [old, b, identical, a]);
+  assert.equal(result.status, "review-required");
+  assert.deepEqual(result.conflicts.map(item => item.version), [3, 4]);
+  assert.equal(result.conflicts[0].target.name, "V3_target.sql");
+  assert.equal(result.conflicts[1].target, null);
+  assert.equal(result.conflicts[1].candidates[0].name, result.conflicts[1].candidates[1].name);
+  assert.notEqual(result.conflicts[1].candidates[0].checksum, result.conflicts[1].candidates[1].checksum);
+  assert.equal(result.candidates.find(row => row.head === identical.head).additions[0].targetMatch, "identical");
+  assert.deepEqual(result.candidates.find(row => row.head === old.head).additions, []);
+  assert.equal(result.databaseLedger, "not-inspected");
+  assert.equal(result.verification, "not-run");
+  assert.deepEqual(reviewMigrationAllocations(target, [a, identical, b, old]), result);
+  assert.equal(reviewMigrationAllocations(target, [identical, old]).status, "no-detected-slot-conflict");
+});
+
+test("pending review refuses altered ancestors, invalid manifests and repeated candidate identity", () => {
+  const base = manifest();
+  const target = { head: "a".repeat(40), manifest: base };
+  const row = { head: "b".repeat(40), mergeBase: "c".repeat(40), baseManifest: base, manifest: base };
+  assert.throws(() => reviewMigrationAllocations(target, [row, row]), /duplicate candidate/);
+  assert.throws(() => reviewMigrationAllocations(target, []), /candidate inventories/);
+  assert.throws(() => reviewMigrationAllocations(target, [{ ...row, manifest: [] }]), /non-empty migration manifest/);
+  const modified = manifest({ ...initialFiles, "V1_initial.sql": "SELECT 99;" });
+  assert.throws(() => reviewMigrationAllocations(target, [{ ...row, manifest: modified }]), /content changed/);
+  assert.throws(() => reviewMigrationAllocations({ ...target, manifest: modified }, [row]), /content changed/);
+  assert.throws(() => reviewMigrationAllocations(target, [{ ...row, head: "HEAD" }]), /Invalid or duplicate/);
+});
+
+test("CLI reviews exact divergent commits without executing SQL or inspecting dirty worktree files", t => {
+  const f = fixture(t);
+  const base = f.git("rev-parse", "HEAD");
+  function branch(name, files) {
+    f.git("checkout", "--detach", base);
+    for (const [filename, content] of Object.entries(files)) f.write(filename, content);
+    f.git("add", "--all"); f.git("commit", "--quiet", "--allow-empty", "-m", name);
+    return f.git("rev-parse", "HEAD");
+  }
+  const target = branch("target", { "V3_target.sql": "SELECT 3;" });
+  const a = branch("candidate A", { "V3_pending.sql": "SELECT 31;", "V4_next.sql": "SELECT 41;" });
+  const b = branch("candidate B", { "V3_pending.sql": "SELECT 31;", "V4_next.sql": "SELECT 42;" });
+  const same = branch("identical candidate", { "V3_target.sql": "SELECT 3;" });
+  f.write("V2_second.sql", "not valid SQL and not committed");
+  const before = f.git("status", "--porcelain");
+  const review = f.check("--review-candidates", target, a, b, same, base);
+  assert.equal(review.status, 1, review.stdout + review.stderr);
+  const report = JSON.parse(review.stdout);
+  assert.equal(report.target, target);
+  assert.deepEqual(report.conflicts.map(x => x.version), [3, 4]);
+  assert.ok(report.candidates.every(x => x.mergeBase === base));
+  assert.equal(f.git("status", "--porcelain"), before);
+  assert.equal(f.git("rev-parse", "HEAD"), same);
+  const clear = f.check("--review-candidates", target, same, base);
+  assert.equal(clear.status, 0, clear.stderr);
+  assert.equal(JSON.parse(clear.stdout).status, "no-detected-slot-conflict");
+  for (const ref of ["HEAD", target.slice(0, 12), "0".repeat(40), f.git("rev-parse", "HEAD^{tree}")]) {
+    const invalid = f.check("--review-candidates", target, ref);
+    assert.equal(invalid.status, 1);
+    assert.doesNotMatch(invalid.stdout, /no-detected-slot-conflict/);
+  }
+  // Replacement refs must not substitute a different committed tree for an exact head.
+  f.git("replace", target, a);
+  try {
+    const replaced = f.check("--review-candidates", target, a, b);
+    assert.equal(replaced.status, 1, replaced.stderr);
+    const retained = JSON.parse(replaced.stdout);
+    assert.deepEqual(retained.conflicts.map(x => x.version), [3, 4]);
+    assert.equal(retained.conflicts[0].target.name, "V3_target.sql");
+  } finally { f.git("replace", "-d", target); }
+  const duplicate = f.check("--review-candidates", target, a, a);
+  assert.equal(duplicate.status, 1);
+  assert.doesNotMatch(duplicate.stdout, /no-detected-slot-conflict/);
 });

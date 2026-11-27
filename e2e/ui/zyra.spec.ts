@@ -1108,6 +1108,92 @@ test.describe("zyra / agents (UI)", () => {
     }
   });
 
+
+  test("graph review links an explicitly nominated case and exposes other changed requirements for QA triage", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId;
+    const suffix = stamp("requirement-nomination");
+    const baseRevision = "base-" + suffix;
+    const reviewRevision = "change-" + suffix;
+    const contract = "tesbo-current-cached-requirement-links-v2";
+    const scope = "e2e-nomination-" + suffix;
+    let caseId: string | undefined;
+    try {
+      const human = await loginAs(tenant!.owner);
+      try {
+        const created = await human.post(`/api/projects/${projectId}/testcases`, {
+          data: { title: "E2E nomination neighbor " + suffix, status: "Draft" }
+        });
+        expect(created.status(), await created.text()).toBe(201);
+        caseId = (await created.json()).id;
+      } finally { await human.dispose(); }
+      const linked = JSON.stringify(["cached_requirement", projectId, "jira", "linked-" + suffix]);
+      const missing = JSON.stringify(["cached_requirement", projectId, "jira", "unnominated-" + suffix]);
+      const nodeId = JSON.stringify(["test_case", projectId, caseId]);
+      const capture = (revision: string) => JSON.stringify({
+        snapshot: { projectId, revision, nodes: [], edges: [] },
+        inventoryStatus: "complete", unresolvedDiagnostics: [],
+        contractId: contract, sourceScopeFingerprint: scope
+      });
+      // Seed the native historical receipt, not a provider capture or a model answer.
+      const receipt = {
+        id: "receipt-" + suffix, projectId, status: "needs_qa_triage",
+        source: { contractId: contract, scopeFingerprint: scope, fromRevision: baseRevision, toRevision: reviewRevision },
+        changed: { addedNodeIds: [], modifiedNodeIds: [linked, missing], removedNodeIds: [],
+          addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+        candidates: [{ caseNodeId: nodeId, reasons: ["requirement_reference"], requirementNodeIds: [linked] }],
+        unlinkedCaseNodeIds: [],
+        evidence: { basis: "cached_source_reference_only", upstreamFreshness: "unverified",
+          coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" }
+      };
+      exec(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+        VALUES (${literal(projectId)}, ${literal(contract)}, ${literal(scope)},
+          ${literal(baseRevision)}, ${literal(capture(baseRevision))}::jsonb);`);
+      const historyId = scalar(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json, review_receipt_json)
+        VALUES (${literal(projectId)}, ${literal(contract)}, ${literal(scope)},
+          ${literal(reviewRevision)}, ${literal(capture(reviewRevision))}::jsonb,
+          ${literal(JSON.stringify(receipt))}::jsonb) RETURNING id;`);
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      const article = page.locator('section[aria-label="Graph change history"] article')
+        .filter({ has: page.getByTestId("qa-review-focus-" + historyId) });
+      const explanation = article.getByRole("region", { name: "Evidence-bounded impact explanation" });
+      const endpoint = `**/agents/zyra/changes/${historyId}/analysis`;
+      const response = page.waitForResponse(r => r.url().endsWith(`/agents/zyra/changes/${historyId}/analysis`) && r.request().method() === "GET");
+      await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+      const read = await response;
+      expect(read.ok(), await read.text()).toBeTruthy();
+      expect(await read.json()).toMatchObject({ projectId, receiptId: receipt.id, coverageAssertion: "none",
+        executionAssertion: "none", cachedRequirementReview: { changedRequirementCount: 2,
+          withoutNomination: [{ requirementNodeId: missing, change: "modified" }] } });
+      const inventory = explanation.getByRole("region", { name: "Changed requirement nomination review" });
+      await expect(inventory).toContainText("1 of 2 changed cached requirements have no case nomination in this receipt.");
+      await expect(inventory).toContainText("not current links, approved expectations or verified coverage");
+      await inventory.getByText("Inspect recorded requirement references", { exact: true }).click();
+      await expect(inventory.getByText(missing, { exact: true })).toBeVisible();
+      await expect(inventory.getByText(linked, { exact: true })).toHaveCount(0);
+      await explanation.getByRole("button", { name: "Hide impact explanation" }).click();
+      // Reopening must revalidate the exact receipt instead of recycling an earlier authorized read.
+      const wrong = async (route: import("@playwright/test").Route) => {
+        const real = await route.fetch();
+        expect(real.ok(), await real.text()).toBeTruthy();
+        await route.fulfill({ json: { ...await real.json(), receiptId: "wrong-receipt" } });
+      };
+      await page.route(endpoint, wrong);
+      try {
+        await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+        await expect(explanation).toContainText("Impact explanation unavailable for this review.");
+        await expect(inventory).toHaveCount(0);
+      } finally { await page.unroute(endpoint, wrong); }
+      expect(Number(scalar(`SELECT COUNT(*)::int FROM graph_review_run_case_links
+        WHERE project_id=${literal(projectId)} AND history_id=${literal(historyId)};`))).toBe(0);
+    } finally {
+      exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)}
+        AND revision IN (${literal(baseRevision)},${literal(reviewRevision)});`);
+      if (caseId) exec(`DELETE FROM testcases WHERE id=${literal(caseId)} AND project_id=${literal(projectId)};`);
+    }
+  });
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function purgeZyra(t: RbacTenant): void {
@@ -1566,7 +1652,7 @@ test.describe("zyra / agents (UI)", () => {
             { key: "AC-1", text: "The obligation is observable", normative: true },
             { key: "AC-2", text: "Historical run output", normative: false },
           ] },
-          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/ui/zyra.spec.ts", automationFramework: "Playwright" } },
+          { opType: "testcase_create", operationId: testcaseOperationId, draft: { title: caseTitle, attachments: "Exact applied case evidence", steps: [{ stepNumber: 1, action: "Open the linked case", expectedResult: "The exact applied case opens" }], automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/ui/zyra.spec.ts", automationFramework: "Playwright" } },
           { opType: "requirement_case_link", operationId: randomUUID(), requirementOperationId, testcaseOperationId, criterionKeys: ["AC-1"] },
         ]
       } });
@@ -1589,6 +1675,7 @@ test.describe("zyra / agents (UI)", () => {
       expect(caseId).not.toBe("");
       expect(await after.json()).toMatchObject({ taskStatus: "done", requirementApplyReceipt: { testcase: { id: caseId } } });
       await expect(page.getByText("3 proposal operations · 1 case candidate · 1 Draft case created ·")).toBeVisible();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact submitted requirement first");
       await page.getByText("Set up an automation handoff").click();
       await expect(page.getByRole("button", {name: "Copy handoff command"})).toBeVisible();
       await expect(page.locator("details[open] pre")).toContainText(`/projects/${tenant!.mainProjectId}/agents/tasks/${taskId}`);
@@ -1602,6 +1689,28 @@ test.describe("zyra / agents (UI)", () => {
       await expect(obligationRow.getByRole("cell").nth(1)).toHaveText("1");
       requirementId = scalar(`SELECT id FROM knowledge_documents WHERE project_id=${literal(tenant!.mainProjectId)} AND title=${literal(title)};`);
       expect(requirementId).not.toBe("");
+
+      // This is a disposable project fixture with an authorized human session, not live acceptance.
+      // Follow the actual link to the exact case instead of reconstructing the ID from its title.
+      await page.getByTestId("requirement-coverage-case-link").click();
+      const casePanel = page.getByTestId("testcase-detail-panel");
+      await expect(casePanel).toHaveAttribute("data-case-id", caseId);
+      await expect(casePanel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs")).toHaveValue("Exact applied case evidence");
+      await page.goBack();
+      await expect(page.getByTestId("requirement-change-bundle")).toBeVisible();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact submitted requirement first");
+
+      await page.getByTestId("requirement-review-approve").click();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Approve the exact linked test case");
+      await approveTestcase(api, tenant!.mainProjectId, caseId);
+      await page.getByRole("button", { name: "Refresh review and coverage", exact: true }).click();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Verify and activate one current link");
+      const activation = page.getByRole("button", { name: "Activate approved case on approved version", exact: true });
+      await expect(activation).toBeEnabled();
+      await activation.click();
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("Review prerequisites observed.");
+      await expect(page.getByTestId("automation-handoff-prerequisites")).toContainText("CLI must still verify");
+      await expect(page.getByTestId("requirement-coverage-readings")).toContainText("Executed: no");
     } finally {
       if (taskId) exec(`DELETE FROM ai_generation_requests WHERE id=${literal(taskId)} AND project_id=${literal(tenant!.mainProjectId)};`);
       if (requirementId) {

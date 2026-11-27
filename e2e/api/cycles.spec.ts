@@ -1534,6 +1534,106 @@ test.describe("native Run retest — distinct reviewed occurrences", () => {
     }
   });
 
+  test("native manual retest refuses generic automation replay, result, evidence and close without changing reviewed occurrences", async ({ request }) => {
+    const f = await seed(request);
+    const project = `/api/projects/${ctx.projectId}`;
+    const automation = project + "/automation";
+    let extraCaseId: string | undefined;
+    let tokenId: string | undefined;
+    let machine: APIRequestContext | undefined;
+    try {
+      const reviewed = await preview(request, f.cycleId, [f.executionId]);
+      const response = await request.post(`/api/cycles/${f.cycleId}/retests`, { data: intent(f.executionId, reviewed.previewDigest) });
+      expect(response.status()).toBe(201);
+      const receipt = await response.json();
+      f.created.push(receipt.cycleId);
+      const retest = receipt.cycleId as string;
+      const originalCaseResponse = await request.get(project + "/testcases/" + f.testcaseId);
+      expect(originalCaseResponse.ok()).toBe(true);
+      const originalCase = await originalCaseResponse.json();
+      const extra = await createTestcaseFixtureResponse(request, project + "/testcases", {
+        data: { title: "Unselected approved case " + randomUUID(), status: "Approved" }
+      });
+      expect(extra.status()).toBe(201);
+      const other = await extra.json();
+      extraCaseId = other.id;
+      const issued = await request.post(project + "/apikeys", {
+        data: { name: "Retest admission control " + randomUUID(), scopes: ["read", "write"] }
+      });
+      expect(issued.ok()).toBe(true);
+      const credential = await issued.json();
+      tokenId = credential.id;
+      machine = await newRequestContext.newContext({ baseURL: env.apiBaseUrl,
+        storageState: { cookies: [], origins: [] }, extraHTTPHeaders: { Authorization: "Bearer " + credential.token } });
+
+      // Synthetic collision with the generic automation external-ID namespace.
+      // Only this freshly created disposable Run is changed. The ordinary native
+      // retest writer does not assign an SDK external ID itself.
+      const externalId = "retest-fixture-" + randomUUID();
+      exec(`UPDATE cycles SET external_id=${literal(externalId)}
+        WHERE project_id=${literal(ctx.projectId)} AND id=${literal(retest)};`);
+      const snapshot = async () => {
+        const read = async (url: string) => {
+          const r = await request.get(url);
+          expect(r.ok()).toBe(true);
+          return r.json();
+        };
+        return {
+          source: await read("/api/cycles/" + f.cycleId),
+          sourceExecutions: await read("/api/cycles/" + f.cycleId + "/executions"),
+          destination: await read("/api/cycles/" + retest),
+          executions: await read("/api/cycles/" + retest + "/executions"),
+          automation: await read(automation + "/runs/" + retest),
+          matchingRuns: scalar(`SELECT count(*)::int FROM cycles WHERE project_id=${literal(ctx.projectId)}
+            AND external_id=${literal(externalId)} AND deleted_at IS NULL;`)
+        };
+      };
+      const before = await snapshot();
+      expect(before.destination).toMatchObject({ source: "manual", retestSourceCycleId: f.cycleId, retestManifest: receipt.manifest });
+      expect(before.executions).toHaveLength(1);
+      expect(before.executions[0]).toMatchObject({ status: "Untested", evidenceCount: 0, executedAt: null });
+      const runPath = automation + "/runs/" + retest;
+      for (const caller of [request, machine]) {
+        const read = await caller.get(runPath);
+        expect(read.status()).toBe(200); // scoped inspection is still allowed
+        const writes: Array<() => Promise<import("@playwright/test").APIResponse>> = [
+          () => caller.post(automation + "/runs", { data: { name: "SDK replay", externalId, caseIds: [] }, failOnStatusCode: false }),
+          () => caller.post(automation + "/runs", { data: { name: "SDK replay", externalId, caseIds: [other.externalId] }, failOnStatusCode: false }),
+          () => caller.post(runPath + "/results", { data: { caseId: originalCase.externalId, status: "pass", retryCount: 0 }, failOnStatusCode: false }),
+          () => caller.post(runPath + "/results", { data: { caseId: other.externalId, status: "pass", retryCount: 0 }, failOnStatusCode: false }),
+          () => caller.post(runPath + "/results/" + originalCase.externalId + "/evidence", {
+            multipart: { kind: "log", files: { name: "unreviewed.txt", mimeType: "text/plain", buffer: Buffer.from("Controlled refused evidence") } },
+            failOnStatusCode: false
+          }),
+          () => caller.patch(runPath + "/close", { data: { status: "completed" }, failOnStatusCode: false }),
+        ];
+        for (const write of writes) {
+          const refused = await write();
+          expect(refused.status()).toBe(409);
+          expect(await refused.json()).toMatchObject({ code: "RETEST_AUTOMATION_REVIEW_REQUIRED" });
+          expect(await snapshot()).toEqual(before);
+        }
+      }
+      // Neighboring legitimate use: the reviewed human can still record a
+      // separate native observation; the source and its receipt stay intact.
+      const saved = await request.patch("/api/cycles/" + retest + "/executions/" + before.executions[0].id, {
+        data: { status: "Passed", actualResult: "Controlled manual verification" }
+      });
+      expect(saved.ok()).toBe(true);
+      const after = await snapshot();
+      expect(after.executions).toHaveLength(1);
+      expect(after.executions[0]).toMatchObject({ id: before.executions[0].id, status: "Passed", actualResult: "Controlled manual verification" });
+      expect(after.destination.retestManifest).toEqual(receipt.manifest);
+      expect(after.sourceExecutions).toEqual(before.sourceExecutions);
+      expect(after.source).toEqual(before.source);
+    } finally {
+      await machine?.dispose();
+      if (tokenId) await request.delete(project + "/apikeys/" + tokenId, { failOnStatusCode: false });
+      if (extraCaseId) await request.delete(project + "/testcases/" + extraCaseId, { failOnStatusCode: false });
+      await f.cleanup();
+    }
+  });
+
   test("concurrent exact retries and readback resolve one committed retest; changed reuse conflicts", async ({ request }) => {
     const f = await seed(request);
     let secondCaseId: string | undefined;
