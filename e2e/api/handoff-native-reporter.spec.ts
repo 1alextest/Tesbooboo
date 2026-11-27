@@ -205,6 +205,29 @@ test("AUT-HANDOFF-01 rejects loopback aliases without current disposable process
   expect(disposableTargetMatches({ ...proof, database: "postgresql://localhost:5432/tesbo_prod", backendDatabase: "postgresql://localhost:5432/tesbo_prod" }), "alternate database").toBe(false); // DevSkim: ignore DS162092
 });
 
+test("AUT-HANDOFF-01 refuses the shared journey before any API call without hosted admission", async () => {
+  const previous = process.env.GITHUB_ACTIONS;
+  const calls: string[] = [];
+  const forbidden = new Proxy({} as APIRequestContext, {
+    get: (_target, method) => async () => {
+      calls.push(String(method));
+      throw new Error("Unexpected fixture API action");
+    },
+  });
+  try {
+    process.env.GITHUB_ACTIONS = "false";
+    const failure = await runHandoffJourney(forbidden, false).then(() => undefined, (error: unknown) => error);
+    expect(calls, "Unadmitted synthetic execution must make zero API calls").toEqual([]);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(
+      "Native reporter fixture requires the current hosted disposable backend and database"
+    );
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_ACTIONS;
+    else process.env.GITHUB_ACTIONS = previous;
+  }
+});
+
 
 // Reuse the actual governed publication and pinned Git/investigation bridge.
 // All decisions here are made by a disposable test actor after hosted-target
@@ -412,6 +435,8 @@ async function readRunInInterface(
 }
 
 async function runHandoffJourney(human: APIRequestContext, governed: boolean, page?: Page) {
+  // Both entrypoints share admission before case approval or credential issuance.
+  verifyDisposableTarget();
   test.setTimeout(240_000); // DevSkim: ignore DS172411
   let projectId = stored.projectId;
   let ownedProjectId: string | undefined;
