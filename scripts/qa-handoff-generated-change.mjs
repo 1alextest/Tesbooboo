@@ -40,7 +40,7 @@ export function validateHandoffPacket(packet) {
     if (typeof value !== 'string' || !digest.test(value)) fail('The packet is missing an exact revision.');
   const testcase = native.testcase;
   if (!testcase || testcase.id !== native.testcaseId || typeof testcase.title !== 'string' || !testcase.title.trim() ||
-      typeof testcase.externalId !== 'string' || !/^[^"')\s]{1,128}$/.test(testcase.externalId))
+      typeof testcase.externalId !== 'string' || !/^[^\\"')\s]{1,128}$/.test(testcase.externalId))
     fail('The approved case needs a title and its Tesbo external id for @tesbo.testId().');
   if (typeof testcase.automationPath !== 'string' || testcase.automationPath !== target.path ||
       !/\.(spec|test)\.(?:[cm]?[jt]sx?)$/.test(testcase.automationPath) ||

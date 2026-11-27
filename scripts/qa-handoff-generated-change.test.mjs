@@ -99,6 +99,14 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
   delete wrongOracle.selectionDigest;
   wrongOracle.investigation.risks[0].oracle = 'Some ungenerated oracle';
   assert.throws(() => validateHandoffPacket(reseal(wrongOracle)), /only supports/);
+  const wrongRevision = structuredClone(p);
+  delete wrongRevision.selectionDigest;
+  wrongRevision.investigation.repoRevision = 'f'.repeat(40);
+  assert.throws(() => validateHandoffPacket(reseal(wrongRevision)), /investigation/);
+  const escapedId = structuredClone(p);
+  delete escapedId.selectionDigest;
+  escapedId.native.testcase.externalId = 'TES\\JOURNEY';
+  assert.throws(() => validateHandoffPacket(reseal(escapedId)), /external id/);
   const spec = generateCoverageSpec(p);
   assert.ok(spec.includes(String.raw`@tesbo.testId(\"TES-JOURNEY-1\")`), 'the generated test must carry the approved external id');
   assert.match(spec, /exactly one current approved link/u);

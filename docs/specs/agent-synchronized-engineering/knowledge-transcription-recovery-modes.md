@@ -1,8 +1,8 @@
 # KB transcription recovery modes — proposal
 
-**Status:** implementation merged as `784c2aed` and deployed; no live environment variable or
-production execution policy was changed. The non-default project/global rollout and its approval
-remain separately pending. This is separate from graph QA notification recovery in
+**Status:** implementation merged as `784c2aed`; no live environment variable or production
+execution policy was changed. The non-default project/global rollout and its approval remain
+separately pending. This is separate from graph QA notification recovery in
 [background-recovery-modes.md](background-recovery-modes.md), whose implementation merged as
 `b434f732`. Together these close the recovery development slice; only approved rollout remains.
 
