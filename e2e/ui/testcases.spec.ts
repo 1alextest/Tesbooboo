@@ -229,9 +229,17 @@ test("stale approval GET and pending POST never open or repaint a different link
     await panel.getByRole("button", { name: "Review for approval" }).click();
     await pendingGet;
     await routeTo(b.id);
+    // Wait for the delayed A response itself, not just the release of its gate:
+    // a zero-modal assertion before the response could conceal the original race.
+    const staleReadSettled = page.waitForResponse(response =>
+      new URL(response.url()).pathname === `${base}/${a.id}`
+      && response.request().method() === "GET");
     if (!releaseGet) throw new Error("The delayed approval snapshot control was not installed.");
     releaseGet();
     releaseGet = undefined;
+    await staleReadSettled;
+    await page.evaluate(() => new Promise<void>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await expect(review).toHaveCount(0);
     await expect(panel).toHaveAttribute("data-case-id", b.id);
     expect(observedApprovePosts).toEqual([]);
