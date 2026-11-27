@@ -435,6 +435,56 @@ const url = process.env.DATABASE_URL ?? "";
       }
     }, 15_000);
 
+    it.each(["read", "write"] as const)("CL-I02 refuses stale %s issuance after switching the active workspace", async (scope) => {
+      const manager = randomUUID();
+      const name = `CL-I02-workspace-${manager}`;
+      const alternate = (await setup.query("INSERT INTO organizations (name,slug) VALUES ('CL-I02 alternate',$1) RETURNING id", [name.toLowerCase()])).rows[0].id;
+      try {
+        await setup.query("INSERT INTO users (id,email,name,active_organization_id) VALUES ($1,$2,'CL-I02 manager',$3)", [manager, `cl-i02-${manager}@tesbo.invalid`, organization]);
+        await setup.query("INSERT INTO organization_members (organization_id,user_id,role) VALUES ($1,$3,'manager'),($2,$3,'manager')", [organization, alternate, manager]);
+        await setup.query("INSERT INTO project_members (project_id,user_id,role) VALUES ($1,$2,'manager')", [project, manager]);
+        const issuer = makeLegacy(db, { config, apiTokens: tokens });
+        const switcher = makeLegacy(db, { config, apiTokens: tokens });
+        const realAccess = issuer.requireProjectAccess.bind(issuer);
+        const rows = async () => (await setup.query("SELECT id,name FROM api_tokens WHERE project_id=$1 AND user_id=$2 ORDER BY id", [project, manager])).rows;
+        const membership = async () => (await setup.query("SELECT pm.id AS project_membership_id,om.id AS organization_membership_id FROM project_members pm JOIN projects p ON p.id=pm.project_id JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=pm.user_id WHERE pm.project_id=$1 AND pm.user_id=$2", [project, manager])).rows[0];
+        const originalMembership = await membership();
+        expect(originalMembership).toBeDefined();
+        expect(await rows()).toEqual([]);
+        let switched = false;
+        const seam = jest.spyOn(issuer, "requireProjectAccess").mockImplementationOnce(async (uid, id) => {
+          const access = await realAccess(uid, id);
+          expect(access.caller_role).toBe("manager");
+          expect(access.organization_id).toBe(organization);
+          // Real workspace switch after real preflight; no authority or insert result is mocked.
+          expect(await switcher.switchWorkspace(manager, alternate)).toMatchObject({ id: alternate });
+          expect(await membership()).toEqual(originalMembership);
+          switched = true;
+          return access;
+        });
+        try {
+          const outcome = await issuer.createApiKey(manager, project, { name, scopes: [scope] })
+            .then(() => ({ error: null }), (error: unknown) => ({ error }));
+          expect(switched).toBe(true);
+          expect(outcome.error).toMatchObject({ status: 403 });
+          expect(await rows()).toEqual([]);
+          await expect(makeLegacy(db, { config, apiTokens: tokens }).createApiKey(manager, project, { name, scopes: [scope] })).rejects.toMatchObject({ status: 404 });
+          expect(await rows()).toEqual([]);
+          expect(await switcher.switchWorkspace(manager, organization)).toMatchObject({ id: organization });
+          const fresh = await makeLegacy(db, { config, apiTokens: tokens }).createApiKey(manager, project, { name: name + "-fresh", scopes: [scope] });
+          expect(await rows()).toEqual([{ id: fresh.id, name: name + "-fresh" }]);
+        } finally {
+          seam.mockRestore();
+        }
+      } finally {
+        await setup.query("DELETE FROM api_tokens WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, manager]);
+        await setup.query("DELETE FROM organization_members WHERE user_id=$1 AND organization_id=ANY($2::uuid[])", [manager, [organization, alternate]]);
+        await setup.query("DELETE FROM users WHERE id=$1", [manager]);
+        await setup.query("DELETE FROM organizations WHERE id=$1", [alternate]);
+      }
+    }, 15_000);
+
     const routes = ["dynamic", "project-prefixed"] as const;
     const business = async () => (await setup.query("SELECT * FROM bugs WHERE project_id=$1 ORDER BY id", [locked])).rows;
     type Options = { token?: string | null; project?: string; session?: string; notification?: boolean };
