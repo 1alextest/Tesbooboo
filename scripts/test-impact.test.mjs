@@ -815,6 +815,39 @@ test("concurrent impact separates direct and static consumer overlap from broad 
   assert.throws(() => compareCandidateImpact({ ...inputs, candidates: [candidates[0], { ...candidates[1], changedPaths: ["../foreign"] }] }), /escapes/);
 });
 
+test("test-only candidate changes a peer's nominated regression evidence without claiming product impact", () => {
+  const target = "a".repeat(40), ancestor = "b".repeat(40), a = "c".repeat(40), b = "d".repeat(40);
+  const spec = "e2e/api/automation.spec.ts";
+  const report = compareCandidateImpact({
+    target, config, availablePaths,
+    candidates: [
+      { head: a, mergeBase: ancestor, changedPaths: ["Tesbo-Backend-Nest/src/automation/automation.service.ts"], targetChangedPaths: [] },
+      { head: b, mergeBase: ancestor, changedPaths: [spec], targetChangedPaths: [] }
+    ]
+  });
+  const testOnly = report.candidates.find(row => row.head === b);
+  assert.deepEqual(testOnly.changedSpecFiles, [spec]);
+  assert.equal(testOnly.impact.counts.selectedSpecFileCount, 0);
+  const pair = report.pairs[0];
+  assert.equal(pair.structuralLead, false);
+  assert.equal(pair.testEvidenceLead, true);
+  assert.deepEqual(pair.changedSpecOverlap.bChangedSpecsSelectedByA, [spec]);
+  assert.deepEqual(pair.changedSpecOverlap.aChangedSpecsSelectedByB, []);
+  assert.equal(report.status, "review-required");
+  assert.equal(report.verification.executedTestCount, null);
+  // Unrelated test change does not automatically require joint evidence review.
+  const unrelated = compareCandidateImpact({
+    target, config, availablePaths,
+    candidates: [
+      { head: a, mergeBase: ancestor, changedPaths: ["Tesbo-Backend-Nest/src/automation/automation.service.ts"], targetChangedPaths: [] },
+      { head: b, mergeBase: ancestor, changedPaths: ["e2e/api/auth.spec.ts"], targetChangedPaths: [] }
+    ]
+  });
+  const selected = Object.values(unrelated.candidates[0].impact.selectedSpecs).flat();
+  if (!selected.includes("e2e/api/auth.spec.ts")) assert.equal(unrelated.pairs[0].testEvidenceLead, false);
+  else assert.fail("Choose a truly unrelated regression spec for this control.");
+});
+
 test("concurrent committed comparison uses target policy, ignores dirty checkout and preserves target/peer drift", t => {
   const directory = temporary(t);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));

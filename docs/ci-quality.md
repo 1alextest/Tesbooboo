@@ -149,10 +149,14 @@ configuration and regular file inventory. It ignores dirty worktree and
 candidate-authored mapping changes. It lists target drift overlapping each
 candidate's changed paths, direct shared changed paths across candidates,
 optional supplied-graph consumer intersections, shared mapped domains,
-selected spec files and required checks. The optional graph is explicitly
+selected spec files and required checks. A test-only change may correctly select
+zero product specs; retain its directly changed E2E files and compare those
+with every other candidate's nominated regression evidence. The optional graph is explicitly
 unverified; do not infer runtime dependencies or semantic behavior.
 
-Structural intersections or incomplete mapping evidence require review. Shared
+Structural intersections, changed-test/peer-selection intersections or incomplete
+mapping evidence require review. Changed tests remain separate from mapped
+product obligations, and never establish changed behavior or executed coverage. Shared
 mapped obligations alone do not establish a conflict. No merge is simulated,
 no tests run, and no coverage or release verdict is issued. Inspect the actual
 changed behavior and relevant requirements before proposing joint regression

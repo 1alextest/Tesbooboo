@@ -383,6 +383,7 @@ export function compareCandidateImpact({ target, candidates, config, availablePa
     return {
       head: candidate.head, mergeBase: candidate.mergeBase,
       targetOverlap: intersect(changedPaths, targetPaths),
+      changedSpecFiles: changedPaths.filter(filename => specGroup(filename) !== null),
       impact
     };
   }).sort((a, b) => a.head.localeCompare(b.head));
@@ -395,12 +396,17 @@ export function compareCandidateImpact({ target, candidates, config, availablePa
       const bChangedConsumersOfA = intersect(y.changedPaths, x.affectedConsumers);
       const sharedConsumers = intersect(x.affectedConsumers, y.affectedConsumers);
       const sharedDomains = intersect([...x.owningDomains, ...x.sharedRiskDomains], [...y.owningDomains, ...y.sharedRiskDomains]);
-      const sharedSpecFiles = intersect(Object.values(x.selectedSpecs).flat(), Object.values(y.selectedSpecs).flat());
+      const aSelected = Object.values(x.selectedSpecs).flat(), bSelected = Object.values(y.selectedSpecs).flat();
+      const sharedSpecFiles = intersect(aSelected, bSelected);
+      const aChangedSpecsSelectedByB = intersect(a.changedSpecFiles, bSelected);
+      const bChangedSpecsSelectedByA = intersect(b.changedSpecFiles, aSelected);
+      const testEvidenceLead = !!(aChangedSpecsSelectedByB.length || bChangedSpecsSelectedByA.length);
       const sharedRequiredChecks = intersect(x.requiredChecks.map(c => c.id), y.requiredChecks.map(c => c.id));
       const structuralLead = !!(directOverlap.length || aChangedConsumersOfB.length || bChangedConsumersOfA.length || sharedConsumers.length);
       pairs.push({
-        heads: [a.head, b.head], structuralLead, directOverlap,
+        heads: [a.head, b.head], structuralLead, testEvidenceLead, directOverlap,
         staticConsumerOverlap: graph === undefined ? null : { aChangedConsumersOfB, bChangedConsumersOfA, sharedConsumers },
+        changedSpecOverlap: { aChangedSpecsSelectedByB, bChangedSpecsSelectedByA },
         sharedDomains, sharedSpecFiles, sharedRequiredChecks
       });
     }
@@ -408,7 +414,7 @@ export function compareCandidateImpact({ target, candidates, config, availablePa
   return {
     version: 1,
     status: rows.some(row => row.targetOverlap.length || row.impact.status === "review-required") ||
-      pairs.some(pair => pair.structuralLead) ? "review-required" : "selection-only",
+      pairs.some(pair => pair.structuralLead || pair.testEvidenceLead) ? "review-required" : "selection-only",
     target,
     verification: { status: "not-run", selectedTestCount: null, executedTestCount: null },
     graphBasis: graph === undefined ? "not-supplied" : "supplied-unverified",
@@ -417,6 +423,7 @@ export function compareCandidateImpact({ target, candidates, config, availablePa
     limitations: [
       "Shared changed paths and static consumer overlaps are joint-review leads, not proven merge conflicts or behavior defects.",
       "Shared domains, spec files and required checks are mapping-derived obligations; a shared file selection alone does not establish a structural conflict.",
+      "A candidate changing a spec file selected for another candidate requires joint evidence review; it is not proof of a changed assertion, broken test or covered behavior.",
       "Mappings and available evidence files come from one selected target, not a simulated merged candidate or approved product requirements.",
       "A supplied graph is not revision-attested by this tool; runtime, SQL, HTTP, queue and external consumers require separate investigation.",
       "No tests were collected or run. No coverage, release readiness, exhaustive PR enumeration or independent AI discovery is asserted."
@@ -465,6 +472,7 @@ export function formatConcurrentMarkdown(report) {
     lines.push("## Candidate " + md(row.head), "Merge base: " + md(row.mergeBase), "",
       "Target/candidate changed-path overlap:", items(row.targetOverlap), "",
       "Selected spec files: " + row.impact.counts.selectedSpecFileCount,
+      "Directly changed E2E spec files:", items(row.changedSpecFiles), "",
       "Candidate selection: " + md(row.impact.status), "",
       "Candidate diagnostics:", items(row.impact.diagnostics.map(item => item.code + ": " + item.message)), "");
   }
@@ -477,7 +485,10 @@ export function formatConcurrentMarkdown(report) {
         "Second candidate changes consumers of first:", items(pair.staticConsumerOverlap.bChangedConsumersOfA),
         "Shared static consumers:", items(pair.staticConsumerOverlap.sharedConsumers), "");
     }
-    lines.push("Shared mapped domains:", items(pair.sharedDomains), "",
+    lines.push(pair.testEvidenceLead ? "Joint test-evidence review indicated." : "No detected changed-spec intersection with peer selection.",
+      "First candidate changes spec files selected by second:", items(pair.changedSpecOverlap.aChangedSpecsSelectedByB),
+      "Second candidate changes spec files selected by first:", items(pair.changedSpecOverlap.bChangedSpecsSelectedByA), "",
+      "Shared mapped domains:", items(pair.sharedDomains), "",
       "Shared selected spec files:", items(pair.sharedSpecFiles), "",
       "Shared required checks:", items(pair.sharedRequiredChecks), "");
   }
