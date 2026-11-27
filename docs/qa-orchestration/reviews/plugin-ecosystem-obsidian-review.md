@@ -97,6 +97,8 @@ These are categories for product planning, not claims that the examples are inst
 
 Tesbo's existing MCP server exposes Tesbo operations to clients. Consuming another server is a distinct host/client capability; this review does not establish that it is already available inside Tesbo. An optional local client can mediate the Obsidian side without creating a universal remote-command proxy.
 
+The inspected MCP grant validation also keeps OAuth client pre-approval read-only; existing API-token grants have their own explicit scopes and tool allowances. A future proposal-writing connector must qualify a currently supported, authorized writer. Successful sign-in or plugin installation cannot be treated as write consent, and this review does not authorize broadening the OAuth contract.
+
 ### Contract to settle before an executable SDK
 
 | Concern | Proposed required behavior |
