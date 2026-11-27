@@ -1584,7 +1584,9 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
           async () => (await statuses([own.id, other.id])).every((row) => row.extraction_status === "ready"),
           "global transcriptions"
         );
-        expect(f.fetchProvider).toHaveBeenCalledTimes(2);
+        // The no-filter sweep is global by contract; assert our two rows are reached rather than
+        // assuming the shared CI database contains no other eligible row.
+        expect(f.fetchProvider.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(f.storage.getBuffer).toHaveBeenCalledWith(own.key);
         expect(f.storage.getBuffer).toHaveBeenCalledWith(other.key);
       } finally {

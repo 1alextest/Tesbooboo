@@ -1,4 +1,8 @@
-import { resolveGraphQaRecoveryMode, resolveKbTranscriptionRecoveryMode } from "./app-config.service";
+import {
+  isKbTranscriptionRecoveryModeInvalid,
+  resolveGraphQaRecoveryMode,
+  resolveKbTranscriptionRecoveryMode
+} from "./app-config.service";
 
 describe("graph QA recovery mode configuration", () => {
   it("defaults to off", () => {
@@ -33,5 +37,12 @@ describe("KB transcription recovery mode configuration", () => {
     expect(resolveKbTranscriptionRecoveryMode("project")).toBe("project");
     expect(resolveKbTranscriptionRecoveryMode("GLOBAL")).toBe("global");
     expect(resolveKbTranscriptionRecoveryMode("everything")).toBe("off");
+  });
+
+  it("distinguishes a deliberate off from a misspelled explicit mode", () => {
+    expect(isKbTranscriptionRecoveryModeInvalid(undefined)).toBe(false);
+    expect(isKbTranscriptionRecoveryModeInvalid("   ")).toBe(false);
+    expect(isKbTranscriptionRecoveryModeInvalid("OFF")).toBe(false);
+    expect(isKbTranscriptionRecoveryModeInvalid("projet")).toBe(true);
   });
 });

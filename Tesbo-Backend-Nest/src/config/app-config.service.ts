@@ -17,6 +17,12 @@ export function resolveKbTranscriptionRecoveryMode(explicitMode: string | undefi
   return "global";
 }
 
+/** A deliberate off is silent; a non-empty unrecognised value must be diagnosable. */
+export function isKbTranscriptionRecoveryModeInvalid(rawMode: string | undefined): boolean {
+  const value = (rawMode ?? "").trim().toLowerCase();
+  return Boolean(value) && !["off", "project", "global"].includes(value);
+}
+
 /** Explicit mode wins; the legacy ENABLED=1 flag remains an alias for global when MODE is unset. */
 export function resolveGraphQaRecoveryMode(
   explicitMode: string | undefined,
@@ -51,8 +57,8 @@ export class AppConfigService {
     resolveKbTranscriptionRecoveryMode(this.kbTranscriptionRecoveryModeRaw);
   // Distinguishes a deliberate off from a typo that resolved closed; the former is silent, the
   // latter must be diagnosable.
-  readonly kbTranscriptionRecoveryModeInvalid = Boolean(this.kbTranscriptionRecoveryModeRaw) &&
-    !["off", "project", "global"].includes(this.kbTranscriptionRecoveryModeRaw.toLowerCase());
+  readonly kbTranscriptionRecoveryModeInvalid =
+    isKbTranscriptionRecoveryModeInvalid(this.kbTranscriptionRecoveryModeRaw);
   readonly kbTranscriptionRecoveryProjectId =
     this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID") || null;
   readonly databaseUrl = this.normalizeDatabaseUrl(this.string("DATABASE_URL", "postgresql://localhost:5432/tesbo"));
