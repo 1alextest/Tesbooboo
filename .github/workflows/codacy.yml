@@ -77,6 +77,8 @@ jobs:
           report_dir=$(mktemp -d "$RUNNER_TEMP/codacy-report.XXXXXXXX")
           report="$report_dir/results.sarif"
           cp scripts/codacy_input_diagnostics.py "$report_dir/verify_checkout.py"
+          fingerprint="$report_dir/checkout.fingerprint"
+          python3 -B "$report_dir/verify_checkout.py" --record-checkout "$fingerprint"
           # Analyzer diagnostics can contain repository text. Keep workflow
           # command processing disabled while it is streamed to the job log.
           marker=$(cat /proc/sys/kernel/random/uuid)
@@ -94,12 +96,12 @@ jobs:
             2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile" "$report_dir/sarif-failure"; then
             :
           else
+            python3 -B "$report_dir/verify_checkout.py" --verify-checkout "$fingerprint"
             # Temporary #240 diagnostic, not a replacement scanner or acceptance gate.
             # Only the confirmed SARIF decoder stack triggers one differently formatted
             # analysis. Generic analyzer failures do not trigger an identical retry.
             # The original failure is preserved regardless of the diagnostic result.
             if [[ -f "$report_dir/sarif-failure" ]]; then
-              python3 -B "$report_dir/verify_checkout.py" --verify-checkout
               echo 'Codacy SARIF formatter failed; collecting local JSON correlation only'
               diagnostic_cidfile="$report_dir/diagnostic.cid"
               diagnostic_report="$report_dir/diagnostic.json"
@@ -115,7 +117,7 @@ jobs:
                 --fail-if-incomplete --max-allowed-issues 2147483647 \
                 2>&1 | python3 -u scripts/codacy_output_guard.py "$diagnostic_cidfile" || diagnostic_status=$?
               echo "Codacy JSON diagnostic pipeline status: $diagnostic_status (not an acceptance result)"
-              python3 -B "$report_dir/verify_checkout.py" --verify-checkout
+              python3 -B "$report_dir/verify_checkout.py" --verify-checkout "$fingerprint"
               if [[ -f "$diagnostic_report" && ! -L "$diagnostic_report" ]]; then
                 python3 -B "$report_dir/verify_checkout.py" --correlate "$diagnostic_report" \
                   || echo 'Codacy JSON correlation unavailable; no formatter culprit established'
@@ -125,9 +127,9 @@ jobs:
             fi
             exit 1
           fi
-          # HEAD alone does not prove the workspace stayed unchanged. This checks
-          # persistent changes, not isolation from a scanner with Docker access.
-          python3 -B "$report_dir/verify_checkout.py" --verify-checkout
+          # Compare tracked checkout bytes (including legitimate checkout transformations).
+          # This detects persistent changes, not isolation from a scanner with Docker access.
+          python3 -B "$report_dir/verify_checkout.py" --verify-checkout "$fingerprint"
           if [[ ! -f "$report" || -L "$report" || ! -s "$report" ]]; then
             echo "Codacy did not produce a regular nonempty SARIF report" >&2
             exit 1

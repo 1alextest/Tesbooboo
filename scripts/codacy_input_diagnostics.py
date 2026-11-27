@@ -4,6 +4,7 @@ A candidate is not necessarily an analyzed file or the cause of the failure.
 Never exclude, transcode or otherwise change the checked-out scanner input.
 """
 import codecs
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,37 @@ def index_entries(raw):
         if stage != b"0":
             raise ValueError("Cannot diagnose an unmerged Git index")
         yield mode, os.fsdecode(path)
+
+
+def checkout_fingerprint(root):
+    """Digest tracked checkout bytes and entry identity, not Git stat-cache claims."""
+    raw = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=root)
+    digest = hashlib.sha256(raw)
+    for mode, path in index_entries(raw):
+        candidate = root / path
+        if any(parent.is_symlink() for parent in candidate.parents if parent != root and root in parent.parents):
+            raise ValueError("Codacy checkout has a symlink parent")
+        metadata = candidate.lstat()
+        digest.update(str(stat.S_IMODE(metadata.st_mode)).encode("ascii") + b"\0")
+        if mode == b"120000" and stat.S_ISLNK(metadata.st_mode):
+            content = os.fsencode(os.readlink(candidate))
+            digest.update(hashlib.sha256(content).digest())
+        elif mode in (b"100644", b"100755") and stat.S_ISREG(metadata.st_mode):
+            with os.fdopen(os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError("Codacy checkout file type changed")
+                file_digest = hashlib.sha256()
+                while chunk := stream.read(65536):
+                    file_digest.update(chunk)
+            digest.update(file_digest.digest())
+        else:
+            raise ValueError("Codacy checkout contains an unsupported input type")
+    return digest.hexdigest()
+
+
+def verify_fingerprint(root, expected):
+    if checkout_fingerprint(root) != expected:
+        raise ValueError("Codacy tracked checkout bytes or entry identity changed")
 
 
 def classify(root, mode, path):
@@ -134,6 +166,17 @@ if __name__ == "__main__":
         raise SystemExit("Codacy checkout identity or clean-source verification failed") from None
     print("Codacy diagnostic clean source commit: " + head)
     if sys.argv[1:] == ["--verify-checkout"]:
+        sys.exit(0)
+    if len(sys.argv) == 3 and sys.argv[1] in ("--record-checkout", "--verify-checkout"):
+        try:
+            manifest = Path(sys.argv[2])
+            if sys.argv[1] == "--record-checkout":
+                with manifest.open("x", encoding="ascii") as stream:
+                    stream.write(checkout_fingerprint(root))
+            else:
+                verify_fingerprint(root, manifest.read_text(encoding="ascii"))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            raise SystemExit("Codacy tracked checkout fingerprint verification failed") from None
         sys.exit(0)
     entries = subprocess.check_output(["git", "ls-files", "--stage", "-z"], cwd=root)
     if len(sys.argv) == 3 and sys.argv[1] == "--correlate":

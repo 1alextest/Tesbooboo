@@ -1,11 +1,13 @@
 import io
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 import subprocess
 
-from codacy_input_diagnostics import assert_clean_checkout, classify, correlate_issues, diagnose, index_entries
+from codacy_input_diagnostics import (assert_clean_checkout, checkout_fingerprint, classify,
+                                      correlate_issues, diagnose, index_entries, verify_fingerprint)
 
 
 class CodacyInputDiagnosticsTest(unittest.TestCase):
@@ -57,6 +59,52 @@ class CodacyInputDiagnosticsTest(unittest.TestCase):
                                           "--ignore-submodules=none"), "")
                 with self.assertRaisesRegex(ValueError, "concealing index flags"):
                     assert_clean_checkout(root, head)
+
+    def test_fingerprint_detects_changes_hidden_by_git_stat_cache(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.git(root, "init", "-q")
+            self.git(root, "config", "core.trustctime", "false")
+            self.git(root, "config", "core.checkStat", "minimal")
+            source = root / "source.txt"
+            source.write_bytes(b"original")
+            # Avoid Git's racy-index timestamp window deterministically.
+            os.utime(source, (1000000000, 1000000000))
+            self.git(root, "add", ".")
+            self.git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+            head = self.git(root, "rev-parse", "HEAD")
+            baseline = checkout_fingerprint(root)
+            verify_fingerprint(root, baseline)
+            saved = source.stat()
+            source.write_bytes(b"modified")
+            os.utime(source, ns=(saved.st_atime_ns, saved.st_mtime_ns))
+            self.assertEqual(assert_clean_checkout(root, head), head)
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                verify_fingerprint(root, baseline)
+            source.write_bytes(b"original")
+            os.utime(source, ns=(saved.st_atime_ns, saved.st_mtime_ns))
+            verify_fingerprint(root, baseline)
+            source.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                verify_fingerprint(root, baseline)
+
+    def test_fingerprint_accepts_legitimate_crlf_checkout(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.git(root, "init", "-q")
+            self.git(root, "config", "core.autocrlf", "true")
+            source = root / "source.txt"
+            source.write_bytes(b"line\n")
+            self.git(root, "add", ".")
+            self.git(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+            source.unlink()
+            self.git(root, "checkout", "--", "source.txt")
+            self.assertEqual(source.read_bytes(), b"line\r\n")
+            self.assertEqual(assert_clean_checkout(root, self.git(root, "rev-parse", "HEAD")),
+                             self.git(root, "rev-parse", "HEAD"))
+            verify_fingerprint(root, checkout_fingerprint(root))
 
     def test_strict_utf8_stream_handles_split_codepoint_and_rejects_truncated_tail(self):
         with TemporaryDirectory() as directory:
