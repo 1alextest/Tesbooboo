@@ -1,6 +1,6 @@
 // Read-only calibration projection of independently recorded discovery adjudications.
 // The caller must pin and authenticate the manifest and review receipts outside this reducer.
-const {verifyFrozenDiscovery}=require('./discovery-study-basis.cjs');
+const {verifyFrozenDiscovery,verifyObservedExecution}=require('./discovery-study-basis.cjs');
 function scoreDiscovery(manifest, receipts, expectedManifestRef) {
   const nonempty = v => typeof v === 'string' && v.trim().length > 0;
   const require = (condition, message) => { if (!condition) throw new Error(message); };
@@ -25,7 +25,7 @@ function scoreDiscovery(manifest, receipts, expectedManifestRef) {
     require((trial.expectedDisposition === 'FINDINGS') === (targetIds.size > 0), 'Control/target inventory conflict');
     roster.set(trial.id, trial);
   }
-  const delivered = new Map();
+  const delivered = new Map(), attemptRefs = new Set();
   for (const receipt of receipts) {
     require(receipt && roster.has(receipt.trialId) && !delivered.has(receipt.trialId) &&
       receipt.manifestRef === expectedManifestRef &&
@@ -34,6 +34,11 @@ function scoreDiscovery(manifest, receipts, expectedManifestRef) {
     require(nonempty(receipt.outputRef) && nonempty(receipt.reviewRef) &&
       dispositions.includes(receipt.disposition) && ['COMPLETE','PARTIAL'].includes(receipt.review) &&
       Array.isArray(receipt.claims), 'Incomplete receipt');
+    if (manifest.purpose === 'BLINDED_TRIAL') {
+      const attemptRef=verifyObservedExecution(manifest,roster.get(receipt.trialId),receipt.execution);
+      require(!attemptRefs.has(attemptRef),'Execution attempt reused across assigned trials');
+      attemptRefs.add(attemptRef);
+    }
     delivered.set(receipt.trialId, receipt);
   }
   const rows = manifest.trials.map(trial => {

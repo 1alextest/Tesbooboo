@@ -102,4 +102,23 @@ function verifySubjectPacket(packet,manifest,expectedRef) {
   // A host delivers only this native input, not the coordinator's packet or evaluator manifest.
   return structuredClone(packet.input);
 }
-module.exports={freezePairedDiscovery,verifyFrozenDiscovery,verifySubjectPacket};
+// Verify recorded observations, not their issuer or truth; the authorized evaluator owns those checks.
+function verifyObservedExecution(manifest, trial, execution) {
+  exactKeys(execution, ['attemptRef','attemptOrdinal','runtimeEvidenceRef','subjectInputRef','methodRef','configuration','usage'], 'execution observation');
+  ensure(nonempty(execution.attemptRef)&&execution.attemptOrdinal===1&&nonempty(execution.runtimeEvidenceRef),
+    'First-attempt execution evidence required');
+  ensure(execution.subjectInputRef===trial.subjectInputRef,'Observed execution input mismatch');
+  const method=trial.arm==='ordinary'?manifest.methods.ordinaryRef:manifest.methods.candidateRef;
+  ensure(execution.methodRef===method,'Observed execution method mismatch');
+  const fields=['nativeBuildRef','modelRef','clientRef','grantRef'];
+  exactKeys(execution.configuration,fields,'observed execution configuration');
+  ensure(fields.every(k=>execution.configuration[k]===manifest.settings[k]),'Observed execution configuration mismatch');
+  const usage=['wallMs','toolCalls','outputTokens'];
+  exactKeys(execution.usage,usage,'observed execution usage');
+  ensure(usage.every(k=>Number.isSafeInteger(execution.usage[k])&&execution.usage[k]>=0),'Missing or invalid execution usage');
+  const b=manifest.settings.budget;
+  ensure(execution.usage.wallMs<=b.maxWallMs&&execution.usage.toolCalls<=b.maxToolCalls&&
+    execution.usage.outputTokens<=b.maxOutputTokens,'Observed execution exceeds frozen budget');
+  return execution.attemptRef;
+}
+module.exports={freezePairedDiscovery,verifyFrozenDiscovery,verifySubjectPacket,verifyObservedExecution};

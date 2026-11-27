@@ -52,3 +52,47 @@ test('reject invalid, unbalanced or answer-bearing input before freeze',()=>{
   const {manifest}=freezePairedDiscovery(practiceStudy());const m=copy(manifest);m.trials.pop();const {ref,...body}=m;m.ref=digest(body);
   assert.throws(()=>verifyFrozenDiscovery(m,m.ref),/Unmatched paired assignment/);
 });
+
+
+test('integrated blinded scoring preserves missing trials and rejects mismatched observed execution',()=>{
+  const {scoreDiscovery}=require('./score-zyra-discovery.cjs');
+  const {manifest}=freezePairedDiscovery(practiceStudy());
+  const receipt=trial=>({
+    trialId:trial.id,manifestRef:manifest.ref,subjectInputRef:trial.subjectInputRef,
+    outputRef:'practice:output:'+trial.id,reviewRef:'practice:review:'+trial.id,
+    disposition:'FINDINGS',review:'COMPLETE',
+    claims:[{id:'claim-1',verdict:'CONFIRMED',targetId:'private-target',evidenceRef:'practice:oracle'}],
+    execution:{
+      attemptRef:'practice:attempt:'+trial.id,attemptOrdinal:1,runtimeEvidenceRef:'practice:runtime:'+trial.id,
+      subjectInputRef:trial.subjectInputRef,methodRef:trial.arm==='ordinary'?manifest.methods.ordinaryRef:manifest.methods.candidateRef,
+      configuration:Object.fromEntries(['nativeBuildRef','modelRef','clientRef','grantRef'].map(k=>[k,manifest.settings[k]])),
+      usage:{wallMs:100,toolCalls:0,outputTokens:50}
+    }
+  });
+  const receipts=manifest.trials.slice(0,2).map(receipt);
+  const result=scoreDiscovery(manifest,receipts,manifest.ref);
+  assert.equal(result.purpose,'BLINDED_TRIAL');
+  for(const arm of result.arms){
+    assert.equal(arm.assigned,3);assert.equal(arm.available,1);
+    assert.deepEqual(arm.risk,{assigned:1,discovered:1,missed:0,unknown:0,unavailable:0});
+    assert.equal(arm.controls.UNAVAILABLE,2);
+  }
+  const mutations=[
+    [r=>delete r.execution,/execution observation fields/],
+    [r=>r.execution.attemptOrdinal=2,/First-attempt/],
+    [r=>r.execution.runtimeEvidenceRef='',/First-attempt/],
+    [r=>r.execution.subjectInputRef=manifest.trials[1].subjectInputRef,/input mismatch/],
+    [r=>r.execution.methodRef=manifest.methods.candidateRef,/method mismatch/],
+    [r=>r.execution.configuration.modelRef='different',/configuration mismatch/],
+    [r=>delete r.execution.usage.outputTokens,/usage fields/],
+    [r=>r.execution.usage.wallMs=-1,/invalid execution usage/],
+    [r=>r.execution.usage.toolCalls=1,/exceeds frozen budget/]
+  ];
+  for(const [mutate,reason] of mutations){
+    const altered=copy(receipts);mutate(altered[0]);assert.throws(()=>scoreDiscovery(manifest,altered,manifest.ref),reason);
+  }
+  const reused=copy(receipts);reused[1].execution.attemptRef=reused[0].execution.attemptRef;
+  assert.throws(()=>scoreDiscovery(manifest,reused,manifest.ref),/attempt reused/);
+  const changed=copy(manifest);changed.trials[0].targets[0].oracleRef='unreviewed';
+  assert.throws(()=>scoreDiscovery(changed,receipts,manifest.ref),/digest mismatch/);
+});
