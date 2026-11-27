@@ -46,6 +46,15 @@ export function changedPaths(commit, { cwd = process.cwd() } = {}) {
     .split("\0").filter(Boolean).map((name) => name.replaceAll("\\", "/")).sort();
 }
 
+/** Read a candidate's committed path delta, never its worktree or index. */
+export function committedChangedPaths(base, head, { cwd = process.cwd() } = {}) {
+  requireCommit(base);
+  requireCommit(head);
+  const output = git(["diff", "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z", base, head, "--"], cwd);
+  if (output !== "" && !output.endsWith("\0")) throw new Error("Expected NUL-terminated committed Git paths.");
+  return output.split("\0").filter(Boolean).sort();
+}
+
 export function readGitFile(commit, filename, { cwd = process.cwd() } = {}) {
   requireCommit(commit);
   if (typeof filename !== "string" || !filename || /^[\\/]|^[a-z]:/i.test(filename) || /[\0\r\n]/.test(filename) ||
