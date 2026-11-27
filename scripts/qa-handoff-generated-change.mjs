@@ -92,24 +92,54 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
   expect(coverageUrl, 'TESBO_JOURNEY_COVERAGE_URL').toBeTruthy();
   expect(token, 'TESBO_JOURNEY_TOKEN').toBeTruthy();
   expect(evidence, 'TESBO_JOURNEY_EVIDENCE_PATH').toBeTruthy();
+  const expectedOrigin = process.env.TESBO_JOURNEY_API_ORIGIN;
+  expect(expectedOrigin, 'TESBO_JOURNEY_API_ORIGIN').toBeTruthy();
+  let destination;
+  let allowed;
+  try {
+    destination = new URL(coverageUrl);
+    allowed = new URL(expectedOrigin);
+  } catch {
+    throw new Error('The approved coverage API origin or URL is malformed.');
+  }
+  expect(allowed.pathname, 'The approved API origin may not contain an alternate path').toBe('/');
+  expect(destination.origin, 'Coverage must use the explicitly approved API origin').toBe(allowed.origin);
+  expect(destination.username || destination.password, 'Coverage URLs may not carry credentials').toBe('');
+  if (destination.protocol !== 'https:') {
+    expect(['127.0.0.1', 'localhost', '[::1]'].includes(destination.hostname),
+      'Unencrypted API traffic is allowed only for a loopback disposable fixture').toBe(true);
+  }
   const evidenceBody = JSON.parse(readFileSync(evidence, 'utf8'));
   expect(evidenceBody.selectionDigest).toBe(BASIS.selectionDigest);
   expect(evidenceBody.target).toEqual(BASIS.target);
+  // Attach the validated identity before any assertion that could fail. On either
+  // outcome the reporter can retain the packet provenance separately from the
+  // observed outcome. The attachment does not itself attest execution success.
+  await test.info().attach('approved-handoff-evidence.json', { path: evidence, contentType: 'application/json' });
 
-  const response = await request.get(coverageUrl, { headers: { Authorization: 'Bearer ' + token } });
-  expect(response.status(), await response.text()).toBe(200);
+  const response = await request.get(coverageUrl, {
+    headers: { Authorization: 'Bearer ' + token }, maxRedirects: 0
+  });
+  expect(response.status(), 'Coverage read HTTP status (body deliberately withheld)').toBe(200);
   const body = await response.json();
-  const matching = (body.cases || []).filter((item) =>
+  expect(body && typeof body === 'object' && !Array.isArray(body), 'A typed coverage result is required').toBe(true);
+  expect(body.requirementId, 'Coverage must be for the reviewed requirement').toBe(BASIS.requirementId);
+  expect(body.approvedVersionId, 'Coverage must be for the reviewed approved version').toBe(BASIS.requirementVersionId);
+  expect(Array.isArray(body.cases), 'Coverage cases must be a list').toBe(true);
+  const sameKeys = (keys) => Array.isArray(keys)
+    && keys.length === BASIS.criterionKeys.length && new Set(keys).size === keys.length
+    && keys.every(key => BASIS.criterionKeys.includes(key));
+  // Count the logical approved case/requirement/criterion group BEFORE comparing link
+  // identity. Filtering to the expected link ID would miss a second distinct link.
+  const matching = body.cases.filter((item) =>
     item.approved === true &&
     item.testcaseId === BASIS.caseId &&
     item.requirementVersionId === BASIS.requirementVersionId &&
-    item.linkId === BASIS.linkId &&
-    JSON.stringify(item.criterionKeys) === JSON.stringify(BASIS.criterionKeys));
+    sameKeys(item.criterionKeys));
   expect(matching, 'exactly one current approved link for the selected case and criteria').toHaveLength(1);
+  expect(matching[0].linkId, 'The sole approved link must match the selected native link').toBe(BASIS.linkId);
   expect(matching[0].testcaseRevision).toBe(BASIS.testcaseRevision);
   expect(matching[0].testcaseApprovalRevision).toBe(BASIS.testcaseApprovalRevision);
-
-  await test.info().attach('approved-handoff-evidence.json', { path: evidence, contentType: 'application/json' });
 });
 `;
 }
