@@ -85,6 +85,26 @@ async function verifyNativeQaTaskKinds(client) {
     await client.query("UPDATE ai_generation_requests SET generated_payload='[]'::jsonb,task_status='done' WHERE id=$1", [governed[0].id]);
     const baseline = await read();
     assert.equal(baseline.length, 10);
+
+    // Compare the installed snapshot against the exact V159 SELECT on the
+    // same persisted rows. No added kind field may change a review digest.
+    const priorMigration = fs.readFileSync(path.resolve("migrations/V159_work_package_a_skills_publication.sql"), "utf8");
+    const priorDefinition = priorMigration.match(/CREATE OR REPLACE FUNCTION testcase_proposal_review_snapshot\(request_id UUID\) RETURNS JSONB[\s\S]*?\$\$;/)?.[0];
+    assert.ok(priorDefinition, "historical snapshot definition missing");
+    const priorSelect = priorDefinition.split("AS $")[1].split("$;")[0].replace("WHERE r.id=request_id;", "WHERE r.id=$1");
+    assert.ok(priorSelect.includes("WHERE r.id=$1"), "historical snapshot parameter missing");
+    const installed = await client.query("SELECT pg_get_functiondef('testcase_proposal_review_snapshot(uuid)'::regprocedure) AS definition");
+    assert.match(installed.rows[0].definition, /r\.task_kind IN \('legacy_generation_review','governed_proposal'\)/);
+    for (const row of baseline) {
+      const historical = (await client.query(priorSelect, [row.id])).rows[0].jsonb_build_object;
+      const actual = (await client.query("SELECT testcase_proposal_review_snapshot($1) AS snapshot", [row.id])).rows[0].snapshot;
+      assert.deepEqual(actual, historical, "snapshot basis must stay unchanged for " + row.id);
+      assert.equal(actual.taskId, row.id);
+      assert.equal(actual.projectId, project);
+    }
+    const absent = await client.query("SELECT testcase_proposal_review_snapshot($1) AS snapshot", [require("node:crypto").randomUUID()]);
+    assert.equal(absent.rows[0].snapshot, null);
+    console.log("Native task review snapshots: 10 existing-kind fixtures match historical V159 basis; missing identity returns null.");
     assert.equal(baseline.find(row => row.id === legacy.id).task_kind, "legacy_generation_review");
     assert.equal(baseline.find(row => row.id === legacy.id).provider, "anthropic");
     assert.equal(baseline.find(row => row.id === governed[0].id).task_kind, "governed_proposal");
