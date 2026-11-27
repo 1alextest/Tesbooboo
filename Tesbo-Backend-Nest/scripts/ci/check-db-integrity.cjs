@@ -401,6 +401,119 @@ async function verifyExternalWorkShape(client) {
 }
 
 
+// Gate A foundation slice 1: installation identity, project capability
+// grants and credential binding. Nothing here admits a producer or an
+// execution route; the checks prove the identity/scope/retention invariants.
+async function verifyInstallationFoundation(client) {
+  const tables = await client.query(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('agent_installations','agent_installation_project_grants')"
+  );
+  assert.deepEqual(tables.rows.map((row) => row.table_name).sort(),
+    ["agent_installation_project_grants", "agent_installations"]);
+  const tokenColumn = await client.query(
+    "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='api_tokens' AND column_name='installation_id'"
+  );
+  assert.equal(tokenColumn.rowCount, 1, "api_tokens.installation_id missing");
+
+  await client.query("BEGIN");
+  try {
+    const suffix = require("node:crypto").randomUUID();
+    const user = (await client.query(
+      "INSERT INTO users(email,name) VALUES ($1,'Installation QA') RETURNING id",
+      ["installation-" + suffix + "@tesbo.invalid"]
+    )).rows[0].id;
+    const orgA = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('Installation A',$1) RETURNING id",
+      ["installation-a-" + suffix]
+    )).rows[0].id;
+    const orgB = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('Installation B',$1) RETURNING id",
+      ["installation-b-" + suffix]
+    )).rows[0].id;
+    const projectA = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'INA','Installation A') RETURNING id",
+      [orgA]
+    )).rows[0].id;
+    const projectB = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'INB','Installation B') RETURNING id",
+      [orgB]
+    )).rows[0].id;
+    const agentA = (await client.query(
+      "INSERT INTO agents(slug,display_name) VALUES ($1,'Workstation A') RETURNING id",
+      ["workstation-a-" + suffix.slice(0, 8)]
+    )).rows[0].id;
+    const agentB = (await client.query(
+      "INSERT INTO agents(slug,display_name) VALUES ($1,'Workstation B') RETURNING id",
+      ["workstation-b-" + suffix.slice(0, 8)]
+    )).rows[0].id;
+    const shared = (await client.query("SELECT id FROM agents WHERE slug='tesbo-mcp'")).rows[0].id;
+    assert.ok(shared, "the shared Tesbo MCP agent must exist");
+
+    const installationA = (await client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name,created_by) VALUES ($1,$2,'opencode-workstation-a','Workstation A',$3) RETURNING id,status",
+      [orgA, agentA, user]
+    )).rows[0];
+    assert.equal(installationA.status, "active");
+    // The same stable key is meaningful only inside its organization.
+    await client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'opencode-workstation-a','Workstation B')",
+      [orgB, agentB]
+    );
+
+    const reject = async (label, operation, sqlstate, constraints) => {
+      await client.query("SAVEPOINT installation_probe");
+      let failure;
+      try { await operation(); } catch (error) { failure = error; }
+      await client.query("ROLLBACK TO SAVEPOINT installation_probe");
+      await client.query("RELEASE SAVEPOINT installation_probe");
+      assert.equal(failure?.code, sqlstate, label + " must be refused: " + (failure?.message || "succeeded"));
+      if (constraints) {
+        assert.ok(constraints.includes(failure?.constraint),
+          label + " failed for an unrelated constraint: " + failure?.constraint);
+      }
+    };
+
+    await reject("shared Tesbo MCP actor as an installation", () => client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'shared-actor','Shared')",
+      [orgA, shared]), "23514", ["agent_installations_not_shared_actor"]);
+    await reject("duplicate installation key in one organization", () => client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'opencode-workstation-a','Duplicate')",
+      [orgA, agentB]), "23505", ["agent_installations_key_unique"]);
+    await reject("reusing one agent identity for two installations", () => client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'second-key','Reuse')",
+      [orgA, agentA]), "23505", ["agent_installations_agent_unique"]);
+
+    const grant = (await client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities,granted_by) VALUES ($1,$2,ARRAY['task.claim.assigned','report.submit.assigned'],$3) RETURNING id",
+      [installationA.id, projectA, user]
+    )).rows[0];
+    await reject("unknown capability in a grant", () => client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities) VALUES ($1,$2,ARRAY['task.everything'])",
+      [installationA.id, projectA]), "23514");
+    await reject("grant crossing an organization boundary", () => client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities) VALUES ($1,$2,ARRAY['task.claim.assigned'])",
+      [installationA.id, projectB]), "23514", ["agent_installation_grants_same_organization"]);
+
+    await client.query(
+      "INSERT INTO api_tokens(user_id,project_id,name,token_hash,installation_id) VALUES ($1,$2,'Installation credential',$3,$4)",
+      [user, projectA, "c".repeat(64), installationA.id]
+    );
+    await reject("deleting an installation with grants and credentials", () => client.query(
+      "DELETE FROM agent_installations WHERE id=$1", [installationA.id]), "23503");
+    await reject("deleting an agent identity an installation depends on", () => client.query(
+      "DELETE FROM agents WHERE id=$1", [agentA]), "23503");
+
+    // Deactivation preserves attribution rather than deleting history.
+    await client.query("UPDATE agent_installations SET status='deactivated',updated_at=now() WHERE id=$1", [installationA.id]);
+    const state = (await client.query("SELECT status FROM agent_installations WHERE id=$1", [installationA.id])).rows[0];
+    assert.equal(state.status, "deactivated");
+    console.log("Installation foundation: shared MCP actor rejected, per-organization keys, cross-org grant refused, unknown capability refused, credential binding retained, deactivation preserves attribution.");
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
+
 // Reproduce a populated V167 -> current upgrade on a separate disposable
 // database using the actual built migration CLI, never by undoing migrations.
 async function verifyPopulatedTaskKindUpgrade(admin, migrationFiles) {
@@ -579,8 +692,9 @@ async function main() {
     }
     await verifyNativeQaTaskKinds(client);
     await verifyExternalWorkShape(client);
+    await verifyInstallationFoundation(client);
     await verifyPopulatedTaskKindUpgrade(client, migrationFiles);
-    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows, native task kinds and external work conditional shape.`);
+    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows, native task kinds, external work conditional shape and installation identity foundation.`);
   } finally {
     await client.end();
   }
