@@ -111,6 +111,74 @@ test("stale editor save retains unsaved Notes until an explicit reload and revie
   }
 });
 
+test("exact linked testcase navigation preserves identity with duplicate titles and withholds unverified case controls", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  let projectId: string | undefined;
+  const title = `E2E exact linked case ${Date.now()}`;
+  try {
+    projectId = (await createProject(api, { name: `Exact linked case ${Date.now()}` })).id;
+    const base = `/api/projects/${projectId}/testcases`;
+    const create = async (attachments: string) => {
+      const response = await api.post(base, { data: { title, attachments } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+    const first = await create("First case with this title");
+    const selected = await create("Exact linked case with the same title");
+    expect(first.id).not.toBe(selected.id);
+    const firstBefore = testcaseEditState(await (await api.get(`${base}/${first.id}`)).json());
+    const selectedBefore = testcaseEditState(await (await api.get(`${base}/${selected.id}`)).json());
+    const panel = page.getByTestId("testcase-detail-panel");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    const selectedPath = `/projects/${projectId}/testcases?testcaseId=${selected.id}`;
+    // The old detail route redirected to the list, losing tcId. Both entry paths must open
+    // the same native editor by ID, regardless of a same-title case elsewhere in the list.
+    await page.goto(`/projects/${projectId}/testcases/${selected.id}`);
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+    await expect(panel.getByTestId("testcase-detail-identity")).toHaveText(selected.externalId || selected.id);
+    await page.reload();
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+
+    // Exercise a different exact URL while the same repository page remains mounted.
+    // The selected case must not be displayed or made actionable if the response identifies
+    // another record. This controlled read response is not a backend identity/auth claim.
+    const wrongRecord = await (await api.get(`${base}/${selected.id}`)).json();
+    const wrongRoute = `**${base}/${first.id}`;
+    await page.route(wrongRoute, route => route.fulfill({ status: 200, json: wrongRecord }));
+    await page.evaluate(id => {
+      const url = new URL(location.href);
+      url.searchParams.set("testcaseId", id);
+      history.pushState(null, "", url);
+    }, first.id);
+    await expect(panel.getByRole("alert")).toContainText("Failed to load the complete test case details");
+    await expect(panel).not.toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Save changes", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+    await page.unroute(wrongRoute);
+    page.once("dialog", dialog => dialog.accept());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(panel).toHaveAttribute("data-case-id", first.id);
+    await expect(notes).toHaveValue("First case with this title");
+    await panel.getByRole("button", { name: "Close panel", exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.get("testcaseId")).toBeNull();
+    await page.reload();
+    await expect(panel).toHaveCount(0);
+    await page.goto(selectedPath);
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+    expect(testcaseEditState(await (await api.get(`${base}/${first.id}`)).json())).toEqual(firstBefore);
+    expect(testcaseEditState(await (await api.get(`${base}/${selected.id}`)).json())).toEqual(selectedBefore);
+  } finally {
+    if (projectId) await deleteProjects(api, [projectId]);
+    await api.dispose();
+  }
+});
+
 /** Exercise Notes through reviewed MCP publication and the native editor on disposable records. */
 test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page }) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
