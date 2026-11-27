@@ -273,8 +273,21 @@ jobs:
           # Full impacted files, after the bounded discovery/regression slice above.
           # Ordinary draft callers and governed-owner refusals share the new revision
           # contract; passing a -g slice alone does not qualify their product boundary.
-          npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts api/requirements.spec.ts ui/skills.spec.ts --workers=10 --output=test-results-requirements --list
-          npx playwright test -c playwright.config.ts api/zyra.spec.ts ui/zyra.spec.ts api/requirements.spec.ts ui/skills.spec.ts --workers=10 --output=test-results-requirements
+          # Observability has already run in each of the three required backend modes above.
+          # Its fixture fails closed outside those modes. Partition the inventory rather than
+          # retrying that same suite in an invalid environment or dropping unique test coverage.
+          inventory="$(mktemp -d)"
+          trap 'rm -rf "$inventory"' EXIT
+          files=(api/zyra.spec.ts ui/zyra.spec.ts api/requirements.spec.ts ui/skills.spec.ts)
+          npx playwright test -c playwright.config.ts "${files[@]}" --workers=10 --output=test-results-requirements --list | tee "$inventory/full"
+          npx playwright test -c playwright.config.ts api/zyra.spec.ts --project=api -g 'ZYR-OBS-' --list | tee "$inventory/observability"
+          npx playwright test -c playwright.config.ts "${files[@]}" --workers=10 --output=test-results-requirements --grep-invert 'ZYR-OBS-' --list | tee "$inventory/general"
+          # Compare multisets (not unique titles): omitted, extra or duplicated locations fail.
+          # A changed/unreadable Playwright inventory format also fails closed via pipefail.
+          LC_ALL=C grep -E '^  \[(api|ui)\] › ' "$inventory/full" | LC_ALL=C sort > "$inventory/expected"
+          LC_ALL=C grep -E '^  \[(api|ui)\] › ' "$inventory/observability" "$inventory/general" -h | LC_ALL=C sort > "$inventory/partition"
+          diff -u "$inventory/expected" "$inventory/partition"
+          npx playwright test -c playwright.config.ts "${files[@]}" --workers=10 --output=test-results-requirements --grep-invert 'ZYR-OBS-'
       - name: Verify notification paging and unread counts
         working-directory: e2e
         env:
