@@ -141,8 +141,9 @@ export async function prepareNativeRetestAutomation(selection, {request, confirm
   const previewPath = '/api/cycles/' + sourceCycleId + '/retests/preview?executionIds=' + sourceExecutionId;
   const read = async () => {
     const preview = await request('GET', previewPath);
-    if (preview.projectId !== projectId || preview.sourceCycleId !== sourceCycleId ||
-        preview.sourceRun?.id !== sourceCycleId || !hex.test(preview.previewDigest ?? '') ||
+    if (!preview || typeof preview !== 'object' || Array.isArray(preview) ||
+        preview.projectId !== projectId || preview.sourceCycleId !== sourceCycleId ||
+        preview.sourceRun?.id !== sourceCycleId || typeof preview.previewDigest !== 'string' || !hex.test(preview.previewDigest) ||
         !Array.isArray(preview.occurrences) || preview.occurrences.length !== 1) {
       throw new Error('The native retest preview did not identify exactly the selected source observation.');
     }
@@ -152,9 +153,10 @@ export async function prepareNativeRetestAutomation(selection, {request, confirm
     if (!occurrence || occurrence.sourceExecutionId !== sourceExecutionId ||
         !uuid.test(occurrence.sourceCycleItemId ?? '') || !uuid.test(occurrence.testcaseId ?? '') ||
         occurrence.sourceResult?.id !== sourceExecutionId || occurrence.sourceResult.status !== 'Failed' ||
-        preview.sourceRun.status !== 'Completed' || !occurrence.eligible || current?.approvalCurrent !== true ||
+        preview.sourceRun.status !== 'Completed' || occurrence.eligible !== true || current?.approvalCurrent !== true ||
         current.status !== 'Approved' || current.id !== occurrence.testcaseId ||
-        !hex.test(current.approvalRevision ?? '') || !definition || definition.id !== current.id ||
+        typeof current.approvalRevision !== 'string' || !hex.test(current.approvalRevision) || !definition ||
+        typeof definition !== 'object' || Array.isArray(definition) || definition.id !== current.id ||
         definition.project_id !== projectId || typeof current.externalId !== 'string' || !current.externalId ||
         definition.external_id !== current.externalId) {
       throw new Error('This preparation requires one failed observation in a completed Run and its current exactly approved native case.');
@@ -177,7 +179,25 @@ export async function prepareNativeRetestAutomation(selection, {request, confirm
         typeof testcase.automationRepo !== 'string' || !/\.(spec|test)\.(?:[cm]?[jt]sx?)$/.test(testcase.automationPath)) {
       throw new Error('The current reviewed case needs an existing Playwright automation target.');
     }
-    return { preview, native: {
+    // The operator needs both saved definitions, not just a mutable title or an
+    // assertion that they were reviewed. Keep the full comparison local to this
+    // interaction; do not export the source definition or raw observation bytes.
+    if (!occurrence.sourceDefinition || typeof occurrence.sourceDefinition !== 'object' ||
+        Array.isArray(occurrence.sourceDefinition) ||
+        !['reviewed_snapshot', 'legacy_snapshot_unknown_approval'].includes(occurrence.sourceDefinitionBasis) ||
+        typeof occurrence.definitionChanged !== 'boolean') {
+      throw new Error('The saved source definition and its review basis could not be established.');
+    }
+    return { preview, comparison: {
+      sourceRun: preview.sourceRun,
+      sourceDefinitionBasis: occurrence.sourceDefinitionBasis,
+      sourceDefinition: occurrence.sourceDefinition,
+      currentReviewedDefinition: current.reviewedContent,
+      sourceEvidenceIds: occurrence.sourceEvidence.map(item => item.id),
+      sourceBugLinks: occurrence.sourceBugLinks.map(item => ({ id: item.id, bugId: item.bugId, executionId: item.executionId })),
+      sourceObservation: { status: occurrence.sourceResult.status, reportedBy: occurrence.sourceResult.reported_by ?? null,
+        executedAt: occurrence.sourceResult.executed_at ?? null }
+    }, native: {
       projectId, sourceCycleId, sourceCycleItemId: occurrence.sourceCycleItemId, sourceExecutionId,
       sourceStatus: 'Failed', sourcePreviewDigest: preview.previewDigest,
       sourceApprovalRevision: occurrence.sourceApprovalRevision ?? null,
@@ -190,9 +210,14 @@ export async function prepareNativeRetestAutomation(selection, {request, confirm
   const initial = await read();
   const target = checkTarget(selection, initial.native.testcase);
   const mapping = await readMapping({ ...selection, targetPath: target.path });
-  if (mapping.targetPath !== target.path || mapping.upstreamCase !== selection.upstreamCase ||
-      mapping.repoRevision !== target.revision || !sha.test(mapping.targetBlob ?? '') ||
-      !Array.isArray(mapping.risks) || mapping.risks.length !== 1) {
+  if (target.repository !== initial.native.testcase.automationRepo ||
+      target.path !== initial.native.testcase.automationPath || target.revision !== selection.repoRevision ||
+      target.branch !== selection.branch || mapping.targetPath !== target.path ||
+      mapping.upstreamCase !== selection.upstreamCase || mapping.repoRevision !== target.revision ||
+      typeof mapping.targetBlob !== 'string' || !sha.test(mapping.targetBlob) ||
+      !Array.isArray(mapping.risks) || mapping.risks.length !== 1 ||
+      mapping.risks[0]?.observableFromBrowser !== 'yes' ||
+      typeof mapping.risks[0]?.oracle !== 'string' || !mapping.risks[0].oracle.trim()) {
     throw new Error('The investigation does not identify one reviewed risk at the selected committed target.');
   }
   const packet = {
@@ -200,7 +225,7 @@ export async function prepareNativeRetestAutomation(selection, {request, confirm
     native: initial.native, target, investigation: { id: selection.investigationId, ...mapping }
   };
   const digest = createHash('sha256').update(JSON.stringify(packet)).digest('hex');
-  if (!await confirm(packet, digest)) throw new Error('Handoff cancelled.');
+  if (!await confirm(packet, digest, initial.comparison)) throw new Error('Handoff cancelled.');
   if (!isDeepStrictEqual(checkTarget(selection, initial.native.testcase), target) ||
       !isDeepStrictEqual((await read()).preview, initial.preview)) {
     throw new Error('The selected source observation, case or target changed during review. Start again.');
@@ -258,9 +283,10 @@ async function main(argv) {
     await page.goto(selection.retestUrl ?? selection.taskUrl, { waitUntil: 'domcontentloaded' });
     await terminal.question(selection.retestUrl ? 'Sign in to your Tesbo source execution in the browser, then press Enter here.\n' : 'Sign in to your Tesbo task in the browser, then press Enter here.\n');
     const request = createHandoffRequest(selection.apiOrigin, context.request, selection.retestUrl ? 'retest' : 'requirement');
-    const confirm = async (packet, digest) => {
+    const confirm = async (packet, digest, comparison) => {
       // Quote all operator-visible strings. Strip directional controls that could disguise selected text.
-      const preview = JSON.stringify(packet, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, ch =>
+      // The comparison is for the interactive reviewer only, not the exported packet.
+      const preview = JSON.stringify(comparison ? { preparation: packet, reviewComparison: comparison } : packet, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, ch =>
         '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
       process.stderr.write(preview + '\n');
       const prompt = selection.retestUrl
