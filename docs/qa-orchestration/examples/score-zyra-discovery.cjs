@@ -1,5 +1,6 @@
 // Read-only calibration projection of independently recorded discovery adjudications.
 // The caller must pin and authenticate the manifest and review receipts outside this reducer.
+const {verifyFrozenDiscovery}=require('./discovery-study-basis.cjs');
 function scoreDiscovery(manifest, receipts, expectedManifestRef) {
   const nonempty = v => typeof v === 'string' && v.trim().length > 0;
   const require = (condition, message) => { if (!condition) throw new Error(message); };
@@ -8,6 +9,7 @@ function scoreDiscovery(manifest, receipts, expectedManifestRef) {
   require(manifest && manifest.schemaVersion === 1 && nonempty(expectedManifestRef) &&
     manifest.ref === expectedManifestRef && ['CALIBRATION','BLINDED_TRIAL'].includes(manifest.purpose),
     'Invalid or mismatched frozen manifest reference');
+  if (manifest.purpose === 'BLINDED_TRIAL') verifyFrozenDiscovery(manifest, expectedManifestRef);
   require(Array.isArray(manifest.trials) && manifest.trials.length > 0 && Array.isArray(receipts), 'Invalid trial inventory');
   const roster = new Map();
   for (const trial of manifest.trials) {
