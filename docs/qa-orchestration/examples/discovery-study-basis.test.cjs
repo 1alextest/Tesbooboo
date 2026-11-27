@@ -96,3 +96,80 @@ test('integrated blinded scoring preserves missing trials and rejects mismatched
   const changed=copy(manifest);changed.trials[0].targets[0].oracleRef='unreviewed';
   assert.throws(()=>scoreDiscovery(changed,receipts,manifest.ref),/digest mismatch/);
 });
+
+const {ARTIFACT_DOMAINS,prepareCrossArtifactContext,bindCrossArtifactCitation,crossArtifactPracticeStudy}=require('./cross-artifact-calibration.cjs');
+
+test('cross-artifact practice uses the existing frozen paired-study owner without exposing private targets',()=>{
+  const study=crossArtifactPracticeStudy();
+  const {manifest,subjectPackets}=freezePairedDiscovery(study);
+  assert.equal(manifest.trials.length,12);
+  assert.equal(subjectPackets.length,12);
+  for (const packet of subjectPackets) {
+    const input=verifySubjectPacket(packet,manifest,manifest.ref);
+    const basis=JSON.parse(input.context.split('\n',1)[0]);
+    assert.deepEqual(Object.keys(basis.domains),ARTIFACT_DOMAINS);
+    assert.equal(prepareCrossArtifactContext(basis),input.context.split('\n',1)[0]);
+    assert.doesNotMatch(input.context,/private:|practice-oracle:|expectedDisposition|rubricRef/);
+  }
+  const {scoreDiscovery}=require('./score-zyra-discovery.cjs');
+  const score=scoreDiscovery(manifest,[],manifest.ref);
+  for (const arm of score.arms) {
+    assert.equal(arm.assigned,6);
+    assert.equal(arm.available,0);
+    assert.equal(arm.risk.unavailable,3);
+    assert.equal(arm.requirementGap.unavailable,1);
+    assert.equal(arm.controls.UNAVAILABLE,3);
+    assert.equal(arm.risk.discovered,0);
+  }
+  const controls=Object.fromEntries(study.pairs.map(p=>[p.id,p.expectedDisposition]));
+  assert.deepEqual(controls,{code:'FINDINGS',manual:'FINDINGS',policy:'FINDINGS',clean:'NO_FINDINGS',unknown:'UNKNOWN',temporal:'NO_FINDINGS'});
+  for(const id of ['manual','policy']){
+    const pair=study.pairs.find(p=>p.id===id);
+    assert.equal(JSON.parse(pair.input.context).domains.implementation.availability,'not_applicable');
+  }
+  const unavailable=JSON.parse(study.pairs.find(p=>p.id==='unknown').input.context);
+  assert.deepEqual(unavailable.domains.policy.records,[]);
+  assert.equal(unavailable.domains.policy.availability,'unavailable');
+});
+
+test('exact citation binds source domain and revision without conferring semantic or transfer authority',()=>{
+  const study=crossArtifactPracticeStudy();
+  const {manifest,subjectPackets}=freezePairedDiscovery(study);
+  const input=verifySubjectPacket(subjectPackets.find(p=>p.trialId==='temporal-2'),manifest,manifest.ref);
+  const cite=(revision,excerpt)=>bindCrossArtifactCitation(input.context,{domain:'policy',id:'refund-policy',revision,excerpt});
+  assert.deepEqual(cite('v3','the requester cannot approve their own refund'),{
+    domain:'policy',id:'refund-policy',revision:'v3',role:'approved',
+    interval:'within_recorded_interval',scopeRef:study.scopeRef,
+    semanticVerdict:'not_adjudicated',transferAuthority:'not_established'
+  });
+  assert.equal(cite('v1','A clerk may approve').interval,'outside_recorded_interval');
+  assert.equal(cite('v4','An automatic refund').interval,'outside_recorded_interval');
+  assert.equal(cite('v5','Remove independent approval').role,'rejected');
+  assert.throws(()=>cite('v3','An automatic refund'),/exact supplied artifact revision/);
+  assert.throws(()=>cite('v3','Reconcile the actor'),/exact supplied artifact revision/);
+  assert.throws(()=>bindCrossArtifactCitation(input.context,{domain:'requirement',id:'refund-policy',revision:'v3',excerpt:'independent supervisor'}),/exact supplied artifact revision/);
+  const manual=verifySubjectPacket(subjectPackets.find(p=>p.trialId==='manual-1'),manifest,manifest.ref);
+  assert.equal(bindCrossArtifactCitation(manual.context,{domain:'user_manual',id:'refund-guide',revision:'v3',excerpt:'The clerk clicks Approve'}).role,'candidate');
+  const unknown=verifySubjectPacket(subjectPackets.find(p=>p.trialId==='unknown-1'),manifest,manifest.ref);
+  assert.throws(()=>bindCrossArtifactCitation(unknown.context,{domain:'policy',id:'refund-policy',revision:'v3',excerpt:'independent supervisor'}),/exact supplied artifact revision/);
+});
+
+test('cross-artifact context fails closed for missing, contradictory or foreign inventory',()=>{
+  const context=crossArtifactPracticeStudy().pairs[0].input.context;
+  const basis=JSON.parse(context);
+  const change=(mutate,reason)=>{const changed=copy(basis);mutate(changed);assert.throws(()=>prepareCrossArtifactContext(changed),reason)};
+  change(x=>delete x.domains.user_manual,/explicit disposition/);
+  change(x=>x.domains.policy.availability='unavailable',/conflicts with record/);
+  change(x=>x.domains.policy.records[0].scopeRef='foreign-project',/scoped artifact/);
+  change(x=>x.domains.policy.records.push(copy(x.domains.policy.records[0])),/Duplicate exact/);
+  change(x=>x.asOf='2026-02-31',/identity or date/);
+  change(x=>{x.domains.policy.records[0].from='2027-01-01';x.domains.policy.records[0].to='2026-12-31'},/scoped artifact or interval/);
+  change(x=>x.domains.policy.records[0].excerpt='x'.repeat(4001),/scoped artifact/);
+  change(x=>x.domains.policy.records[0].oracleRef='private-label',/scoped artifact/);
+  change(x=>x.purpose='LIVE_PROJECT_CONTEXT',/calibration identity/);
+  const temporal=JSON.parse(crossArtifactPracticeStudy().pairs.find(p=>p.id==='temporal').input.context);
+  const canonical=prepareCrossArtifactContext(temporal);
+  temporal.domains.policy.records.reverse();
+  assert.equal(prepareCrossArtifactContext(temporal),canonical);
+});
+
