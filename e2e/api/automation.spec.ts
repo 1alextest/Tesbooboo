@@ -1,4 +1,5 @@
-import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
+import { approveTestcase, createTestcaseFixtureResponse } from "../utils/testcase-approval";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, request, test, type APIRequestContext } from "@playwright/test";
@@ -219,6 +220,171 @@ test.describe("automation ingest - run lifecycle", () => {
       expect(failedRow.evidenceCount).toBe(1);
     } finally {
       await cleanup(api, runIds, cases.map((c) => c.id));
+    }
+  });
+
+  // Use the existing automation and native retest writers together. The submitted
+  // runner outcome is a controlled fixture, not execution of a generated browser spec.
+  // AUT-HANDOFF-01 separately exercises the actual generated reporter process.
+  test("AUT-01 a full session preserves automated failure evidence and a linked Bug through a separate manual retest", async ({ request: api }) => {
+    const project = `/api/projects/${ctxA.projectId}`;
+    const base = automationBase(ctxA.projectId);
+    const suffix = randomUUID();
+    let caseId: string | undefined;
+    let sourceRunId: string | undefined;
+    let retestRunId: string | undefined;
+    let bugId: string | undefined;
+    let primaryFailed = false;
+    try {
+      const created = await api.post(`${project}/testcases`, { data: {
+        title: `E2E automation retest lineage ${suffix}`, status: "Draft",
+        steps: [{ action: "Read the controlled linked-case result", expected: "Exactly one current approved link" }]
+      } });
+      expect(created.status()).toBe(201);
+      const draft = await created.json();
+      caseId = draft.id as string;
+      const approved = await approveTestcase(api, ctxA.projectId, caseId);
+      expect(approved.approvalRevision).toMatch(/^[a-f0-9]{64}$/);
+      const source = await createRun(api, {
+        name: `Original automated failure ${suffix}`, environment: "synthetic",
+        commitSha: "0123456789abcdef0123456789abcdef01234567",
+        caseIds: [approved.externalId],
+      });
+      expect(source.status()).toBe(201);
+      const run = await source.json();
+      sourceRunId = run.runId as string;
+      expect(run.source).toBe("automation");
+      expect(run.casesAttached).toBe(1);
+      const failureText = "Controlled runner observation: two current approved links instead of one";
+      expect((await postResult(api, sourceRunId, {
+        caseId: approved.externalId, status: "fail", errorMessage: failureText,
+        durationMs: 25,
+      })).ok()).toBeTruthy();
+
+      const uploaded = await api.post(`${base}/runs/${sourceRunId}/results/${approved.externalId}/evidence`, {
+        multipart: { kind: "screenshot", files: { name: "original-failure.png", mimeType: "image/png", buffer: PNG_1PX } }
+      });
+      expect(uploaded.status()).toBe(201);
+      expect((await uploaded.json()).total).toBe(1);
+      const close = await api.patch(`${base}/runs/${sourceRunId}/close`, { data: { status: "completed" } });
+      expect(close.ok()).toBeTruthy();
+      const readAutomation = async () => {
+        const response = await api.get(`${base}/runs/${sourceRunId}`);
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const first = await readAutomation();
+      expect(first.summary).toMatchObject({ total: 1, failed: 1 });
+      expect(first.results).toHaveLength(1);
+      const original = first.results[0];
+      expect(original).toMatchObject({ caseId: approved.externalId, status: "Failed",
+        reportedBy: "automation", errorMessage: failureText });
+      expect(original.evidence).toHaveLength(1);
+      const evidenceId = original.evidence[0].id as string;
+      const executionId = original.executionId as string;
+      expect(executionId).toBeTruthy();
+      expect(evidenceId).toBeTruthy();
+
+      const bug = await api.post(`${project}/bugs`, { data: {
+        title: `Controlled duplicate approved link ${suffix}`,
+        links: [{ testcaseId: caseId, cycleId: sourceRunId, executionId }]
+      } });
+      expect(bug.status()).toBe(201);
+      bugId = (await bug.json()).id;
+      expect(bugId).toBeTruthy();
+      const preview = async () => {
+        const response = await api.get(`/api/cycles/${sourceRunId}/retests/preview`, { params: { executionIds: executionId } });
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const basis = await preview();
+      expect(basis.sourceRun).toMatchObject({ id: sourceRunId, source: "automation" });
+      expect(basis.occurrences).toHaveLength(1);
+      const occurrence = basis.occurrences[0];
+      expect(occurrence).toMatchObject({
+        sourceExecutionId: executionId, testcaseId: caseId, eligible: true, definitionChanged: false,
+        sourceApprovalRevision: approved.approvalRevision,
+        sourceResult: { id: executionId, status: "Failed", reported_by: "automation" },
+        currentCase: { id: caseId, approvalCurrent: true, approvalRevision: approved.approvalRevision }
+      });
+      expect(occurrence.sourceEvidence).toEqual([expect.objectContaining({ id: evidenceId })]);
+      expect(occurrence.sourceBugLinks).toEqual([expect.objectContaining({ bugId })]);
+
+      const reviewedIntent = {
+        requestKey: randomUUID(), executionIds: [executionId], expectedPreviewDigest: basis.previewDigest,
+        name: `Independent manual retest ${suffix}`, environment: "synthetic", buildVersion: "controlled-corrected-fixture"
+      };
+      const retest = await api.post(`/api/cycles/${sourceRunId}/retests`, { data: reviewedIntent });
+      expect(retest.status()).toBe(201);
+      const receipt = await retest.json();
+      retestRunId = receipt.cycleId as string;
+      expect(retestRunId).not.toBe(sourceRunId);
+      expect(receipt.manifest.occurrences).toHaveLength(1);
+      const retained = receipt.manifest.occurrences[0];
+      expect(retained).toMatchObject({
+        ...occurrence, targetApprovalRevision: approved.approvalRevision
+      });
+      const readRetest = async () => {
+        const response = await api.get(`/api/cycles/${retestRunId}/executions`);
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const fresh = await readRetest();
+      expect(fresh).toHaveLength(1);
+      expect(fresh[0]).toMatchObject({ id: retained.executionId, status: "Untested", executedAt: null, evidenceCount: 0 });
+      expect(fresh[0].id).not.toBe(executionId);
+      expect(fresh[0].actualResult).toBeFalsy();
+
+      // The retest records a new human observation in the disposable fixture.
+      const corrected = "Controlled manual observation: exactly one current approved link";
+      expect((await api.patch(`/api/cycles/${retestRunId}/executions/${fresh[0].id}`, {
+        data: { status: "Passed", actualResult: corrected }
+      })).ok()).toBeTruthy();
+      expect(await readRetest()).toEqual([expect.objectContaining({
+        id: retained.executionId, status: "Passed", actualResult: corrected, evidenceCount: 0
+      })]);
+      const after = await readAutomation();
+      expect(after.summary).toEqual(first.summary);
+      expect(after.results).toEqual(first.results);
+      expect(await preview()).toEqual(basis);
+      const downloaded = await api.get(`/api/cycles/${sourceRunId}/executions/${executionId}/attachments/${evidenceId}/download`);
+      expect(downloaded.status()).toBe(200);
+      expect(await downloaded.body()).toEqual(PNG_1PX);
+      const target = await api.get(`/api/cycles/${retestRunId}`);
+      expect(target.status()).toBe(200);
+      expect(await target.json()).toMatchObject({ source: "manual", retestSourceCycleId: sourceRunId,
+        buildVersion: reviewedIntent.buildVersion, retestManifest: receipt.manifest });
+      const linkedRetests = await api.get(`/api/cycles/${sourceRunId}/retests`);
+      expect(linkedRetests.status()).toBe(200);
+      expect((await linkedRetests.json()).map((item: { id: string }) => item.id)).toEqual([retestRunId]);
+    } catch (error) {
+      primaryFailed = true;
+      throw error;
+    } finally {
+      // Clean only IDs returned for this fixture, in dependent-first order.
+      // An unsuccessful cleanup must not hide the original test failure.
+      const endpoints = [
+        bugId && `/api/bugs/${bugId}`,
+        retestRunId && `/api/cycles/${retestRunId}`,
+        sourceRunId && `/api/cycles/${sourceRunId}`,
+        caseId && `${project}/testcases/${caseId}`,
+      ].filter((endpoint): endpoint is string => Boolean(endpoint));
+      const failures: string[] = [];
+      for (const endpoint of endpoints) {
+        try {
+          const removed = await api.delete(endpoint, { failOnStatusCode: false });
+          if (!removed.ok()) failures.push(endpoint + ": delete HTTP " + removed.status());
+          else {
+            const readback = await api.get(endpoint, { failOnStatusCode: false });
+            if (readback.status() !== 404) failures.push(endpoint + ": readback HTTP " + readback.status());
+          }
+        } catch { failures.push(endpoint + ": cleanup request failed"); }
+      }
+      if (failures.length) {
+        const description = failures.join("; ");
+        test.info().annotations.push({ type: "fixture-cleanup-failure", description });
+        if (!primaryFailed) throw new Error("Automation retest fixture cleanup incomplete: " + description);
+      }
     }
   });
 
