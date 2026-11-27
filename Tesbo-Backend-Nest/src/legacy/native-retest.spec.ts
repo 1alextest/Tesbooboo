@@ -19,6 +19,18 @@ describe("native retest exact intent", () => {
     expect(retestDigest({ ...a, definition: "approved-B" })).not.toBe(retestDigest(a));
     expect(retestDigest({ ...a, result: "Passed" })).not.toBe(retestDigest(a));
   });
+  it("preserves legacy manual intent and refuses a requested automation mode or unrecognized binding", () => {
+    const input = { requestKey: randomUUID(), executionIds: [first], expectedPreviewDigest: "a".repeat(64), name: "Manual verification" };
+    const legacy = retestCreateInput(input);
+    expect(retestCreateInput({ ...input, executionMode: "manual" })).toEqual(legacy);
+    expect(retestDigest(retestCreateInput({ ...input, executionMode: "manual" }))).toBe(retestDigest(legacy));
+    for (const executionMode of ["automation", "automated", "playwright", null, false, {}]) {
+      expect(() => retestCreateInput({ ...input, executionMode })).toThrow("Automated retest execution is not available");
+    }
+    for (const extra of [{ automationBinding: {} }, { runnerTokenId: first }, { executionMode: "manual", automation: {} }]) {
+      expect(() => retestCreateInput({ ...input, ...extra })).toThrow("unsupported fields");
+    }
+  });
   it("requires exact reviewed preview and explicit useful name while keeping unknown build truthful", () => {
     const input = { requestKey: randomUUID(), executionIds: [first], expectedPreviewDigest: "a".repeat(64), name: "Manual verification" };
     expect(retestCreateInput(input)).toMatchObject({ name: "Manual verification", buildVersion: null, environment: null });
