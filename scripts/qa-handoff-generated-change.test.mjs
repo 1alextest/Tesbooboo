@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { writeFile, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { generateCoverageSpec, SUPPORTED_ORACLE, validateHandoffPacket, writeGeneratedChange } from './qa-handoff-generated-change.mjs';
@@ -30,8 +30,9 @@ function packet() {
     native: {
       projectId: PROJECT, taskId: TASK, receiptId: RECEIPT, proposalRevision: PROPOSAL, selectedIndex: 1,
       requirementId: REQUIREMENT, requirementVersionId: REQUIREMENT_VERSION, linkId: LINK,
-      testcaseId: CASE, testcaseRevision: REVISION, testcaseApprovalRevision: APPROVAL, criterionKeys: ['AC-1'],
-      criteria: [{ key: 'AC-1', text: 'The requirement lists one linked case' }],
+      testcaseId: CASE, testcaseRevision: REVISION, testcaseApprovalRevision: APPROVAL, criterionKeys: ['AC-1', 'AC-2'],
+      criteria: [{ key: 'AC-1', text: 'The requirement lists one linked case' },
+        { key: 'AC-2', text: 'The reviewed case is linked to both criteria' }],
       testcase: {
         id: CASE, externalId: 'TES-JOURNEY-1', title: 'Approved journey case',
         steps: [{ stepNumber: 1, action: 'Apply the reviewed bundle', expectedResult: 'One case is linked' }],
@@ -60,14 +61,16 @@ function coverage(cases) {
 }
 
 const caseObject = {
-  linkId: LINK, testcaseId: CASE, requirementVersionId: REQUIREMENT_VERSION, criterionKeys: ['AC-1'],
+  linkId: LINK, testcaseId: CASE, requirementVersionId: REQUIREMENT_VERSION, criterionKeys: ['AC-1', 'AC-2'],
   testcaseRevision: REVISION, testcaseApprovalRevision: APPROVAL, approved: true,
 };
 
 async function runSpec(directory, coveragePath) {
   const report = join(directory, 'report.json');
+  // Each invocation must produce its own report, not reuse an earlier result.
+  await rm(report, { force: true });
   try {
-    await execFileAsync(process.execPath, [playwrightCli, 'test', 'tests/journey.spec.mjs', '--config=playwright.config.mjs'], {
+    const output = await execFileAsync(process.execPath, [playwrightCli, 'test', 'tests/journey.spec.mjs', '--config=playwright.config.mjs'], {
       cwd: directory, timeout: 60_000,
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([key]) =>
@@ -77,9 +80,10 @@ async function runSpec(directory, coveragePath) {
         TESBO_JOURNEY_TOKEN: 'test-token', TESBO_JOURNEY_EVIDENCE_PATH: join(directory, 'evidence.json')
       },
     });
-    return { ok: true, report: JSON.parse(await readFile(report, 'utf8')) };
-  } catch {
-    return { ok: false, report: JSON.parse(await readFile(report, 'utf8')) };
+    return { ok: true, report: JSON.parse(await readFile(report, 'utf8')), output: output.stdout + output.stderr };
+  } catch (error) {
+    return { ok: false, report: JSON.parse(await readFile(report, 'utf8')),
+      output: String(error.stdout ?? '') + String(error.stderr ?? '') };
   }
 }
 
@@ -113,15 +117,21 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
   assert.match(spec, /testcaseApprovalRevision/u);
   assert.match(spec, /approved-handoff-evidence\.json/u);
 
+  const privateCanary = randomUUID();
+  let coverageReads = 0;
   const server = createServer((req, res) => {
+    coverageReads++;
     if (req.url === '/private-error') {
       res.writeHead(503, { 'content-type': 'text/plain' });
-      res.end('PRIVATE_FIXTURE_CANARY');
+      res.end(privateCanary);
       return;
     }
     res.writeHead(200, { 'content-type': 'application/json' });
     if (req.url === '/faulty') res.end(coverage([caseObject, { ...caseObject }]));
     else if (req.url === '/different-link-id') res.end(coverage([caseObject, { ...caseObject, linkId: '00000000-0000-4000-8000-000000000009' }]));
+    else if (req.url === '/reversed-only') res.end(coverage([{ ...caseObject, criterionKeys: ['AC-2', 'AC-1'] }]));
+    else if (req.url === '/reversed-neighbor') res.end(coverage([caseObject, { ...caseObject,
+      linkId: '00000000-0000-4000-8000-000000000009', criterionKeys: ['AC-2', 'AC-1'] }]));
     else if (req.url === '/wrong-link-id') res.end(coverage([{ ...caseObject, linkId: '00000000-0000-4000-8000-000000000009' }]));
     else if (req.url === '/other-case') res.end(coverage([caseObject, { ...caseObject, testcaseId: '00000000-0000-4000-8000-000000000008' }]));
     else if (req.url === '/different-criteria') res.end(coverage([caseObject, { ...caseObject, criterionKeys: ['AC-2'] }]));
@@ -137,7 +147,9 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
     const generated = writeGeneratedChange(p, directory);
     await mkdir(dirname(generated.path), { recursive: true });
     await writeFile(generated.path, generated.content);
-    await writeFile(join(directory, 'evidence.json'), JSON.stringify({ selectionDigest: p.selectionDigest, target: p.target }));
+    const identity = { selectionDigest: p.selectionDigest, target: p.target };
+    const evidencePath = join(directory, 'evidence.json');
+    await writeFile(evidencePath, JSON.stringify(identity));
     await writeFile(join(directory, 'playwright.config.mjs'), `import { defineConfig } from '@playwright/test';
 export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [['list'], ['json', { outputFile: 'report.json' }]] });
 `);
@@ -150,24 +162,61 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
     assert.equal(faulty.report.stats.unexpected, 1);
     assert.equal(faulty.report.stats.expected, 0);
     assert.match(JSON.stringify(faulty.report), /exactly one current approved link/u);
-    for (const scenario of ['different-link-id', 'wrong-link-id', 'wrong-requirement', 'wrong-approved-version', 'wrong-revision', 'private-error']) {
+    for (const scenario of ['different-link-id', 'wrong-link-id', 'wrong-requirement', 'wrong-approved-version', 'wrong-revision', 'reversed-only', 'private-error']) {
       const candidate = await runSpec(directory, `http://127.0.0.1:${port}/${scenario}`);
       assert.equal(candidate.ok, false, `${scenario} must fail its observed oracle`);
       assert.equal(candidate.report.stats.unexpected, 1);
       assert.equal(candidate.report.stats.expected, 0);
       assert.match(JSON.stringify(candidate.report.suites), /approved-handoff-evidence\.json/u,
         'failed attempts must retain validated packet-identity evidence');
-      // Inspect the test result surface, not config metadata: CI embeds the PR diff in the report,
-      // and that diff contains this fixture's canary string.
-      assert.doesNotMatch(JSON.stringify(candidate.report.suites), /PRIVATE_FIXTURE_CANARY/u,
-        'a rejected coverage API body must not become public test evidence');
+      // A runtime marker cannot be present in Git-diff metadata. Check the
+      // entire actual report and captured child output without printing either.
+      assert.equal(JSON.stringify(candidate.report).includes(privateCanary), false,
+        'a rejected coverage API body must not appear in the report');
+      assert.equal(candidate.output.includes(privateCanary), false,
+        'a rejected coverage API body must not appear in child output');
     }
-    for (const scenario of ['other-case', 'different-criteria']) {
+    for (const scenario of ['other-case', 'different-criteria', 'reversed-neighbor']) {
       const candidate = await runSpec(directory, `http://127.0.0.1:${port}/${scenario}`);
       assert.equal(candidate.ok, true, `${scenario} is a legitimate unrelated link and must not be blocked`);
       assert.equal(candidate.report.stats.expected, 1);
       assert.equal(candidate.report.stats.unexpected, 0);
     }
+
+    // Reject an unreviewed extra evidence field before any coverage read or
+    // packet attachment. A rejected input must not become an assertion diagnostic.
+    const readsBefore = coverageReads;
+    await writeFile(evidencePath, JSON.stringify({ ...identity, unreviewed: privateCanary }));
+    const unbounded = await runSpec(directory, `http://127.0.0.1:${port}/good`);
+    assert.equal(unbounded.ok, false);
+    assert.equal(unbounded.report.stats.unexpected, 1);
+    assert.equal(coverageReads, readsBefore);
+    assert.match(JSON.stringify(unbounded.report.suites), /Packet identity evidence is unavailable or does not match the bounded payload/u);
+    assert.equal(JSON.stringify(unbounded.report).includes(privateCanary), false);
+    assert.equal(unbounded.output.includes(privateCanary), false);
+    const attachmentsOf = report => {
+      const visit = suite => [
+        ...(suite.specs ?? []).flatMap(item => (item.tests ?? []).flatMap(item =>
+          (item.results ?? []).flatMap(item => item.attachments ?? []))),
+        ...(suite.suites ?? []).flatMap(visit),
+      ];
+      return (report.suites ?? []).flatMap(visit).filter(item => item.name === 'approved-handoff-evidence.json');
+    };
+    assert.equal(attachmentsOf(unbounded.report).length, 0);
+
+    // Formatting is not authority. A parsed value matching the exact bounded
+    // identity may be normalized, but raw bytes are never forwarded. This
+    // input includes a shadowed JSON field with an otherwise unreviewed value.
+    await writeFile(evidencePath, '{"selectionDigest":' + JSON.stringify(privateCanary) + ',' + JSON.stringify(identity).slice(1));
+    const normalized = await runSpec(directory, `http://127.0.0.1:${port}/good`);
+    assert.equal(normalized.ok, true);
+    assert.equal(normalized.report.stats.expected, 1);
+    const attachments = attachmentsOf(normalized.report);
+    assert.equal(attachments.length, 1);
+    assert.equal(attachments[0].contentType, 'application/json');
+    assert.equal(await readFile(resolve(directory, attachments[0].path), 'utf8'), JSON.stringify(identity));
+    assert.equal(JSON.stringify(normalized.report).includes(privateCanary), false);
+    assert.equal(normalized.output.includes(privateCanary), false);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
