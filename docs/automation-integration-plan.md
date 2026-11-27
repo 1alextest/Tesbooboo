@@ -352,3 +352,7 @@ an uncalled client, and was not part of what was approved.
 return empty/zero payloads, nothing in the frontend or SDK consumes them, and the e2e contract in
 `api/tail.spec.ts` pins their shape. Removing them is a reporter-version compatibility decision for
 the automation owner, not cleanup an agent should perform unilaterally.
+
+## Governed native retest compatibility (27 November 2026)
+
+The native reviewed retest owner is [the existing Run receipt contract](specs/agent-synchronized-engineering/reviews/2026-11-20-native-qa/README.md#governed-automated-retest--proposed-extension-27-november-2026). Generic SDK create/reuse, result ingestion, evidence and close must not implicitly acquire a native retest by ID or external ID. The current correction checks the persisted source relationship before effects and again under the Run lock; scoped GET remains available. Existing ordinary automation Runs and native manual retest operations retain their contracts. A later explicit automated mode must bind the exact reviewed occurrence and authorized runner in that native owner, not create a parallel Run or approval system. Candidate tests and independent acceptance are pending.
