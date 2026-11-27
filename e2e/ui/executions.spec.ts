@@ -1236,9 +1236,16 @@ test.describe("inline status change is optimistic", () => {
       await select.selectOption("Blocked");
       await expect(select).toHaveValue("Blocked");
 
+      // Register the response listener before releasing the intercepted PATCH. The optimistic
+      // select value alone cannot establish that persistence has completed.
+      const saved = page.waitForResponse((response) =>
+        response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname.startsWith(`/api/cycles/${cycle.id}/executions/`) &&
+        /\/executions\/[0-9a-f-]{36}$/.test(new URL(response.url()).pathname),
+      );
       releaseResponse?.();
-      // Still "Blocked" once the (deliberately delayed) response actually lands — the optimistic
-      // value wasn't a flash that reverted once the real round trip caught up.
+      const response = await saved;
+      expect(response.ok()).toBe(true);
       await expect(select).toHaveValue("Blocked");
 
       const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });

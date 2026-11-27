@@ -4,6 +4,7 @@ import { AuthController } from "./auth.controller";
 import { ActivityMiddleware } from "./activity.middleware";
 import { AuthMiddleware } from "./auth.middleware";
 import { AuthService } from "./auth.service";
+import { McpOAuthServer } from "./mcp-oauth-server";
 import { EmailOutboxController } from "./email-outbox.controller";
 import { EmailOutboxService } from "./email-outbox.service";
 import { EmailService } from "./email.service";
@@ -28,10 +29,11 @@ import { WelcomeEmailModule } from "../welcome-email/welcome-email.module";
     PasswordService,
     PasswordResetService,
     ApiTokenService,
+    McpOAuthServer,
     ActivityMiddleware,
     UserActivityService
   ],
-  exports: [AuthService, OtpService, PasswordService, PasswordResetService, AuthMiddleware, EmailService, ApiTokenService]
+  exports: [AuthService, OtpService, PasswordService, PasswordResetService, AuthMiddleware, EmailService, ApiTokenService, McpOAuthServer]
 })
 export class AuthModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

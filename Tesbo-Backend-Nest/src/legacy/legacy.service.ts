@@ -18571,7 +18571,7 @@ export class LegacyService implements OnModuleInit {
     if (principal.transport !== "mcp") return;
     let access;
     try { access = readMcpAccess(authority.settings); } catch { access = null; }
-    const grant = access?.clients.find(client => client.tokenId === principal.tokenId!.toLowerCase());
+    const grant = access?.clients.find(client => "tokenId" in client && client.tokenId === principal.tokenId!.toLowerCase());
     if (!access?.enabled || !grant?.scopes.includes("write") || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now() ||
         grant.allowedTools && !grant.allowedTools.includes(toolName)) {
       throw new ForbiddenException({ error: "Current project consent for this MCP proposal client is required" });
