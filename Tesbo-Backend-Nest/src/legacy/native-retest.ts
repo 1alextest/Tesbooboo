@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { createHash } from "node:crypto";
 
 export const MAX_RETEST_EXECUTIONS = 100;
@@ -51,6 +51,20 @@ export function retestCreateInput(value: unknown) {
     throw new BadRequestException({ error: "A retest request must be an object" });
   }
   const body = value as Record<string, unknown>;
+  // An explicit execution intent must not be silently normalized into a
+  // manual Run. This native writer currently owns human/manual retests only.
+  // Preserve the exact normalized v1 manual input (and historical digests).
+  if (Object.hasOwn(body, "executionMode") && body.executionMode !== "manual") {
+    throw new ConflictException({
+      code: "RETEST_AUTOMATION_UNAVAILABLE",
+      error: "Automated retest execution is not available through this manual retest command. Review the intended execution mode before creating a Run."
+    });
+  }
+  const allowed = new Set(["requestKey", "executionIds", "expectedPreviewDigest", "name",
+    "environment", "buildVersion", "description", "executionMode"]);
+  if (Object.keys(body).some(key => !allowed.has(key))) {
+    throw new BadRequestException({ error: "The retest request contains unsupported fields. Review the current request contract before creating or cancelling a retest." });
+  }
   const requestKey = retestRequestKey(body.requestKey);
   if (typeof body.expectedPreviewDigest !== "string" || !/^[a-f0-9]{64}$/.test(body.expectedPreviewDigest)) {
     throw new BadRequestException({ error: "expectedPreviewDigest must be the digest from the reviewed retest preview" });

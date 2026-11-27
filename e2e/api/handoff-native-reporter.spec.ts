@@ -353,9 +353,10 @@ async function governedPacket(human: APIRequestContext, projectId: string, track
       }
     });
     expect(confirmations).toBe(1);
-    return { packet, currentCase, requirementId, requirementVersionId, linkId, coveragePath, readCoverage };
-  } finally {
+    return { packet, currentCase, requirementId, requirementVersionId, linkId, coveragePath, readCoverage, fixture };
+  } catch (error) {
     await fixture.cleanup();
+    throw error;
   }
 }
 
@@ -715,13 +716,74 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean, pa
       });
       expect(source.sourceEvidence).toEqual(expect.arrayContaining([expect.objectContaining({ id: defectRun.evidenceId })]));
       expect(source.sourceBugLinks).toEqual([expect.objectContaining({ bugId })]);
-      const retest = await human.post("/api/cycles/" + defectRun.runId + "/retests", { data: {
+      // Reuse the approved native failure and its pinned investigation checkout.
+      // Preparation is a read-only decision aid, not execution authority.
+      const { prepareNativeRetestAutomation, createHandoffRequest } = await import(path.join(__dirname, "../../scripts/qa-approved-handoff.mjs"));
+      const { fixture } = nativePacket;
+      const retestUrl = "/api/cycles/" + defectRun.runId + "/retests";
+      const readRetests = async () => {
+        const response = await human.get(retestUrl);
+        expect(response.status()).toBe(200);
+        return response.json();
+      };
+      const beforePreparation = await readRetests();
+      const basis = { ...fixture.selected, projectId, sourceCycleId: defectRun.runId,
+        sourceExecutionId: defectRun.executionId };
+      let confirmations = 0;
+      const prepared = await prepareNativeRetestAutomation(basis, {
+        request: createHandoffRequest(env.apiBaseUrl, human, "retest"),
+        checkTarget: fixture.checkTarget,
+        confirm: async (packet: any, digest: string, comparison: any) => {
+          confirmations++;
+          expect(packet).toMatchObject({
+            purpose: "prepare_native_retest_automation", executionAuthorized: false,
+            native: { projectId, sourceCycleId: defectRun.runId, sourceExecutionId: defectRun.executionId,
+              sourceCycleItemId: source.sourceCycleItemId, sourcePreviewDigest: reviewed.previewDigest,
+              targetApprovalRevision: currentCase.approvalRevision,
+              testcase: { id: testcaseId, externalId: currentCase.externalId,
+                automationRepo: originRepo, automationPath: nativePacket!.packet.target.path }
+            },
+            target: nativePacket!.packet.target
+          });
+          expect(packet.native.sourceEvidenceIds).toContain(defectRun.evidenceId);
+          expect(packet.native.sourceBugLinks).toEqual([expect.objectContaining({ bugId, executionId: defectRun.executionId })]);
+          expect(comparison.sourceDefinition).toEqual(source.sourceDefinition);
+          expect(comparison.currentReviewedDefinition).toEqual(source.currentCase.reviewedContent);
+          expect(digest).toBe(createHash("sha256").update(JSON.stringify(packet)).digest("hex"));
+          return true;
+        }
+      });
+      expect(confirmations).toBe(1);
+      expect(prepared.executionAuthorized).toBe(false);
+      expect(prepared.selectionDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(await readRetests()).toEqual(beforePreparation);
+      expect((await readFailure()).results).toEqual(original.results);
+
+      const manualIntent = {
         requestKey: randomUUID(), executionIds: [defectRun.executionId], expectedPreviewDigest: reviewed.previewDigest,
         name: "Reviewed manual retest " + randomUUID(), environment: "controlled-fixture"
-      } });
+      };
+      const refused = await human.post(retestUrl, {
+        data: { ...manualIntent, executionMode: "automation" }, failOnStatusCode: false
+      });
+      expect(refused.status()).toBe(409);
+      expect(await refused.json()).toMatchObject({ code: "RETEST_AUTOMATION_UNAVAILABLE" });
+      const unknownBinding = await human.post(retestUrl, {
+        data: { ...manualIntent, automationBinding: { selectionDigest: prepared.selectionDigest } }, failOnStatusCode: false
+      });
+      expect(unknownBinding.status()).toBe(400);
+      expect(await readRetests()).toEqual(beforePreparation);
+      const outcome = await human.get(retestUrl + "/requests/" + manualIntent.requestKey, { failOnStatusCode: false });
+      expect(outcome.status()).toBe(404);
+      const retest = await human.post(retestUrl, { data: { ...manualIntent, executionMode: "manual" } });
       expect(retest.status()).toBe(201);
       const receipt = await retest.json();
       manualRetestId = receipt.cycleId as string;
+      // Explicit manual intent has the same v1 identity as omitting mode.
+      const replay = await human.post(retestUrl, { data: manualIntent });
+      expect(replay.ok()).toBe(true);
+      expect(await replay.json()).toMatchObject({ cycleId: manualRetestId, requestDigest: receipt.requestDigest,
+        manifestDigest: receipt.manifestDigest, replayed: true });
       expect(receipt.manifest.occurrences).toHaveLength(1);
       expect(receipt.manifest.occurrences[0]).toMatchObject(source);
       const readManual = async () => {
@@ -860,6 +922,13 @@ async function runHandoffJourney(human: APIRequestContext, governed: boolean, pa
         if (!removed.ok()) return "delete HTTP " + removed.status();
         const readback = await human.get(endpoint, { failOnStatusCode: false });
         return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
+      } });
+    }
+    if (nativePacket) {
+      const fixture = nativePacket.fixture;
+      steps.push({ label: "pinned Git investigation fixture", action: async () => {
+        await fixture.cleanup();
+        return fs.existsSync(fixture.repo) ? "fixture checkout still exists" : undefined;
       } });
     }
     steps.push({ label: "loopback server", action: async () => {
