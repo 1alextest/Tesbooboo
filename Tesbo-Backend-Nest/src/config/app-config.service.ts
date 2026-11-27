@@ -46,8 +46,13 @@ export class AppConfigService {
   // Explicit execution scope for the KB transcription restart sweep. This is intentionally separate
   // from the graph QA flag: either may be disabled without changing the other. Unset keeps the
   // existing automatic global recovery.
+  private readonly kbTranscriptionRecoveryModeRaw = this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_MODE");
   readonly kbTranscriptionRecoveryMode: KbTranscriptionRecoveryMode =
-    resolveKbTranscriptionRecoveryMode(this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_MODE"));
+    resolveKbTranscriptionRecoveryMode(this.kbTranscriptionRecoveryModeRaw);
+  // Distinguishes a deliberate off from a typo that resolved closed; the former is silent, the
+  // latter must be diagnosable.
+  readonly kbTranscriptionRecoveryModeInvalid = Boolean(this.kbTranscriptionRecoveryModeRaw) &&
+    !["off", "project", "global"].includes(this.kbTranscriptionRecoveryModeRaw.toLowerCase());
   readonly kbTranscriptionRecoveryProjectId =
     this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID") || null;
   readonly databaseUrl = this.normalizeDatabaseUrl(this.string("DATABASE_URL", "postgresql://localhost:5432/tesbo"));

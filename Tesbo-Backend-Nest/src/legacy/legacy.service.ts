@@ -2556,9 +2556,16 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
    */
   private startKnowledgeTranscriptionRecovery(): void {
     if (this.kbTranscriptionSweepTimer) return;
-    const mode = this.config.kbTranscriptionRecoveryMode ?? "global";
+    if (this.config.kbTranscriptionRecoveryModeInvalid) {
+      this.logger.warn("KB transcription recovery mode is not off, project or global; background recovery is disabled");
+      return;
+    }
+    const mode = this.config.kbTranscriptionRecoveryMode;
     if (mode === "off") return;
-    if (mode !== "project" && mode !== "global") return;
+    if (mode !== "project" && mode !== "global") {
+      this.logger.warn("KB transcription recovery mode is unavailable; background recovery is disabled");
+      return;
+    }
     let projectId: string | undefined;
     if (mode === "project") {
       const configured = this.config.kbTranscriptionRecoveryProjectId;
@@ -2570,6 +2577,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       projectId = configured ?? undefined;
+    } else if (this.config.kbTranscriptionRecoveryProjectId) {
+      // A project id without project mode is almost certainly a mistaken attempt to narrow scope.
+      this.logger.warn("TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID is ignored because recovery mode is global");
     }
     const run = () => {
       void this.resumeInterruptedKnowledgeTranscriptions(projectId).catch((err) => {

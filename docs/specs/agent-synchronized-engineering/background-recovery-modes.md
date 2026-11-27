@@ -100,16 +100,6 @@ process. The applicable executable coverage is therefore the processor/module re
 plus the existing migrated-PostgreSQL project-filter test. A deployed mode switch remains unexecuted
 and is a rollout step, not something this PR claims to have tested end to end.
 
-## Filename concurrency (upload race covered; broader invariant separate)
-
-The upload work had left displayed-name allocation outside the insert lock, and no open PR owned it.
-A bounded correction now allocates the name inside the upload transaction after the project advisory
-lock, preserving deliberate same-name uploads under a new request key. The concurrency regression is
-KBF-A-87. Move, rename and restore still do not reallocate a name, so the broader folder-wide
-uniqueness invariant is not claimed as closed; the storage layer, delete retries and historical
-repair are unchanged. See §13.1 of
-[the Work Package B design](work-package-b-governed-manuals-policies-design.md).
-
 ## Native coverage record
 
 A native search found 35 existing cases in the authorized Tesbo project, none covering graph background
@@ -126,8 +116,9 @@ Draft if a human later applies it, and no PASS/FAIL evidence is inferred from th
 
 ## Coordination
 
-- **#301** owns `knowledge-document-writes.db.spec.ts` destination/race coverage; this work does not
-  edit it.
-- **#302** owns `integration-sync.processor.ts` quota-accounting behavior; this work does not edit it.
+- **#301/#302** are merged. The separate KB recovery PR extends
+  `knowledge-document-writes.db.spec.ts` only with transcription-recovery cases; it does not change
+  destination/race or integration-sync behavior.
 - **#303** owns the automation handoff; it is not duplicated.
-- **#292/#298** own runtime authorization corrections; no OAuth/security surface is changed.
+- **#292/#298** own runtime authorization corrections; no OAuth/security surface is changed and
+  #292's migration reconciliation remains with its owner.

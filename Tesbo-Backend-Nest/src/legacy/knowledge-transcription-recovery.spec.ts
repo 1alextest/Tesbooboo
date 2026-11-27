@@ -1,3 +1,4 @@
+import { resolveKbTranscriptionRecoveryMode } from "../config/app-config.service";
 import { makeLegacy } from "./test-helpers/legacy-service.fixture";
 
 const PROJECT = "00000000-0000-4000-8000-000000000001";
@@ -20,8 +21,8 @@ describe("KB transcription background recovery scheduling", () => {
     jest.restoreAllMocks();
   });
 
-  it("keeps automatic global startup dispatch and the five-minute sweep when unset", async () => {
-    const { svc, sweep } = service({});
+  it("keeps automatic global startup dispatch and the five-minute sweep for unset mode", async () => {
+    const { svc, sweep } = service({ kbTranscriptionRecoveryMode: resolveKbTranscriptionRecoveryMode(undefined) });
     await svc.onModuleInit();
     expect(sweep).toHaveBeenCalledTimes(1);
     expect(sweep).toHaveBeenLastCalledWith(undefined);
@@ -77,6 +78,28 @@ describe("KB transcription background recovery scheduling", () => {
     jest.advanceTimersByTime(10 * 60 * 1000);
     expect(sweep).not.toHaveBeenCalled();
     expect(jest.getTimerCount()).toBe(0);
+    svc.onModuleDestroy();
+  });
+
+  it("fails closed when the configuration marks an explicit mode invalid", async () => {
+    const { svc, sweep } = service({
+      kbTranscriptionRecoveryMode: "global",
+      kbTranscriptionRecoveryModeInvalid: true
+    });
+    await svc.onModuleInit();
+    jest.advanceTimersByTime(10 * 60 * 1000);
+    expect(sweep).not.toHaveBeenCalled();
+    expect(jest.getTimerCount()).toBe(0);
+    svc.onModuleDestroy();
+  });
+
+  it("does not treat a project id as a scope unless project mode is selected", async () => {
+    const { svc, sweep } = service({
+      kbTranscriptionRecoveryMode: "global",
+      kbTranscriptionRecoveryProjectId: PROJECT
+    });
+    await svc.onModuleInit();
+    expect(sweep).toHaveBeenCalledWith(undefined);
     svc.onModuleDestroy();
   });
 

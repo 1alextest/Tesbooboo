@@ -27,12 +27,17 @@ No queue, storage object, transcription provider or duplicate recovery ledger is
   A missing or invalid UUID fails closed with a warning and registers nothing — it never widens to
   global.
 - Explicit `global` retains the existing all-project sweep.
-- Any other explicit value fails closed to no registration.
+- A non-empty unrecognized value fails closed to no registration and is logged. A blank/whitespace
+  value is treated as unset (global), matching the existing optional-setting convention.
+- Setting only the project id while mode is unset/global is ignored with a warning; it is not treated
+  as an implicit narrowing request.
 - This flag is independent of `TESBO_GRAPH_QA_RECOVERY_*`. Changing one does not change the other.
 
 **Request-triggered upload transcription is not controlled by this flag.** An authorized upload still
 calls `transcribeKnowledgeFile` for its own file; disabling background recovery only stops the
-restart/periodic sweep. Existing upload idempotency and replay are unchanged.
+restart/periodic sweep. Existing upload idempotency and replay are unchanged. The separate
+`RagIngestionService.resumeInterruptedEmbeddings` startup backfill is embedding-only and remains
+unchanged; it cannot retranscribe a pending file and is not a second transcription sweep.
 
 ## What the sweep keeps
 
@@ -46,8 +51,10 @@ argument passed to the existing sweep.
 
 1. **Review only now.** No environment variable is changed and production continues with the
    existing unset/global behaviour.
-2. **Development/e2e `project`:** set the mode and a disposable project UUID in that environment;
-   verify startup, the five-minute summary/heartbeat and that no other project is claimed or charged.
+2. **Development/e2e `project`:** set the mode and a disposable project UUID in that environment.
+   Verify the one-time mode/register log, a claim/ready transition for that project, and that no other
+   project is claimed, byte-read or charged. There is no per-run success summary; the lease heartbeat
+   is database state, not a log line.
 3. **Production:** retain unset/global (current behaviour) unless the owner explicitly approves a
    scope change. Setting `project` in production would deliberately stop automatic recovery for all
    other projects; setting `off` would stop background recovery entirely while leaving upload
@@ -58,10 +65,13 @@ argument passed to the existing sweep.
 
 ## Verification
 
-- Unit lifecycle tests exercise unset/global, off, project, invalid project and duplicate startup;
-  they assert startup dispatch, the five-minute dispatch scope, and timer cleanup on shutdown.
+- Unit lifecycle tests exercise unset/global, off, project, invalid mode/project and duplicate
+  startup; they assert startup dispatch, the five-minute dispatch scope, and timer cleanup on
+  shutdown.
 - The migrated-PostgreSQL suite uses two disposable projects and proves a project-scoped sweep
-  neither claims, reads bytes for, nor calls the provider for the other project.
+  neither claims, reads bytes for, nor calls the provider for the other project. A second case proves
+  the no-filter global sweep still reaches both projects, and an off-mode case proves an upload still
+  dispatches its own transcription.
 - Existing transcription recovery tests continue to cover lease takeover, fencing, transient reads,
   missing objects, archived/deleted exclusion and embedding enqueue.
 - Not proven here: a deployed timer under an actual non-default mode, production approval, alerting
