@@ -41,6 +41,10 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   const targetRevision = "c".repeat(40);
   let currentCase: any;
   const server = createServer((req, res) => {
+    if (req.headers.authorization !== "Bearer disposable-loopback-control") {
+      res.writeHead(401).end();
+      return;
+    }
     const row = {
       linkId, testcaseId, requirementVersionId, criterionKeys: ["AC-1"], approved: true,
       testcaseRevision: currentCase?.editRevision, testcaseApprovalRevision: currentCase?.approvalRevision,
