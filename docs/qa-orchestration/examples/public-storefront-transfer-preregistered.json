@@ -1,0 +1,36 @@
+{
+  "study": "public-source test-design transfer comparison; source-exposed calibration, not native Zyra or a held-out defect-discovery trial",
+  "revision": "d5cd655fa8a974f4ddb6fde2868586e0084211d2",
+  "scope": [
+    "src/pages/CheckOutStepTwo.jsx",
+    "src/utils/orderCalculations.js",
+    "src/utils/InventoryData.js",
+    "src/utils/shopping-cart.js",
+    "src/components/CartItem.jsx"
+  ],
+  "rubric": {
+    "totals": {
+      "2": "Concrete two-item or other independent numerical oracle; compare displayed individual prices to subtotal, tax (8%) and grand total; exercise problem and ordinary persona or give an explicit ordinary positive control.",
+      "1": "Identifies incorrect totals or double pricing and proposes some observable check, but incomplete calculation/control.",
+      "0": "Omitted or wrong expected totals."
+    },
+    "finish": {
+      "2": "Complete checkout with known nonempty cart; independently revisit or refresh cart and check empty persisted contents/badge while retaining order evidence; compare problem vs ordinary persona or include ordinary positive control.",
+      "1": "Identifies cart not clearing or checks cart badge after completion, without independent durable effect or ordinary control.",
+      "0": "Omitted or expects retained cart as correct ordinary outcome."
+    },
+    "identity": {
+      "2": "Click a known cart item link, verify actual item identity/name/price or identifier against original and an ordinary control; avoid relying only on navigation success.",
+      "1": "Identifies misdirected link or checks selected item but lacks discriminating identity/control.",
+      "0": "Omitted or accepts the wrong identity."
+    }
+  },
+  "limits": "Score first response only. 0-2 per obligation; report missing separately; no advancement threshold or inference from one pair. Source comments explicitly expose seeded behavior, so do not interpret score as hidden defect recall. Reviewer knows source and treatment; no independent blind grading. Record actual tool scope and access uncertainty.",
+  "model": "same default Browser Use model (explicit selection not confirmed if service overrides)",
+  "maxCostUSDPerArm": 0.25,
+  "timeoutSecondsPerArm": 80,
+  "subjects": {
+    "ordinary": "Public source research only. Open and inspect exactly these five pinned public GitHub source files (no other repository pages, tests, issues, history, or external search).\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/pages/CheckOutStepTwo.jsx\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/utils/orderCalculations.js\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/utils/InventoryData.js\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/utils/shopping-cart.js\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/components/CartItem.jsx\nTask: prepare up to three high-value release QA test scenarios for the storefront cart and checkout overview/finish behavior, based on the source. For each give the risk, actor/setup, concrete actions, expected observations, exact source path and function or expression, and any missing evidence. Distinguish proposed tests from executed observations. Do not log in or run the live storefront. Use at most 450 narrative words; return your first answer. If a source cannot be opened, report that limitation.",
+    "candidate": "Public source research only. Open and inspect exactly these five pinned public GitHub source files (no other repository pages, tests, issues, history, or external search).\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/pages/CheckOutStepTwo.jsx\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/utils/orderCalculations.js\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/utils/InventoryData.js\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/utils/shopping-cart.js\nhttps://github.com/saucelabs/sample-app-web/blob/d5cd655fa8a974f4ddb6fde2868586e0084211d2/src/components/CartItem.jsx\nTask: prepare up to three high-value release QA test scenarios for the storefront cart and checkout overview/finish behavior, based on the source. For each give the risk, actor/setup, concrete actions, expected observations, exact source path and function or expression, and any missing evidence. Distinguish proposed tests from executed observations. Do not log in or run the live storefront. Use at most 450 narrative words; return your first answer. If a source cannot be opened, report that limitation.\n\nAdditional investigation method: trace the user goal through state transitions and downstream effects. Ask how an apparently correct visible result could coexist with an incorrect underlying result; choose an independent observation that discriminates the alternatives. Preserve the exact subject across transitions, include a legitimate positive or unchanged neighbor, and distinguish unknown intent from an established expectation."
+  }
+}
