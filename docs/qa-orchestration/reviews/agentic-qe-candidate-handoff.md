@@ -4,6 +4,8 @@
 
 The supplied link is Dragan Spiridonov’s portfolio. Its primary QA platform is **Agentic QE**. **QA Investigation Harness** is a separate project from QAtools-tech. The latter exports eligible plan-to-test mappings. Agentic QE can help test whether the automation subsequently written for one of those mappings would actually catch a defect. The Agentic QE default branch inspected was commit `3b569fdf0169f78f5e0eb6cbb1527e410d876c27`, dated 25 November 2026. Its package declared version 3.15.23 and its license was MIT. The commit pins the code in this review. [Portfolio](https://github.com/proffesor-for-testing) · [Agentic QE commit](https://github.com/proffesor-for-testing/agentic-qe/commit/3b569fdf0169f78f5e0eb6cbb1527e410d876c27) · [Manifest](https://github.com/proffesor-for-testing/agentic-qe/blob/3b569fdf0169f78f5e0eb6cbb1527e410d876c27/package.json) · [License](https://github.com/proffesor-for-testing/agentic-qe/blob/3b569fdf0169f78f5e0eb6cbb1527e410d876c27/LICENSE) · [Investigation Harness](https://github.com/QAtools-tech/qa-investigation-harness)
 
+**Related follow-up.** The [plugin ecosystem and Obsidian review](plugin-ecosystem-obsidian-review.md) examines additional Quality Forge articles, AQE's actual plugin packaging/lifecycle code, and Nagual's learning/provenance mechanisms against current Tesbo ownership. Its proposed connector contract and acceptance scenarios are source-reviewed and UNRUN; they do not extend the execution evidence below or change the ordinary Zyra authoring default.
+
 ## An executable test of the missed retry
 
 All four authors in Tesbo’s earlier trial missed a check on the **same booking across both calls**. I ran the upstream mutation evaluator against a small, hand-written model of this risk. Calling standby returns 202. On an empty one-booking outbox it adds one notice addressed to Ada. The injected defect changes the boundary from `length < 1` to `length <= 1`. The second call on booking B then appends a duplicate with the same ID and recipient. The reference model deliberately covers just that one booking.
@@ -80,3 +82,4 @@ for (const [name, body, expected] of cases) {
   console.log(name, result.reason);
 }
 ```
+
