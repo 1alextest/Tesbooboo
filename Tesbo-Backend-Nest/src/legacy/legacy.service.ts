@@ -2045,7 +2045,8 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
           const claim = await this.db.query<{ id: string }>(
             `INSERT INTO integration_ticket_comments
                (project_id, generation_request_id, save_event_id, provider, issue_key, testcase_ids, status, comment_text, posted_by)
-             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
+             SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9
+             WHERE EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=$2 AND r.project_id=$1 AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
              ON CONFLICT (generation_request_id, save_event_id, provider, issue_key) DO NOTHING
              RETURNING id`,
             [
@@ -2294,6 +2295,16 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const label = TICKET_PROVIDER_LABELS[provider];
     try {
+      // A queued delivery must still belong to an admitted testcase-review
+      // task. A claim identifier alone is not permission to post externally.
+      const admitted = await this.db.query(
+        `SELECT 1 FROM integration_ticket_comments c
+          JOIN ai_generation_requests r ON r.id=c.generation_request_id AND r.project_id=c.project_id
+          WHERE c.id=$1 AND c.project_id=$2 AND c.generation_request_id=$3
+            AND c.provider=$4 AND c.issue_key=$5 AND c.status='pending' AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal'))`,
+        [claimId, projectId, taskId, provider, issueKey]
+      );
+      if (!admitted.rows[0]) return;
       const remoteId = provider === "jira"
         ? await this.jiraPostComment(projectId, issueKey, content.adf)
         : provider === "notion"
@@ -2336,6 +2347,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const res = await this.db.query(
       `SELECT id, provider, issue_key, status, reason, testcase_ids, posted_at, created_at, updated_at
        FROM integration_ticket_comments WHERE project_id = $1 AND generation_request_id = $2
+         AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
        ORDER BY created_at ASC`,
       [projectId, taskId]
     );
@@ -2356,13 +2368,14 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const claimed = await this.db.query(
       `UPDATE integration_ticket_comments SET status = 'pending', reason = NULL, posted_by = $4, updated_at = now()
        WHERE id = $1 AND project_id = $2 AND generation_request_id = $3 AND status = 'failed'
+         AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
        RETURNING *`,
       [commentId, projectId, taskId, uid]
     );
     const row = claimed.rows[0];
     if (!row) {
       const existing = await this.db.query(
-        "SELECT status FROM integration_ticket_comments WHERE id = $1 AND project_id = $2 AND generation_request_id = $3",
+        "SELECT status FROM integration_ticket_comments WHERE id = $1 AND project_id = $2 AND generation_request_id = $3 AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))",
         [commentId, projectId, taskId]
       );
       if (!existing.rows[0]) throw new NotFoundException({ error: "Ticket comment not found" });
