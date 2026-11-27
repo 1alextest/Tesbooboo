@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  API_BASE,
   closeZyraTask,
   ApiError,
   deleteZyraTaskDraft,
@@ -66,6 +67,30 @@ const TICKET_COMMENT_STATUS: Record<ZyraTicketComment["status"], { label: string
   skipped_disabled: { label: "Not posted — auto-comment off", tone: "neutral" },
   skipped_not_connected: { label: "Not posted — not connected", tone: "warning" },
 };
+
+function AutomationHandoffInstructions({ projectId, taskId }: { projectId: string; taskId: string }) {
+  const [command, setCommand] = useState("");
+  const showCommand = () => {
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const origin = window.location.origin;
+    const taskUrl = new URL(`/projects/${encodeURIComponent(projectId)}/agents/tasks/${encodeURIComponent(taskId)}`, origin);
+    setCommand([
+      "node scripts/qa-approved-handoff.mjs",
+      "--task-url " + quote(taskUrl.href),
+      "--api-origin " + quote(new URL(API_BASE, origin).origin),
+      '--repo "$TARGET_REPO" --branch "$TARGET_BRANCH" --revision "$TARGET_COMMIT"',
+      '--harness "$HARNESS_DIR" --investigation "$INVESTIGATION_ID" --case "$PLAN_CASE"',
+    ].join(" "));
+  };
+  return (
+    <details className="rounded-lg border border-[var(--border)] p-3" onToggle={event => { if (event.currentTarget.open) showCommand(); }}>
+      <summary className="cursor-pointer text-sm font-medium">Set up an automation handoff</summary>
+      <p className="my-2 text-sm">After approving the requirement and test case and activating their link, choose the existing Playwright spec and investigation case to send to your generator.</p>
+      <a className="text-sm underline" href="https://github.com/1alextest/Tesbooboo/blob/development/docs/qa-orchestration/examples/approved-automation-handoff.md" target="_blank" rel="noreferrer">Setup and command arguments</a>
+      {command && <div className="mt-2 space-y-2"><pre className="whitespace-pre-wrap break-all text-xs">{command}</pre><CopyButton value={command} label="Copy handoff command" /></div>}
+    </details>
+  );
+}
 
 function normalizeStatus(status: string): string {
   if (status === "accepted") return "done";
@@ -928,6 +953,11 @@ export default function ZyraTaskDetailPage() {
           documentId={requirementApplyReceipt.requirement.documentId}
           versionId={requirementApplyReceipt.requirement.versionId}
           canApprove={canApproveRequirement}
+          automationHandoff={requirementApplied && requirementApplyReceipt.id && requirementApplyReceipt.testcase?.id
+            && requirementApplyReceipt.link?.criterionKeys.length && bundleCase?.draft?.automationRepo && bundleCase.draft.automationPath
+            && String(bundleCase.draft.automationFramework ?? "").trim().toLowerCase() === "playwright"
+            ? { testcaseId: requirementApplyReceipt.testcase.id, criterionKeys: requirementApplyReceipt.link.criterionKeys,
+                setup: <AutomationHandoffInstructions projectId={projectId} taskId={taskId} /> } : undefined}
         />
       )}
 

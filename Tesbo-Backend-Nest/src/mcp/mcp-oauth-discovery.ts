@@ -36,7 +36,7 @@ function configuredHttpsUrl(value: string | undefined, label: string, allowPath:
 export function mcpOAuthDiscoveryPolicy(env: NodeJS.ProcessEnv = process.env): McpOAuthDiscoveryPolicy | null {
   // Fail closed when not explicitly enabled. This gate only permits metadata,
   // never real access-token acceptance.
-  if (env.TESBO_MCP_OAUTH_DISCOVERY_PREVIEW !== "true") return null;
+  if (env.TESBO_MCP_OAUTH_DISCOVERY_PREVIEW !== "true" && env.TESBO_MCP_OAUTH_ENABLED !== "true") return null;
   return {
     issuer: configuredHttpsUrl(env.TESBO_MCP_OAUTH_ISSUER, "TESBO_MCP_OAUTH_ISSUER", true),
     resourceOrigin: configuredHttpsUrl(env.TESBO_MCP_OAUTH_RESOURCE_ORIGIN, "TESBO_MCP_OAUTH_RESOURCE_ORIGIN", false),

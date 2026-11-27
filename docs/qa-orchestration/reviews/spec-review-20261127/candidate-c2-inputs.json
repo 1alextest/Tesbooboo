@@ -1,0 +1,84 @@
+{
+  "candidate": "1.4.49 C2",
+  "original_candidate_manifest_sha256": "dd8fa57f48ebcfe054dc98c69215539ea669ac932136291a622f5fe123233bfb",
+  "source_repository_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "application_integration_parent": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
+  "research_parent": "7539a739243167b2d6709df1d644bd5b955f6ffc",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "bytes": 22035,
+      "sha256": "6c45d84879a97c425c86c421f7e35c1523e7f5a741ff0f48df52e031c5da7fe7"
+    },
+    {
+      "path": "CLAUDE.md",
+      "bytes": 22374,
+      "sha256": "85f8edf61844289b041ea5322d9210956f1ee9e904f41964c3632d5e6ccf55f8"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "bytes": 101195,
+      "sha256": "cc850737c2995a86dc285fc02791e41fd598658c3afe1d13af727637cd2b9310"
+    },
+    {
+      "path": "docs/qa-orchestration/source-manifest.json",
+      "bytes": 5166,
+      "sha256": "d0a5f0c586fbf23c753ee359641c274738f9aef4b485c95b2f8108f96c6b5fe6"
+    },
+    {
+      "path": "docs/qa-orchestration/00_README.md",
+      "bytes": 188069,
+      "sha256": "3d8723750db6bb3caeeb776ffac31baaa93017ba3777ee3921a10226bce93d70"
+    },
+    {
+      "path": "docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 252825,
+      "sha256": "a552c1c310b75895a8fe852c78ce163606b3fd619dc180af06e4c98b42ea9d36"
+    },
+    {
+      "path": "docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 196119,
+      "sha256": "e0cb04ab8fdba94b79f18d46a184b417e49565c56ee3b50492988116ce0c3b25"
+    },
+    {
+      "path": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "bytes": 465688,
+      "sha256": "374bf4e7d853c958c9442baf56c8a06e62dcac0a97be10e221a7fd73e41c7499"
+    },
+    {
+      "path": "docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "bytes": 213220,
+      "sha256": "e87f1e9ddb2ac70c17ad2d06d7538e49c838ec71a8c7df7e314a5c6370d3c6fa"
+    },
+    {
+      "path": "docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 444952,
+      "sha256": "1a0c034a4198df51eede6acfbe4f32f519322de4b8073fa4e52a6f67d71677bd"
+    },
+    {
+      "path": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 181754,
+      "sha256": "279edcd5d6b941a3cd35e3fc877748d875efd36a967143b5b00a0cd5db512c17"
+    },
+    {
+      "path": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "bytes": 168165,
+      "sha256": "a17f91dadbcf3e22c3f420126303d2ca7921d44665911fa50df423c0adaf8878"
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "bytes": 49480,
+      "sha256": "b90e612c05df37fb83b123fe2fac23f99e98ad8abc2f1ba9e76497d300fb2609"
+    },
+    {
+      "path": "scripts/check-gitleaks-evidence-exceptions.py",
+      "bytes": 16800,
+      "sha256": "fd86eca2fb510e1a8de64fa331dd2a02400822c28d95a8fcf26ee87dbf4980a3"
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/verify-documents.py",
+      "bytes": 4725,
+      "sha256": "97410fd680261207ca04df7c284510af65e8471fbbb162323aa19ae216562b5b"
+    }
+  ]
+}

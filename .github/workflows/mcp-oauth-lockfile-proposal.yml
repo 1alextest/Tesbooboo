@@ -1,0 +1,42 @@
+name: OAuth dependency lockfile proposal (test-only)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mcp-oauth-lockfile-proposal.yml"
+      - "Tesbo-Backend-Nest/package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  propose-dependency-lock:
+    name: propose-dependency-lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Produce reproducible, non-secret lockfile additions
+        working-directory: Tesbo-Backend-Nest
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm install --package-lock-only --save-exact --ignore-scripts --no-audit --no-fund oidc-provider@9.15.1
+          npm audit --omit=dev --audit-level=high
+          node <<'NODE'
+          const fs=require("fs"),cp=require("child_process");
+          const old=JSON.parse(cp.execFileSync("git",["show","HEAD:Tesbo-Backend-Nest/package-lock.json"],{encoding:"utf8"}));
+          const now=JSON.parse(fs.readFileSync("package-lock.json","utf8"));
+          const changed=Object.entries(now.packages).filter(([key,value])=>JSON.stringify(old.packages[key])!==JSON.stringify(value));
+          const removed=Object.keys(old.packages).filter(key=>!Object.hasOwn(now.packages,key));
+          const delta={root:now.packages[""],changed,removed,version:now.lockfileVersion};
+          console.log("TESBO_OAUTH_LOCK_DELTA_START"+JSON.stringify(delta)+"TESBO_OAUTH_LOCK_DELTA_END");
+          console.log("TESBO_OAUTH_LOCK_ENTRY_COUNTS",changed.length,removed.length);
+          NODE

@@ -14,7 +14,7 @@ const PROJECT_ROUTE = /^\/api\/projects\/([0-9a-fA-F-]{36})(?:\/|$)/i;
 const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /** Token credentials cannot administer the project, its members, or further tokens. */
-const CONTROL_PLANE = /^\/(?:apikeys|members|mcp-access)(?:\/|$)/i;
+const CONTROL_PLANE = /^\/(?:apikeys|members|mcp-access|mcp-oauth-consents)(?:\/|$)/i;
 
 @Injectable()
 export class ApiTokenRestGuard implements CanActivate {
@@ -26,9 +26,21 @@ export class ApiTokenRestGuard implements CanActivate {
     // real OAuth resource-server verifier and explicit MCP-only route policy ship,
     // reject even a synthetic OAuth principal before any REST owner or MCP tool.
     if (req.oauthAccess) {
+      // AuthMiddleware only sets oauthAccess after validating the real opaque
+      // AS access token, consent Grant and exact resource binding. No userId
+      // is inherited. Permit ONE read-only resource route; the MCP domain
+      // service still checks current project/member/client consent per request.
+      const path = (req.path ?? req.url ?? "").split("?")[0];
+      const match = /^\/api\/projects\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/mcp\/?$/.exec(path);
+      if (req.method.toUpperCase() === "POST" && match &&
+          req.oauthAccess.kind === "oauth_access" &&
+          req.oauthAccess.projectId === match[1] &&
+          req.oauthAccess.scopes.length === 1 && req.oauthAccess.scopes[0] === "mcp:read") {
+        return true;
+      }
       throw new ForbiddenException({
         code: "OAUTH_MACHINE_ACCESS_DISABLED",
-        error: "OAuth machine access has not been enabled for this route"
+        error: "OAuth machine credentials are limited to their approved read-only MCP resource"
       });
     }
     const token = req.apiToken;

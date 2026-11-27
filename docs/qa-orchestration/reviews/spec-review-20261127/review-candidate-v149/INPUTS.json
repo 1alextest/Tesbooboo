@@ -1,0 +1,72 @@
+{
+  "candidate": "1.4.49 C1",
+  "source_repository_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "research_parent": "7539a739243167b2d6709df1d644bd5b955f6ffc",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "bytes": 19548,
+      "sha256": "8ae63e3c1d2a763cbde8ea60e7155bfca86487e16ec4823784175a5fb122920c"
+    },
+    {
+      "path": "CLAUDE.md",
+      "bytes": 20590,
+      "sha256": "28b88704ded3772166d1764ab686794d2a2972b55cc3b6f0e20921be5be21e47"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "bytes": 101117,
+      "sha256": "e587d6754c58c8de33f67fbb0277c8814c8575ce8359a336b8f92a0a55cb6375"
+    },
+    {
+      "path": "docs/qa-orchestration/source-manifest.json",
+      "bytes": 4857,
+      "sha256": "702bb7c24023322e6ed9728ca90af87a001fb4964756fd3202f869e994753e27"
+    },
+    {
+      "path": "docs/qa-orchestration/00_README.md",
+      "bytes": 188069,
+      "sha256": "3d8723750db6bb3caeeb776ffac31baaa93017ba3777ee3921a10226bce93d70"
+    },
+    {
+      "path": "docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 252825,
+      "sha256": "a552c1c310b75895a8fe852c78ce163606b3fd619dc180af06e4c98b42ea9d36"
+    },
+    {
+      "path": "docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 196119,
+      "sha256": "e0cb04ab8fdba94b79f18d46a184b417e49565c56ee3b50492988116ce0c3b25"
+    },
+    {
+      "path": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "bytes": 463608,
+      "sha256": "a9230d4d7bb64efb4ba2e247e66d0254f069b5e8303ac802ee67927f7d6c60a8"
+    },
+    {
+      "path": "docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "bytes": 213220,
+      "sha256": "e87f1e9ddb2ac70c17ad2d06d7538e49c838ec71a8c7df7e314a5c6370d3c6fa"
+    },
+    {
+      "path": "docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 444457,
+      "sha256": "ae7e1e160d8f10ad7c58fb56fc57fc05460784bc6475c8f65734a1a095481357"
+    },
+    {
+      "path": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 181754,
+      "sha256": "279edcd5d6b941a3cd35e3fc877748d875efd36a967143b5b00a0cd5db512c17"
+    },
+    {
+      "path": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "bytes": 168165,
+      "sha256": "a17f91dadbcf3e22c3f420126303d2ca7921d44665911fa50df423c0adaf8878"
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "bytes": 48742,
+      "sha256": "c93d89f7e2e233bc0ceceaa34bbd9fe366473e6fafa7b2567e2d11acf818a5e1"
+    }
+  ]
+}

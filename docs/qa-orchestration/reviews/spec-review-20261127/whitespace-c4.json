@@ -1,0 +1,118 @@
+{
+  "kind": "whitespace_observation",
+  "candidate": "C4",
+  "comparison_base": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
+  "full_exit": 2,
+  "primary_frozen_core_exit": 2,
+  "primary_output": "docs/specs/agent-synchronized-engineering/README.md:26: trailing whitespace.\n+ \n",
+  "classified_diagnostic_count": 255,
+  "classifications": [
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/candidate-c1-to-c2.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 24
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/candidate-c2-to-c3.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 50
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/candidate-c3-to-c4.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 5
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/candidate-final.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 66
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/candidate-first.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 32
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/preparation/engineering-method-review.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 2
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/preparation/spec-contract-review.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 7
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/publication-delta.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 9
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/receipts/white-independent.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 6
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/receipts/white-informed.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 6
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/research-candidate-final.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 8
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/research-candidate-first.patch",
+      "kind": "preserved unified-patch context/historical bytes",
+      "count": 9
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/blue-b-c2-delta.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 5
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/blue-b.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 8
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/elephant-gold.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 2
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/green-a.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 3
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/green-b.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 2
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/purple.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 5
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/red-b-c2-delta.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 2
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/teams/red-b.md",
+      "kind": "unchanged original reviewer Markdown formatting",
+      "count": 3
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/README.md",
+      "kind": "byte-identical incoming subordinate blank-line whitespace",
+      "count": 1
+    }
+  ],
+  "unclassified": [],
+  "policy": "Both full and core git diff --check return 2; no blanket whitespace pass is claimed. The core diagnostic is one blank line containing a space, preserved byte-identically from the concurrent subordinate README. Other diagnostics are unchanged original review Markdown and literal historical/context spaces in evidence patches. Exact evidence bytes are retained; no git/CI rule, suppression or ignore setting changed."
+}

@@ -1727,6 +1727,12 @@ export class LegacyController {
     return this.legacy.applyRequirementProposal(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
   }
 
+  @Post("/api/projects/:projectId/requirements/proposals/:taskId/automation-handoff")
+  @HttpCode(200)
+  requirementAutomationHandoff(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string, @Body() body: Record<string, any>) {
+    return this.legacy.requirementAutomationHandoff(projectId, req.userId, taskId, body, { kind: req.apiToken ? "api_token" : "human_session" });
+  }
+
   @Post("/api/projects/:projectId/requirements/:documentId/approve")
   approveRequirementVersion(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("documentId") documentId: string, @Body() body: Record<string, any>) {
     return this.legacy.approveRequirementVersion(projectId, req.userId, documentId, body, { kind: req.apiToken ? "api_token" : "human_session" });

@@ -1,0 +1,395 @@
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -15,7 +15,7 @@
+ 
+ 1. **Discover → reuse → extend → compose → create only when justified.** Search the actual implementation, existing decisions, active PRs and relevant external producers before proposing architecture. For each capability record: *required capability | existing owner | current maturity | reuse/extend/compose/extract/new | evidence*. Prefer reuse, then extension, then composition, then extraction of a genuinely shared core. Create a new primitive only when those cannot satisfy the requirement coherently, and explain the missing invariant, ownership and integration points. UNVERIFIED ≠ ABSENT; similar appearance ≠ semantic equivalence; copy-paste or an unused import ≠ reuse. While building, keep a record of capability opportunities the work exposes — a step users work around, a repeated manual bridge, a fact kept only outside the product — but only after searching the specifications, current implementation, UI/REST/MCP surfaces and the work record for an existing owner. Report them as enhancement candidates using the same record shape with *existing owner or NONE*, never as implemented scope; implementing one needs explicit approval.
+ 
+-   For meaningful new or extended capabilities, architectural/contract choices and recurring failures, apply the existing [evidence-informed engineering and precedent-transfer procedure](docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer). Investigate established mechanisms and contrary experience, distinguish documented behavior from proven outcomes, and record adopt/adapt/reject/defer/no-change against this product's constraints and verification needs. Reuse adequate current research for routine changes; no new subsystem or implementation authority follows from a precedent.
++   For meaningful new or extended capabilities, architectural/contract choices and recurring failures, apply the existing [evidence-informed engineering and precedent-transfer procedure](docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer). Investigate established mechanisms and contrary experience, distinguish documented behavior from proven outcomes, and record adopt/adapt/reject/defer/no-change against this product's constraints and verification needs. Reuse adequate current research for routine changes; no new subsystem or implementation authority follows from a precedent. Route findings through the existing [scope/team handoff](docs/agent-scope-discipline.md#research-informed-engineering-and-team-handoff); the canonical brief owns the procedure.
+ 
+ 2. **Map upstream and downstream before changing a feature.** Trace `actor/input → UI/API/MCP → authentication/authorization → validation → domain service → persistence → events/jobs → cache/index/projection → UI/notifications/reports/exports/external consumers`. Name who owns each material fact, which entry points can change it, who depends on it, its tenant/project/object/lifecycle scope, and the failure, retry, freshness and historical implications. Find the writer before trusting a stored field. Scale the map to the size of the change.
+ 
+--- a/docs/qa-orchestration/source-manifest.json
++++ b/docs/qa-orchestration/source-manifest.json
+@@ -2,7 +2,7 @@
+   "package": "Tesbo canonical specifications",
+   "package_revision": "1.4.49",
+   "status": "PROPOSED / BACKLOG / NOT FROZEN",
+-  "publication": "Repository candidate in existing PR295; saved v1.4.48 archive retained as historical input. No v1.4.49 Library export or runtime publication claimed.",
++  "publication": "Integrated repository candidate in existing PR295. Saved v1.4.48 and the separately published 639faffc v1.4.49 export retain historical identities; no archive matching this integrated candidate or runtime publication is claimed.",
+   "scope": "Preserve saved v1.4.48; reconcile general plugin proposal and evidence-informed engineering within existing owners. No implementation, active Skill, runtime acceptance or deployment.",
+   "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+   "research_source_commit": "7539a739243167b2d6709df1d644bd5b955f6ffc",
+@@ -68,59 +68,69 @@
+       "package_revision": "1.4.47",
+       "archive_bytes": 691903,
+       "archive_sha256": "51cab10edd1bcf480ee68083aa11b8cd2a9f4f958e5ebd3dca63c35a65193011"
++    },
++    {
++      "kind": "concurrent_repository_publication",
++      "commit": "639faffc05e6c66f12a048dccaca4431285b674d",
++      "package_revision": "1.4.49",
++      "source_manifest_git_blob": "8e64120d0c1aa97c35755a0378a4c007f6e8b6ca",
++      "archive_bytes": 723552,
++      "archive_sha256": "be4a09be89f3431646569afbb85353db5a9c05b7fc965f73ab0304e4883cd829",
++      "scope": "Historical incoming publication; its exact manifest and original review receipts remain preserved. These archive bytes do not identify the integrated repository candidate."
+     }
+   ],
+   "files": [
+     {
+       "path": "00_README.md",
+-      "bytes": 188069,
+-      "sha256": "3d8723750db6bb3caeeb776ffac31baaa93017ba3777ee3921a10226bce93d70",
+-      "git_blob": "cf7c2e0a2c14fa2643de9869f2d69e5c362ee645"
++      "bytes": 188956,
++      "sha256": "424ab26a78e97081420324c45073251629bf0e1eae06a7157122eb9e4df6424c",
++      "git_blob": "6e56f3526f714a24e0e83c04c83339432081ecc5"
+     },
+     {
+       "path": "01_PRODUCT_REQUIREMENTS.md",
+-      "bytes": 252825,
+-      "sha256": "a552c1c310b75895a8fe852c78ce163606b3fd619dc180af06e4c98b42ea9d36",
+-      "git_blob": "781b3fe6a1c96cd3e9bf9b88b2738ba178024347"
++      "bytes": 253729,
++      "sha256": "ec315085b8caff2ad3362e87239c8fa31b934b404972eaf2b99470ab52c7288c",
++      "git_blob": "cc68f97e81ab64f2f7314ced2de83d0c6b1c18f2"
+     },
+     {
+       "path": "02_WORKFLOW_AND_UX_SPEC.md",
+-      "bytes": 196119,
+-      "sha256": "e0cb04ab8fdba94b79f18d46a184b417e49565c56ee3b50492988116ce0c3b25",
+-      "git_blob": "b39045c616b2b62db238b8577ddb5185ac43af51"
++      "bytes": 199145,
++      "sha256": "e39952e44e28fe62770fc89c76be84690465f6232f478d98a2f714a1072a9117",
++      "git_blob": "491e67f26a54e88fab76c704dc56e4e7560b2242"
+     },
+     {
+       "path": "03_TECHNICAL_DESIGN.md",
+-      "bytes": 465688,
+-      "sha256": "374bf4e7d853c958c9442baf56c8a06e62dcac0a97be10e221a7fd73e41c7499",
+-      "git_blob": "f88df47d55bd25171f789bbc62908d77fb5ca7b5"
++      "bytes": 468828,
++      "sha256": "4e5f4a6cf5188ed77dcc7029597b36bf8e6cbf2f38b53357dd0a8580fb2ae037",
++      "git_blob": "69f7f7269665788e92fd12d131aa15afb6b39a67"
+     },
+     {
+       "path": "04_MCP_API_CONTRACTS.md",
+-      "bytes": 213220,
+-      "sha256": "e87f1e9ddb2ac70c17ad2d06d7538e49c838ec71a8c7df7e314a5c6370d3c6fa",
+-      "git_blob": "04beb45c7b1a79e19ad88175f255c55a94a9c09b"
++      "bytes": 214460,
++      "sha256": "b6f6c0816ef9b4d46c1396b1d96e223a6f32d0d811b2ee80870a029532e9c9d2",
++      "git_blob": "9d7fc6c380203bbe2308de6d4baaecbd9aca3d99"
+     },
+     {
+       "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+-      "bytes": 444952,
+-      "sha256": "1a0c034a4198df51eede6acfbe4f32f519322de4b8073fa4e52a6f67d71677bd",
+-      "git_blob": "dbc009148fb54b465fb0612bd987329e8f68aac1"
++      "bytes": 447453,
++      "sha256": "772389d456086492db0ba642a13836943749406a2114ce1c56f7c70d9a5ad05e",
++      "git_blob": "cf94a0c3219cb45941e815b38c91728eae289dfd"
+     },
+     {
+       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+-      "bytes": 181754,
+-      "sha256": "279edcd5d6b941a3cd35e3fc877748d875efd36a967143b5b00a0cd5db512c17",
+-      "git_blob": "1faa3c36a1bd26bdf6ed287f94baedf61c688387"
++      "bytes": 182583,
++      "sha256": "1d131d1dffde3c099bedcfdf480379735ac71e8299a5a0fcc5a9569e23a805a1",
++      "git_blob": "6893fe9e035cbc84303b231105ee8647d30b68d2"
+     },
+     {
+       "path": "07_UI_DESIGN_TASKS.md",
+-      "bytes": 168165,
+-      "sha256": "a17f91dadbcf3e22c3f420126303d2ca7921d44665911fa50df423c0adaf8878",
+-      "git_blob": "d2eae1540e01e218a212e49044dcabd851a0f6c9"
++      "bytes": 169494,
++      "sha256": "06529b05fa83c72baac0a0daeeaae57d2b82cb5925257de623232f5a4bd7bc09",
++      "git_blob": "e010a1558324ba7776085576c4d3692cf44258df"
+     }
+   ],
+   "review_record": "reviews/spec-review-20261127/README.md",
+   "integration_parent": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
+-  "integration_scope": "Preserve incoming development and merged PR315; source-review findings retain their original pins. This proposal changes documentation and exact document verification bindings only relative to incoming development."
++  "integration_scope": "Preserve incoming development and merged PR315; source-review findings retain their original pins. This proposal changes documentation and exact document verification bindings only relative to incoming development.",
++  "concurrent_publication_parent": "639faffc05e6c66f12a048dccaca4431285b674d"
+ }
+--- a/docs/qa-orchestration/00_README.md
++++ b/docs/qa-orchestration/00_README.md
+@@ -906,7 +906,7 @@
+ 
+ Use four distinct planning states: **Research / Exploration**, **Proposed / Backlog**, **Approved for Implementation**, and **Implemented / Verified**. Record the evidence and authority for a transition in the existing work owner. These describe delivery maturity; they do not add runtime status values or replace the more detailed implementation, deployment and verification distinctions already defined. Existing implemented integrations retain their actual evidence and status.
+ 
+-Candidate contributions include sources, external executors, method/content packages, analysis/verification, reporting/export and product/UI extensions. An extension can contribute to more than one admitted point, but its manifest cannot grant authority or replace native record owners. Existing integrations or supported external clients may already solve the need without a new installed package. FR-058/T-408 cover execution integration; they are not retroactively relabeled as a complete general plugin platform.
++Candidate contributions include sources, external executors, method/content packages, analysis/verification, reporting/export, notification/workflow and product/UI extensions. These illustrative profiles are not a closed enum. Proposed FR-125, T-462 and AC-094 retain the distinct general requirement, bounded design qualification and future acceptance identities introduced by the concurrent PR295 amendment; none is an official native record or implementation authorization. An extension can contribute to more than one admitted point, but its manifest cannot grant authority or replace native record owners. Existing integrations or supported external clients may already solve the need without a new installed package. FR-058/T-408 cover execution integration; they are not retroactively relabeled as a complete general plugin platform.
+ 
+ The [portable method](06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer) extends the existing two-stage practice: distill a conditional principle from evidence, then instantiate it against the target's actual constraints. Use it for meaningful feature additions, extensions, architecture/contract choices and recurring failures across the engineering lifecycle. Reuse adequate current research for routine work. The supporting [plugin research PR](https://github.com/1alextest/Tesbooboo/pull/315) retains the original Quality Forge, Agentic QE, Nagual and Obsidian investigations and adds comparable extension-system precedents. Documentation of a mechanism is not measured proof of its success, and a familiar vendor is not evidence that the mechanism transfers.
+ 
+@@ -923,3 +923,5 @@
+ **Source reconciliation:** the current repository candidate was PR295 at `f92c3341eadc03f274becbead3b0f45d0a86539e`; the saved eight-file v1.4.48 input is version 33, 707,628 bytes, SHA-256 `6665ba660aa208bd35db51b90052fc0b69abc01c6922c197544003e3480b1bef`. All eight saved bodies are preserved except the current-package pointer. The research PR already referred to a v1.4.49 review folder that was absent at that repository head; this run creates a new, attributable [review record](reviews/spec-review-20261127/README.md). It does not reconstruct or certify unavailable earlier receipts. The saved v1.4.48 archive remains the historical input; current publication status is stated in the source manifest.
+ 
+ The proposed method does not alter original assurance charters, install an active Skill, certify effectiveness or permit a new product subsystem. New plugin/runtime/client/UI/native-record acceptance remains **NOT RUN**. Document checks and independent source reviews have their own bounded receipts.
++
++**Concurrent publication reconciliation:** PR295 subsequently advanced to `639faffc05e6c66f12a048dccaca4431285b674d` with its own proposed v1.4.49 contracts and analytical receipts. The current continuation preserves both original review streams and integrates their obligations within these same eight owners. The new candidate has its own exact manifest and delta review; neither earlier receipt set silently certifies it. Prior archive identities remain historical publication evidence, while the current repository candidate is bound by the source manifest.
+--- a/docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md
++++ b/docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md
+@@ -1225,13 +1225,13 @@
+ 
+ ## Revision 1.4.49 — conditional general-plugin requirements
+ 
+-**Proposed / Backlog; implementation not selected.** Preserve the current authority, source/record identity, Tasks, Skills, Runs and evidence requirements. The following are design obligations for an admitted extension profile, not six promised features or new native requirement IDs. Canonical 03 owns mechanisms; 04 owns logical transport semantics; 05 assigns work and proof. FR-058/T-408 remain executor-specific. Resolve a genuine new requirement under the existing requirement/review owner when a bounded outcome is selected.
++**FR-125 — General optional contributions (Proposed / Backlog; implementation not selected).** Preserve the current authority, source/record identity, Tasks, Skills, Runs and evidence requirements. The following are design obligations for an admitted extension profile, not six promised features. FR-125 is the proposed specification identity preserved from the concurrent amendment, not an official native Requirement. Canonical 03 owns mechanisms; 04 owns logical transport semantics; T-462 and AC-094 in canonical 05 own bounded design qualification and future acceptance. FR-058/T-408 remain executor-specific; no runtime, SDK or first contribution is selected.
+ 
+ 1. **Contribution scope.** Describe the user's outcome and the exact native contribution point. Source intake, execution, method content, analysis, reports and product/UI contributions can have different effects and trust boundaries. Reuse a supported configuration/integration/manual path when sufficient; do not require third-party executable code merely to import content or call an existing external client.
+-2. **Identity and authority.** Distinguish publisher, plugin/package release and digest, installed instance, external account/source binding, project enablement, effective configuration and acting principal/grant. Installation, signature verification, project enablement and operational health prove different facts. No plugin identity, UI action or source metadata can create human approval or increase an actor's authority.
+-3. **Registration and compatibility.** Each admitted contribution point declares one provider, independent additive providers or an explicitly ordered composition, with conflict handling. Bind host/interface/payload/runtime/dependency compatibility to exact accepted identities; detect missing, conflicting, cyclic or withdrawn dependencies. Unknown compatibility cannot be presented as supported. Never silently substitute the latest version or choose a provider by incidental load order.
+-4. **Lifecycle and continued work.** Preview upgrade/removal effects on dependent contributions and retained records. A scope, executable, dependency or material configuration change invalidates the affected admission/permission basis as defined by its native owner. Disable/revoke fences new and queued work and rechecks authority at protected effects; in-flight work and uncertain external effects remain visible. Installation or requested stop does not prove activation or physical termination. Recovery preserves prior receipts and cannot replay an uncertain mutation blindly.
+-5. **Trust and data.** Declare actual execution location, credential custody, data access/egress and enforced containment for each profile. Reuse existing authorization, outbound-access, storage, retention and isolated-execution owners. Signed bytes establish provenance/integrity only; process separation alone does not establish a tenant security boundary. Uninstall is distinct from deletion of retained source derivatives or native history, and access revocation still applies to retained data.
++2. **Identity and authority.** Distinguish publisher, plugin/package release and digest, installed instance, external account/source binding, project enablement, effective configuration and acting principal/grant. Installation, signature verification, project enablement and operational health prove different facts. No plugin identity or source metadata can independently create human approval or increase an actor's authority. An admitted UI may present an already-authorized human action through the existing native approval owner on the exact reviewed basis; the contribution cannot manufacture that decision.
++3. **Registration and compatibility.** Each admitted contribution point declares one provider, independent additive providers or an explicitly ordered composition, with conflict handling. Bind host/interface/payload/runtime/dependency compatibility to exact accepted identities; detect missing, conflicting, cyclic or withdrawn dependencies. Unknown compatibility cannot be presented as supported. Never silently substitute the latest version or choose a provider by incidental load order. Validate the whole proposed contribution/dependency set atomically so refusal does not leave a partially active candidate. Bind selected providers and scoped defaults to the native operation as specified in canonical 03.
++4. **Lifecycle and continued work.** Preview planned upgrade/removal effects on dependent contributions and retained records. Existing independently authorized urgent containment must not wait for complete dependency inventory or telemetry; canonical 03 retains the original control and scope limits. A scope, executable, dependency or material configuration change invalidates the affected admission/permission basis as defined by its native owner. Disable/revoke fences new and queued work and rechecks authority at protected effects; in-flight work and uncertain external effects remain visible. Installation or requested stop does not prove activation or physical termination. Recovery preserves prior receipts and cannot replay an uncertain mutation blindly.
++5. **Trust and data.** Declare actual execution location, credential custody, data access/egress and enforced containment for each profile. Reuse existing authorization, outbound-access, storage, retention and isolated-execution owners. Signed bytes establish provenance/integrity only; process separation alone does not establish a tenant security boundary. Uninstall is distinct from deletion of retained source derivatives or native history, and actual read-access revocation still applies to retained data. An admitted persistent/custom result requires meaningful authorized historical readback after its sole renderer is removed, not merely retention of an opaque blob.
+ 6. **Usability and operability.** Users can discover an admitted capability, understand its scope and available action, distinguish requested from effective state, and find the exact native result or failure. Operators can attribute failures and latency to the effective plugin/configuration/operation without logging secrets or high-cardinality sensitive metrics. Unsupported, denied, incompatible, degraded, stale and unknown outcomes are truthful; a broken optional plugin does not silently corrupt core workflows.
+ 
+ **Acceptance direction:** use unlike contribution profiles to challenge the abstraction, including an existing/no-plugin alternative. Check valid operation, denied action, incompatible/ambiguous registration, permission expansion, interruption, retry, dependency change, removal and historical readback. A manifest or attractive plugin catalog alone does not prove any of these outcomes. Product decisions about the initial user need, admitted code/hosting model, distribution and permission powers remain open until the corresponding implementation is authorized.
+--- a/docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md
++++ b/docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md
+@@ -1063,3 +1063,20 @@
+ For disable, revoke, upgrade or remove, show when the request becomes effective, dependent capabilities affected, queued/in-flight work and any external stopping limit. Do not show “stopped” merely because Tesbo stopped dispatching. Separate preserving governed history from deleting retained sources/configuration; deletion follows the existing authority and retention rules. Keep unavailable historical presentation identifiable, with a native evidence/source route where supported. Preserve a manual/core route where the contribution is optional, and explain a genuinely unavailable prerequisite rather than promising a fallback that does not exist.
+ 
+ Design traces must compare materially different profiles and no-plugin use. Obsidian selected-source intake and an executor's task/report handoff are illustrations with different effects, not a priority decision. Human comprehension, accessible interaction and runtime/native persistence need their own later evidence; this specification review executes none of them.
++
++### Actor and next-action mapping
++
++Map these capabilities to actual configured principals before implementation; no row creates a new role or grants permission.
++
++| Actor capability | Legitimate decision / action | When unavailable or blocked |
++| --- | --- | --- |
++| Package admission authority | Inspect and admit the exact package/dependency scope | Ordinary users can inspect their permitted status and identify the accountable maintainer; they cannot bypass admission |
++| External account / grant owner | Connect, renew or revoke the selected external account within its native authority | Expired access or a departed owner pauses affected use; an authorized reassignment/reconnection establishes a new explicit basis, never a silently borrowed credential |
++| Workspace/project configuration authority | Enable, disable and choose contribution bindings/defaults within that scope | Show the missing prerequisite and authorized next action without implying workspace-wide authority |
++| Ordinary invoker | Select an allowed contribution and complete the native task under current permissions | Preserve task context and explain permitted manual/alternative paths; no silent provider substitution |
++| Native artifact or Skill reviewer | Review the exact native candidate and take its already-authorized action | Package install/enable does not approve or activate that candidate |
++| Historical reader / operator | Inspect native history, evidence and supported recovery under current access | Provide a preserved native representation/export or disclose the admitted limitation; never require unsafe obsolete plugin execution to inspect protected history |
++
++When several permitted contributions serve the same job, disclose the selected provider and any scoped default, bind the operation to that selection, and allow permitted deliberate selection where the contract supports it. Installation order, an agent's preference or a failed provider cannot silently choose another. Changing a default affects eligible future work only; in-flight and historical work retain their actual provider/version. Different account authority or target effects require a new reviewed selection. Unaffected consumers of a shared connection retain their rights when one binding or departing owner's access changes.
++
++**Planned change and urgent containment.** Full preview and dependency-impact checks govern planned maintenance. The existing independently authorized emergency stop/grant path in revision 1.4.47 fences its authorized affected scope without waiting for a healthy catalog, complete inventory or telemetry. Preserve the actor/scope controls, actual acknowledgements and known/unknown effects; reconcile dependents and uncertain work afterward. This creates no emergency bypass or new control path, and an unavailable stop control is not a confirmed stop. Historical results require the admitted usable native representation, export or migration in canonical 03; an opaque unsupported download does not satisfy the reader's task.
+--- a/docs/qa-orchestration/03_TECHNICAL_DESIGN.md
++++ b/docs/qa-orchestration/03_TECHNICAL_DESIGN.md
+@@ -2104,18 +2104,20 @@
+ | Method/content package | Existing Skill candidate/version/evaluation/assignment owners | Content/package identity is distinct from approved effective method; import does not activate |
+ | Analysis/verification | Existing attributed analysis, proposals and independent evidence owners | Inference cannot become observed execution, an approved oracle or a native result |
+ | Report/export | Native authorized result/evidence readers and permitted export/delivery owners | Read scope, redaction, destination and truthful handling of absent/estimated evidence |
+-| Product/UI contribution | Selected native module and its server-side action owner | Declared placements/actions, accessibility, actual code containment and removal behavior |
+-
+-A profile may need only declarative content or an existing remote API. Do not assume a uniform executable runtime. Admit arbitrary server or browser code only after a separate hosting/threat-model decision and enforcement proof; first-party branding is not the proof. Existing external clients retain their own installation/operation and are not forced into a Tesbo companion.
++| Notification/workflow or product/UI contribution | Selected native module and its server-side action owner | Declared effects, placements/actions, accessibility, actual code containment and removal behavior |
++
++A profile may need only declarative content or an existing remote API. Do not assume a uniform executable runtime. Admit arbitrary server or browser code only after a separate hosting/threat-model decision and enforcement proof; first-party branding is not the proof. Existing external clients retain their own installation/operation and are not forced into a Tesbo companion. Do not force every profile through the source pipeline's `RemoteTicket` shape or the execution task/report schema. Reuse semantic domain contracts where they fit and compose shared transport/authentication/receipts without conflating different outputs.
+ 
+ ### Identity, extension points and compatibility
+ 
+ Keep package/publisher/release/digest, installed instance, account/source connection, project enablement generation, configuration revision, contribution-point version and acting grant independently attributable. Bind an admitted operation to the applicable identities through its current native receipt; retain what is needed to interpret historical output. Minimize sensitive configuration and reference protected credentials rather than embedding them in manifests, prompts or evidence.
+ 
+-Each extension point defines its native owner, supported input/output and effect classes, cardinality and composition semantics. A singleton rejects a conflicting registration without replacing the incumbent. Additive contributions remain individually identifiable. Ordered composition requires an explicit stable order and a defined failure/partial-result policy; loading order, title similarity or a race is not a policy. Namespace clashes, incompatible contracts and an unsupported required contribution fail admission before its effects. No extension can override a protected native decision by registering first or last.
++Each extension point defines its native owner, supported input/output and effect classes, cardinality and composition semantics. A singleton rejects a conflicting registration without replacing the incumbent. Additive contributions remain individually identifiable. Ordered composition requires an explicit stable order and a defined failure/partial-result policy; loading order, title similarity or a race is not a policy. Namespace clashes, incompatible contracts and an unsupported required contribution fail admission before its effects. No extension can override a protected native decision by registering first or last. Validate the entire proposed contribution set and resolved dependency closure before activation; reject ambiguity atomically or leave the candidate inert with an attributable error, without a partially active subset.
+ 
+ Check the actual host version, extension-point/interface version, input/output schema version, runtime target and dependency closure independently of the package release. Pin resolved versions/digests; handle required/optional dependencies explicitly, detect cycles/conflicts and expose affected dependents before upgrade/removal. Refuse the affected activation when required compatibility evidence is absent. A valid optional/no-plugin path can continue. Upstream withdrawal or deprecation triggers reassessment under the selected support policy, not an invented automatic destructive action. Recheck current advisories, maintenance and licensing at adoption; these research sources do not select a dependency.
+ 
++Contribution registration and provider selection are distinct. The existing configuration/task owner binds the chosen contribution, account and exact version, including any permitted scoped default. A default change applies only to eligible future work; queued/in-flight attempts and historical receipts retain their original provider/version. An explicit fallback needs its own supported contract, compatible effects and current authority with visible attribution. Failure, installation order or an agent preference cannot silently choose a different provider.
++
+ ### Source-connection identity and cardinality: conditional convergence gate
+ 
+ At the inspected repository candidate `f92c3341eadc03f274becbead3b0f45d0a86539e`, `V47_integration_connections.sql` and `integration-sync.client.ts` use one connection per organization/provider; `V72_integration_sync_pipeline.sql` and `integration-sync.processor.ts` identify mirrors by project/provider/external ID/source role. Those keys do not establish multiple same-provider account/vault namespaces. V97 and the connection callback writers also retain a connection row while replacing its external account, so a connection UUID alone does not establish an unchanged remote source over time. Existing canonical 04 source-namespace and ASER-C02 identity obligations remain authoritative. Qualify sequential source/account replacement even when only one connection is active; separately qualify simultaneous accounts if that cardinality is selected. Review any needed migration in the existing connection/source owner and prove ingestion, links, caches/retrieval, delayed events and tenant isolation. Preserve supported current single-provider behavior and legitimate same-account credential renewal. Bind delayed events to the original source identity and connection/configuration generation; never resolve them only by the current provider name. This is a conditional future convergence gate, not a claim of a deployed collision or authorization to change the schema now.
+@@ -2123,6 +2125,8 @@
+ ### Lifecycle, changes and recovery
+ 
+ **Existing sync reuse limitation.** At the same source pin, `Tesbo-Backend-Nest/src/integration-sync/integration-sync.service.ts` settles active runs during disconnect, but `markRunning` updates by run ID without a terminal-state predicate. The inspected `integration-sync.processor.ts` ticket path can await provider/analysis work and then update the native mirror without rechecking the original run/connection generation in that write transaction. Disconnect clears credentials and disables mappings; those controls do not by themselves prove a final fence for work that already read its inputs. Retain [Red A's source finding and counterevidence](reviews/spec-review-20261127/teams/red-a.md#tesbo-ra01--native-sync-stopping-is-not-a-proved-effect-fence-even-with-one-provider-connection) under the existing sync owner. Before relying on this path for the proposed guarantee, reproduce the boundary safely, qualify the necessary current-authority/generation protection and prove legitimate same-generation completion. This is an open source-based implementation gate, not an executed production defect, a completed fix or a reason to create another scheduler.
++
++**Urgent containment is distinct from planned maintenance.** The existing independently authorized revision 1.4.47 stop/grant control can fence its authorized affected scope without a complete dependency preview, live telemetry or a healthy catalog. Preserve its operator authority, scope, emergency receipt and audit-gap obligations; record known/unknown impact and actual acknowledgements, then reconcile affected dependencies and uncertain effects. This is no new control path, unauthenticated override or authority to stop unrelated work.
+ 
+ Represent desired configuration, admitted package/scope, effective generation and observed runtime health separately through existing owners. The selected adapter documents supported transitions and whether installation/activation/disable/removal needs drain, restart or a remote acknowledgement. A requested transition is not its completion. Compatibility or migration failure retains a recoverable prior state or a clearly blocked state with a receipt; never mark a partially migrated extension healthy.
+ 
+@@ -2142,8 +2146,12 @@
+ 
+ Disable/remove only resources owned by that installation/contribution; shared credentials, subscriptions and dependent integrations require their owning policy and impact checks. Separate uninstall from deletion/purge and honor retention/holds. Deny snapshots, caches, embeddings and derived metadata only to the extent that their applicable read authority is revoked; disconnecting a provider or uninstalling its code does not itself revoke separately authorized project-owned knowledge or history. Conversely, retained bytes or an available native view do not override a revoked read grant. Resolve each reader's current native authority and preserve permitted history with a comprehensible source/evidence readback when an optional renderer is gone. A selected profile that adds source-specific retained-data permissions beyond current project access must identify the policy owner, migration and every affected reader/index/cache/export path before implementation. Reinstallation does not silently reactivate expired/revoked grants or previously deleted data.
+ 
++**Durable historical interpretation.** For admitted persistent/custom results, identify the format/schema revision and a usable native representation, supported export/migration or an explicitly narrower retention limitation before admission. Preserve original bytes/provenance and material meaning in permitted derived views. Authorized readers must be able to inspect the admitted decision basis after the sole renderer is disabled, incompatible or removed without running unsafe obsolete code. An opaque unsupported blob or a download button alone is insufficient. If this cannot be satisfied, restrict the affected persistent/UI profile and disclose the exact limitation before admission; a fallback must not invent an interpretation.
++
+ ### Operability and bounded proof
+ 
+-Use existing correlation, audit, work and observability owners to connect plugin/release/configuration/operation identity to dispatch, refusal, retry, last success, backlog, latency, dependency health and resource budget. Keep detailed traces restricted and redact secrets; a plugin cannot edit the evidence or stopping authority that constrains it. Define selected load/timeout/fairness/degradation expectations before measuring them. No fixed resource budget, SLA or universal isolation technology is selected here.
++Use existing correlation, audit, work and observability owners to connect plugin/release/configuration/operation identity to dispatch, refusal, retry, last success, backlog, latency, dependency health and resource budget. Keep detailed traces restricted and redact secrets; a plugin cannot edit the evidence or stopping authority that constrains it. Define selected load/timeout/fairness/degradation expectations before measuring them. Qualify selected initialization, invocation, retries, background work and artifact budgets, including a crash/timeout/exhaustion control that leaves unrelated native QA and legitimate contributions usable. A missing execution result cannot become a passing test. No fixed resource budget, SLA or universal isolation technology is selected here.
++
++Treat package/catalog descriptions, icons/links, generated HTML/Markdown, external responses and attachment names as untrusted data at existing sanitization, outbound-access, size/type and path-containment owners. A host proxy must not forward ambient session cookies/tokens or unrelated authentication headers to a contribution. Route only explicitly scoped credentials through the existing owner and verify actual outbound requests and received bytes; package signing or source inspection alone cannot prove that boundary.
+ 
+ Canonical 05 supplies design traces and future acceptance. Primary mechanisms from VS Code, Backstage, Grafana, Jenkins and Terraform are recorded in PR315's research and the associated review evidence. Their limitations are part of the comparison: extension hosts are not automatically security sandboxes; signatures are not authorization; lifecycle requests may precede effective stopping; protocol compatibility differs from package version. These are conditional design lessons, not imported runtime implementations or measured Tesbo benefits.
+--- a/docs/qa-orchestration/04_MCP_API_CONTRACTS.md
++++ b/docs/qa-orchestration/04_MCP_API_CONTRACTS.md
+@@ -1257,7 +1257,7 @@
+ 
+ ## Revision 1.4.49 — logical plugin contract, authority and receipts
+ 
+-**Proposed logical contract only.** No `install_plugin`, plugin API, manifest format, SDK or advertised MCP operation is introduced by this text. Select an adapter and its transport only after its native owner, permitted effects and actual supported capabilities are established. Existing tools and APIs retain their current schemas and authorization. An unimplemented operation is explicitly unsupported; documentation is not a tool-discovery receipt.
++**Proposed logical contract under FR-125 / AC-094 only.** No `install_plugin`, plugin API, manifest format, SDK or advertised MCP operation is introduced by this text. Select an adapter and its transport only after its native owner, permitted effects and actual supported capabilities are established. Existing tools and APIs retain their current schemas and authorization. An unimplemented operation is explicitly unsupported; documentation is not a tool-discovery receipt.
+ 
+ The following field groups identify required meanings for a selected contribution. They may be represented by existing records/references; names are design labels, not deployed JSON fields or a new parallel store.
+ 
+@@ -1267,6 +1267,7 @@
+ | `contributions[]` | Declared point ID/interface version, profile, supported operations/effects and required capability references; native point owner validates them. |
+ | `compatibility`, `dependencies[]` | Host/API/schema/runtime constraints, required/optional dependency identities and resolved digests; selected admission owner verifies the complete applicable set and conflicts. |
+ | `installationRef`, `connectionRef`, `projectRef`, `configurationRevision`, `enablementGeneration` | Separate installed, external-source, scope and effective-basis references. Native records establish ownership; client labels cannot do so. |
++| Selected contribution/account/version and scoped default | The existing configuration/task owner binds the actual selected provider. Defaults affect eligible future work only; a fallback needs explicit supported semantics, current authority and attributable output. These are logical associations, not new JSON keys. |
+ | `principalRef`, `grantRef`, `effectiveScope`, `decisionRef` | Trusted identity, current permission intersection and any exact required human decision supplied by existing authorization/review owners, never conferred by package metadata. |
+ | `operationRef`, `attemptRef`, `inputBasis`, `nativeReceiptRef`, `evidenceRefs` | Existing operation identity, exact inputs, native effect/readback and attributed evidence. Retry keys cannot be repurposed across actors, projects, destinations or changed payloads. |
+ | `requestedState`, `effectiveState`, `observedHealth`, `lastObservedAt`, `reason` | Distinct request, effective runtime and observation with freshness/unknowns; emitted by their actual owners, not collapsed into an “installed” success flag. |
+@@ -1276,3 +1277,7 @@
+ UI, REST, MCP, SDK and background entrances reach the same native authority/effect owner. Validate the applicable package/configuration/generation and current grant at admission and protected commit. A hidden UI command, installed package, source `approved` flag or model assertion cannot authorize invocation, publish a record or activate a Skill. Content, code, credentials, policy and independent evidence keep their existing trust boundaries.
+ 
+ Failure contracts distinguish incompatible/unsupported input, permission refusal, dependency conflict, stale basis, transport failure, partial work and unknown external effect. Reconciliation may use an existing operation/receipt read only if authorized; a retry cannot disclose another principal's receipt. Current grant denial is checked before returning prior sensitive output. Revoked/offline callbacks cannot resurrect an old generation. Expired/redacted evidence is explicit and cannot satisfy a required-evidence gate. Native history and successful historical effects stay attributed even when a later operation is refused.
++
++Admission validates the whole contribution and resolved dependency set atomically before activation; collision refusal leaves no partially active candidate or silently shadowed native route/tool. Revalidate relied-on permissions and dependency revisions after waits and at the protected effect. A departed connection owner requires authorized reassignment/reconnection, never a borrowed credential.
++
++Catalog metadata, descriptions, icons/links, external output, generated markup and attachment filenames remain untrusted data. Preserve actual tenant/project, sanitization, size/type, destination and download/path controls. A proxy must not forward ambient host cookies/tokens or unrelated authentication headers; test actual outbound bytes against legitimate scoped-credential controls. Discovery, invocation and subsequent evidence retrieval each enforce their own current audience and access.
+--- a/docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
++++ b/docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
+@@ -2315,11 +2315,17 @@
+ 
+ **Proposed / Backlog; all plugin runtime, UI and native-record scenarios below NOT RUN.** These extend existing work/proof owners and introduce no official Test Case IDs, new automatic gate or implementation priority. T-408 owns execution adapters only; source/knowledge work, T-422 Skills, attributed analysis, reporting and a selected UI module retain their own responsibilities. A missing common contract is a candidate decision in the existing work record, not permission to build a new registry or runtime.
+ 
+-### First complete deliverable: reviewed design and decisions
++### T-462 — qualify the general optional-contribution design
++
++**Proposed design task only.** T-462 retains the concurrent amendment's proposed specification identity and traces FR-125 through existing domain owners. It is not an official native Task or permission to implement a runtime, SDK, marketplace, package installation or active Skill.
+ 
+ Reconcile the same eight canonical documents, actual source owners, external precedents and team findings. Trace at least two materially different candidate profiles selected for design contrast, including their legitimate no-plugin/manual paths. For example, selected source intake reaches a knowledge snapshot and optional native draft; an executor reaches a task/attempt/report and independently admitted native Run. Compare their authority, data, effects, failure and removal obligations. Two similar source adapters do not alone qualify every other profile. These are design traces, not selection of the first implementation or a mandate to ship both.
+ 
+ Before an implementation slice, resolve its actual user outcome, admitted contribution/hosting and distribution model, installation/project/account permission powers, compatibility/support policy, data retention and recovery decisions. Record the responsible owner and evidence. Already-decided native approval, permission and record ownership are reused without reopening them. Unresolved choices block only their affected implementation; safe research/reconciliation continues. Keep Research / Exploration, Proposed / Backlog, Approved for Implementation and Implemented / Verified distinct in the work record.
++
++### AC-094 — selected contribution outcome, authority and lifecycle
++
++**Proposed acceptance identity; all scenarios NOT RUN.** AC-094 qualifies FR-125 for each actually admitted profile and preserves the concurrent amendment's identity. It is not an official native Test Case, Run, executed-test total or certification of unselected profiles.
+ 
+ ### Actor → feature → observable scenario
+ 
+@@ -2329,20 +2335,24 @@
+ | --- | --- | --- |
+ | Authorized member / contributed operation | Complete the selected outcome through its real packaged entry point | Exact admitted bytes/configuration are attributable; native result can be independently reopened; packaging failure cannot pass via an internal helper alone. |
+ | Member without required authority / same operation | Invoke through UI and applicable direct API/MCP/job paths | Refusal with no forbidden native/external effect or cross-project disclosure; legitimate authorized use still succeeds. |
+-| Integration manager / admission | Missing, incompatible, cyclic or conflicting dependency; unknown required capability; competing singleton | Affected activation refuses before effects, names the actionable conflict and preserves incumbent/core/independent valid use. |
++| Integration manager / admission | Missing, incompatible, cyclic or conflicting dependency; unknown required capability; competing singleton | The whole candidate contribution/dependency set refuses atomically before effects, without a partially active subset; it names the actionable conflict and preserves incumbent/core/independent valid use. |
+ | Integration manager / composition | Add two supported providers with declared order and one failing component | Stable documented composition and explicit partial/failure result; no incidental load-order override or false pass. |
+ | Integration manager / upgrade | Change package/configuration/dependency and expand requested authority | Exact difference is reviewable; changed basis cannot reuse stale admission; valid approved update has coherent native readback. |
+ | Manager and executing worker / revoke or disable | Pause a worker at an awaited provider/analysis boundary, disconnect or replace its source basis, then resume; also cover queue wait, native commit and an external effect | No forbidden native write or stale run reopening after the effective fence; legitimate same-generation completion still works. Observed external effects and unknown stopping outcomes are preserved, not described as rolled back. The existing sync path's source gap remains open until this proof and any needed owner fix. |
+ | Member / source connection and identity | Replace account A with B while keeping one active connection, then deliver old A work with a colliding external ID; compare same-account credential renewal | Namespaces/history remain distinct; delayed work cannot update or be attributed to the replacement source; valid renewal of the same evidenced account preserves legitimate continuity. If simultaneous accounts are selected, also prove their separate namespaces and independent updates. |
+ | Member / retry and recovery | Lose the response, reconnect, retry identical versus changed payload | One permitted native effect/receipt; changed payload conflicts; unknown external mutation is reconciled before replay. |
+ | Integration manager / remove and reinstall | Remove a dependency with dependents, then reinstall an approved version | Declared impact policy applies; shared resources survive; revoked grants do not reactivate; uninstall and purge remain separate. |
+-| Authorized reader / historical result | Open evidence after disconnect/removal or renderer loss, then separately revoke the applicable read grant | Separately authorized project-owned knowledge/history remains interpretable after disconnect; the revoked scope cannot retrieve protected snapshots or derivatives; unavailable or expired evidence stays explicit. |
++| Authorized reader / historical result | Open evidence after disconnect/removal or renderer loss, then separately revoke the applicable read grant | Separately authorized project-owned knowledge/history remains meaningfully interpretable after disconnect or sole-renderer removal through the admitted native representation/export/migration, without unsafe obsolete code or an opaque unsupported blob; the revoked scope cannot retrieve protected snapshots or derivatives; unavailable or expired evidence stays explicit. |
+ | Operator / health and overload | Slow/crashed contribution, unavailable dependency, bounded competing workload | Correlation identifies responsible version and operation; measured budgets/backpressure and safe recovery follow selected thresholds without secret leakage. |
+ | Member / optional extension | Complete the supported core/no-plugin path, including unavailable optional provider | Core result is intact; absent mandatory capability is explained; no fabricated fallback or automatic additional permission. |
++| User/configuration owner / provider selection | Several eligible providers, changed scoped default and failed selected provider | Exact selected contribution/account/version survives dispatch, evidence and history; defaults apply only to eligible future work. Queued/in-flight attempts do not reroute silently; an alternative needs its own admitted effects, current authority and attribution. |
++| Grant owner and ordinary user / recovery | Departed account owner with shared legitimate consumers | Pause affected use with an actor-specific next action; authorized reassignment/reconnection establishes new access without borrowing credentials or breaking unrelated legitimate consumers. |
++| Authorized operator / urgent containment | Dependency inventory, telemetry or catalog unavailable | Existing trusted stop/grant control fences the authorized affected scope promptly; actual acknowledgements and unknown/in-flight effects remain truthful, followed by reconciliation. An unavailable control cannot count as confirmed stop. |
++| Publisher/source and native consumer / data boundary | Hostile metadata/markup, filename/path and proxy credential routing alongside legitimate controls | Inspect actual rendered/native effects and outbound received bytes; reject forbidden disclosure/execution/path effects without forwarding ambient host cookies/tokens or unrelated headers. A manifest or scanner alone does not pass. |
+ | QA/reviewer / user understanding | Discover action, inspect impact, recover from refusal and return to the native result | Real accessible UI supports the intended task; prototype/source inspection is not recorded as human acceptance. |
+ 
+ Predeclare actual scope, fixture/target authorization, independent expected basis, measurements, cleanup and forbidden effects. Include correct, faulty, refused and insufficient-evidence controls. Retain source review, document-integrity checks, runtime assertions, human comprehension and effective-method evaluation separately. A report/analysis extension cannot grade absent execution as success. Passing this design review cannot prove the proposed method improved discovery or that any plugin is running.
+ 
+ ### Method qualification and feedback
+ 
+-Use canonical 06's precedent-transfer decision record within existing T-422/T-453/FR-124 work. A meaningful research result can be reuse, no change, rejection or deferral. Before claiming improved engineering, compare against the incumbent on independently selected dissimilar tasks and retain adverse/no-change/UNKNOWN results, reviewer effort and cost. Current reviews are informed/source-based specification assurance; no new efficacy experiment is claimed. Record useful user feedback and provisional grades against the actual application, without promoting satisfaction into causal or security proof.
++Use canonical 06's precedent-transfer decision record within existing T-422/T-453/FR-124 work. A meaningful research result can be reuse, no change, rejection or deferral. Apply the procedure to this plugin decision, a materially different engineering problem and a valid existing-solution/no-change case, retaining fit, counterevidence and unknowns as conceptual interpretation checks. Before claiming improved engineering, compare against the incumbent on independently selected dissimilar tasks and retain adverse/no-change/UNKNOWN results, reviewer effort and cost. Current reviews are informed/source-based specification assurance; no new efficacy experiment is claimed. Record useful user feedback and provisional grades against the actual application, without promoting satisfaction into causal or security proof.
+--- a/docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md
++++ b/docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md
+@@ -852,10 +852,10 @@
+ 1. **Frame the outcome and discover the owner.** Record the actual actor, desired consequence, constraints and important failure conditions. Inspect current implementation, specifications, prior decisions and concurrent work. Explain what can be reused and the exact remaining gap before comparing external systems.
+ 2. **Find comparable mechanisms and contrary experience.** Search primary documentation, source, standards and relevant maintainers' incident/limitation reports. Include contrasting approaches or failures where available, not only successful vendors. Distinguish marketed intent, documented behavior, code observed, a reported outcome and an independently reproduced result. Capture exact version/commit or document date and retrieval date; note support/deprecation, licensing, security and operational limitations when material. Popularity and longevity are leads, not proof of quality.
+ 3. **Distill a conditional principle.** Explain the causal mechanism and assumptions, the cost/risks it introduces and where it fails. Consider a plausible competing explanation before attributing success or failure. A lack of public failures is not evidence of safety; selection/survivorship and reporting bias can limit the source. Keep a documented limitation distinct from an invented production incident. Reconcile with an existing principle before naming another.
+-4. **Instantiate against the actual target.** Compare actors, scale, tenancy, trust, data, lifecycle, existing owners, business rules, operational ability and deployment constraints. Decide **adopt**, **adapt**, **reject**, **defer**, or **no change**, with the concrete reason and residual unknowns. A platform-specific API, UI or permission policy does not become universal merely because its underlying principle transfers. Missing human authority remains a scoped decision, not a guessed default.
+-5. **Make the consequence testable and traceable.** Link the decision to its current requirement/design/backlog/test owner and describe an observation that would distinguish success from a false analogy. Include a boundary or contrary case and the valid existing/no-plugin alternative where relevant. State what evidence is still required, the responder/fallback and the condition that would reopen the choice. Research is complete only for its declared decision/scope; implementation and verification retain separate gates.
+-
+-Use one proportionate record in the existing PR, review, task or principle register. Required meanings are **problem/constraints; current owner and maturity; source/version/date; observed mechanism and outcome class; inferred principle and limits; contrasting evidence/alternative cause; adopt/adapt/reject/defer/no-change rationale; target change or unchanged decision; verification/remaining authority; recheck trigger**. These are record semantics, not eleven compulsory UI fields or a new database. A citation list without a justified decision is incomplete. Retain a supported no-change result without manufacturing a feature or finding.
++4. **Instantiate against the actual target.** Compare actors, scale, tenancy, trust, data, lifecycle, existing owners, business rules, operational ability and deployment constraints. Compare reuse, extension, composition, extraction, a new primitive and existing/manual behavior where relevant, including implementation/maintenance cost and sacrifices. Decide **adopt**, **adapt**, **reject**, **defer**, or **no change**, with the concrete reason and residual unknowns. A platform-specific API, UI or permission policy does not become universal merely because its underlying principle transfers. Missing human authority remains a scoped decision, not a guessed default.
++5. **Make the consequence testable and traceable.** Link the decision to its current requirement/design/backlog/test owner and describe an observation that would distinguish success from a false analogy. Include a boundary or contrary case and the valid existing/no-plugin alternative where relevant. State the expected observable benefit, preserved obligations, failure signal, actual validation/result if available, remaining evidence, responder/fallback and condition that would reopen the choice. Research is complete only for its declared decision/scope; implementation and verification retain separate gates.
++
++Use one proportionate record in the existing PR, review, task or principle register. Required meanings are **problem/constraints; current owner and maturity; source/version/date; observed mechanism and outcome class; inferred principle and limits; contrasting evidence/alternative cause; adopt/adapt/reject/defer/no-change rationale; target change or unchanged decision; verification/remaining authority; recheck trigger**. These are record semantics, not eleven compulsory UI fields or a new database. A citation list without a justified decision is incomplete. Retain a supported no-change result without manufacturing a feature or finding. Stop expanding research when material uncertainties have supported bounded dispositions and further searching is unlikely to change this decision; record missing evidence. Revisit on relied-on version, threat, scale, user-need, license/support or observed-outcome changes, and allow reversal of adoption. Keep unsuccessful trials and local exceptions without rewriting their history or automatically promoting a method. The existing [scope/team handoff](../agent-scope-discipline.md#research-informed-engineering-and-team-handoff) routes this same canonical procedure.
+ 
+ ### Application by the existing teams
+ 
+--- a/docs/qa-orchestration/07_UI_DESIGN_TASKS.md
++++ b/docs/qa-orchestration/07_UI_DESIGN_TASKS.md
+@@ -953,3 +953,9 @@
+ Use task-focused actions with search/filter and useful history when the actual inventory warrants them. Before disable/remove/upgrade, disclose affected work/dependents, remaining data and any stop/restart/recovery limit. A failed or uncertain action preserves the user's context and offers the supported next action. Provide keyboard access, focus/return behavior, readable errors and ordinary/empty/loading/denied/offline/incompatible/degraded states as applicable; do not invent data or a working action for a screenshot.
+ 
+ Assess materially different contribution journeys and supported no-plugin use. A source picker, executor task handoff and report view need different contextual information; copying one plugin marketplace screen cannot define all three. Walk through the actual native receipt/result and historical view after removal. Prototype interaction, source correctness, deployed behavior and human task comprehension keep separate evidence. Source-only team review here does not satisfy those later UI and user checks.
++
++For overlapping eligible contributions, show the actual selected provider/account/version and any permitted scoped default; changed defaults must not hide rerouted queued/in-flight work. A failed provider cannot silently select a broader credential or destination. Exercise a departed connection owner: the ordinary user receives a meaningful next step without admin power, while authorized reassignment/reconnection preserves unrelated legitimate consumers.
++
++Verify useful historical interpretation after the sole custom renderer disappears, using the admitted native representation/export/migration from canonical 03. An opaque unsupported download is insufficient. Display the limitation before admitting a profile that cannot retain the promised historical meaning.
++
++Planned maintenance uses current dependency/permission impact preview. Keep the existing independently authorized emergency stop/grant interaction usable when catalog, telemetry or dependency inventory is unavailable; show scoped action and actual acknowledgement promptly, preserve unknown effects, and support later reconciliation. No new unauthenticated override or unconfirmed success is implied. Treat catalog descriptions, links/icons and rendered contribution content as untrusted presentation inputs and exercise the actual rendering/data boundary.
+--- a/docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md
++++ b/docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md
+@@ -231,9 +231,9 @@
+ 
+ ## Canonical reconciliation and native handoff
+ 
+-The scope correction is reconciled through the existing proposed-specification [PR295](https://github.com/1alextest/Tesbooboo/pull/295). At its inspected head `f92c3341eadc03f274becbead3b0f45d0a86539e`, the previously advertised v1.4.49 review path was absent; the saved canonical package was v1.4.48. The new [connected specification review record](https://github.com/1alextest/Tesbooboo/blob/docs/skill-evaluation-specs-20261126/docs/qa-orchestration/reviews/spec-review-20261127/README.md) records this continuation's actual inputs, reports and limits. No unavailable earlier team receipt or test result is reconstructed. The review considers the connected specification contracts; this research remains supporting evidence. General obligations are proposed without selecting an implementation slice:
+-
+-- `00_README.md` P-16 and `01_PRODUCT_REQUIREMENTS.md` FR-058: retain replaceable execution integration; add the distinct knowledge/report/Skill contribution obligations where approved. FR-058 alone is not a finished generic plugin SDK.
++The scope correction is reconciled through the existing proposed-specification [PR295](https://github.com/1alextest/Tesbooboo/pull/295). At its inspected head `f92c3341eadc03f274becbead3b0f45d0a86539e`, the previously advertised v1.4.49 review path was absent; the saved canonical package was v1.4.48. The new [connected specification review record](https://github.com/1alextest/Tesbooboo/blob/docs/skill-evaluation-specs-20261126/docs/qa-orchestration/reviews/spec-review-20261127/README.md) records this continuation's actual inputs, reports and limits. No unavailable earlier team receipt or test result is reconstructed. The review considers the connected specification contracts; this research remains supporting evidence. Concurrent PR295 publication `639faffc05e6c66f12a048dccaca4431285b674d` supplies a separately attributed analytical stream and primary incident comparisons, preserved alongside the later charter-based reviews; neither stream is relabelled as the other. General obligations are proposed without selecting an implementation slice:
++
++- `00_README.md` P-16 and `01_PRODUCT_REQUIREMENTS.md` FR-058: retain replaceable execution integration; add the distinct knowledge/report/Skill contribution obligations where approved. FR-058 alone is not a finished generic plugin SDK. The concurrent amendment's proposed FR-125, T-462 and AC-094 identities retain general outcome, design and future acceptance ownership without creating native records.
+ - `03_TECHNICAL_DESIGN.md` modular-monolith, integration, imported-source identity and GEX learning sections: define registration, namespace, scope, evidence and lifecycle at their existing owners.
+ - `04_MCP_API_CONTRACTS.md`: distinguish proposed logical associations from implemented and advertised operations; retain explicit unsupported behavior, authority, provenance and recovery. Do not invent a callable plugin endpoint from this review.
+ - `05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md` T-408 and the existing Skills/evidence tasks: add accepted scenarios and dependencies, reconcile with #295 and #310/#313.
+@@ -243,3 +243,31 @@
+ 
+ Rollback uses a normally reviewed documentation revert while retaining the original findings and their evidence. PR315 had removed its two earlier cross-reference additions so the harness and Agentic QE handoff remained with their active owners; the present continuation preserves that ownership. This research amendment changes no runtime configuration, credentials, schema, installed packages or production data.
+ 
++## 27 November 2026 — established plugin systems and engineering lessons
++
++**Evidence boundary.** The original AQE/Nagual/Quality Forge research is retained. The comparisons below add independently designed ecosystems using primary producer documentation and official incident/advisory reports retrieved on 27 November 2026. A documented mechanism is evidence that an approach exists, not proof that it produced superior engineering or human outcomes. Incident reports substantiate a reported failure and response; they do not establish how often it occurs or that Tesbo has the same vulnerability. No comparative benchmark or independently measured benefit in Tesbo was performed. The adoption column is a scoped inference for the proposed design, not a dependency choice.
++
++| Primary evidence | Documented mechanism, outcome or pitfall | Distilled principle and Tesbo disposition | Limit / counterexample |
++| --- | --- | --- | --- |
++| [Backstage extension points](https://backstage.io/docs/backend-system/architecture/extension-points/) and [modules](https://backstage.io/docs/backend-system/architecture/modules/) | Small public extension interfaces; duplicate action IDs and competing singleton runners are rejected. Module initialization precedes plugin initialization and constrains later registration. | **Adapt:** define namespaced contributions, allowed multiplicity, collision refusal and actual activation/version boundaries at existing native owners. Test duplicate/reserved IDs and an allowed multi-provider point. | Do not import Backstage's architecture, database layout or initialization implementation. These docs do not establish dynamic hot reload or measured reliability in Tesbo. |
++| [VS Code contribution points](https://code.visualstudio.com/api/references/contribution-points) and [extension host](https://code.visualstudio.com/api/advanced-topics/extension-host) | Distinct contribution declarations and runtime/location requirements; activation can be lazy and extensions do not directly own the editor's UI. | **Adapt:** compare declared with actually registered/invoked capabilities; load only needed capabilities within the selected profile and measured operating envelope. | A process or declaration is not a permission boundary. Do not select a desktop runtime or require every profile to be executable code. Performance benefit here is a design rationale, not a Tesbo measurement. |
++| [VS Code runtime security](https://code.visualstudio.com/docs/configure/extensions/extension-runtime-security) | The extension host has VS Code's permissions, including files, network and process execution; publisher/dependency trust requires explicit consideration. | **Adapt the distinction, reject the ambient authority:** package trust/admission does not grant tenant/project/target rights. Use actual authority and isolation controls for admitted effects. | Desktop-user trust does not transfer to hostile multi-tenant server execution. No manifest-only sandbox claim. |
++| [Microsoft's extension supply-chain response](https://github.com/microsoft/vsmarketplace/discussions/1904) | The producer reports removing an affected extension version within hours and adding delayed automatic updates/cooldown in VS Code 1.123. | **Evaluate:** bind containment and update decisions to exact package/dependency versions, not publisher reputation alone; preserve attribution and affected-scope recovery. | This is an attributable producer incident account, not an independently reproduced outcome or an order to copy automatic updates/cooldown. Tesbo update/distribution policy remains unselected. |
++| [Jenkins plugin management](https://www.jenkins.io/doc/book/managing/plugins/) | Removing a required dependency can prevent correct startup. Disable, uninstall and purging old configuration are different operations; uninstall can retain configuration. | **Adapt:** inspect dependency impact before transition and preserve an explicit removal/data policy. Test required/optional dependencies, unaffected consumers and usable historical results. | Jenkins restart/configuration semantics are not Tesbo requirements; retained data alone does not ensure a usable reader or complete recovery. |
++| [Grafana security release](https://grafana.com/blog/grafana-security-releases-new-versions-with-fixes-for-cve-2022-39229-cve-2022-39201-cve-2022-31130-cve-2022-31123/) | Official disclosures identify proxy cookie/token leaks and a plugin-signature bypass through a versioning flaw. | **Adapt:** explicitly constrain credential routing and artifact/version admission; assert actual outbound bytes and negative integrity/compatibility controls. | A signature is not authorization or proof of safe behavior. These historical flaws are not findings in Tesbo or claims that current Grafana is affected. |
++| [Backstage connection concepts](https://backstage.io/docs/backend-system/core-services/connections/concepts/) | Plugin-scoped configuration narrows visible credentials; the docs explicitly say this does not replace authorization. | **Adapt:** keep connection selection/configuration separate from current caller/target authority, including shared-account and departing-owner cases. | Do not infer that installing an extension or having a matching account configuration permits an action. |
++| [Terraform plugin protocol](https://developer.hashicorp.com/terraform/plugin/terraform-plugin-protocol) and [go-plugin](https://github.com/hashicorp/go-plugin) | Explicit protocol compatibility; go-plugin uses RPC with a reliable local-network assumption. | **Adapt:** version the actual host/contribution contract and reject incompatible negotiation. Compare an existing adapter before a new SDK. | Neither gRPC nor Go nor a local-process reliability model is selected. A remote Internet service needs its actual failure, identity and network contracts. |
++| [VS Code Webviews](https://code.visualstudio.com/api/extension-guides/webview) and [UX guidance](https://code.visualstudio.com/api/ux-guidelines/webviews) | Custom views have specific resource, message, sanitization/CSP, theming and accessibility obligations; custom UI is not always necessary. | **Adapt:** prefer adequate native presentation; qualify admitted custom UI boundaries and retained historical meaning after its renderer disappears. | Product-specific browser restrictions are not a complete Tesbo threat model; documented accessibility guidance is not observed human usability. |
++| [Forge app versions](https://developer.atlassian.com/platform/forge/versions/) and [storage lifecycle](https://developer.atlassian.com/platform/forge/storage-reference/hosted-storage-data-lifecycle/) | Installation/version and consent changes are distinct; retained uninstall data is not a generally readable archive or automatic recovery. | **Adapt:** evaluate material authority changes separately from package version labels; define lawful readable history, export/migration and recovery before admitting persistent custom formats. | Forge's retention periods, approval model and support process do not become Tesbo policy. No recovery success rate was measured here. |
++| [Current Grafana Frontend Sandbox status](https://grafana.com/docs/grafana/latest/administration/plugin-management/plugin-frontend-sandbox/) | The public-preview feature is documented as deprecated and scheduled for removal in 13.4. | **Reject as a presently selected mechanism:** check lifecycle/maintenance before adopting an attractive precedent; retain only the relevant problem/constraint as research. | This does not reject all browser isolation designs or decide Tesbo's runtime. A dated source needs rechecking when adoption is considered. |
++
++### Decisions changed by this comparison
++
++The proposed v1.4.49 contract now distinguishes package dependencies, work-unit dependencies and application assurance relationships; it adds namespaced contribution conflicts, explicit provider selection/default binding, compatible state recovery, usable historical representation and profile-specific effects. It applies existing revocation, stopping, budgets and native evidence controls rather than reproducing them in a second plugin framework. Installation, connection, project enablement and actual grant remain separate, including the actor who can resolve each blocked state. The research has not selected a first profile, marketplace, SDK, executable/UI runtime or automatic update policy.
++
++**Stopping point for this design increment.** These sources support concrete proposed boundaries and falsifiable acceptance dimensions. Additional broad searching is unlikely to resolve the remaining product choices without a selected user outcome. Targeted deeper source/incident/version/license analysis resumes when a profile or dependency is considered for implementation, or when a relied-on assumption changes. Runtime controls and historical-readability cases remain NOT RUN. Existing functionality, configuration, a native adapter or no change remain valid alternatives to installing a plugin.
++
++**Reusable engineering lesson.** Investigate established outcomes and failures, separate the evidence from the inferred mechanism, identify applicability/counterexamples, and test the contextual decision through the existing owner. The detailed portable method belongs to canonical 06 and the existing engineering/team instructions. This research document supplies a worked application, not another binding team charter or an installed Skill.
++
++
++**Concurrent integration reconciliation, 27 November 2026.** PR315 was observed merged at `907076b6df572d6b161ce2bd334d083f450413b7`; its research bytes in development `d440c48ede32ca38783b178ea6d957ded8bca9e4` match the original reviewed `7539a739243167b2d6709df1d644bd5b955f6ffc` input. This additive research correction and comparative continuation are now carried with the canonical amendment in existing PR295, preserving the same document identity and the merged PR history. No later change to PR315 is implied.
+--- a/scripts/check-gitleaks-evidence-exceptions.py
++++ b/scripts/check-gitleaks-evidence-exceptions.py
+@@ -42,10 +42,10 @@
+ # under their exact paths and the generic-api-key rule.
+ CANONICAL_PROSE = [
+     ("technical", Path("docs/qa-orchestration/03_TECHNICAL_DESIGN.md"),
+-     "374bf4e7d853c958c9442baf56c8a06e62dcac0a97be10e221a7fd73e41c7499",
++     "4e5f4a6cf5188ed77dcc7029597b36bf8e6cbf2f38b53357dd0a8580fb2ae037",
+      "".join(("auth, ", "finalization/", "merge ")), "merge", "merge2"),
+     ("contracts", Path("docs/qa-orchestration/04_MCP_API_CONTRACTS.md"),
+-     "e87f1e9ddb2ac70c17ad2d06d7538e49c838ec71a8c7df7e314a5c6370d3c6fa",
++     "b6f6c0816ef9b4d46c1396b1d96e223a6f32d0d811b2ee80870a029532e9c9d2",
+      "".join(("token. Reject cycles, ", "missing/foreign/", "unapproved ")), "unapproved", "unapproved2"),
+ ]
+ 

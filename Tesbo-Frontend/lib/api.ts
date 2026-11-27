@@ -1096,6 +1096,9 @@ export interface ZyraTask {
 }
 
 export interface RequirementApplyReceipt {
+  id?: string;
+  proposalRevision?: string;
+  selectedIndex?: number;
   requirement: { documentId: string; versionId: string; versionNumber: number | null; editRevision: string | null };
   testcase: { id: string; title: string | null; editRevision: string | null } | null;
   link: { id: string; criterionKeys: string[] } | null;
@@ -1923,19 +1926,53 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
 }
 
-export type McpClientGrant = {
+/** Existing named token client grants keep their exact API shape. */
+export type ApiMcpClientGrant = {
   tokenId: string;
   clientName: string;
   scopes: Array<"read" | "write">;
   allowedTools: string[] | null;
   expiresAt: string | null;
 };
+/** Owner preapproval only; OAuth login and end-user consent are separate. */
+export type OAuthMcpClientGrant = {
+  kind: "oauth_client";
+  oauthClientId: string;
+  clientName: string;
+  scopes: Array<"read">;
+  allowedTools: string[] | null;
+  expiresAt: string | null;
+};
+export type McpClientGrant = ApiMcpClientGrant | OAuthMcpClientGrant;
 export type ProjectMcpAccess = { enabled: boolean; revision: number; clients: McpClientGrant[] };
 export async function getProjectMcpAccess(projectId: string): Promise<ProjectMcpAccess> {
   return api(`/api/projects/${projectId}/mcp-access`);
 }
 export async function updateProjectMcpAccess(projectId: string, access: ProjectMcpAccess): Promise<ProjectMcpAccess> {
   return api(`/api/projects/${projectId}/mcp-access`, { method: "PUT", body: access });
+}
+
+/** A human consent record, not proof that the client is currently online. */
+export type MyMcpOAuthConsent = {
+  id: string; // Opaque binding ID; never the bearer or provider Grant ID.
+  clientId: string;
+  clientName: string;
+  resource: string;
+  status: "consent_current" | "reconsent_required" | "revoked";
+  currentAllowedTools: string[] | null;
+  createdAt: string;
+  revokedAt: string | null;
+};
+export async function listMyMcpOAuthConsents(projectId: string): Promise<{
+  consents: MyMcpOAuthConsent[]; truncated: boolean;
+}> {
+  return api("/api/projects/" + projectId + "/mcp-oauth-consents");
+}
+export async function revokeMyMcpOAuthConsent(projectId: string, consentId: string): Promise<{
+  id: string; status: "revoked"; replayed: boolean;
+}> {
+  return api("/api/projects/" + projectId + "/mcp-oauth-consents/" + encodeURIComponent(consentId),
+    { method: "DELETE" });
 }
 
 export interface ApiToken {

@@ -1,0 +1,26 @@
+{
+  "kind": "development_integration",
+  "previous_review_source": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "research_pr_merged_externally": 315,
+  "research_merge": "907076b6df572d6b161ce2bd334d083f450413b7",
+  "research_input": "7539a739243167b2d6709df1d644bd5b955f6ffc",
+  "incoming_development": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
+  "local_merge": "8d6676aa989dd5a9c27a7adcc0b686257e4de3a1",
+  "conflicts": [
+    {
+      "path": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "kind": "add/add",
+      "incoming_matches_reviewed_research_parent": true,
+      "resolution": "Preserved complete reviewed continuation; incoming historical research bytes unchanged from pinned source."
+    }
+  ],
+  "application_paths_compared_to_incoming": [
+    "Tesbo-Backend-Nest",
+    "Tesbo-Frontend",
+    "e2e",
+    ".github",
+    "docs/agent-skills"
+  ],
+  "differences_in_compared_paths": [],
+  "limits": "Existing source reviews remain at their exact f92 source pin. Incoming application changes are preserved, not reattributed or newly runtime-verified by this documentation amendment. New candidate hashes include the incoming AGENTS and CLAUDE guidance."
+}

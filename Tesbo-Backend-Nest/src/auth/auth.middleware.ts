@@ -1,16 +1,18 @@
-import { Injectable, NestMiddleware } from "@nestjs/common";
+import { Injectable, NestMiddleware, Optional } from "@nestjs/common";
 import type { Response, NextFunction } from "express";
 import { AppConfigService } from "../config/app-config.service";
 import { AuthenticatedRequest } from "../common/request.types";
 import { ApiTokenService } from "./api-token.service";
 import { OtpService } from "./otp.service";
+import { McpOAuthServer } from "./mcp-oauth-server";
 
 @Injectable()
 export class AuthMiddleware implements NestMiddleware {
   constructor(
     private readonly config: AppConfigService,
     private readonly otpService: OtpService,
-    private readonly apiTokens: ApiTokenService
+    private readonly apiTokens: ApiTokenService,
+    @Optional() private readonly oauth?: McpOAuthServer
   ) {}
 
   async use(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
@@ -20,8 +22,7 @@ export class AuthMiddleware implements NestMiddleware {
     // never resolved (no session lookup) on a bearer-authenticated call.
     req.userId = null;
     req.apiToken = null;
-    // No OAuth verifier exists yet. Reset untrusted/ambient identity before any lookup.
-    // A future verifier must attach a checked principal explicitly after this boundary.
+    // Reset untrusted/ambient identity before any credential lookup.
     req.oauthAccess = null;
 
     const bearer = this.readBearerHeader(req.headers?.authorization);
@@ -29,15 +30,19 @@ export class AuthMiddleware implements NestMiddleware {
       // authenticate() answers null for an absent token, so no second user-controlled branch is
       // needed between "a bearer was presented" and "a principal was resolved".
       const principal = await this.apiTokens.authenticate(bearer.token);
-      req.userId = principal?.userId ?? null;
-      req.apiToken = principal
-        ? {
-            tokenId: principal.tokenId,
-            userId: principal.userId,
-            projectId: principal.projectId,
-            scopes: principal.scopes
-          }
-        : null;
+      if (principal) {
+        req.userId = principal.userId;
+        req.apiToken = {
+          tokenId: principal.tokenId,
+          userId: principal.userId,
+          projectId: principal.projectId,
+          scopes: principal.scopes
+        };
+      } else if (this.oauth?.enabled) {
+        // Credential validation, including missing/empty inputs, is owned by the
+        // verifier. An OAuth principal cannot assign a human session identity.
+        req.oauthAccess = await this.oauth.verifyAccessToken(bearer.token);
+      }
     } else {
       const sessionToken = req.cookies?.[this.config.sessionCookieName];
       req.userId = sessionToken ? await this.otpService.resolveSession(sessionToken) : null;

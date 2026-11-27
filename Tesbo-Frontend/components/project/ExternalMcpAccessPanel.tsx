@@ -1,14 +1,113 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type McpClientGrant, type ProjectMcpAccess } from "@/lib/api";
+import { ApiError, getProjectMcpAccess, listApiKeys, updateProjectMcpAccess, type ApiToken, type ApiMcpClientGrant, type McpClientGrant, type OAuthMcpClientGrant, type ProjectMcpAccess, type MyMcpOAuthConsent, listMyMcpOAuthConsents, revokeMyMcpOAuthConsent } from "@/lib/api";
 import { Button, Card, Field, FieldLabel, Input } from "@/components/ui";
+
+function clientGrantIdentity(client: McpClientGrant): string {
+  return "tokenId" in client ? `api:${client.tokenId}` : `oauth:${client.oauthClientId}`;
+}
 
 type ExternalMcpAccessPanelProps = { projectId: string; canManage: boolean; refreshKey?: number };
 
 export function ExternalMcpAccessPanel(props: ExternalMcpAccessPanelProps) {
   // A project change must not reuse credentials, pending form input, notices or a save from another project.
-  return <ProjectMcpAccessPanel key={props.projectId} {...props} />;
+  return <div key={props.projectId} className="space-y-4"><MyOAuthConsentHistory projectId={props.projectId} refreshKey={props.refreshKey ?? 0} /><ProjectMcpAccessPanel {...props} /></div>;
+}
+
+/**
+ * Individual user's consent records. The server returns only the authenticated
+ * session owner's rows; client labels are never used as authority.
+ * No stored consent is evidence of a currently running external application.
+ */
+function MyOAuthConsentHistory({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
+  const [rows, setRows] = useState<MyMcpOAuthConsent[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const generationRef = useRef<{ active: boolean } | null>(null);
+  const pendingRef = useRef(false);
+
+  useEffect(() => {
+    const generation = { active: true };
+    generationRef.current = generation;
+    pendingRef.current = false;
+    setRows(null); setTruncated(false); setLoading(true);
+    setBusyId(null); setError(null); setNotice(null);
+    listMyMcpOAuthConsents(projectId).then(result => {
+      if (!generation.active || generationRef.current !== generation) return;
+      setRows(result.consents); setTruncated(result.truncated);
+    }).catch(reason => {
+      if (generation.active && generationRef.current === generation) {
+        setError(reason instanceof Error ? reason.message : "Consent history could not be loaded.");
+      }
+    }).finally(() => {
+      if (generation.active && generationRef.current === generation) setLoading(false);
+    });
+    return () => { generation.active = false; };
+  }, [projectId, refreshKey, reload]);
+
+  async function disconnect(consent: MyMcpOAuthConsent) {
+    if (pendingRef.current || loading || !rows) return;
+    const generation = generationRef.current;
+    if (!generation?.active) return;
+    pendingRef.current = true;
+    setBusyId(consent.id); setError(null); setNotice(null);
+    try {
+      const result = await revokeMyMcpOAuthConsent(projectId, consent.id);
+      if (!generation.active || generationRef.current !== generation) return;
+      if (result.status !== "revoked" || result.id !== consent.id) throw Error("Revocation result did not match this consent.");
+      setRows(current => current?.map(row => row.id === consent.id ?
+        { ...row, status: "revoked" as const, currentAllowedTools: null } : row) ?? null);
+      setNotice("This consent has been revoked. The previously issued OAuth grant cannot be used again.");
+    } catch (reason) {
+      if (!generation.active || generationRef.current !== generation) return;
+      // A failed response may hide a committed revoke; do not claim either state.
+      setRows(null);
+      setError(reason instanceof Error ? reason.message : "Could not confirm the outcome. Reload to verify.");
+    } finally {
+      if (generation.active && generationRef.current === generation) {
+        pendingRef.current = false; setBusyId(null);
+      }
+    }
+  }
+
+  return <Card className="space-y-3 p-4" aria-labelledby="my-oauth-consents-title">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h3 id="my-oauth-consents-title" className="font-semibold">Your OAuth consent history</h3>
+        <p className="text-sm text-[var(--muted)]">These are consent records for your Tesbo account in this project, not proof that an app is online. You can revoke your own consent without changing the project owner&apos;s client approval.</p>
+      </div>
+      <Button variant="secondary" disabled={loading || busyId !== null}
+        onClick={() => setReload(x => x + 1)}>Reload history</Button>
+    </div>
+    {loading && <p role="status">Loading your OAuth consent history…</p>}
+    {error && <p role="alert" className="text-sm text-[var(--error-foreground)]">{error}</p>}
+    {notice && <p role="status" className="text-sm">{notice}</p>}
+    {rows && rows.length === 0 && <p className="text-sm text-[var(--muted)]">You have not authorized an OAuth client for this project.</p>}
+    {rows && rows.length > 0 && <ul className="space-y-2" aria-label="Your OAuth consent records">
+      {rows.map(consent => {
+        const stateLabel = consent.status === "revoked" ? "Revoked" :
+          consent.status === "reconsent_required" ? "Reauthorization required" : "Consent recorded (not live status)";
+        return <li key={consent.id} className="space-y-1 rounded-lg border border-[var(--border)] p-3 text-sm">
+          <p className="font-medium break-words">{consent.clientName}</p>
+          <p className="break-all text-[var(--muted)]">{consent.clientId}</p>
+          <p>State: {stateLabel}</p>
+          <p>{consent.status === "consent_current" ? "Read-only tools: " + (consent.currentAllowedTools ? consent.currentAllowedTools.join(", ") : "all currently permitted read tools") : "This consent has no current access."}</p>
+          <p className="text-[var(--muted)]">Approved resource: {consent.resource}</p>
+          <p className="text-[var(--muted)]">Consent recorded: {new Date(consent.createdAt).toLocaleString()}</p>
+          {consent.status !== "revoked" && <Button variant="secondary" disabled={busyId !== null}
+            onClick={() => void disconnect(consent)}>
+            {busyId === consent.id ? "Revoking…" : "Revoke my consent"}
+          </Button>}
+        </li>;
+      })}
+    </ul>}
+    {truncated && <p className="text-sm text-[var(--muted)]">Only the 50 most recent consent records are shown. Older history is retained but not displayed here.</p>}
+  </Card>;
 }
 
 function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: ExternalMcpAccessPanelProps) {
@@ -24,6 +123,9 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
   const [allowWrite, setAllowWrite] = useState(false);
   const [expiresAt, setExpiresAt] = useState("");
   const [tools, setTools] = useState("");
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientName, setOauthClientName] = useState("");
+  const [oauthExpiresAt, setOauthExpiresAt] = useState("");
   const requestGeneration = useRef<{ active: boolean } | null>(null);
   const pendingSave = useRef<{ active: boolean } | null>(null);
 
@@ -34,6 +136,7 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
     pendingSave.current = null;
     setAccess(null); setTokens([]); setError(null); setNotice(null); setSaving(false);
     setTokenId(""); setClientName(""); setAllowWrite(false); setExpiresAt(""); setTools("");
+    setOauthClientId(""); setOauthClientName(""); setOauthExpiresAt("");
     setLoading(canManage);
     if (!canManage) return () => { generation.active = false; };
     Promise.all([getProjectMcpAccess(projectId), listApiKeys(projectId)]).then(([next, nextTokens]) => {
@@ -75,7 +178,7 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
     if (!access || saving || loading) return;
     const token = tokens.find(item => item.id === tokenId);
     if (!token || !clientName.trim()) { setError("Choose a current API token and enter the client name."); return; }
-    const scopes: McpClientGrant["scopes"] = [];
+    const scopes: ApiMcpClientGrant["scopes"] = [];
     if (token.scopes.includes("read")) scopes.push("read");
     if (allowWrite && token.scopes.includes("write")) scopes.push("write");
     if (!scopes.length) { setError("Choose a credential with read access, or explicitly allow its write access."); return; }
@@ -89,8 +192,34 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
     }
   }
 
+  async function addOauthClient(event: FormEvent) {
+    event.preventDefault();
+    if (!access || saving || loading || !canManage) return;
+    const candidate = oauthClientId.trim();
+    let parsed: URL;
+    try { parsed = new URL(candidate); } catch { setError("Enter the canonical HTTPS URL of the OAuth client metadata document."); return; }
+    if (candidate !== parsed.href || parsed.protocol !== "https:" || parsed.username || parsed.password ||
+        parsed.hash || parsed.search || parsed.hostname === "localhost" || !oauthClientName.trim()) {
+      setError("The OAuth client ID must be a canonical HTTPS URL and the client must have a name.");
+      return;
+    }
+    if (access.clients.some(client => clientGrantIdentity(client) === `oauth:${candidate}`)) {
+      setError("That OAuth client already has a project grant.");
+      return;
+    }
+    const grant: OAuthMcpClientGrant = {
+      kind: "oauth_client", oauthClientId: candidate, clientName: oauthClientName.trim(),
+      scopes: ["read"], allowedTools: null,
+      expiresAt: oauthExpiresAt ? new Date(oauthExpiresAt).toISOString() : null
+    };
+    if (await save({ ...access, clients: [...access.clients, grant] },
+      "Read-only OAuth client identity preapproved. This is not a connection; the user must still complete login and consent.")) {
+      setOauthClientId(""); setOauthClientName(""); setOauthExpiresAt("");
+    }
+  }
+
   if (!canManage) return <p className="text-sm text-[var(--muted)]">A project owner or manager must enable external MCP access and approve each client credential.</p>;
-  const availableTokens = tokens.filter(token => !access?.clients.some(client => client.tokenId === token.id));
+  const availableTokens = tokens.filter(token => !access?.clients.some(client => "tokenId" in client && client.tokenId === token.id));
   const selectedToken = tokens.find(token => token.id === tokenId);
 
   return <Card className="space-y-4 p-4" aria-labelledby="external-mcp-heading">
@@ -114,16 +243,17 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
       </div>
       <ul className="space-y-3" aria-label="Approved MCP clients">
         {access.clients.map(client => {
-          const token = tokens.find(item => item.id === client.tokenId);
-          return <li key={client.tokenId} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] p-3">
+          const isOauth = "kind" in client && client.kind === "oauth_client";
+          const token = "tokenId" in client ? tokens.find(item => item.id === client.tokenId) : undefined;
+          return <li key={clientGrantIdentity(client)} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] p-3">
             <div className="min-w-0 text-sm">
               <p className="font-semibold break-words">{client.clientName}</p>
-              <p className="text-[var(--muted)]">{token ? `${token.name} · ${token.tokenPrefix}` : "Credential revoked or unavailable"}</p>
+              <p className="text-[var(--muted)]">{isOauth ? `OAuth identity preapproved (not connected): ${"oauthClientId" in client ? client.oauthClientId : ""}` : token ? `${token.name} · ${token.tokenPrefix}` : "Credential revoked or unavailable"}</p>
               <p>{client.scopes.join(" + ")} · {client.allowedTools ? `Tools: ${client.allowedTools.join(", ")}` : "All tools within these scopes"}</p>
               <p>{client.expiresAt ? `Expires ${new Date(client.expiresAt).toLocaleString()}` : "No grant expiry set"}</p>
               {token && <p className="text-[var(--muted)]">Credential last used: {token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : "Never"}</p>}
             </div>
-            <Button variant="secondary" disabled={saving || loading} onClick={() => void save({ ...access, clients: access.clients.filter(item => item.tokenId !== client.tokenId) }, "Client access revoked. Subsequent MCP requests are blocked.")}>Revoke {client.clientName}</Button>
+            <Button variant="secondary" disabled={saving || loading} onClick={() => void save({ ...access, clients: access.clients.filter(item => clientGrantIdentity(item) !== clientGrantIdentity(client)) }, "Client access revoked. Subsequent MCP requests are blocked.")}>Revoke {client.clientName}</Button>
           </li>;
         })}
       </ul>
@@ -144,6 +274,32 @@ function ProjectMcpAccessPanel({ projectId, canManage, refreshKey = 0 }: Externa
         <p className="text-xs text-[var(--muted)]">The grant is bound to this credential, not to a name supplied by the connecting app. Use a different credential for each client.</p>
         <Button type="submit" disabled={saving || loading || !tokenId || !clientName.trim()}>Approve client</Button>
         <Button type="button" variant="secondary" disabled={saving || loading} onClick={() => setReloadKey(key => key + 1)}>Reload credentials</Button>
+      </form>
+      <form onSubmit={addOauthClient} className="space-y-3 border-t border-[var(--border)] pt-4" aria-labelledby="oauth-client-grant-title">
+        <h3 id="oauth-client-grant-title" className="font-semibold">Preapprove an OAuth client — read only</h3>
+        <p className="text-sm text-[var(--muted)]">
+          This approves a client identity in the existing project policy. It does not connect the app,
+          grant consent on a user&apos;s behalf, issue an OAuth token, or permit publishing test cases.
+          Each user must separately authorize access when OAuth becomes available.
+        </p>
+        <Field><FieldLabel htmlFor="mcp-oauth-client-id">OAuth client ID metadata URL (HTTPS)</FieldLabel>
+          <Input id="mcp-oauth-client-id" type="url" value={oauthClientId} maxLength={2048}
+            disabled={saving || loading} onChange={event => setOauthClientId(event.target.value)}
+            placeholder="https://client.example/oauth/client.json" />
+        </Field>
+        <Field><FieldLabel htmlFor="mcp-oauth-client-name">Client label</FieldLabel>
+          <Input id="mcp-oauth-client-name" value={oauthClientName} maxLength={100}
+            disabled={saving || loading} onChange={event => setOauthClientName(event.target.value)}
+            placeholder="Read-only QA client" />
+        </Field>
+        <Field><FieldLabel htmlFor="mcp-oauth-client-expiry">Project approval expiry (optional)</FieldLabel>
+          <Input id="mcp-oauth-client-expiry" type="datetime-local" value={oauthExpiresAt}
+            disabled={saving || loading} onChange={event => setOauthExpiresAt(event.target.value)} />
+        </Field>
+        <p className="text-xs text-[var(--muted)]">Read-only scope only. Client metadata must be verified during the future OAuth handshake; this label is not evidence of client authenticity.</p>
+        <Button type="submit" disabled={saving || loading || !oauthClientId.trim() || !oauthClientName.trim()}>
+          Preapprove read-only client
+        </Button>
       </form>
     </>}
   </Card>;

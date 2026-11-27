@@ -1,0 +1,63 @@
+{
+  "kind": "immutable_review_input_reconstruction",
+  "patch": "candidate-c1-to-c2.patch",
+  "patch_sha256": "8166e2ec2922652c6a90ad2805cf58663c70563fd7419ef3bd9b6b4de184628f",
+  "scope": "The 13 common reviewed artifacts only. C2 added two verifier bindings, neither was a C1 input; their full source is not duplicated in this patch.",
+  "command": "Copy C2 bytes for the 13 C1 manifest paths into an isolated directory, then git apply --reverse candidate-c1-to-c2.patch.",
+  "exit_code": 0,
+  "restored_artifact_matches": [
+    {
+      "path": "AGENTS.md",
+      "matches_c1": true
+    },
+    {
+      "path": "CLAUDE.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/source-manifest.json",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/00_README.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "matches_c1": true
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "matches_c1": true
+    }
+  ],
+  "limits": "Reconstructs the 13 C1 input bytes only; not runtime or semantic verification."
+}

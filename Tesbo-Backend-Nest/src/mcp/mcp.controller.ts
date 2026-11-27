@@ -1,11 +1,13 @@
-import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Delete, Get, NotFoundException, Optional, Param, Post, Put, Req, Res, UnauthorizedException } from "@nestjs/common";
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../common/request.types";
 import { McpService } from "./mcp.service";
-import { MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
+import { MCP_SERVER_INSTRUCTIONS, MCP_SERVER_NAME, MCP_SESSION_HEADER, RpcCode, type JsonRpcId } from "./mcp.types";
 import type { McpClientGrant } from "./mcp-access";
 import { unsupportedMcpProtocol } from "./mcp-protocol-compat";
 import { mcpOAuthDiscoveryPolicy, mcpOAuthProtectedResourceMetadata, mcpOAuthUnauthorizedChallenge } from "./mcp-oauth-discovery";
+import { McpOAuthServer } from "../auth/mcp-oauth-server";
+import { modernMcpResponse, validateModernMcpRequest } from "./mcp-oauth-modern";
 
 /**
  * Tesbo MCP — HTTP transport.
@@ -42,7 +44,7 @@ import { mcpOAuthDiscoveryPolicy, mcpOAuthProtectedResourceMetadata, mcpOAuthUna
  */
 @Controller()
 export class McpController {
-  constructor(private readonly mcp: McpService) {}
+  constructor(private readonly mcp: McpService, @Optional() private readonly oauth?: McpOAuthServer) {}
 
   /**
    * Opt-in, read-only *preview* of project-specific RFC 9728 discovery.
@@ -67,6 +69,10 @@ export class McpController {
     @Param("projectId") projectId: string,
     @Body() body: unknown
   ) {
+    if (req.oauthAccess) {
+      await this.respondOAuth(req, res, body, projectId);
+      return;
+    }
     // Authenticate independently of the URL parameter. Discovery only decorates
     // an already-denied request; it can never select or bypass authentication.
     let principal: NonNullable<AuthenticatedRequest["apiToken"]>;
@@ -97,6 +103,19 @@ export class McpController {
     return this.mcp.updateAccessSettings(req, projectId, body);
   }
 
+  /** Self-service consent history: independent of project-owner client approval.
+   * No machine bearer can list another human's grants or revoke one. */
+  @Get("/api/projects/:projectId/mcp-oauth-consents")
+  listMyOAuthConsents(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string) {
+    return this.mcp.listMyOAuthConsents(req, projectId);
+  }
+
+  @Delete("/api/projects/:projectId/mcp-oauth-consents/:consentId")
+  revokeMyOAuthConsent(@Req() req: AuthenticatedRequest,
+    @Param("projectId") projectId: string, @Param("consentId") consentId: string) {
+    return this.mcp.revokeMyOAuthConsent(req, projectId, consentId);
+  }
+
   // Two handlers, not two decorators on one: Nest keeps a single route-method per handler.
   @Get(["/api/mcp", "/api/projects/:projectId/mcp"])
   async getNotAllowed(@Req() req: AuthenticatedRequest, @Res() res: Response) {
@@ -117,6 +136,57 @@ export class McpController {
     }
     res.setHeader("Allow", "POST");
     res.status(405).json({ error: "The Tesbo MCP endpoint accepts POST only (no server-sent event stream, no session termination)." });
+  }
+
+  /**
+   * OAuth access is accepted only for a verified opaque bearer bound to this
+   * exact resource. The shared MCP service owns current membership, owner
+   * consent, read-scope intersection and every tool handler. This transport
+   * intentionally remains legacy-era until the 2026 stateless codec is tested.
+   */
+  private async respondOAuth(req: AuthenticatedRequest, res: Response, body: unknown, projectId: string) {
+    const principal = req.oauthAccess;
+    if (!principal || !this.oauth?.enabled) {
+      throw new UnauthorizedException({ error: "A valid OAuth access token is required" });
+    }
+    let resource: string;
+    try { resource = this.oauth.resource(projectId); }
+    catch { throw new UnauthorizedException({ error: "OAuth resource is unavailable" }); }
+    const modern = validateModernMcpRequest(req, body, new URL(resource).origin);
+    if (!modern.ok) {
+      res.status(modern.error.status).json(modern.error.body);
+      return;
+    }
+    const info = { name: MCP_SERVER_NAME, version: this.mcp.serverVersion,
+      instructions: MCP_SERVER_INSTRUCTIONS };
+    // Never expose catalog/capabilities to a revoked client or removed member.
+    if (modern.method === "server/discover") {
+      try {
+        await this.mcp.authorizeVerifiedOAuthReadOnly(principal, projectId, this.oauth.issuer, resource);
+      } catch (error) {
+        res.status(403).json(this.mcp.toErrorResponse(modern.id, error));
+        return;
+      }
+      res.status(200).json(modernMcpResponse(
+        { jsonrpc: "2.0", id: modern.id, result: {} }, modern.method, info
+      ));
+      return;
+    }
+    const result = await this.mcp.handleVerifiedOAuthReadOnlyRequest(
+      body, principal, projectId, this.oauth.issuer, resource
+    );
+    if ("error" in result && result.error.code === RpcCode.ProjectScopeDenied) {
+      res.status(403).json(result);
+      return;
+    }
+    if ("error" in result && result.error.code === RpcCode.ScopeDenied) {
+      const metadata = mcpOAuthDiscoveryPolicy();
+      if (metadata) res.setHeader("WWW-Authenticate",
+        `Bearer error="insufficient_scope", resource_metadata="${metadata.resourceOrigin}/.well-known/oauth-protected-resource/api/projects/${projectId}/mcp"`);
+      res.status(403).json(result);
+      return;
+    }
+    res.status(200).json(modernMcpResponse(result, modern.method, info));
   }
 
   private async respond(

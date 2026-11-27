@@ -4,6 +4,24 @@ import { existsSync } from "fs";
 import { join } from "path";
 
 export type GraphQaRecoveryMode = "off" | "project" | "global";
+export type KbTranscriptionRecoveryMode = "off" | "project" | "global";
+
+/**
+ * KB transcription recovery has no legacy enable flag. Its pre-existing behaviour is automatic
+ * global recovery, so unset means global; an explicitly invalid value fails closed.
+ */
+export function resolveKbTranscriptionRecoveryMode(explicitMode: string | undefined): KbTranscriptionRecoveryMode {
+  const explicit = (explicitMode ?? "").trim().toLowerCase();
+  if (explicit === "off" || explicit === "project" || explicit === "global") return explicit;
+  if (explicit) return "off";
+  return "global";
+}
+
+/** A deliberate off is silent; a non-empty unrecognised value must be diagnosable. */
+export function isKbTranscriptionRecoveryModeInvalid(rawMode: string | undefined): boolean {
+  const value = (rawMode ?? "").trim().toLowerCase();
+  return Boolean(value) && !["off", "project", "global"].includes(value);
+}
 
 /** Explicit mode wins; the legacy ENABLED=1 flag remains an alias for global when MODE is unset. */
 export function resolveGraphQaRecoveryMode(
@@ -31,6 +49,18 @@ export class AppConfigService {
   // existing deployment does not lose a worker merely by upgrading.
   readonly graphQaRecoveryMode: GraphQaRecoveryMode = this.parseGraphQaRecoveryMode();
   readonly graphQaRecoveryProjectId = this.optionalString("TESBO_GRAPH_QA_RECOVERY_PROJECT_ID") || null;
+  // Explicit execution scope for the KB transcription restart sweep. This is intentionally separate
+  // from the graph QA flag: either may be disabled without changing the other. Unset keeps the
+  // existing automatic global recovery.
+  private readonly kbTranscriptionRecoveryModeRaw = this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_MODE");
+  readonly kbTranscriptionRecoveryMode: KbTranscriptionRecoveryMode =
+    resolveKbTranscriptionRecoveryMode(this.kbTranscriptionRecoveryModeRaw);
+  // Distinguishes a deliberate off from a typo that resolved closed; the former is silent, the
+  // latter must be diagnosable.
+  readonly kbTranscriptionRecoveryModeInvalid =
+    isKbTranscriptionRecoveryModeInvalid(this.kbTranscriptionRecoveryModeRaw);
+  readonly kbTranscriptionRecoveryProjectId =
+    this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID") || null;
   readonly databaseUrl = this.normalizeDatabaseUrl(this.string("DATABASE_URL", "postgresql://localhost:5432/tesbo"));
   readonly databaseUser = this.optionalString("DATABASE_USER");
   readonly databasePassword = this.optionalString("DATABASE_PASSWORD");
