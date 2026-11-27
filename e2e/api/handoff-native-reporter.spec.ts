@@ -36,6 +36,40 @@ function isReviewedUniquenessFailure(report: any): boolean {
     && /Expected length:\s*1\b/.test(message) && /Received length:\s*2\b/.test(message);
 }
 
+// Reconcile the complete observed attachment population, not just a matching
+// packet. Playwright may add its own error-context.md on a failed attempt.
+type ReportAttachment = { name: string; path?: string; contentType: string };
+type NativeEvidence = { id: string; fileName: string; kind: string; contentType: string };
+function reconcilePacketEvidence(attachments: ReportAttachment[], evidence: NativeEvidence[]): NativeEvidence {
+  const files = attachments.filter(item => item.path);
+  const packets = files.filter(item => item.name === "approved-handoff-evidence.json"
+    && item.contentType === "application/json");
+  expect(packets, "Exactly one packet identity attachment in the actual child report").toHaveLength(1);
+  const expectedNames = files.map(item => path.basename(item.path!));
+  expect(new Set(expectedNames).size, "Unique child attachment file identities").toBe(files.length);
+  expect(evidence, "All observed child file attachments must be retained").toHaveLength(files.length);
+  expect(new Set(evidence.map(item => item.id)).size, "Unique native evidence identities").toBe(evidence.length);
+  for (const file of files) {
+    const matches = evidence.filter(item => item.fileName === path.basename(file.path!));
+    expect(matches, "Exactly one native attachment for " + file.name).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ kind: "log", contentType: file.contentType });
+  }
+  return evidence.find(item => item.fileName === path.basename(packets[0].path!))!;
+}
+
+test("AUT-HANDOFF-01 reconciles packet evidence and additional failure context without hiding duplicates", () => {
+  const packet = { name: "approved-handoff-evidence.json", path: "output/packet.json", contentType: "application/json" };
+  const context = { name: "error-context", path: "output/error-context.md", contentType: "text/markdown" };
+  const nativePacket = { id: "packet", fileName: "packet.json", kind: "log", contentType: packet.contentType };
+  const nativeContext = { id: "context", fileName: "error-context.md", kind: "log", contentType: context.contentType };
+  expect(reconcilePacketEvidence([packet], [nativePacket])).toEqual(nativePacket);
+  expect(reconcilePacketEvidence([packet, context], [nativeContext, nativePacket])).toEqual(nativePacket);
+  expect(() => reconcilePacketEvidence([packet, context], [nativePacket])).toThrow();
+  expect(() => reconcilePacketEvidence([packet, context], [nativeContext, nativeContext])).toThrow();
+  expect(() => reconcilePacketEvidence([packet, packet], [nativePacket, nativeContext])).toThrow();
+  expect(() => reconcilePacketEvidence([packet, context], [nativePacket, { ...nativeContext, fileName: "unexpected.md" }])).toThrow();
+});
+
 test("AUT-HANDOFF-01 diagnostic distinguishes the actual uniqueness assertion from report metadata", () => {
   const label = "exactly one current approved link for the selected case and criteria";
   const report = (message: string) => ({
@@ -211,20 +245,6 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       expect(row, "Exactly the native approved case must receive the execution").toBeTruthy();
       expect(row.status).toBe(expectedPass ? "Passed" : "Failed");
       expect(row.reportedBy).toBe("automation");
-      expect(row.evidence).toHaveLength(1);
-      expect(row.evidence[0].kind).toBe("log");
-
-      const regularRead = await human.get("/api/cycles/" + runId + "/executions");
-      expect(regularRead.ok()).toBe(true);
-      const executions = await regularRead.json();
-      expect(executions).toHaveLength(1);
-      expect(executions[0]).toMatchObject({ externalId: currentCase.externalId, reportedBy: "automation" });
-      expect(executions[0].evidenceCount).toBe(1);
-
-      const fileRead = await human.get("/api/cycles/" + runId + "/executions/" + row.executionId
-        + "/attachments/" + row.evidence[0].id + "/download");
-      expect(fileRead.ok(), "Native evidence must be retrievable, not merely listed").toBe(true);
-      expect(Buffer.from(await fileRead.body())).toEqual(await readFile(evidencePath));
       const output = JSON.parse(await readFile(path.join(temp!, "report.json"), "utf8"));
       expect(output.stats[expectedPass ? "expected" : "unexpected"]).toBe(1);
       expect(output.stats[expectedPass ? "unexpected" : "expected"]).toBe(0);
@@ -235,6 +255,19 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       if (!expectedPass) {
         expect(isReviewedUniquenessFailure(output), "The sole actual failed result must identify the reviewed uniqueness assertion and the seeded two-link fault").toBe(true);
       }
+      const packetEvidence = reconcilePacketEvidence(results[0].attachments ?? [], row.evidence);
+
+      const regularRead = await human.get("/api/cycles/" + runId + "/executions");
+      expect(regularRead.ok()).toBe(true);
+      const executions = await regularRead.json();
+      expect(executions).toHaveLength(1);
+      expect(executions[0]).toMatchObject({ externalId: currentCase.externalId, reportedBy: "automation" });
+      expect(executions[0].evidenceCount).toBe(row.evidence.length);
+
+      const fileRead = await human.get("/api/cycles/" + runId + "/executions/" + row.executionId
+        + "/attachments/" + packetEvidence.id + "/download");
+      expect(fileRead.ok(), "Native evidence must be retrievable, not merely listed").toBe(true);
+      expect(Buffer.from(await fileRead.body())).toEqual(await readFile(evidencePath));
       return runId;
     }
 
