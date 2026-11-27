@@ -292,6 +292,15 @@ test.describe("automation ingest - run lifecycle", () => {
       expect(bug.status()).toBe(201);
       bugId = (await bug.json()).id;
       expect(bugId).toBeTruthy();
+      // Linking the Bug is a separate effect. Preserve execution truth and
+      // evidence across that write, then compare the complete pre-retest view.
+      const beforeRetest = await readAutomation();
+      expect(beforeRetest.summary).toEqual(first.summary);
+      expect(beforeRetest.results).toHaveLength(1);
+      expect(beforeRetest.results[0]).toMatchObject({
+        executionId, caseId: approved.externalId, status: "Failed", reportedBy: "automation",
+        errorMessage: failureText, evidence: original.evidence
+      });
       const preview = async () => {
         const response = await api.get(`/api/cycles/${sourceRunId}/retests/preview`, { params: { executionIds: executionId } });
         expect(response.status()).toBe(200);
@@ -344,8 +353,8 @@ test.describe("automation ingest - run lifecycle", () => {
         id: retained.executionId, status: "Passed", actualResult: corrected, evidenceCount: 0
       })]);
       const after = await readAutomation();
-      expect(after.summary).toEqual(first.summary);
-      expect(after.results).toEqual(first.results);
+      expect(after.summary).toEqual(beforeRetest.summary);
+      expect(after.results).toEqual(beforeRetest.results);
       expect(await preview()).toEqual(basis);
       const downloaded = await api.get(`/api/cycles/${sourceRunId}/executions/${executionId}/attachments/${evidenceId}/download`);
       expect(downloaded.status()).toBe(200);
