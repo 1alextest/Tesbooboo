@@ -64,11 +64,11 @@ not textual inspection. It is wired into the pinned investigation/handoff CI ste
 - **No approved TESBOPROJECT case is used.** The authorized project currently has staged/unapplied
   coverage proposals and Draft cases, and this session must not approve production records. The
   journey remains a CI-disposable contract until a human applies and approves one exact bundle.
-- **No native run/evidence readback is claimed from this script.** The Playwright reporter/automation
-  ingest and its authoritative readback are owned and tested separately in
-  `e2e/api/automation.spec.ts`; this reference consumer does not create a native run. The next
-  authorized increment is to run the generated tag through that reporter against a disposable
-  approved case and read the resulting run, execution and evidence back through the existing API.
+- **The standalone script does not report a native Run.** The existing reporter/automation
+  ingest remains the result owner. The separate `e2e/api/handoff-native-reporter.spec.ts` joins this
+  generator to that actual reporter with both synthetic and governed disposable inputs. Its exact
+  candidate must execute in hosted CI before native readback is credited; a passing standalone
+  generator test does not establish that seam.
 - **No source-to-code review is automated.** The generated file is a reviewable change; a human must
   review the diff before committing it to the approved target. This script does not push branches or
   approve code.
@@ -86,6 +86,44 @@ A separate Draft case proposal was staged through the authorized MCP path:
 - review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/2f20c10e-c1d3-4480-ba08-51f4cb04eca7`
 
 Manual execution remains **UNRUN**. Staging is not approval, apply, a Test Run or evidence.
+
+## Where verification is visible
+
+Developer checks, disposable integration results and persistent project executions have different
+destinations. The historical scorecard/calibration examples use Node tests and retain engineering
+output in their local or CI run. They provide neither an intelligence dashboard nor native Run
+records. This generated-process test uses Playwright's list/JSON reporters, and likewise has no
+Tesbo upload. An `@tesbo.testId` tag identifies a case only when the configured Tesbo reporter
+actually reports it to an authorized project.
+
+The joined handoff fixture reuses the existing **Test Runs** list and Run result drawer. The governed
+scenario now requires all three actual reporter-created Runs (initial pass, controlled fault,
+corrected automated attempt) to be discoverable by their unique names. Opening a card must read
+that exact Run, show automated provenance and the actual checkout commit/branch, preserve its
+case/result after reload, and download every observed evidence file through the UI with identical
+bytes. The original closure and full attachment checks remain at the API boundary. The separate
+native manual retest must still show **Untested** and retain its origin. It is not executed by the
+corrected automated Run.
+
+These are assertions in the candidate, not a claim of executed browser acceptance. On a completed
+hosted run, the existing compatibility HTML report retains Run/evidence screenshots and bounded
+`native-run-readback-<runId>.json` attachments with exact project/case/Run/execution identities,
+result, checkout commit/branch and evidence hashes. Fixture records are then deleted as required.
+The Git checkout identifies the disposable application build; the packet's separate target revision
+still identifies the controlled generated-change fixture. Neither is a production acceptance.
+
+For persistent TESBOPROJECT tracking, reopen the existing review task above and reconcile the
+connected requirement/case inventory before proposing any revision. Reuse matching definitions and
+history; do not create eleven cases merely because eleven development checks ran. A permitted
+human must apply and approve an eligible definition before an authorized reporter can create its
+real Run. Navigate **Test Runs → Run → case result → Evidence** for that reported execution.
+Keep source/CI links with the existing review work when no native evidence writer is available.
+No persistent case, approval, Run or PASS is created by this documentation or disposable test.
+
+The native requirements/cases/review task and engineering evidence need reconciliation through the
+connected project; no official IDs are invented. The developer walkthrough is updated here. Native
+Manual/Policy records and active Skills remain unchanged by this test-only continuation; their
+discovery/write status stays blocked until the authorized connection is available.
 
 ## Run
 
