@@ -7,6 +7,32 @@ const { Client } = require("pg");
 
 // Exercise the actual migrated owner with rollback-only disposable fixtures.
 async function verifyNativeQaTaskKinds(client) {
+  // Assert the real installed boundary before creating fixtures. A fresh empty
+  // database alone cannot demonstrate populated historical backfill.
+  const constraints = await client.query(
+    "SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'public.ai_generation_requests'::regclass AND conname IN ('native_qa_task_kind_values','native_qa_task_kind_matches_provider','native_qa_external_producer_closed')"
+  );
+  assert.deepEqual(constraints.rows.map(row => row.conname).sort(), [
+    "native_qa_external_producer_closed", "native_qa_task_kind_matches_provider", "native_qa_task_kind_values"
+  ]);
+  assert.ok(constraints.rows.every(row => row.convalidated), "native task constraints must be validated");
+  const binding = await client.query(
+    "SELECT tgenabled FROM pg_trigger WHERE tgrelid = 'public.ai_generation_requests'::regclass AND tgname = 'native_qa_task_kind_binding' AND NOT tgisinternal"
+  );
+  assert.equal(binding.rowCount, 1, "native task kind binding trigger missing");
+  assert.ok(["O", "A"].includes(binding.rows[0].tgenabled), "native task kind trigger must fire for ordinary writes");
+  const columns = await client.query(
+    "SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'public.ai_generation_requests'::regclass AND attname IN ('provider','task_kind') AND NOT attisdropped"
+  );
+  assert.equal(columns.rowCount, 2);
+  assert.ok(columns.rows.every(row => row.attnotnull), "provider and task kind must both be non-null");
+  // Use an independently stated expected mapping rather than the migration's
+  // classifier itself. Report the population so zero is not evidence of backfill.
+  const population = await client.query(
+    "SELECT count(*)::int AS total, count(*) FILTER (WHERE provider = 'external_qa_work' OR task_kind IS DISTINCT FROM CASE WHEN provider IN ('external_proposal','external_requirement_proposal','external_document_proposal') THEN 'governed_proposal' ELSE 'legacy_generation_review' END)::int AS violations FROM ai_generation_requests"
+  );
+  assert.equal(population.rows[0].violations, 0, "persisted native task kind population violates the closed producer contract");
+  console.log("Native task population checked before fixtures:", population.rows[0].total);
   await client.query("BEGIN");
   try {
     const suffix = require("node:crypto").randomUUID();
@@ -99,10 +125,16 @@ async function verifyNativeQaTaskKinds(client) {
     await reject("governed subtype substituted", () => client.query(
       "UPDATE ai_generation_requests SET provider='external_document_proposal' WHERE id=$1", [governed[0].id]),
       ["native_qa_governed_lane_immutable"]);
+    await reject("legacy provider switched to reserved external provider without changing kind", () => client.query(
+      "UPDATE ai_generation_requests SET provider='external_qa_work' WHERE id=$1", [legacy.id]),
+      ["native_qa_task_kind_matches_provider"]);
+    await reject("multi-row update mixes permitted legacy and forbidden governed lane substitution", () => client.query(
+      "UPDATE ai_generation_requests SET provider=CASE WHEN id=$1 THEN 'openai' ELSE 'external_document_proposal' END WHERE id IN ($1,$2)", [legacy.id, governed[0].id]),
+      ["native_qa_governed_lane_immutable"]);
     await reject("combined provider and kind conversion", () => client.query(
       "UPDATE ai_generation_requests SET provider='external_qa_work',task_kind='external_qa_work' WHERE id=$1", [legacy.id]),
       ["native_qa_task_kind_immutable"]);
-    console.log("Native task kinds: 10 legitimate fixture rows; 11 exact constraint refusals; all prior rows preserved; external producer closed.");
+    console.log("Native task kinds: 10 legitimate fixture rows; 13 exact constraint refusals; all prior rows preserved; external producer closed.");
   } finally {
     await client.query("ROLLBACK");
   }
