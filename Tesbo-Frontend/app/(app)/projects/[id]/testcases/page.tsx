@@ -458,7 +458,13 @@ export default function TestCasesPage() {
   const [panelOriginalSuiteId, setPanelOriginalSuiteId] = useState<string | null>(null);
   const [panelEditRevision, setPanelEditRevision] = useState<string | null>(null);
   const [loadedFormFingerprint, setLoadedFormFingerprint] = useState<string | null>(null);
-  const [approvalReview, setApprovalReview] = useState<{ id: string; editRevision: string; approvalRevision: string; snapshot: TestCaseApprovalSnapshot } | null>(null);
+  const [approvalReview, setApprovalReview] = useState<{
+    id: string; projectId: string; loadGeneration: number;
+    editRevision: string; approvalRevision: string; snapshot: TestCaseApprovalSnapshot
+  } | null>(null);
+  // A pending review GET or approval POST belongs to one exact editor load.
+  // Switching/closing the editor invalidates only that operation, not another save.
+  const approvalPendingGenerationRef = useRef<number | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
 
   // Bugs filed against this test case (edit mode only — a case being created has none yet).
@@ -1060,38 +1066,78 @@ export default function TestCasesPage() {
     }, customFieldValues, panelTagIds);
   }
 
+  function invalidatePendingApproval() {
+    if (approvalPendingGenerationRef.current !== null) {
+      approvalPendingGenerationRef.current = null;
+      setPanelSaving(false);
+    }
+    setApprovalReview(null);
+    setApprovalError(null);
+  }
+
   async function openApprovalReview() {
     if (!panelCaseVerified || !panelTestcaseId || panelSaving || hasUnsavedReviewChanges()) return;
+    const caseId = panelTestcaseId;
+    const loadGeneration = panelLoadRequestRef.current;
+    approvalPendingGenerationRef.current = loadGeneration;
+    const isCurrent = () => panelLoadRequestRef.current === loadGeneration
+      && approvalPendingGenerationRef.current === loadGeneration;
     setPanelSaving(true);
     setPanelError(null);
     try {
-      const data = await getTestCase(projectId, panelTestcaseId);
+      const data = await getTestCase(projectId, caseId);
+      if (!isCurrent()) return;
       const snapshot = data.approvalSnapshot as TestCaseApprovalSnapshot | undefined;
-      if (data.id !== panelTestcaseId || typeof data.editRevision !== "string" || typeof data.approvalRevision !== "string" || !snapshot?.case
+      if (data.id !== caseId || typeof data.editRevision !== "string" || typeof data.approvalRevision !== "string" || !snapshot?.case
           || !Array.isArray(snapshot.customFields) || !Array.isArray(snapshot.customTags)) {
         throw new Error("The complete reviewed version is unavailable. Reload the case before approving it.");
       }
       setApprovalError(null);
-      setApprovalReview({ id: panelTestcaseId, editRevision: data.editRevision, approvalRevision: data.approvalRevision, snapshot });
+      setApprovalReview({ id: caseId, projectId, loadGeneration, editRevision: data.editRevision,
+        approvalRevision: data.approvalRevision, snapshot });
     } catch (error) {
-      setPanelError(error instanceof Error ? error.message : "Could not load the version for review.");
-    } finally { setPanelSaving(false); }
+      if (isCurrent()) setPanelError(error instanceof Error ? error.message : "Could not load the version for review.");
+    } finally {
+      if (isCurrent()) {
+        approvalPendingGenerationRef.current = null;
+        setPanelSaving(false);
+      }
+    }
   }
 
   async function submitApprovalReview() {
-    if (!approvalReview || panelSaving) return;
+    const review = approvalReview;
+    if (!review || panelSaving || !panelCaseVerified || review.id !== panelTestcaseId
+        || review.projectId !== projectId || review.loadGeneration !== panelLoadRequestRef.current) return;
+    const loadGeneration = review.loadGeneration;
+    approvalPendingGenerationRef.current = loadGeneration;
+    const isCurrent = () => panelLoadRequestRef.current === loadGeneration
+      && approvalPendingGenerationRef.current === loadGeneration;
     setPanelSaving(true);
     try {
-      await approveTestCase(projectId, approvalReview.id, approvalReview.editRevision, approvalReview.approvalRevision);
-      const reviewedId = approvalReview.id;
+      // Backend revision and actor gates remain authoritative. This UI fence prevents
+      // an in-flight approval response for A from painting or reopening A over case B.
+      await approveTestCase(projectId, review.id, review.editRevision, review.approvalRevision);
+      if (!isCurrent()) return;
       setApprovalReview(null);
       await loadSuitesAndSummary();
+      if (!isCurrent()) return;
       await loadSelectedSuiteCases();
-      await openViewPanel(reviewedId);
-      setPanelSuccess("The reviewed version was approved.");
+      if (!isCurrent()) return;
+      const reopening = openViewPanel(review.id);
+      const reopenedGeneration = panelLoadRequestRef.current;
+      const loaded = await reopening;
+      if (loaded && panelLoadRequestRef.current === reopenedGeneration) {
+        setPanelSuccess("The reviewed version was approved.");
+      }
     } catch (error) {
-      setApprovalError(error instanceof Error ? error.message : "Could not confirm approval. Reload the case to check its current state.");
-    } finally { setPanelSaving(false); }
+      if (isCurrent()) setApprovalError(error instanceof Error ? error.message : "Could not confirm approval. Reload the case to check its current state.");
+    } finally {
+      if (isCurrent()) {
+        approvalPendingGenerationRef.current = null;
+        setPanelSaving(false);
+      }
+    }
   }
 
   function resetForm(defaultSuiteId?: string | null) {
@@ -1134,6 +1180,7 @@ export default function TestCasesPage() {
 
   async function openCreatePanel() {
     panelLoadRequestRef.current += 1;
+    invalidatePendingApproval();
     setPanelLoading(false);
     setPanelLoadedCaseId(null);
     setPanelExternalId(null);
@@ -1146,6 +1193,7 @@ export default function TestCasesPage() {
 
   async function openCreatePanelForSuite(targetSuiteId: string) {
     panelLoadRequestRef.current += 1;
+    invalidatePendingApproval();
     setPanelLoading(false);
     setPanelLoadedCaseId(null);
     setPanelExternalId(null);
@@ -1156,12 +1204,12 @@ export default function TestCasesPage() {
     resetForm(targetSuiteId);
   }
 
-  async function openViewPanel(testcaseId: string) {
+  async function openViewPanel(testcaseId: string): Promise<boolean> {
     const requestId = ++panelLoadRequestRef.current;
+    invalidatePendingApproval();
     setPanelLoadedCaseId(null);
     setPanelExternalId(null);
     setPanelSuccess(null);
-    setApprovalReview(null);
     setPanelError(null);
     setPanelLoading(true);
     setPanelTestcaseId(testcaseId);
@@ -1185,7 +1233,7 @@ export default function TestCasesPage() {
         listBugs(projectId, { testcaseId }).catch(() => []),
         getTestCaseTags(projectId, testcaseId),
       ]);
-      if (requestId !== panelLoadRequestRef.current) return;
+      if (requestId !== panelLoadRequestRef.current) return false;
       if (data.id !== testcaseId) throw new Error("The response did not identify the requested test case.");
       fillFormFromTestCase(data);
       setPanelLoadedCaseId(testcaseId);
@@ -1195,8 +1243,10 @@ export default function TestCasesPage() {
       setPanelBugs(bugs);
       setPanelTagIds(tags.map((t) => t.id));
       setLoadedFormFingerprint(editorFingerprint(data, Object.fromEntries(customFields.map((f) => [f.id, f.value])), tags.map((t) => t.id)));
+      return true;
     } catch {
       if (requestId === panelLoadRequestRef.current) setPanelError("Failed to load the complete test case details. Reload before editing or approving.");
+      return false;
     } finally {
       if (requestId === panelLoadRequestRef.current) setPanelLoading(false);
     }
@@ -1204,6 +1254,7 @@ export default function TestCasesPage() {
 
   function clearPanelState() {
     panelLoadRequestRef.current += 1;
+    invalidatePendingApproval();
     setPanelMode("closed");
     setPanelTestcaseId(null);
     setPanelLoadedCaseId(null);
@@ -1212,7 +1263,6 @@ export default function TestCasesPage() {
     setPanelError(null);
     setPanelSuccess(null);
     setPanelEditRevision(null);
-    setApprovalReview(null);
     setSelectedSourceRef(null);
   }
 
@@ -3696,7 +3746,9 @@ export default function TestCasesPage() {
         }}
       />
 
-      {approvalReview && <TestCaseApprovalReview
+      {approvalReview && panelCaseVerified && approvalReview.id === panelTestcaseId
+        && approvalReview.projectId === projectId
+        && approvalReview.loadGeneration === panelLoadRequestRef.current && <TestCaseApprovalReview
         snapshot={approvalReview.snapshot}
         busy={panelSaving}
         error={approvalError}
