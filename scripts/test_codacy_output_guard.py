@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
-from codacy_output_guard import guard, stop_scanner
+from codacy_output_guard import guard, stop_scanner, record_formatter_failure
 
 
 DECODE = 'Exception in thread "main" java.nio.charset.MalformedInputException: Input length = 2\n'
@@ -62,6 +62,28 @@ class CodacyOutputTest(unittest.TestCase):
             cidfile.write_text(container_id)
             stop_scanner(cidfile)
             docker.assert_called_once_with(['docker', 'kill', container_id], check=True, timeout=15)
+
+    def test_only_exact_formatter_failure_records_diagnostic_marker(self):
+        with TemporaryDirectory() as temp, patch('codacy_output_guard.stop_scanner') as stop:
+            cidfile = Path(temp) / 'cli.cid'
+            marker = Path(temp) / 'sarif-failure'
+            callback = lambda: record_formatter_failure(cidfile, marker)
+            output, diagnostics = io.StringIO(), io.StringIO()
+            self.assertEqual(guard([ANALYZER_ERROR, PARSE_ERROR, FILE_ERROR], output, diagnostics, callback), 1)
+            self.assertFalse(marker.exists())
+            stop.assert_not_called()
+            self.assertEqual(guard([DECODE, READ_FRAME, SARIF_FRAME, SARIF_FRAME], output, diagnostics, callback), 1)
+            self.assertTrue(marker.is_file())
+            stop.assert_called_once_with(cidfile)
+
+    def test_marker_error_does_not_prevent_exact_scanner_stop(self):
+        with TemporaryDirectory() as temp, patch('codacy_output_guard.stop_scanner') as stop:
+            cidfile = Path(temp) / 'cli.cid'
+            marker = Path(temp) / 'missing-parent' / 'sarif-failure'
+            with patch('sys.stderr', new_callable=io.StringIO):
+                record_formatter_failure(cidfile, marker)
+            self.assertFalse(marker.exists())
+            stop.assert_called_once_with(cidfile)
 
     def test_invalid_id_is_never_passed_to_docker(self):
         with TemporaryDirectory() as temp, patch('codacy_output_guard.subprocess.run') as docker:

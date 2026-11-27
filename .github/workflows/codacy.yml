@@ -82,7 +82,7 @@ jobs:
           marker=$(cat /proc/sys/kernel/random/uuid)
           echo "::stop-commands::$marker"
           trap 'echo "::$marker::"' EXIT
-          docker run --rm --cidfile "$cidfile" \
+          if docker run --rm --cidfile "$cidfile" \
             --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
             --env JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 \
             --volume /var/run/docker.sock:/var/run/docker.sock \
@@ -91,7 +91,40 @@ jobs:
             "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
             --verbose --format sarif --output "$report" \
             --gh-code-scanning-compat --fail-if-incomplete --max-allowed-issues 2147483647 \
-            2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile"
+            2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile" "$report_dir/sarif-failure"; then
+            :
+          else
+            # Temporary #240 diagnostic, not a replacement scanner or acceptance gate.
+            # Only the confirmed SARIF decoder stack triggers one differently formatted
+            # analysis. Generic analyzer failures do not trigger an identical retry.
+            # The original failure is preserved regardless of the diagnostic result.
+            if [[ -f "$report_dir/sarif-failure" ]]; then
+              python3 -B "$report_dir/verify_checkout.py" --verify-checkout
+              echo 'Codacy SARIF formatter failed; collecting local JSON correlation only'
+              diagnostic_cidfile="$report_dir/diagnostic.cid"
+              diagnostic_report="$report_dir/diagnostic.json"
+              diagnostic_status=0
+              docker run --rm --cidfile "$diagnostic_cidfile" \
+                --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
+                --env JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 \
+                --volume /var/run/docker.sock:/var/run/docker.sock \
+                --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
+                --volume "$report_dir:$report_dir" \
+                "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
+                --verbose --format json --output "$diagnostic_report" \
+                --fail-if-incomplete --max-allowed-issues 2147483647 \
+                2>&1 | python3 -u scripts/codacy_output_guard.py "$diagnostic_cidfile" || diagnostic_status=$?
+              echo "Codacy JSON diagnostic pipeline status: $diagnostic_status (not an acceptance result)"
+              python3 -B "$report_dir/verify_checkout.py" --verify-checkout
+              if [[ -f "$diagnostic_report" && ! -L "$diagnostic_report" ]]; then
+                python3 -B "$report_dir/verify_checkout.py" --correlate "$diagnostic_report" \
+                  || echo 'Codacy JSON correlation unavailable; no formatter culprit established'
+              fi
+              # No raw diagnostic report is printed, retained as an artifact or uploaded.
+              rm -f -- "$diagnostic_report"
+            fi
+            exit 1
+          fi
           # HEAD alone does not prove the workspace stayed unchanged. This checks
           # persistent changes, not isolation from a scanner with Docker access.
           python3 -B "$report_dir/verify_checkout.py" --verify-checkout

@@ -73,9 +73,23 @@ def guard(lines, output, diagnostics, stop):
     return 1 if rejected or formatter_failed or analyzer_failures or unreadable_files else 0
 
 
+def record_formatter_failure(cidfile, marker=None):
+    """Record the guard's exact formatter diagnosis, then stop only its scanner."""
+    if marker is not None:
+        try:
+            marker.touch(exist_ok=False)
+        except OSError:
+            # Diagnostics must never interfere with stopping a failed scanner.
+            print("Could not record Codacy formatter diagnostic marker.", file=sys.stderr)
+    stop_scanner(cidfile)
+
+
 if __name__ == "__main__":
     # A diagnostic may itself contain non-UTF-8 source bytes. Preserve those
     # bytes in the streamed log without letting them interrupt the guard.
     sys.stdin.reconfigure(errors="surrogateescape")
     sys.stdout.reconfigure(errors="surrogateescape")
-    sys.exit(guard(sys.stdin, sys.stdout, sys.stderr, lambda: stop_scanner(Path(sys.argv[1]))))
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit("Expected scanner CID file and optional formatter diagnostic marker")
+    marker = Path(sys.argv[2]) if len(sys.argv) == 3 else None
+    sys.exit(guard(sys.stdin, sys.stdout, sys.stderr, lambda: record_formatter_failure(Path(sys.argv[1]), marker)))
