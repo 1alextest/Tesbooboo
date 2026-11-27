@@ -49,9 +49,40 @@ assign, claim, report or close external QA work after this change.
 
 `Tesbo-Backend-Nest/scripts/ci/check-db-integrity.cjs` extends the disposable-PostgreSQL integrity
 job: it asserts the installed constraints/columns, then — inside a savepoint that is rolled back —
-temporarily lifts only the producer fence to prove one coherent external DRAFT fixture and fourteen
-exact conditional refusals, and finally asserts the fence is restored and validated. No external
+temporarily lifts only the producer fence to prove one coherent external DRAFT fixture and the
+exact conditional refusals (22 after V171), and finally asserts the fence is restored and validated. No external
 row can persist.
+
+## Corrections from independent review — V171
+
+Independent review of `e777ef74` (PR #333) recorded three source-backed pre-admission findings.
+`V171_native_qa_external_work_corrections.sql` addresses the representational ones and states the
+remaining Gate A obligations; V170's bytes and review receipt are preserved.
+
+1. **Legacy owner pointers.** External rows must now have `chat_session_id IS NULL` and
+   `sweep_testcase_id IS NULL`; both are legacy owners whose deletion lifecycles must not reach
+   external work. The harness proves insert and update refusals and asserts legitimate `zyra_chat`
+   and `zyra_archive_sweep` rows keep their links.
+2. **Complete field classification.** Generation-specific (required NULL for external, required
+   present for non-external): `style`, `include_*`, `feedback`, `context`, `language` — added to the
+   existing set. Deliberately neutral (left at their honest empty default): `source_summary`.
+   Genuinely shared (not constrained): `activity_log`, `jira_issue_keys`, `linear_issue_keys`,
+   `notion_page_ids`. `model` is generation-specific but optional for non-model legacy producers, so
+   it is forbidden for external work without being required of every legacy row.
+3. **Revision maintenance versus CAS.** The trigger is now a real row-level compare-and-set: a
+   governed change must present exactly `OLD.external_work_revision + 1`, so a stale writer that
+   read an older revision is refused under the row lock. Inserts must start `DRAFT` at revision 0
+   with prompt revision 1. This is necessary but **not** sufficient authorization: Gate A must
+   still reject stale expected revisions inside the assignment transaction and bind the real prompt
+   content. The migration says so rather than claiming CAS equals authority.
+4. **Prompt identity.** The reviewed prompt may change only while `DRAFT`/`READY`/
+   `NEEDS_CLARIFICATION` and only in a statement that does not advance into assignment. It is
+   frozen from `ASSIGNED` onward, including `CLAIMED`, so a prompt cannot be swapped while entering
+   claim. Canonical clarification (`ASSIGNED → NEEDS_CLARIFICATION → prompt revision →
+   ASSIGNED → new claim`) still works and is exercised; a new fenced attempt is Gate A's owner.
+5. **Transitions.** Canonical §4.1 state adjacency is enforced at the database, which removes the
+   “rewind to a pre-assignment state, then edit the prompt” bypass. Installation/lease authority
+   and attempt validity remain Gate A.
 
 ## Explicitly deferred
 
