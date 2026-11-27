@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 const commitPattern = /^[a-f\d]{40}(?:[a-f\d]{24})?$/i;
-const git = (args, cwd, encoding = "utf8") => execFileSync("git", args, {
+const git = (args, cwd, encoding = "utf8") => execFileSync("git", ["--no-replace-objects", ...args], {
   cwd, encoding, maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"]
 });
 const requireCommit = (commit) => {
@@ -22,6 +22,21 @@ export function resolveBase(ref, { cwd = process.cwd() } = {}) {
   } catch {
     throw new Error(`Cannot resolve --base ${JSON.stringify(ref)} and its merge base with HEAD. Fetch the base history; do not substitute an empty selection.`);
   }
+}
+
+/** Exact object comparison for a read-only review of concurrent candidates.
+ * Unlike resolveBase, this never uses the checked-out HEAD or tracked worktree.
+ */
+export function exactCommitMergeBase(target, candidate, { cwd = process.cwd() } = {}) {
+  for (const sha of [target, candidate]) {
+    requireCommit(sha);
+    const resolved = git(["rev-parse", "--verify", "--end-of-options", sha + "^{commit}"], cwd).trim();
+    if (resolved !== sha) throw new Error("Expected an exact lowercase commit SHA, not a tag or abbreviated object.");
+  }
+  const bases = git(["merge-base", "--all", target, candidate], cwd).trim().split("\n");
+  if (bases.length !== 1) throw new Error("Candidate and target do not have one unambiguous merge base.");
+  requireCommit(bases[0]);
+  return bases[0];
 }
 
 /** NUL-separated paths retain spaces/brackets; disabling renames retains both old and new paths. */
