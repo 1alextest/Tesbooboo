@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
 import { env } from "../utils/env";
-import { createApprovedTestcase } from "../utils/testcase-approval";
+import { approveTestcase } from "../utils/testcase-approval";
 
 const runExecutable = promisify(execFile);
 const stored = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf8")) as { projectId: string };
@@ -70,6 +70,35 @@ test("AUT-HANDOFF-01 reconciles packet evidence and additional failure context w
   expect(() => reconcilePacketEvidence([packet, context], [nativePacket, { ...nativeContext, fileName: "unexpected.md" }])).toThrow();
 });
 
+type CleanupStep = { label: string; action: () => Promise<string | undefined> };
+
+async function runCleanupSteps(steps: CleanupStep[]): Promise<string[]> {
+  const failures: string[] = [];
+  for (const step of steps) {
+    try {
+      const failure = await step.action();
+      if (failure) failures.push(step.label + ": " + failure);
+    } catch {
+      // Never copy a transport error, response body, or credential into CI output.
+      failures.push(step.label + ": operation threw");
+    }
+  }
+  return failures;
+}
+
+test("AUT-HANDOFF-01 cleanup reports non-success and still attempts remaining compensations", async () => {
+  const called: string[] = [];
+  const failures = await runCleanupSteps([
+    { label: "credential", action: async () => { called.push("credential"); return "delete HTTP 403"; } },
+    { label: "run", action: async () => { called.push("run"); throw new Error("synthetic transport failure"); } },
+    { label: "case", action: async () => { called.push("case"); return "readback HTTP 200"; } },
+    { label: "temp", action: async () => { called.push("temp"); return undefined; } },
+  ]);
+  expect(called).toEqual(["credential", "run", "case", "temp"]);
+  expect(failures).toEqual(["credential: delete HTTP 403", "run: operation threw", "case: readback HTTP 200"]);
+  expect(await runCleanupSteps([{ label: "ok", action: async () => undefined }])).toEqual([]);
+});
+
 test("AUT-HANDOFF-01 diagnostic distinguishes the actual uniqueness assertion from report metadata", () => {
   const label = "exactly one current approved link for the selected case and criteria";
   const report = (message: string) => ({
@@ -101,6 +130,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   let testcaseId: string | undefined;
   let credentialId: string | undefined;
   let temp: string | undefined;
+  let primaryFailed = false;
 
   const requirementId = randomUUID();
   const requirementVersionId = randomUUID();
@@ -123,13 +153,21 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   });
 
   try {
-    currentCase = await createApprovedTestcase(human, projectId, {
-      title: "Disposable generated reporter " + Date.now(),
-      automationRepo: originRepo,
-      automationPath: "tests/journey.spec.mjs",
-      automationFramework: "Playwright",
+    const created = await human.post("/api/projects/" + projectId + "/testcases", {
+      data: {
+        title: "Disposable generated reporter " + Date.now(),
+        automationRepo: originRepo,
+        automationPath: "tests/journey.spec.mjs",
+        automationFramework: "Playwright",
+        status: "Draft",
+      },
     });
-    testcaseId = currentCase.id;
+    expect(created.status(), "Disposable draft must be created").toBe(201);
+    const draft = await created.json();
+    testcaseId = draft.id;
+    expect(testcaseId).toBeTruthy();
+    // Register the created ID before approval so a failed review is still cleaned up.
+    currentCase = await approveTestcase(human, projectId, testcaseId!);
     expect(currentCase.status).toBe("Approved");
     expect(currentCase.externalId).toBeTruthy();
     expect(currentCase.editRevision).toMatch(/^[a-f0-9]{64}$/);
@@ -230,11 +268,12 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       } catch (error) {
         stdout = String((error as { stdout?: string }).stdout ?? "");
       }
-      expect(succeeded, "The generated assertion should distinguish the controlled " + pathname).toBe(expectedPass);
       const match = /\[tesbo\] reporting 1 linked test\(s\) to run ([0-9a-f-]{36})/i.exec(stdout);
+      if (match) runIds.push(match[1]);
+      // Record observed native identity even if the child verdict is wrong.
+      expect(succeeded, "The generated assertion should distinguish the controlled " + pathname).toBe(expectedPass);
       expect(match, "The existing Tesbo reporter must create a real native Run").not.toBeNull();
       const runId = match![1];
-      runIds.push(runId);
 
       const nativeRead = await human.get("/api/projects/" + projectId + "/automation/runs/" + runId);
       expect(nativeRead.ok(), "The reporter-created Run must be readable through the existing API").toBe(true);
@@ -274,15 +313,61 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
     const correctRun = await execute("/good", true);
     const defectRun = await execute("/fault", false);
     expect(defectRun).not.toBe(correctRun);
+  } catch (error) {
+    primaryFailed = true;
+    throw error;
   } finally {
-    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
-    for (const runId of runIds) {
-      await human.delete("/api/cycles/" + runId, { failOnStatusCode: false });
+    const steps: CleanupStep[] = [];
+    const project = "/api/projects/" + projectId;
+    // Revoke first, then attempt every other cleanup even when one fails.
+    if (credentialId) {
+      const id = credentialId;
+      steps.push({ label: "credential " + id, action: async () => {
+        const removed = await human.delete(project + "/apikeys/" + id, { failOnStatusCode: false });
+        if (!removed.ok()) return "delete HTTP " + removed.status();
+        const listed = await human.get(project + "/apikeys", { failOnStatusCode: false });
+        if (!listed.ok()) return "list readback HTTP " + listed.status();
+        const rows = await listed.json();
+        if (!Array.isArray(rows) || !rows.every(item => typeof item?.id === "string")) return "invalid credential list readback";
+        if (rows.some(item => item.id === id)) return "credential still listed after deletion";
+        return undefined;
+      } });
     }
-    if (testcaseId) await human.delete("/api/projects/" + projectId + "/testcases/" + testcaseId,
-      { failOnStatusCode: false });
-    if (credentialId) await human.delete("/api/projects/" + projectId + "/apikeys/" + credentialId,
-      { failOnStatusCode: false });
-    if (temp) await rm(temp, { recursive: true, force: true });
+    for (const runId of new Set(runIds)) {
+      steps.push({ label: "run " + runId, action: async () => {
+        const removed = await human.delete("/api/cycles/" + runId, { failOnStatusCode: false });
+        if (!removed.ok()) return "delete HTTP " + removed.status();
+        const readback = await human.get(project + "/automation/runs/" + runId, { failOnStatusCode: false });
+        return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
+      } });
+    }
+    if (testcaseId) {
+      const endpoint = project + "/testcases/" + testcaseId;
+      steps.push({ label: "case " + testcaseId, action: async () => {
+        const removed = await human.delete(endpoint, { failOnStatusCode: false });
+        if (!removed.ok()) return "delete HTTP " + removed.status();
+        const readback = await human.get(endpoint, { failOnStatusCode: false });
+        return readback.status() === 404 ? undefined : "readback HTTP " + readback.status();
+      } });
+    }
+    steps.push({ label: "loopback server", action: async () => {
+      if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      return server.listening ? "still listening" : undefined;
+    } });
+    if (temp) {
+      const directory = temp;
+      steps.push({ label: "generated fixture directory", action: async () => {
+        await rm(directory, { recursive: true, force: true });
+        return fs.existsSync(directory) ? "directory still exists" : undefined;
+      } });
+    }
+    const failures = await runCleanupSteps(steps);
+    if (failures.length) {
+      const description = failures.join("; ");
+      // Preserve the original assertion while recording secondary cleanup failure.
+      test.info().annotations.push({ type: "fixture-cleanup-failure", description });
+      console.error("Native reporter fixture cleanup incomplete: " + description);
+      if (!primaryFailed) throw new Error("Native reporter fixture cleanup incomplete: " + description);
+    }
   }
 });
