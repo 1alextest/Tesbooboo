@@ -1,0 +1,119 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
+import { writeFile, mkdtemp, rm, readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+import { generateCoverageSpec, validateHandoffPacket, writeGeneratedChange } from './qa-handoff-generated-change.mjs';
+
+const execFileAsync = promisify(execFile);
+
+const e2eDir = fileURLToPath(new URL('../e2e/', import.meta.url));
+const playwrightCli = join(e2eDir, 'node_modules', '@playwright', 'test', 'cli.js');
+const PROJECT = '00000000-0000-4000-8000-000000000001';
+const TASK = '00000000-0000-4000-8000-000000000002';
+const RECEIPT = '00000000-0000-4000-8000-000000000003';
+const REQUIREMENT = '00000000-0000-4000-8000-000000000004';
+const REQUIREMENT_VERSION = '00000000-0000-4000-8000-000000000005';
+const LINK = '00000000-0000-4000-8000-000000000006';
+const CASE = '00000000-0000-4000-8000-000000000007';
+const REVISION = 'a'.repeat(64), APPROVAL = 'b'.repeat(64), PROPOSAL = 'c'.repeat(64);
+const COMMIT = 'd'.repeat(40), BLOB = 'e'.repeat(40);
+
+function packet() {
+  const body = {
+    schemaVersion: 1,
+    purpose: 'prepare_automation_change',
+    native: {
+      projectId: PROJECT, taskId: TASK, receiptId: RECEIPT, proposalRevision: PROPOSAL, selectedIndex: 1,
+      requirementId: REQUIREMENT, requirementVersionId: REQUIREMENT_VERSION, linkId: LINK,
+      testcaseId: CASE, testcaseRevision: REVISION, testcaseApprovalRevision: APPROVAL, criterionKeys: ['AC-1'],
+      criteria: [{ key: 'AC-1', text: 'The requirement lists one linked case' }],
+      testcase: {
+        id: CASE, externalId: 'TES-JOURNEY-1', title: 'Approved journey case',
+        steps: [{ stepNumber: 1, action: 'Apply the reviewed bundle', expectedResult: 'One case is linked' }],
+        automationRepo: 'owner/repo', automationPath: 'tests/journey.spec.mjs',
+        automationFramework: 'Playwright', automationTestName: 'approved journey'
+      },
+    },
+    target: { repository: 'owner/repo', branch: 'main', revision: COMMIT, path: 'tests/journey.spec.mjs' },
+    investigation: {
+      id: 'CASE-300', upstreamCase: 'TC-01', targetPath: 'tests/journey.spec.mjs', targetBlob: BLOB,
+      repoRevision: COMMIT, harnessRevision: 'a468921c2bead820520a97df897168487b2b4985',
+      risks: [{ id: 'R1', oracle: 'The requirement lists one linked case' }],
+    },
+  };
+  return { ...body, selectionDigest: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+}
+
+function coverage(cases) {
+  return JSON.stringify({ requirementId: REQUIREMENT, approvedVersionId: REQUIREMENT_VERSION, cases });
+}
+
+const caseObject = {
+  linkId: LINK, testcaseId: CASE, requirementVersionId: REQUIREMENT_VERSION, criterionKeys: ['AC-1'],
+  testcaseRevision: REVISION, testcaseApprovalRevision: APPROVAL, approved: true,
+};
+
+async function runSpec(directory, coveragePath) {
+  const report = join(directory, 'report.json');
+  try {
+    await execFileAsync(process.execPath, [playwrightCli, 'test', 'generated.spec.mjs', '--config=playwright.config.mjs'], {
+      cwd: directory, timeout: 60_000,
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+          !/^(?:https?_proxy|all_proxy)$/i.test(key))),
+        NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost',
+        TESBO_JOURNEY_COVERAGE_URL: coveragePath, TESBO_JOURNEY_TOKEN: 'test-token',
+        TESBO_JOURNEY_EVIDENCE_PATH: join(directory, 'evidence.json')
+      },
+    });
+    return { ok: true, report: JSON.parse(await readFile(report, 'utf8')) };
+  } catch {
+    return { ok: false, report: JSON.parse(await readFile(report, 'utf8')) };
+  }
+}
+
+test('generated Playwright change is packet-bound and catches the duplicated-link fault', async () => {
+  const p = packet();
+  assert.doesNotThrow(() => validateHandoffPacket(p));
+  assert.throws(() => validateHandoffPacket({ ...p, selectionDigest: '0'.repeat(64) }), /selection digest/);
+  assert.throws(() => validateHandoffPacket({ ...p, native: { ...p.native, testcase: { ...p.native.testcase, externalId: '' } } }), /selection digest|external id/);
+  const spec = generateCoverageSpec(p);
+  assert.ok(spec.includes(String.raw`@tesbo.testId(\"TES-JOURNEY-1\")`), 'the generated test must carry the approved external id');
+  assert.match(spec, /exactly one current approved link/u);
+  assert.match(spec, /testcaseApprovalRevision/u);
+  assert.match(spec, /approved-handoff-evidence\.json/u);
+
+  const server = createServer((req, res) => {
+    const faulty = req.url === '/faulty';
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(coverage(faulty ? [caseObject, { ...caseObject }] : [caseObject]));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const directory = await mkdtemp(join(e2eDir, '.journey-'));
+  try {
+    const generated = writeGeneratedChange(p, directory);
+    await writeFile(generated.path, generated.content);
+    await writeFile(join(directory, 'evidence.json'), JSON.stringify({ selectionDigest: p.selectionDigest, target: p.target }));
+    await writeFile(join(directory, 'playwright.config.mjs'), `import { defineConfig } from '@playwright/test';
+export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [['list'], ['json', { outputFile: 'report.json' }]] });
+`);
+    const good = await runSpec(directory, `http://127.0.0.1:${port}/good`);
+    assert.equal(good.ok, true, JSON.stringify(good.report));
+    assert.equal(good.report.stats.expected, 1);
+    assert.equal(good.report.stats.unexpected, 0);
+    const faulty = await runSpec(directory, `http://127.0.0.1:${port}/faulty`);
+    assert.equal(faulty.ok, false, 'the duplicated-link control must fail the generated assertion');
+    assert.equal(faulty.report.stats.unexpected, 1);
+    assert.equal(faulty.report.stats.expected, 0);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

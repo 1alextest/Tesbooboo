@@ -18186,7 +18186,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
                 d.reviewed_version_id, v.snapshot_metadata AS version_metadata,
                 case_decision.id AS case_approval_receipt_id, case_decision.actor_id AS case_approver_id,
                 l.criterion_keys, l.requirement_version_id, l.testcase_revision, l.testcase_approval_revision,
-                testcases.id, testcases.title, testcases.description, testcases.preconditions, testcases.steps,
+                testcases.id, testcases.external_id, testcases.title, testcases.description, testcases.preconditions, testcases.steps,
                 testcases.postconditions, testcases.test_data, testcases.automation_repo, testcases.automation_path,
                 testcases.automation_framework, testcases.automation_test_name,
                 ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
@@ -18257,7 +18257,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       return {
         projectId, taskId, receiptId, proposalRevision, selectedIndex, requirementId, requirementVersionId, linkId,
         testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys, criteria: criteria.map(({ key, text }) => ({ key, text })),
-        testcase: { id: row.id, title: row.title, description: row.description, preconditions: row.preconditions, steps,
+        testcase: { id: row.id, externalId: row.external_id, title: row.title, description: row.description, preconditions: row.preconditions, steps,
           postconditions: row.postconditions, testData: row.test_data, automationRepo: row.automation_repo, automationPath: row.automation_path,
           automationFramework: row.automation_framework, automationTestName: row.automation_test_name },
         provenance: { requestedBy: row.requested_by,

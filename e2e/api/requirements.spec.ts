@@ -439,7 +439,7 @@ test("a coding-agent MCP bundle stages requirement-linked native regression case
     expect(handoff.status(), await handoff.text()).toBe(200);
     const exported = await handoff.json();
     expect(exported).toMatchObject({ ...basis, criteria: [{ key: "AC-1", text: reviewedCriterion }],
-      testcase: { id: caseId, title: caseTitle, steps: regressionSteps, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/api/requirements.spec.ts" },
+      testcase: { id: caseId, externalId: caseAfter.externalId, title: caseTitle, steps: regressionSteps, automationRepo: "1alextest/Tesbooboo", automationPath: "e2e/api/requirements.spec.ts" },
       provenance: { operationId: testcaseOperationId, reviewerId: applied.receipt.reviewerId, producer: { kind: "api_token", tokenId },
         appliedSkillDigest: applied.receipt.skillContext.digest, submittedVersionId: requirementVersionId }
     });
