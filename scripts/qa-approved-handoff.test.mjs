@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createHandoffRequest, parseSelection, prepareHandoff } from './qa-approved-handoff.mjs';
+import { createHandoffRequest, parseSelection, prepareHandoff, prepareNativeRetestAutomation } from './qa-approved-handoff.mjs';
 import { createHandoffFixture, fixtureGit as git } from './qa-handoff-fixture.mjs';
 import { HARNESS_REVISION } from './qa-investigation-mapping.mjs';
 
@@ -273,4 +273,119 @@ test('handoff returns the original object for a valid HTTP 200', async () => {
   const payload = {id: 'fixture', current: true};
   const request = createHandoffRequest(origin, {fetch: async () => ({status: () => 200, json: async () => payload})});
   assert.equal(await request('GET', recoveryPath), payload);
+});
+
+const retestSelection = { ...selection, sourceCycleId: id(31), sourceExecutionId: id(32) };
+function retestFixture() {
+  const preview = {
+    projectId, sourceCycleId: retestSelection.sourceCycleId,
+    sourceRun: { id: retestSelection.sourceCycleId, status: 'Completed', name: 'Earlier Run' },
+    previewDigest: 'e'.repeat(64),
+    occurrences: [{
+      sourceCycleItemId: id(33), sourceExecutionId: retestSelection.sourceExecutionId, testcaseId: basis.testcaseId,
+      sourceApprovalRevision: basis.testcaseApprovalRevision,
+      sourceResult: { id: retestSelection.sourceExecutionId, status: 'Failed', error_message: 'PRIVATE_SOURCE_DIAGNOSTIC' },
+      sourceEvidence: [{ id: id(34), fileName: 'original.txt' }],
+      sourceBugLinks: [{ id: id(35), bugId: id(36), executionId: retestSelection.sourceExecutionId }],
+      eligible: true, definitionChanged: false,
+      currentCase: { id: basis.testcaseId, externalId: 'TES-TC-7', title: 'Filter tasks', status: 'Approved',
+        approvalCurrent: true, approvalRevision: basis.testcaseApprovalRevision, reviewedContent: { case: {
+          id: basis.testcaseId, project_id: projectId, external_id: 'TES-TC-7',
+          automation_repo: targetRepo, automation_path: targetPath, automation_framework: 'Playwright',
+          steps: [{ action: 'Filter tasks', expected: 'Only matching tasks are returned' }]
+        } } }
+    }]
+  };
+  const calls = [];
+  const checks = {
+    request: async (method, path) => {
+      calls.push({method, path});
+      assert.equal(method, 'GET');
+      assert.equal(path, '/api/cycles/' + retestSelection.sourceCycleId + '/retests/preview?executionIds=' + retestSelection.sourceExecutionId);
+      return structuredClone(preview);
+    },
+    confirm: async () => true, checkTarget: () => target,
+    readMapping: async () => ({upstreamCase:'TC-01', targetPath, repoRevision, targetBlob:'f'.repeat(40), risks:[{id:'R1'}]})
+  };
+  return {preview, calls, checks};
+}
+
+test('parses one exact retest URL without changing the existing task mode or permitting ambiguous selection', () => {
+  const common = ['--api-origin', origin, '--repo', '.', '--branch', 'main', '--revision', repoRevision,
+    '--harness', '.', '--investigation', 'CASE-300', '--case', 'TC-01'];
+  const url = origin + '/projects/' + projectId + '/cycles/' + retestSelection.sourceCycleId + '/execute/' + retestSelection.sourceExecutionId;
+  const parsed = parseSelection(['--retest-url', url, ...common]);
+  assert.equal(parsed.sourceExecutionId, retestSelection.sourceExecutionId);
+  assert.equal(parsed.sourceCycleId, retestSelection.sourceCycleId);
+  assert.equal(parsed.projectId, projectId);
+  assert.throws(() => parseSelection(['--retest-url', url, '--task-url', origin + '/projects/' + projectId + '/agents/tasks/' + taskId, ...common]), /--retest-url/);
+  assert.throws(() => parseSelection(['--retest-url', url.replace('/execute/', '/execution/'), ...common]), /full native execution URL/);
+});
+
+test('prepares only the selected failed occurrence, rechecks native read and target after consent, and never authorizes execution', async () => {
+  const {preview, calls, checks} = retestFixture();
+  let confirmations = 0, targetChecks = 0;
+  checks.checkTarget = () => { targetChecks++; return target; };
+  checks.confirm = async (p, hash) => {
+    confirmations++;
+    assert.equal(p.purpose, 'prepare_native_retest_automation');
+    assert.equal(p.executionAuthorized, false);
+    assert.equal(p.native.sourcePreviewDigest, preview.previewDigest);
+    assert.equal(hash, digest(JSON.stringify(p)));
+    return true;
+  };
+  const packet = await prepareNativeRetestAutomation(retestSelection, checks);
+  assert.equal(confirmations, 1);
+  assert.equal(targetChecks, 2);
+  assert.equal(calls.length, 2);
+  assert.equal(packet.native.testcase.externalId, 'TES-TC-7');
+  assert.equal(packet.native.targetApprovalRevision, basis.testcaseApprovalRevision);
+  assert.deepEqual(packet.native.sourceEvidenceIds, [id(34)]);
+  assert.equal(packet.native.sourceBugLinks[0].bugId, id(36));
+  assert.equal(JSON.stringify(packet).includes('PRIVATE_SOURCE_DIAGNOSTIC'), false);
+  assert.equal(Object.hasOwn(packet.native, 'destinationRunId'), false);
+});
+
+for (const [name, change] of [
+  ['foreign project', p => {p.projectId = id(99);}],
+  ['wrong source execution', p => {p.occurrences[0].sourceExecutionId = id(99);}],
+  ['wrong result identity', p => {p.occurrences[0].sourceResult.id = id(99);}],
+  ['uncompleted source Run', p => {p.sourceRun.status = 'In Progress';}],
+  ['nonfailed result', p => {p.occurrences[0].sourceResult.status = 'Passed';}],
+  ['multiple occurrences', p => {p.occurrences.push(structuredClone(p.occurrences[0]));}],
+  ['stale case approval', p => {p.occurrences[0].currentCase.approvalCurrent = false;}],
+  ['mismatched reviewed case', p => {p.occurrences[0].currentCase.reviewedContent.case.id = id(99);}],
+  ['missing automation mapping', p => {p.occurrences[0].currentCase.reviewedContent.case.automation_path = null;}],
+  ['foreign Bug occurrence', p => {p.occurrences[0].sourceBugLinks[0].executionId = id(99);}],
+]) {
+  test('withholds retest preparation for ' + name, async () => {
+    const {preview, checks} = retestFixture();
+    change(preview);
+    let consent = 0;
+    checks.confirm = async () => { consent++; return true; };
+    await assert.rejects(prepareNativeRetestAutomation(retestSelection, checks));
+    assert.equal(consent, 0);
+  });
+}
+
+test('retains no packet if the source or current approved definition changes after review', async () => {
+  for (const change of [
+    p => {p.occurrences[0].sourceBugLinks = [];},
+    p => {p.occurrences[0].currentCase.approvalRevision = '9'.repeat(64);},
+    p => {p.previewDigest = '9'.repeat(64);},
+  ]) {
+    const {preview, checks} = retestFixture();
+    checks.confirm = async () => { change(preview); return true; };
+    await assert.rejects(prepareNativeRetestAutomation(retestSelection, checks), /changed during review/);
+  }
+});
+
+test('refuses an unrelated investigation commit and cancelled retest preparation', async () => {
+  let fixture = retestFixture();
+  fixture.checks.readMapping = async () => ({upstreamCase:'TC-01', targetPath, repoRevision:'9'.repeat(40), targetBlob:'f'.repeat(40), risks:[{id:'R1'}]});
+  await assert.rejects(prepareNativeRetestAutomation(retestSelection, fixture.checks), /selected committed target/);
+  fixture = retestFixture();
+  fixture.checks.confirm = async () => false;
+  await assert.rejects(prepareNativeRetestAutomation(retestSelection, fixture.checks), /cancelled/);
+  assert.equal(fixture.calls.length, 1);
 });
