@@ -150,3 +150,40 @@ node --test scripts/qa-handoff-generated-change.test.mjs
 
 The test writes only under a temporary directory inside `e2e/` and removes it. It does not use a
 Tesbo token, create records or call a provider.
+
+## Diagnostic disclosure correction — 27 November 2026 candidate
+
+The independent Red review reproduced a narrower failure that packet-byte validation did not
+cover: the uniqueness assertion received entire coverage rows. On a duplicate, Playwright copied
+an extra runtime-only `internalReviewerNote` marker into its actual error, JSON report, console
+output and file-backed failure context. The canonical packet attachment remained clean. This was
+an isolated synthetic probe, not an observed production disclosure or a native upload.
+
+The generator now passes only `{ length: matching.length }` to the same length matcher. It keeps
+the reviewed uniqueness label and exact expected/received cardinality diagnostics consumed by
+the existing reporter-journey checker, while withholding unrelated response properties. Ordered
+criterion matching, exact sole-link/revision checks and native identity remain unchanged.
+
+EG then independently reproduced additional disclosure from malformed JSON, object-valued
+identities, URL credentials and a real loopback connection reset. The transport error included
+the synthetic bearer header. The coupled correction now replaces parser/request exceptions with
+fixed categories, validates UUID/digest primitives before value comparisons and evaluates URL
+refusals as booleans. It never forwards an original exception or cause containing body, path or
+header data. These are corrections within the same emitted-test owner.
+
+The regression puts the random marker into successful HTTP coverage responses on both the
+duplicate and valid-single-row paths. It checks the actual child error/report/output and every
+reported attachment's bytes, including failure context. The original private-503, ordered-group,
+identity and alternate-link controls remain. The added control failed before the generator fix;
+the complete two-case Node suite passed afterward, with its actual generated Playwright children.
+The extended suite also passed after EG’s corrections: seven malformed-body/field/transport
+controls and one rejected-userinfo control use runtime-only markers and inspect report, console
+and all reported attachment bytes. The socket-reset control uses its marker as the actual bearer
+token, so a formatter that reintroduces the request call log fails the regression.
+These local results qualify the emitted-test boundary. Hosted candidate CI, native diagnostic
+upload/readback, broader field-specific disclosure policy and live acceptance remain separate.
+
+The native reporter seam and governed requirement/case/link journey remain in #313; #319 was
+merged into that owner branch on 27 November. Their disposable record and execution evidence must remain attributed to their
+own candidates; they do not establish the ordinary New task/model-authoring path or mandatory
+Skill-content delivery. No new runner, draft owner or result service is introduced here.
