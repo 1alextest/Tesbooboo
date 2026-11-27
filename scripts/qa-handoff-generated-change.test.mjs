@@ -155,9 +155,11 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
       assert.equal(candidate.ok, false, `${scenario} must fail its observed oracle`);
       assert.equal(candidate.report.stats.unexpected, 1);
       assert.equal(candidate.report.stats.expected, 0);
-      assert.match(JSON.stringify(candidate.report), /approved-handoff-evidence\.json/u,
+      assert.match(JSON.stringify(candidate.report.suites), /approved-handoff-evidence\.json/u,
         'failed attempts must retain validated packet-identity evidence');
-      assert.doesNotMatch(JSON.stringify(candidate.report), /PRIVATE_FIXTURE_CANARY/u,
+      // Inspect the test result surface, not config metadata: CI embeds the PR diff in the report,
+      // and that diff contains this fixture's canary string.
+      assert.doesNotMatch(JSON.stringify(candidate.report.suites), /PRIVATE_FIXTURE_CANARY/u,
         'a rejected coverage API body must not become public test evidence');
     }
     for (const scenario of ['other-case', 'different-criteria']) {
