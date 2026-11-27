@@ -801,6 +801,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
 
 test("AUT-HANDOFF-01 governed packet reaches actual generated pass, Bug-linked fault and corrected automation attempt without inventing manual retest execution", async () => {
   test.setTimeout(240_000);
+ // DevSkim: ignore DS172411
   verifyDisposableTarget();
   const human = await screensApi();
   try {
