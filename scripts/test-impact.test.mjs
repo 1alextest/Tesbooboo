@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   ImpactInputError, normalizePath, matchesPattern, validateConfig, parseGraph,
   affectedConsumers, planImpact, formatMarkdown, parseNulPaths, parseArgs,
-  changedPathsFromGit, runCli
+  changedPathsFromGit, runCli, compareCandidateImpact
 } from "./test-impact.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -773,4 +773,131 @@ test("runCli can be embedded without touching process exit state", () => {
   assert.equal(code, 0);
   assert.equal(process.exitCode, oldExit);
   assert.ok(lines.join("").includes("No tests run"));
+});
+
+test("concurrent impact separates direct and static consumer overlap from broad mapped obligations", () => {
+  const target = "a".repeat(40), ancestor = "b".repeat(40), a = "c".repeat(40), b = "d".repeat(40), c = "e".repeat(40);
+  const changed = "Tesbo-Backend-Nest/src/automation/automation.service.ts";
+  const consumer = "Tesbo-Backend-Nest/src/automation/automation.controller.ts";
+  const peer = "Tesbo-Backend-Nest/src/automation/unrelated.ts";
+  const graph = { modules: [
+    { source: changed, dependencies: [] },
+    { source: consumer, dependencies: [{ resolved: changed }] },
+    { source: peer, dependencies: [] }
+  ] };
+  const candidates = [
+    { head: a, mergeBase: ancestor, changedPaths: [changed], targetChangedPaths: [changed] },
+    { head: b, mergeBase: ancestor, changedPaths: [consumer], targetChangedPaths: [] },
+    { head: c, mergeBase: ancestor, changedPaths: [peer], targetChangedPaths: [] }
+  ];
+  const inputs = { target, candidates, config, availablePaths };
+  const report = compareCandidateImpact({ ...inputs, graph });
+  assert.equal(report.status, "review-required");
+  assert.equal(report.graphBasis, "supplied-unverified");
+  assert.deepEqual(report.candidates[0].targetOverlap, [changed]);
+  const ab = report.pairs.find(pair => pair.heads.includes(a) && pair.heads.includes(b));
+  assert.deepEqual(ab.directOverlap, []);
+  assert.deepEqual(ab.staticConsumerOverlap.bChangedConsumersOfA, [consumer]);
+  assert.equal(ab.structuralLead, true);
+  const bc = report.pairs.find(pair => pair.heads.includes(b) && pair.heads.includes(c));
+  assert.equal(bc.structuralLead, false);
+  assert.ok(bc.sharedSpecFiles.includes("e2e/api/automation.spec.ts"));
+  assert.equal(report.verification.executedTestCount, null);
+  assert.deepEqual(compareCandidateImpact({ ...inputs, candidates: [...candidates].reverse(), graph }), report);
+  const withoutGraph = compareCandidateImpact({ ...inputs, candidates: candidates.map(row => ({ ...row, targetChangedPaths: [] })) });
+  assert.equal(withoutGraph.status, "selection-only");
+  assert.equal(withoutGraph.pairs[0].staticConsumerOverlap, null);
+  assert.ok(withoutGraph.pairs.every(pair => !pair.structuralLead));
+  const direct = compareCandidateImpact({ ...inputs, candidates: [candidates[0], { ...candidates[1], changedPaths: [changed] }] });
+  assert.deepEqual(direct.pairs[0].directOverlap, [changed]);
+  assert.equal(direct.pairs[0].structuralLead, true);
+  assert.throws(() => compareCandidateImpact({ ...inputs, candidates: [candidates[0], candidates[0]] }), /duplicate candidate identity/);
+  assert.throws(() => compareCandidateImpact({ ...inputs, candidates: [candidates[0], { ...candidates[1], changedPaths: ["../foreign"] }] }), /escapes/);
+});
+
+test("concurrent committed comparison uses target policy, ignores dirty checkout and preserves target/peer drift", t => {
+  const directory = temporary(t);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key)));
+  Object.assign(env, {
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(directory, "no-global-config"),
+    GIT_AUTHOR_NAME: "Impact fixture", GIT_AUTHOR_EMAIL: "impact@example.invalid",
+    GIT_COMMITTER_NAME: "Impact fixture", GIT_COMMITTER_EMAIL: "impact@example.invalid"
+  });
+  const git = (...args) => execFileSync("git", ["-c", "commit.gpgsign=false", "-c",
+    "core.hooksPath=" + path.join(directory, "no-hooks"), ...args], { cwd: directory, encoding: "utf8", env }).trim();
+  const write = (file, value) => {
+    fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+    fs.writeFileSync(path.join(directory, file), value);
+  };
+  const policy = ".github/test-impact.json", workflow = ".github/workflows/core-quality.yml", spec = "e2e/api/health.spec.ts";
+  const shared = "src/shared.ts", peer = "src/peer.ts";
+  const fixtureConfig = {
+    version: 1, policy: "Target-owned static fixture.",
+    checks: { backend: { workflow, job: "backend-quality", description: "Fixture check.", evidence: [] } },
+    domains: { health: { description: "Fixture domain.", specs: [spec], checks: ["backend"] } },
+    rules: [{ id: "health", patterns: ["src/**"], domains: ["health"], reason: "Fixture owner." }],
+    nonProduct: [{ id: "quality-config", patterns: [policy], reason: "Target-owned configuration review.", checks: ["backend"] }],
+    sharedRisks: []
+  };
+  git("init", "--quiet");
+  for (const [filename, content] of [[policy, JSON.stringify(fixtureConfig)], [workflow, "name: fixture\n"],
+    [spec, "// fixture\n"], [shared, "original\n"], [peer, "original\n"]]) write(filename, content);
+  git("add", "--all"); git("commit", "--quiet", "-m", "baseline");
+  const ancestor = git("rev-parse", "HEAD");
+  function branch(label, files) {
+    git("checkout", "--quiet", "--detach", ancestor);
+    for (const [filename, content] of Object.entries(files)) write(filename, content);
+    git("add", "--all"); git("commit", "--quiet", "-m", label);
+    return git("rev-parse", "HEAD");
+  }
+  const target = branch("target", { [shared]: "target drift\n" });
+  const a = branch("candidate-a", { [shared]: "candidate A\n", [policy]: "{not trusted candidate policy" });
+  const b = branch("candidate-b", { [shared]: "candidate B\n", [peer]: "candidate B peer\n" });
+  write(policy, "{dirty worktree");
+  const before = git("status", "--porcelain");
+  const run = args => spawnSync(process.execPath, [script, ...args], { cwd: directory, env, encoding: "utf8" });
+  const r = run(["--compare-candidates", target, a, b]);
+  assert.equal(r.status, 1, r.stderr);
+  const report = JSON.parse(r.stdout);
+  assert.equal(report.input.mode, "committed-candidate-comparison");
+  assert.equal(report.input.configBlob, git("rev-parse", target + ":" + policy));
+  assert.equal(report.input.trackedWorktreeIncluded, false);
+  assert.ok(report.candidates.every(row => row.mergeBase === ancestor && row.targetOverlap.includes(shared)));
+  assert.deepEqual(report.pairs[0].directOverlap, [shared]);
+  assert.deepEqual(report.pairs[0].sharedSpecFiles, [spec]);
+  assert.equal(git("status", "--porcelain"), before);
+  assert.equal(git("rev-parse", "HEAD"), b);
+  const markdown = run(["--compare-candidates", target, a, b, "--format", "markdown"]);
+  assert.equal(markdown.status, 1, markdown.stderr);
+  assert.match(markdown.stdout, /Joint structural review indicated/);
+  assert.match(markdown.stdout, /tests NOT RUN/);
+  assert.match(markdown.stdout, /Target config blob:/);
+  assert.match(markdown.stdout, /Candidate diagnostics:/);
+  // A replacement ref must not change the target policy or delta identity.
+  git("replace", target, a);
+  try {
+    const replaced = run(["--compare-candidates", target, a, b]);
+    assert.equal(replaced.status, 1, replaced.stderr);
+    assert.deepEqual(JSON.parse(replaced.stdout), report);
+  } finally { git("replace", "-d", target); }
+  // A literal backslash is a distinct Git filename on POSIX, not a directory separator.
+  // Do not silently map it to the path of a different file.
+  if (process.platform !== "win32") {
+    const ambiguous = branch("ambiguous path", { ["src\\shared.ts"]: "distinct literal filename\n" });
+    const refused = run(["--compare-candidates", target, a, ambiguous]);
+    assert.equal(refused.status, 2, refused.stderr);
+    assert.match(refused.stderr, /Ambiguous committed Git path/);
+  }
+  for (const args of [
+    ["--compare-candidates", target, a, a],
+    ["--compare-candidates", "HEAD", a, b],
+    ["--compare-candidates", target, a, "0".repeat(40)],
+    ["--compare-candidates", target, a, b, "--config", policy],
+    ["--compare-candidates", target, a, b, "--base", "HEAD"],
+    ["--compare-candidates", target, "--path", a, b]
+  ]) {
+    const refused = run(args);
+    assert.equal(refused.status, 2, refused.stdout + refused.stderr);
+    assert.equal(JSON.parse(refused.stdout).status, "invalid-input");
+  }
 });
