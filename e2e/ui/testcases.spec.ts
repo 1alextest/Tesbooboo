@@ -179,6 +179,97 @@ test("exact linked testcase navigation preserves identity with duplicate titles 
   }
 });
 
+
+test("stale approval GET and pending POST never open or repaint a different linked case", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  let projectId: string | undefined;
+  let releaseGet: (() => void) | undefined;
+  let releasePost: (() => void) | undefined;
+  try {
+    projectId = (await createProject(api, { name: `Review race ${Date.now()}` })).id;
+    const base = `/api/projects/${projectId}/testcases`;
+    const create = async (suffix: string) => {
+      const res = await api.post(base, { data: { title: `Review race ${suffix} ${Date.now()}`, attachments: suffix } });
+      expect(res.ok(), await res.text()).toBe(true);
+      return res.json();
+    };
+    const a = await create("A");
+    const b = await create("B");
+    const panel = page.getByTestId("testcase-detail-panel");
+    const review = page.getByRole("dialog", { name: "Review saved test case" });
+    const routeTo = async (caseId: string) => {
+      await page.evaluate(id => {
+        const url = new URL(location.href);
+        url.searchParams.set("testcaseId", id);
+        history.pushState(null, "", url);
+      }, caseId);
+      await expect(panel).toHaveAttribute("data-case-id", caseId);
+    };
+    await page.goto(`/projects/${projectId}/testcases?testcaseId=${a.id}`);
+    await expect(panel).toHaveAttribute("data-case-id", a.id);
+
+    // Freeze A's full approval snapshot AFTER the server replied, then select B in
+    // the same mounted editor. A's response must never open an approval dialog.
+    let getStarted!: () => void;
+    const pendingGet = new Promise<void>(resolve => { getStarted = resolve; });
+    const getGate = new Promise<void>(resolve => { releaseGet = resolve; });
+    await page.route(`**${base}/${a.id}`, async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      getStarted();
+      await getGate;
+      await route.fulfill({ response });
+    });
+    const observedApprovePosts: string[] = [];
+    page.on("request", request => {
+      if (request.method() === "POST" && request.url().includes("/testcases/") && request.url().endsWith("/approve")) {
+        observedApprovePosts.push(request.url());
+      }
+    });
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await pendingGet;
+    await routeTo(b.id);
+    releaseGet();
+    releaseGet = undefined;
+    await expect(review).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-case-id", b.id);
+    expect(observedApprovePosts).toEqual([]);
+    await page.unroute(`**${base}/${a.id}`);
+
+    // A fresh B approval may be reviewed. An intentionally delayed B approval
+    // response must not restore B or display B's success after selecting A.
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await expect(review).toBeVisible();
+    let postStarted!: () => void;
+    const pendingPost = new Promise<void>(resolve => { postStarted = resolve; });
+    const postGate = new Promise<void>(resolve => { releasePost = resolve; });
+    await page.route(`**${base}/${b.id}/approve`, async route => {
+      postStarted();
+      await postGate;
+      // No real native approval is performed in this UI interleaving control.
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await pendingPost;
+    await routeTo(a.id);
+    const finished = page.waitForResponse(response => response.url().includes(`${base}/${b.id}/approve`) && response.status() === 200);
+    releasePost();
+    releasePost = undefined;
+    await finished;
+    await expect(review).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-case-id", a.id);
+    await expect(panel.getByText("The reviewed version was approved.")).toHaveCount(0);
+    // A remains a new unapproved case: no real POST was allowed to write either record.
+    expect((await (await api.get(`${base}/${a.id}`)).json()).approvalCurrent).toBeFalsy();
+    expect((await (await api.get(`${base}/${b.id}`)).json()).approvalCurrent).toBeFalsy();
+  } finally {
+    releaseGet?.();
+    releasePost?.();
+    if (projectId) await deleteProjects(api, [projectId]);
+    await api.dispose();
+  }
+});
+
 /** Exercise Notes through reviewed MCP publication and the native editor on disposable records. */
 test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page }) => {
   const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
