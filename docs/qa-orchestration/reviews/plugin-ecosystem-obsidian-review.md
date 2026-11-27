@@ -1,12 +1,12 @@
-# Plugin ecosystem and Obsidian: adoption review
+# General-purpose Tesbo plugins: adoption review
 
-**Review date: 26 November 2026. Status: proposed, non-normative research and reconciliation review.** This document records the owner's interest in future Tesbo plugins, evaluates the supplied Quality Forge / Agentic QE / Nagual sources, and proposes a first useful integration. It does not add a ninth canonical specification, approve a runtime dependency, activate a Skill, or claim a working plugin. The eight canonical specification files remain unchanged. Accepted product decisions must be incorporated into their existing owners before implementation.
+**Research date: 26 November 2026; scope corrected 27 November 2026. Status: proposed, non-normative research and reconciliation review.** The owner clarified that Tesbo's future plugin capability is general-purpose and Obsidian was only an example. The original recommendation to prioritize an Obsidian/Markdown flow was the research author's proposal, not an owner-selected delivery sequence, and is superseded here. This document retains the supplied Quality Forge / Agentic QE / Nagual research and the illustrative Obsidian investigation. It does not add a ninth canonical specification, select the first plugin, approve a runtime dependency, activate a Skill, or claim a working plugin. Accepted requirements and review findings belong in the existing eight canonical owners.
 
 ## Recommendation
 
-Reserve a governed extension contract within the existing Tesbo application. Prove its value through selected Markdown/Obsidian source intake, linked native drafts, and the existing human review workflow. Reuse the integration pipeline, knowledge store, Skills governance, MCP authorization and native execution/evidence owners. Introduce third-party execution only when an individual adapter demonstrates a useful result under those boundaries.
+Define the common obligations for optional extensions across Tesbo's existing application, then qualify the contribution profiles actually needed. A plugin may contribute a connector, execution or analysis capability, method content, reporting, or a bounded product/UI capability. Those profiles have different effects and need not use one execution mechanism. Reuse the integration pipeline, knowledge store, Skills governance, MCP authorization and native execution/evidence owners where their invariants fit. Select a new owner only when evidence shows a distinct responsibility.
 
-The first product outcome is: **a tester can select source notes, see what will be shared, create or update a linked proposal, and review the result in Tesbo without losing source identity or changing approved material silently.** A public marketplace, arbitrary server-side code loading and continuous two-way synchronization are later decisions.
+The product direction is **Tesbo can gain optional capabilities without making one provider, source format, runtime or plugin mandatory for its core QA workflow.** Obsidian is one knowledge-integration example. It does not define the host architecture, supported contribution set, implementation technology or first delivery priority. Compare materially different contribution types against the shared lifecycle and their existing native owners before claiming the abstraction reusable. The first admitted profiles, third-party distribution, executable/UI isolation and any marketplace remain explicit product and architecture decisions.
 
 ## Evidence scope and existing work
 
@@ -89,7 +89,8 @@ A Tesbo plugin is a **versioned extension with declared contributions, compatibi
 | Analysis adapter | Coverage, mutation, accessibility or security analysis | Findings with method, scope and limitations; a report cannot approve a release |
 | Method/Skill pack | QA heuristics, domain playbooks, reviewer methods | Versioned candidate content through existing Skills governance |
 | Reporting adapter | Markdown exports, approved report formats | Permission-filtered views of native facts |
-| UI contribution | A review panel or specialized evidence viewer | Initially declared, host-rendered contributions; arbitrary third-party frontend code is a separate trust decision |
+| Product capability module | A specialized authoring capability, fixture tool or evidence workflow, subject to a demonstrated need | Compose existing owners; genuinely distinct state requires a justified scoped owner, lifecycle, migration and permissions before admission |
+| UI contribution | A review panel or specialized evidence viewer | Admission must identify its rendering and data-access boundary; host-rendered declarations and isolated executable UI are alternatives to evaluate, not a selected architecture |
 
 These are categories for product planning, not claims that the examples are installed. A connector need not be an AI agent or run its own server. A Skill pack need not execute code. Native reviewed adapters can remain compiled modules. Untrusted executable extensions need a separate, enforced execution boundary before admission; placing code in another module or declaring permissions is insufficient isolation.
 
@@ -115,9 +116,9 @@ The inspected MCP grant validation also keeps OAuth client pre-approval read-onl
 | Removal and data | Remove subscriptions/jobs/credentials owned by the extension without revoking resources shared by other enabled consumers, and prevent further collection/use under a revoked grant. Apply current native access and retention rules to retained snapshots, embeddings, caches and derived retrieval. Preserve approved history where required without broadening access; uninstall is not automatic purge |
 | Operations | Visible last successful operation, freshness, backlog, failures, budget usage, dependency health and affected records; reuse current observability and work records |
 
-The first implementation should exercise the contract with one existing built-in adapter and one new source adapter, maintaining existing behavior. A universal SDK designed only around Obsidian would not yet demonstrate a reusable abstraction.
+Qualification should exercise at least two materially different contribution profiles selected for a real user need, including their normal, refused, interrupted and no-plugin paths. Two source adapters alone do not demonstrate that execution, analysis, reporting, content and product/UI contributions share a sufficient contract. This is a design-proof recommendation, not selection of the first implementation or a requirement to ship every profile together.
 
-## Obsidian: a concrete first journey
+## Obsidian: one illustrative knowledge-integration journey
 
 Obsidian stores [plain Markdown files in local vaults](https://obsidian.md/help/data-storage). The official [plugin API](https://docs.obsidian.md/) extends the running app. This supports portable source exchange and an optional Tesbo command inside Obsidian; it does not establish a supported way to embed the Obsidian application inside Tesbo or execute existing Obsidian plugins in Tesbo.
 
@@ -134,7 +135,7 @@ Obsidian stores [plain Markdown files in local vaults](https://obsidian.md/help/
 
 Preserve frontmatter, headings, aliases and links as source data where needed. A Wikilink is not by itself proof of a formal requirement-to-case relationship. A field such as `approved: true` in a note cannot confer Tesbo approval. Embedded instructions, linked pages and attachments remain untrusted inputs; they must not broaden the selection, execute commands or grant authority.
 
-### Optional local connection, after the first flow
+### Optional local connection within this example
 
 Two paths are worth comparing on the same fixture:
 
@@ -155,9 +156,9 @@ Stable note IDs may be stored in metadata only with user consent, or maintained 
 
 If writeback is added, preserve the user's unrelated text and unsaved work. Official [Vault guidance](https://docs.obsidian.md/Plugins/Vault) recommends a guarded read/modify operation; asynchronous results must recheck the current content. Reject stale updates and offer a reviewable conflict. Preserve both revisions. Obsidian file synchronization does not resolve Tesbo business approval conflicts.
 
-## Proposed acceptance scenarios
+## Illustrative source-integration acceptance scenarios
 
-These scenarios are **proposed and UNRUN**. Actor labels describe effective capabilities, not new roles. Actual role mappings and native case reuse must be resolved from the configured project before automation. Coverage navigation follows actor → feature → scenario; each scenario has one canonical implementation in the existing test project.
+These source-integration scenarios are **illustrative, proposed and UNRUN**; they do not define the whole plugin system or its delivery priority. The general contribution and lifecycle acceptance belongs to the canonical specification review. Actor labels describe effective capabilities, not new roles. Actual role mappings and native case reuse must be resolved from the configured project before automation. Coverage navigation follows actor → feature → scenario; each scenario has one canonical implementation in the existing test project.
 
 | Actor and state | Feature / scenario | Observable result and evidence |
 | --- | --- | --- |
@@ -189,34 +190,36 @@ Use the existing `e2e/` owners for integration, knowledge, authorization, Skills
 
 | Stage | Coherent deliverable | Exit evidence |
 | --- | --- | --- |
-| 1. Reconcile contract | Incorporate approved extension requirements into canonical owners; map one built-in adapter and selected Markdown intake | Owners, effects, actor permissions, identity and lifecycle decisions are explicit; no duplicate platform |
-| 2. Prove source intake | Selected files → source snapshot → appropriate linked proposal → native human review | Real scoped readback, duplicate/retry controls, revision conflicts, access refusals and retained source provenance |
-| 3. Compare local experience | Optional first-party Obsidian command versus bounded existing bridge | Same user scenario, measured setup burden, containment, compatibility and recovery; choose on evidence |
-| 4. Qualify a second contribution | One existing runner/report adapter or bounded analysis capability through the same contract | Genuine reuse across different effects, complete evidence and successful disable/upgrade behavior |
-| 5. Expand selectively | Multi-account/vault support, controlled sync, third-party catalog or UI contributions as separately justified | Tested tenancy/isolation, distribution, migration, observability and support boundaries |
+| 1. Reconcile the general direction | Amend existing canonical owners and review the connected QA workflow using the established teams | Common lifecycle, contribution-specific effects, native ownership and unresolved choices are explicit |
+| 2. Challenge the abstraction | Trace unlike contribution profiles and valid no-plugin/manual alternatives through the same obligations | Reuse is demonstrated across different effect/authority boundaries; provider-specific details remain in their adapters |
+| 3. Select a bounded delivery | Choose first admitted profiles and hosting/distribution approach from actual user value and evidence | Accountable product decision, supported capabilities, implementation owners and discriminating acceptance scope |
+| 4. Prove the chosen end-to-end outcome | Implement only the admitted scope using existing native owners | Real packaged invocation and native readback, permissions, retries, interruption, version change and removal evidence |
+| 5. Expand when justified | Admit additional contribution profiles, providers, deployment modes or distribution paths | Compatibility, migration, isolation, recovery and support are qualified for each new boundary |
 
 The current research is not blocked by the following future product decisions. Record them in the existing review/work owner and resolve only before the affected implementation:
 
 | Decision | Current disposition | Recommendation and consequence |
 | --- | --- | --- |
-| Does the first Obsidian outcome need live sync or selected snapshots? | HUMAN_REQUIRED for implementation priority; snapshot flow proposed | Start with snapshots to establish value and preserve source/approval ownership; live sync adds local connectivity and conflict obligations |
-| Who may install an extension, connect an account/vault, and enable it for a project? | HUMAN_REQUIRED; exact existing role mapping not established by this review | Reuse existing permissions where adequate; separate these powers instead of assuming one admin flag covers all |
+| Which contribution profiles and user outcome come first? | HUMAN_REQUIRED before implementation priority is fixed; no provider selected | Compare actual value, reuse and proof cost across candidate profiles; Obsidian remains one possible integration |
+| If an Obsidian integration is selected, does it need sync or selected snapshots? | Conditional future decision; not a platform prerequisite | Compare snapshot intake and synchronization within that adapter's own needs; neither defines the general plugin model |
+| Who may install an extension, connect an account/vault, and enable it for a project? | Reconcile existing authority first; HUMAN_REQUIRED only for an unresolved power in a selected profile | Reuse existing permissions where adequate; separate these powers instead of assuming one admin flag covers all |
 | Can a workspace connect several accounts/vaults for one provider? | Source constraints established; live deployment unverified; HUMAN_REQUIRED for expanded product cardinality | Plan namespaced source identity; verify deployment and prove existing-provider migration and cross-account isolation before expanding cardinality |
-| Which local approach should be supported first? | DELEGATED evaluation, adoption remains a product decision | Compare the official plugin route and bounded REST/MCP bridge; do not assume the bridge's broad key is least privilege |
-| May third-party code execute or render arbitrary UI? | HUMAN_REQUIRED for later scope; excluded from the initial proposal | Keep first-party adapters and declared UI contributions initially; choose and prove an enforced boundary before opening executable extensions |
+| If an Obsidian connection is selected, which local approach fits it? | Conditional DELEGATED evaluation; adoption remains a product decision | Compare the official plugin route and bounded REST/MCP bridge; do not assume the bridge's broad key is least privilege |
+| Which distribution and execution profiles are admitted? | HUMAN_REQUIRED before executable/UI scope is implemented | Compare compiled first-party contributions, content packages, remote adapters and isolated third-party code; choose and prove each admitted boundary without treating a manifest as isolation |
 | May learning change active Skills or approve artifacts? | ALREADY_DECIDED by existing governance | No automatic promotion; reuse candidate evaluation and authorized exact-version activation |
 | Does a plugin require a second knowledge database or mandatory desktop application? | ALREADY_DECIDED by existing architecture | Reuse native knowledge and work owners; an optional Obsidian integration does not impose a companion on every Tesbo user |
 
 ## Canonical reconciliation and native handoff
 
-When the owner adopts a slice, amend the existing eight specifications in place using their normal version/review process:
+The scope correction is reconciled in the proposed v1.4.49 amendment through existing [PR295](https://github.com/1alextest/Tesbooboo/pull/295). The [connected specification review record](https://github.com/1alextest/Tesbooboo/blob/docs/skill-evaluation-specs-20261126/docs/qa-orchestration/reviews/spec-review-20261127/README.md) binds the actual team receipts, unchanged methods, input revisions and remaining gates. It reviews the eight specifications as a connected workflow; this research remains supporting evidence. General obligations are proposed without selecting an implementation slice:
 
 - `00_README.md` P-16 and `01_PRODUCT_REQUIREMENTS.md` FR-058: retain replaceable execution integration; add the distinct knowledge/report/Skill contribution obligations where approved. FR-058 alone is not a finished generic plugin SDK.
 - `03_TECHNICAL_DESIGN.md` modular-monolith, integration, imported-source identity and GEX learning sections: define registration, namespace, scope, evidence and lifecycle at their existing owners.
-- `04_MCP_API_CONTRACTS.md`: document only implemented/approved adapter contracts, explicit unsupported behavior, authority, provenance and recovery. Do not invent a callable plugin endpoint from this review.
+- `04_MCP_API_CONTRACTS.md`: distinguish proposed logical associations from implemented and advertised operations; retain explicit unsupported behavior, authority, provenance and recovery. Do not invent a callable plugin endpoint from this review.
 - `05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md` T-408 and the existing Skills/evidence tasks: add accepted scenarios and dependencies, reconcile with #295 and #310/#313.
-- `02_WORKFLOW_AND_UX_SPEC.md`, `07_UI_DESIGN_TASKS.md` and `06_IMPLEMENTATION_AGENT_BRIEF.md`: reflect selected-content preview, accessible status/conflicts, effective authority, existing native record handoffs and the optional-local-client boundary.
+- `02_WORKFLOW_AND_UX_SPEC.md`, `07_UI_DESIGN_TASKS.md` and `06_IMPLEMENTATION_AGENT_BRIEF.md`: reflect contribution-specific context and effects, accessible status/conflicts, effective authority, existing native record handoffs and supported recovery. The optional local-client example does not define every contribution.
 
 Native assessment for this documentation change: Requirements and Test Cases have a proposed future handoff; Manuals and Policies have no implemented behavior to update; Skills and active assignments remain unchanged; this review/PR owns the research task and source evidence. **Tesbo sync not performed:** no callable authorized Tesbo connector was exposed in this session. Native duplicate discovery, record publication, approval and Test Run execution are not claimed. Preserve this review for later reconciliation with the existing native records; do not bypass missing MCP access with direct database or REST writes.
 
-Rollback of this documentation-only proposal is removal of the review and its two cross-references through normal review. No runtime configuration, credentials, schema, installed packages or production data are changed.
+Rollback uses a normally reviewed documentation revert while retaining the original findings and their evidence. The two earlier cross-reference additions are removed from this research PR so the harness and Agentic QE handoff remain with their active owners. No runtime configuration, credentials, schema, installed packages or production data are changed.
+
