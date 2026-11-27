@@ -1,0 +1,207 @@
+{
+  "scope": "Documentation integrity only; no runtime acceptance, native Test Run, human usability or efficacy claim.",
+  "source_archive": "Tesbo_Specifications_v1.4.49.zip",
+  "archive_sha256": "be4a09be89f3431646569afbb85353db5a9c05b7fc965f73ab0304e4883cd829",
+  "checks": [
+    {
+      "check": "preserve-00_README.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-00_README.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "preserve-07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Saved v1.4.48 substantive prefix; current amendment header and final separating whitespace excluded."
+    },
+    {
+      "check": "source-07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Size, SHA-256 and Git blob match source-manifest."
+    },
+    {
+      "check": "archive-identity",
+      "passed": true,
+      "detail": "Archive bytes and SHA-256 match source-manifest."
+    },
+    {
+      "check": "archive-eight-canonical-files",
+      "passed": true,
+      "detail": "Exactly eight root Markdown entries, CRC readable."
+    },
+    {
+      "check": "archive-body-00_README.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "archive-body-07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Archive member equals current canonical source byte-for-byte."
+    },
+    {
+      "check": "new-identity-FR-125",
+      "passed": true,
+      "detail": "Absent in prior package and exactly one explicit current definition; not a native ID or executed case."
+    },
+    {
+      "check": "new-identity-T-462",
+      "passed": true,
+      "detail": "Absent in prior package and exactly one explicit current definition; not a native ID or executed case."
+    },
+    {
+      "check": "new-identity-AC-094",
+      "passed": true,
+      "detail": "Absent in prior package and exactly one explicit current definition; not a native ID or executed case."
+    },
+    {
+      "check": "receipt-architecture-original",
+      "passed": true,
+      "detail": "Original reviewer bytes preserved unchanged."
+    },
+    {
+      "check": "receipt-architecture-candidate",
+      "passed": true,
+      "detail": "Original reviewer bytes preserved unchanged."
+    },
+    {
+      "check": "receipt-security-lifecycle-original",
+      "passed": true,
+      "detail": "Original reviewer bytes preserved unchanged."
+    },
+    {
+      "check": "receipt-security-lifecycle-candidate",
+      "passed": true,
+      "detail": "Original reviewer bytes preserved unchanged."
+    },
+    {
+      "check": "receipt-experience-original",
+      "passed": true,
+      "detail": "Original reviewer bytes preserved unchanged."
+    },
+    {
+      "check": "receipt-experience-candidate",
+      "passed": true,
+      "detail": "Original reviewer bytes preserved unchanged."
+    },
+    {
+      "check": "primary-document-whitespace",
+      "passed": true,
+      "detail": "git diff --cached --check on canonical/instruction/source-manifest/research/view and coordinator metadata files returned exit0. Original receipts and retained patches are byte-preservation evidence, checked separately below."
+    },
+    {
+      "check": "documentation-only",
+      "passed": true,
+      "detail": "No application, executable runtime, test-suite, schema, CI or dependency file changed."
+    }
+  ],
+  "passed": true,
+  "retained_evidence_whitespace": {
+    "command": "git diff --cached --check",
+    "exit_code": 2,
+    "paths": [
+      "docs/qa-orchestration/reviews/spec-review-20261127/candidate-final.patch",
+      "docs/qa-orchestration/reviews/spec-review-20261127/candidate-first.patch",
+      "docs/qa-orchestration/reviews/spec-review-20261127/publication-delta.patch",
+      "docs/qa-orchestration/reviews/spec-review-20261127/receipts/white-independent.md",
+      "docs/qa-orchestration/reviews/spec-review-20261127/receipts/white-informed.md",
+      "docs/qa-orchestration/reviews/spec-review-20261127/research-candidate-final.patch",
+      "docs/qa-orchestration/reviews/spec-review-20261127/research-candidate-first.patch"
+    ],
+    "disposition": "Full staged scan flags literal blank context lines/historical trailing spaces in preserved unified patches and intentional Markdown hard-break spaces in the two original White receipts. All flagged paths were classified; original evidence bytes are retained unchanged. No repository or CI rule was changed or suppressed."
+  }
+}

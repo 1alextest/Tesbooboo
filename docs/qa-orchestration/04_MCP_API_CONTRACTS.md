@@ -1,6 +1,6 @@
 # Proposed MCP / REST Contracts and Integration Security
 
-**Current package amendment:** 1.4.47 — 26 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.47 section for this update. Earlier revision headers and receipts below retain their historical scope.
+**Current package amendment:** 1.4.49 — 27 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.49 section for this update. Earlier revision headers and receipts below retain their historical scope.
 
 **Document ID:** TESBO-API-004 | **Revision:** 1.4.39 — 21 November 2026; module authoring principles and contextual guidance integration; NOT FROZEN | **Status:** mixed proposed and scoped native contracts; NOT FROZEN. PROPOSED labels remain proposals.
 **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
@@ -1236,3 +1236,42 @@ No sensitive credential bytes, browser sessions, vault contents or model-provide
 Authorize before revealing stop status, evidence, counts or parent/child relationships; preserve project/tenant boundaries, privacy and safe denied/error behavior. A failed status read is unknown, not stopped. A transport cancellation is not proof that the downstream operation did not commit. Required audit failure aborts the protected native effect; optional telemetry export failure is separately disclosed. External effects reconcile by their real provider/native operation receipt and must not be blindly retried.
 
 Negotiate and test any adapter/schema increment against both existing MCP endpoints and supported actual clients. Retain old bearer-client compatibility within its current policy; do not grant new powers or invent exact identities to accommodate a legacy client. Acceptance and rollout follow canonical 05; all added runtime scenarios remain NOT RUN.
+
+
+## Revision 1.4.48 — unit correction and dependency-revalidation contracts
+
+**Proposed logical associations only.** Extend existing native task/plan/claim/report, selected proposal and ASER evidence contracts; no new endpoint, command family, public enum or graph service is advertised by this amendment. Discover actual client/adapter capabilities before sending data or promising work-unit scheduling. Revision 1.4.47 authority, wait/resume, stopping and credential controls remain in force.
+
+| Existing owner | Minimum observable association and invariant |
+| --- | --- |
+| Task / versioned plan / selected draft | Project/task and stable logical unit, purpose, plan/input generation, relied-on source/criterion/Skill/environment/resource/authority revisions, bounded output/check contract and responsible principal. Distinguish planned work from observed dispatch. A title or array position cannot identify the unit. |
+| Dependency / impact projection | Source and target units or external prerequisites, relation meaning, exact relied-on basis, declaration/observation origin, permitted visibility, completeness and invalidation rule. Resource/authority constraints are not reduced to output-variable edges. A derived relation cannot authorize dispatch or native mutation. |
+| Attempt / report / check | Unit and plan basis, attempt generation, actual executor, request/operation identity, original output/evidence, exact check/evaluator, observed outcome/limits, attempted versus committed effects and relevant costs. Keep a self-report distinct from an independently observed effect; preserve missing evidence. |
+| Correction / continuation | Bind the failed unit/check and reason to the original basis and evidence, allowed repair scope, affected dependency closure, known unknowns and remaining limits. A successor retains lineage. Re-resolve current rights, inputs and resource capability; a stale response cannot overwrite newer work or its result. |
+| Native review / apply | Show the exact selected candidate and joint obligations. Recheck current authority and dependency basis at the actual native transaction. An unaffected earlier result may be reused only for its unchanged declared reliance. New task completion does not approve a case, activate a Skill or release a build. |
+| Learning candidate | Link causal evidence, applicability, counterexample, proposed planning/worker-method revision and adoption decision through existing Tasks/Skills/Guide review. A returned report cannot directly alter the effective method or grant itself permanent authority. |
+
+For lost or duplicate delivery, reconcile the scoped original operation and per-unit receipt using existing native idempotency rules. Distinguish a request replay, a separately attributable retry and a new corrective attempt. Uncertain external effects remain explicit; do not resume the whole batch to discover what happened. Resource leases, source reads and native atomicity retain their real owners; proposed unit associations do not imply those owners already expose all required fields.
+
+A scoped status/readback must let an authorized consumer distinguish a local check's observed result, unavailable evidence, stale input reliance, pending integrated review and protected publication decisions using the established lifecycle/readiness vocabulary. Do not translate all these facts into one green label. Enforce visibility on unit/dependency identities, denied neighbors, explanations, counts and summaries; an inaccessible dependency cannot leak through an impact list. A client unable to support a declared capability receives a truthful limitation and supported manual path, never invented scheduling or authority.
+
+## Revision 1.4.49 — logical plugin associations and contract admission
+
+**Proposed logical contract under FR-125 / AC-094.** This section declares required meanings, not implemented JSON keys, REST routes, MCP tools or a finalized SDK. Confirm deployed schemas and effective capabilities before advertising or calling anything. Existing FR-058 executor contracts remain narrower than the general plugin concept.
+
+| Association | Required meaning and invariant |
+| --- | --- |
+| Package | Stable namespace/identity, exact version and artifact digest, attributable publisher/source, compatible host and protocol versions, reviewed dependency closure |
+| Contribution | Stable package-scoped identity, owning extension point and contract revision, profile, actual effects, declared multiplicity/conflict rules |
+| Binding | Exact workspace/project and applicable account/connection, enabled/configuration revision and source namespace where relevant; no inference of global enablement |
+| Effective authority | Authenticated human/workload, current target permissions, applicable grant/consent and required Skill basis; declarations cannot mint authority |
+| Invocation / transition | Native operation/attempt identity, exact input and relied-on package/dependency/binding revisions, expected revision, current authority, budgets and relevant idempotency key |
+| Outcome / evidence | Committed native receipt or supported refusal/partial/unknown outcome, actual target result and permitted evidence references; no inference of execution from package state |
+
+Negotiation must distinguish supported, unsupported, unavailable, denied, incompatible and unverified capabilities. A catalog entry or configuration is not proof that the configured runtime implements an operation. Validate names, schemas, protocol versions, dependency closure and payload/attachment limits against the distributed artifact and actual consumer. A change to effective permissions or relied-on dependencies requires revalidation; re-consent follows the existing authority contract where newly required. Do not silently fall back to a broader credential or another provider.
+
+Install/admit, connect, enable, invoke, update, revoke and remove each use the correct existing native owner. Apply expected-revision checks and atomic admission at that owner; validate current authority at the protected effect after waits. Preserve namespaced contribution collisions as explicit refusal. Late events/results retain their original attempt and cannot overwrite the new active basis. Reconcile a timed-out mutation from its operation receipt; retrying an uncertain write is not the default. See canonical 03 for dependency impact and canonical 02 for user recovery.
+
+Treat metadata, descriptions, icons/links, external responses, generated HTML/Markdown and attachment filenames as untrusted data. Preserve existing sanitization, size/type limits, outbound destination controls, tenant/project checks and download/path containment at their actual boundaries. A host proxy does not forward ambient authentication cookies/tokens to an extension. Tool discovery, invocation and subsequent evidence retrieval each enforce their actual audience and current access.
+
+Profile adapters return to their domain's native artifact/receipt contract. Importing method content cannot approve or activate it; a report cannot alter a result; a connector refresh cannot overwrite human annotations; an execution adapter cannot publish official cases or manufacture a Run outcome. Exact source and artifact references remain attributable after disable/removal under the native access/retention policy. Contract fixtures and native tests are NOT RUN for this amendment; no callable plugin operation is asserted.

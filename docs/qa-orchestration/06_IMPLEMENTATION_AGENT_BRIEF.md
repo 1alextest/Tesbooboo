@@ -1,6 +1,8 @@
 # Implementation Agent Brief — OpenCode / Claude Code / Codex
 
-**Current package amendment:** 1.4.47 — 26 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.47 section for this update. Earlier revision headers and receipts below retain their historical scope.
+**Current package amendment:** 1.4.49 — 27 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.49 section for this update. Earlier revision headers and receipts below retain their historical scope.
+
+**UX and team review addendum · 26 November 2026.** See [Reviewing a consequential user choice](#reviewing-a-consequential-user-choice).
 
 **Revision:** 1.4.45 — 22 November 2026. Discover target-specific redesign obligations. NOT FROZEN.
 **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
@@ -805,3 +807,75 @@ Move stable parsing, normalization, correlation and validation into existing tes
 7. Update the owning specs, native candidates where the authorized connector permits, operating/manual guidance and incident handoff as applicable. Keep specification/source/merge/deployment/reachability/permission/execution proof separate. Missing Tesbo access is an explicit synchronization gap, not permission for direct DB/REST bypass or invented native IDs. No new active Skill or automatic monitoring policy follows from this text.
 
 Read canonical 03/04 for precise trust and logical contracts and 05 for cumulative proof. Record accountable decisions for runtime guarantees, identity/credential adapter, retention/egress, isolation and operational thresholds before implementation depends on them. Continue independent work where a decision is irrelevant; block only the affected interpretation. Preserve historical user work, authentic prior outcomes and the eight-file ownership boundary.
+
+## Reviewing a consequential user choice
+
+Use these checks with the existing team assignments when the actor’s intent, the actual destination or the result could be misunderstood. The [UI design tasks](07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice) provide examples. The project contract determines which choices are available.
+
+| Reviewer | Evidence to bring back |
+|---|---|
+| Purple and Grey | From the normal entry point, can a person identify the recipient or target, predict the reach of the action, then find what happened? Use an uncoached task. Record actual participant responses separately from a simulated walkthrough. |
+| Blue and Green | Trace the displayed identity, scope and result to their source. Identify which changes invalidate an earlier decision and any supported path to inspect or withdraw it after the original entry point changes. |
+| Red and fresh-eyes reviewers | Try similar-looking destinations, a material change between preview and commit, and a harmless change. Check for both silent expansion and unnecessary interruption. |
+| QA and Security, as applicable | Exercise one authorized action, a rejected action and an unaffected neighbor. Record the response, records that must retain their values and any required refusal evidence. For a missing acknowledgement or partial result, check what the person can verify before they repeat the action. |
+| White and Graph, within their existing roles | Match the claim to the exact occurrence. Mark suggested, attempted, skipped and observed work accurately. Record a blocked or unreached condition as such and route a missing product decision to its accountable owner. |
+
+The existing [shared review instructions](https://github.com/NesberryEnterprise/Nesberry/pull/4530) describe how these checks transfer across products. The existing Tesbo review and release authorities govern their application here.
+
+
+## Revision 1.4.48 — coordinate work without destroying accepted evidence
+
+**Proposed operating refinement of existing owners.** Apply the dependency and correction contracts in canonical 03/04, the original native publication boundaries and the v1.4.47 execution controls. This records a method, not an installed Skill, new worker runtime or automation permission.
+
+1. Establish the intended human outcome, approved expectations, allowed effects, usable evidence and check before generating the work that check will assess. A mechanical predicate may prove only structure; surface an unresolved semantic oracle to its actual owner. Do not invent a requirement or reward a model for asserting confidence.
+2. Decompose by the relevant obligations and change consequences. Inspect data flow, shared records/resources, authority, environment, independent review and combined invariants. Run truly independent work concurrently only within supported capabilities and total budgets. Keep input scope and missing dependencies visible; task order in a prompt is not proof of a dependency, and absence of a variable is not proof of independence.
+3. Bind each bounded job and check to stable native identities and exact revisions. Preserve independently collected first passes and distinguish later informed synthesis. Use deterministic code for operations with defined policies/keys; record judgment where semantic reconciliation is still needed.
+4. Return the failed unit with its exact evidence, expectation, permitted repair scope and remaining limits. Preserve unrelated work and original failed attempts. Reassess the actual dependency closure when shared facts change, then verify the combined result; a local pass does not certify all downstream effects. A shared-owner repair can require a reasoned scope decision rather than a file-only restriction.
+5. Recover according to the failure mechanism and current authority. Reconcile uncertain writes before retry; stop or replan affected no-progress work, exhausted budgets, incompatible checks and missing human decisions. Preserve the supported native continuation path. Do not hard-code the article's three-attempt example or ask for approval of every harmless internal step.
+6. Distill a causal lesson before proposing guidance: observation → investigated cause → agnostic principle → contextual planning/worker constraint → independent evaluation → authorized adoption. Compare existing guidance, counterexamples and no-change cases. Learning can improve task selection and decomposition; it cannot silently promote a rule or overwrite history.
+7. Review product quality, dependency coverage, correct escalation, unnecessary rework, total elapsed effort and attributable costs against the current baseline. Retain unknowns and legitimate alternate procedures. Update existing native records only through supported authorized capabilities; otherwise retain the precise handoff and say Tesbo sync was not performed.
+
+Use the existing team responsibilities and consequential-choice checks. Each applicable specialist must originate its own evidence-grounded candidate gap; a coordinator's supplied question list does not establish independent discovery. No universal new graph visualization, review quorum, fixed retry count, model choice or release threshold is selected here.
+
+## Revision 1.4.49 — engineering precedents and contextual application
+
+This extends the existing [portable discovery and distillation method](#portable-method-for-discovery-and-principle-distillation) and AGENTS.md's discover/reuse/extend principle. It applies when building, extending, redesigning or repairing a feature, including requirements, architecture, APIs, data, security, implementation, testing, delivery, operations and UX. It does not create another methodology registry, alter original team identities/quorum or install an active Skill. The owner's current direction authorizes using this research practice in this work; claims that it improves outcomes still require evaluation.
+
+**Principle — learn from established outcomes before inventing a mechanism.** Investigate comparable implementations and their successes, failures and trade-offs; identify the supported cause and applicability limits; then derive and verify the smallest appropriate change for the target. Transfer the reasoning, not the other product's architecture or popularity. A familiar feature can still have new requirements, and a useful analogy can come from another industry when its constraints match.
+
+### Proportionate decision procedure
+
+1. **Frame the outcome and uncertainty.** State the actor, job, required/forbidden effects, present friction and consequential unanswered question. Inspect the actual implementation, existing decisions, active work and current user path before naming a new mechanism. A request for plugins is not a request to build an Obsidian-only platform; a request for a better interface is not proof that a fashionable layout solves it.
+2. **Find informative precedents.** Use primary product/engineering documentation, code, standards, advisories, incident reports and attributable practitioner accounts. Seek contrasting approaches and failure/recovery evidence where material, not only vendor showcases or a single ecosystem's cross-linked pages. Compare underlying mechanism, trust boundary, scale, lifecycle, users and operating model; direct competitors are useful but not required. Reuse still-current prior research after checking applicability.
+3. **Separate evidence classes.** Record what was observed in source, documented by a producer, reported as an outcome, independently measured, inferred, or unknown. Pin the source/revision or retrieval date and relevant operating conditions. A documented design is evidence that a mechanism exists; it is not automatically a measured success. A retrospective's causal explanation may be plausible without excluding other causes. Preserve contradictory results and failed attempts.
+4. **Distill then instantiate.** Explain the mechanism behind the outcome and the conditions under which it holds. State the application-independent principle and counterexample/non-applicability; then map it to the target's actors, data, authority, lifecycle, costs and existing owner. Include implementation/maintenance, dependency, licensing, security and operating implications where a dependency or design is being adopted. Do not turn an ecosystem convention into a universal rule.
+5. **Compare the smallest sufficient options.** Evaluate reuse, extension, composition, extraction, a new primitive, existing/manual behavior and no change as relevant. Describe benefits and sacrifices, not just feature counts. Choose a proportionate experiment or document a justified defer/reject/retain decision. A missing native capability needs its real owner; it is not supplied by better wording in a Skill.
+6. **Make the choice falsifiable.** State the expected observable benefit, preserved obligations, failure signal, affected owner, appropriate verification boundary and fallback. Include a valid control and a meaningful counterexample. For a plugin, actually qualify the distributed contribution, dependency/authority transition and native result when implementation is admitted; a research matrix or successful registration does not prove that outcome.
+7. **Record and stop at the decision boundary.** Put the compact evidence and rationale in the existing spec, ADR, issue or review owner and link supporting sources. Reuse that record across teams. Stop expanding research when material uncertainties have a supported bounded disposition and further searching is unlikely to change the decision; record missing evidence. A small reversible change can need only a checked precedent or a reason research is unnecessary. No source-count quota, fixed company list or compulsory comparative study for every edit.
+8. **Revisit on relevant change.** Recheck when the relied-on version, threat model, scale, user need, integration contract, license/maintenance state or observed outcome changes. Feed verified misses and successful outcomes into the same lesson/decision record; retain unsuccessful trials and local exceptions. New evidence may justify undoing adoption. Do not rewrite historical results or auto-promote a candidate method.
+
+**Compact evidence record:** `outcome/question | current owner/state | precedent and exact source | observation/outcome and evidence class | mechanism/causal confidence | principle and limits | target fit/non-fit | alternatives/disposition | expected benefit/failure signal | validation and actual result | owner/status/revisit trigger`. Use only applicable fields and links; this is a reasoning aid, not a new product form with mandatory fields.
+
+### Team application
+
+The coordinator gives specialists the goal, frozen artifacts, actual context and unchanged applicable charter. Specialists independently investigate relevant precedents and derive their own findings. Preserve original first-pass outputs before disclosing the author's diagnosis or other reviewers' findings; later reconciliation is explicitly informed. Do not plant the desired conclusion under the label research. Grouped analytical lenses are identified as such; a single reviewer adopting multiple lenses is not multiple independent team approvals.
+
+| Lens | Contribution to the same engineering decision |
+| --- | --- |
+| Blue | Find current owners and established alternatives; establish why reuse/extend/compose or genuinely new work fits. |
+| Red | Challenge the premise and attractive analogy; seek failure mechanisms, counterexamples and conditions that would reverse the choice. |
+| Green | Trace real interfaces, data, dependencies, migration and downstream consequences across the integrated path. |
+| Security | Compare actual trust, authority, supply-chain and data boundaries; turn applicable incidents into discriminating refusal/legitimate controls. |
+| QA | Derive actor/feature/scenario coverage and lifecycle, concurrency, interruption and regression checks from the contract; test the mechanism and actual outcome. |
+| Grey | Trace complete human and agent jobs, valid manual/no-plugin paths, error recovery and the resulting native artifact. |
+| Purple | Inspect relevant interface precedents and current product truth; test comprehension, accessibility, identity/scope and preserved capabilities. |
+| Graph | Bind each accepted obligation, owner, source revision, decision and proof without creating a second authority; identify uncovered or stale links. |
+| Operability | Examine deployment, compatibility, budgets, failure containment, telemetry, support, recovery and decommissioning. This is an explicit assigned lens, not a new charter or automatic quorum member. |
+| White | Reconcile actual inputs, original findings, dispositions, unexecuted proof and remaining decisions; distinguish a reviewed document from implementation/release acceptance. |
+| EG / fresh eyes | Independently derive omissions from the desired outcome and frozen artifacts; preserve its first observations before comparison. |
+
+Each applicable lens records a grounded finding, supported no-change conclusion or explicit evidence gap. No finding quota or forced consensus applies. Original charters and protected human authorities remain intact. The [existing scope/finding procedure](../agent-scope-discipline.md#research-informed-engineering-and-team-handoff) routes this method into normal engineering handoffs.
+
+### Application to general plugins
+
+Use the [current plugin research record](reviews/plugin-ecosystem-obsidian-review.md), originally merged through PR315 and continued with this amendment, to compare narrow extension points, protocol compatibility, installation/authorization UX, dependency failure, update/removal, trust and recovery across established ecosystems. Apply the resulting questions to all selected contribution profiles and their native owners, not just a knowledge connector. An optional UI contribution and an external executor may need different boundaries. Obsidian remains illustrative, and the first plugin/SDK/distribution/runtime decision remains unselected. T-462 and AC-094 own design qualification and future proof; no plugin execution or new active method is claimed here.

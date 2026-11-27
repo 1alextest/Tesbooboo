@@ -1,6 +1,8 @@
 # Tesbo: Shared Human-and-Agent Engineering Platform — Specification Package
 
-**Current package amendment:** 1.4.47 — 26 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.47 section for this update. Earlier revision headers and receipts below retain their historical scope.
+**Current package amendment:** 1.4.49 — 27 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.49 section for this update. Earlier revision headers and receipts below retain their historical scope.
+
+**UX and team review addendum · 26 November 2026.** For interactions with consequential choices, use the [team checks](06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice) and [design examples](07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice). These additions clarify how to review the existing proposed workflows.
 
 **Revision:** 1.4.45 — 22 November 2026. Derive redesign obligations from each target project. NOT FROZEN.
 **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
@@ -878,3 +880,44 @@ The complete review covers [Katelyn Lesse's multiagent engineering article](http
 **Maturity reconciliation.** Existing MCP source already checks current membership, credential presence, project/client consent, grant expiry, scope and tool allowlist. Existing opt-in Langfuse/OTel and bounded Zyra traces are partial diagnostics. These are foundations, not evidence of complete per-agent identity, tamper-protected fleet tracing, workload suspension or physical stopping. OAuth #246, credential lifecycle #292/#298 and client setup #297/#299 remain separately tracked work at the inspection checkpoint; do not duplicate or declare them delivered through this text. The recent KB recovery implementation supplies local claim/lease/fencing patterns to inspect and reuse where suitable, not proof of a general agent runtime.
 
 **Delivery boundary.** Extend Zyra, native Tasks, proposals, Runs and Files/Evidence; use the existing authorization/audit/observability owners. No ninth normative specification, new workflow state family, identity platform or scheduler is selected. A managed executor is optional. Existing human/manual and user-managed execution paths remain supported within their real capabilities. All additional runtime acceptance in this amendment is **NOT RUN**; implementation decisions and authorized pilots remain explicit backlog work.
+
+
+## Revision 1.4.48 — dependency-aware work and bounded correction
+
+**Proposed / NOT FROZEN; 26 November 2026.** Extend the existing Zyra task/plan, FR-010–015/027–037/101–105/117–119/124, T-422/D-14, T-459 and native review/evidence owners. Preserve the complete v1.4.47 execution-control contracts, the latest consequential-choice UX/team addenda and prior scoped evidence. This amendment introduces no new agent platform, graph database, workflow engine, policy store or active Skill. Package pointers advance; historical bodies and their revision-specific claims remain.
+
+The design input is [Hanako's Loops and Graphs article](https://x.com/hanakoxbt/status/2091515787366306154), read in full. Its examples motivate local verification, dependency-aware work selection and feedback into planning. Its four-node vocabulary, three-attempt example, variable-only dependency rule, automatic permanent lessons and final-only human approval are not adopted as universal rules. Existing [orchestrator/worker and evaluator/optimizer patterns](https://www.anthropic.com/research/building-effective-agents) are supporting architecture references, not efficacy evidence or a dependency decision.
+
+**Current source fit:** application pin `784c2aed8620f91e2d5984adb2c33278f56a3456`; existing documentation parent is PR295 head `f92c3341eadc03f274becbead3b0f45d0a86539e`. Zyra already persists an active scenario plan, processes batches, generates bounded chunks concurrently, joins their results and fences plan progress. The proposal refines coordination and evidence above those owners. Those mechanisms do not by themselves establish a dependency-aware work graph or integration correctness. Canonical 03 records the inspected scope; earlier source pins retain their historical meaning. The saved v1.4.47 package, version 32 (SHA-256 `960740dd635174f73b40329182f842d54fc80be8383560fac08e83a0c5d68652`), is the preserved eight-file input.
+
+| Existing owner | Refinement |
+| --- | --- |
+| 01 requirements / 02 workflow | Meaningful checks before work, dependency and shared-resource scope, targeted corrections, stale-result visibility and appropriately placed human decisions. |
+| 03 technical design | Distinguish assurance/application relationships from work coordination; bind units/checks/dependencies to revisions; invalidate only the relevant reliance and prove integrated obligations. |
+| 04 contracts | Logical plan/unit/attempt/check/return associations through existing owners, compatible capability discovery, current authority and replay-safe recovery. |
+| 05 backlog/proof | Extend existing scenario owners with fault controls, resource conflicts, dependency changes, integrated failures, bounded recovery and governed planning feedback; new runtime outcomes NOT RUN. |
+| 06 agent brief / 07 UI | Plan and review within authority, preserve unaffected work, explain why a result needs reassessment and what a person can do next. |
+
+**Smallest useful next proof:** one authorized read-only investigation with versioned task inputs, independently grounded checks, a bounded pair of independent analyses, deterministic evidence collation and an integrated native review. Seed one failed unit, one changed shared dependency and an unaffected neighbor; preserve earlier evidence and assess whether the correct work is returned. Compare decision quality, needless rework and total cost with today's supported Zyra procedure before adopting another runtime or mandatory gate. A valid result can be no change, a human-owned unresolved decision or insufficient evidence. This document does not execute or authorize that pilot. Native Tesbo synchronization, runtime/client acceptance, human comprehension, signing/review and release remain separately evidenced.
+
+## Revision 1.4.49 — general plugins and research-informed engineering
+
+**Scope: proposed architecture and engineering guidance, not implementation approval.** Tesbo's optional plugin capability is general-purpose. Obsidian is one possible knowledge integration; it does not select the first plugin, a universal transport, a mandatory companion, a hosting model or a marketplace. A plugin can contribute source integration, execution, analysis, method content, reporting, notification/workflow integration or a bounded product/UI capability. These are illustrative profiles, not a closed enum or a commitment to deliver them all. The core human QA workflow remains usable without a plugin.
+
+The [existing plugin research record](reviews/plugin-ecosystem-obsidian-review.md), originally merged through PR315 and continued with this amendment, owns external observations and candidate comparisons. This package owns the proposed product obligations. FR-058 and T-408 remain the execution-agent contract and delivery owner; their existence does not establish a generic extension SDK. The distinct general requirement is **FR-125**, with bounded design qualification **T-462** and **AC-094**. Existing identity, native artifact, integration, execution, evidence and Skills owners remain authoritative. No new runtime, scheduler, approval system or persistent knowledge store is selected.
+
+| Canonical owner | This amendment's responsibility |
+| --- | --- |
+| 01 | FR-125 outcomes, contribution scope and preserved authority |
+| 02 | Discovery, authorization, use, recovery, change and removal journeys |
+| 03 | Contribution contracts, ownership, dependency and trust boundaries |
+| 04 | Logical identities, capability negotiation and effect/receipt semantics |
+| 05 | T-462, AC-094, discriminating qualification and implementation admission |
+| 06 | Engineering precedent research, principle distillation, contextual application and team use |
+| 07 | Truthful, accessible contribution and lifecycle presentation |
+
+Use four separate delivery classifications: **Research/Exploration**, **Proposed/Backlog**, **Approved for Implementation**, and **Implemented/Verified** with its actual verification scope. A merged specification is not approval to implement its backlog. The current plugin contract and its acceptance scenarios are Proposed/Backlog and NOT RUN. First contribution profiles, executable/UI admission, distribution and priority remain unselected. Continue independently authorized engineering work without treating those future choices as a global blocker.
+
+**Reconciliation basis.** Preserve the complete saved v1.4.48 package (stored version 33, archive SHA-256 `6665ba660aa208bd35db51b90052fc0b69abc01c6922c197544003e3480b1bef`) including coordination and consequential-choice guidance, alongside PR295 at `f92c3341eadc03f274becbead3b0f45d0a86539e`. PR315 at `7539a739243167b2d6709df1d644bd5b955f6ffc` already corrected its general scope, but referred to a v1.4.49 publication and review receipt absent from that PR295 input. This amendment supplies an attributable successor; it does not retroactively make the earlier claim true. Historical reviews retain their exact input scope. See the [current analytical review record](reviews/spec-review-20261127/README.md).
+
+**Distilled principle.** Before inventing or extending an engineering mechanism, investigate relevant established approaches and their outcomes, extract the supported mechanism and limits, then evaluate the smallest fitting application against the target's actual constraints. This extends the existing discover/reuse/extend and portable-distillation method across requirements, architecture, security, data, implementation, testing, delivery, operations and UX. Research can justify retaining the existing approach or making no change. External adoption and empirical superiority require their own evidence. Canonical 06 owns the procedure; the existing team process references it rather than creating a separate rulebook.

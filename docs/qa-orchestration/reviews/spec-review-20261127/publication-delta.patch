@@ -1,0 +1,71 @@
+--- a/docs/qa-orchestration/00_README.md
++++ b/docs/qa-orchestration/00_README.md
+@@ -904,7 +904,7 @@
+ 
+ **Scope: proposed architecture and engineering guidance, not implementation approval.** Tesbo's optional plugin capability is general-purpose. Obsidian is one possible knowledge integration; it does not select the first plugin, a universal transport, a mandatory companion, a hosting model or a marketplace. A plugin can contribute source integration, execution, analysis, method content, reporting, notification/workflow integration or a bounded product/UI capability. These are illustrative profiles, not a closed enum or a commitment to deliver them all. The core human QA workflow remains usable without a plugin.
+ 
+-The [existing research proposal in PR315](https://github.com/1alextest/Tesbooboo/pull/315) owns external observations and candidate comparisons. This package owns the proposed product obligations. FR-058 and T-408 remain the execution-agent contract and delivery owner; their existence does not establish a generic extension SDK. The distinct general requirement is **FR-125**, with bounded design qualification **T-462** and **AC-094**. Existing identity, native artifact, integration, execution, evidence and Skills owners remain authoritative. No new runtime, scheduler, approval system or persistent knowledge store is selected.
++The [existing plugin research record](reviews/plugin-ecosystem-obsidian-review.md), originally merged through PR315 and continued with this amendment, owns external observations and candidate comparisons. This package owns the proposed product obligations. FR-058 and T-408 remain the execution-agent contract and delivery owner; their existence does not establish a generic extension SDK. The distinct general requirement is **FR-125**, with bounded design qualification **T-462** and **AC-094**. Existing identity, native artifact, integration, execution, evidence and Skills owners remain authoritative. No new runtime, scheduler, approval system or persistent knowledge store is selected.
+ 
+ | Canonical owner | This amendment's responsibility |
+ | --- | --- |
+--- a/docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md
++++ b/docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md
+@@ -878,4 +878,4 @@
+ 
+ ### Application to general plugins
+ 
+-Use the [PR315 research record](https://github.com/1alextest/Tesbooboo/pull/315) to compare narrow extension points, protocol compatibility, installation/authorization UX, dependency failure, update/removal, trust and recovery across established ecosystems. Apply the resulting questions to all selected contribution profiles and their native owners, not just a knowledge connector. An optional UI contribution and an external executor may need different boundaries. Obsidian remains illustrative, and the first plugin/SDK/distribution/runtime decision remains unselected. T-462 and AC-094 own design qualification and future proof; no plugin execution or new active method is claimed here.
++Use the [current plugin research record](reviews/plugin-ecosystem-obsidian-review.md), originally merged through PR315 and continued with this amendment, to compare narrow extension points, protocol compatibility, installation/authorization UX, dependency failure, update/removal, trust and recovery across established ecosystems. Apply the resulting questions to all selected contribution profiles and their native owners, not just a knowledge connector. An optional UI contribution and an external executor may need different boundaries. Obsidian remains illustrative, and the first plugin/SDK/distribution/runtime decision remains unselected. T-462 and AC-094 own design qualification and future proof; no plugin execution or new active method is claimed here.
+--- a/docs/qa-orchestration/source-manifest.json
++++ b/docs/qa-orchestration/source-manifest.json
+@@ -2,8 +2,8 @@
+   "package": "Tesbo_Specifications_v1.4.49.zip",
+   "package_revision": "1.4.49",
+   "status": "PROPOSED / NOT FROZEN",
+-  "archive_bytes": 723520,
+-  "archive_sha256": "603b77ffa3c56a969bd364407114fcd6f49b60c183a3fccec109b4ea12dbcd27",
++  "archive_bytes": 723552,
++  "archive_sha256": "be4a09be89f3431646569afbb85353db5a9c05b7fc965f73ab0304e4883cd829",
+   "scope": "User-authorized general plugin design and engineering precedent method; preserves recovered v1.4.48 and original history in the same eight canonical identities. No runtime, active Skill, implementation admission, native acceptance or freeze follows.",
+   "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+   "parents": [
+@@ -78,9 +78,9 @@
+   "files": [
+     {
+       "path": "00_README.md",
+-      "bytes": 187833,
+-      "sha256": "0cd095bc78cb2ff420335409bca0f33751ef091e790d1c2c0fe1bdaa72b9d104",
+-      "git_blob": "229fb5cc279c838a20fa8911c35ed8366bd862b2"
++      "bytes": 187893,
++      "sha256": "3f9fbbd950483ed95d0e56bad8cb8062c09e3a9243c9ebaf3ed79d8dcc1ac8f3",
++      "git_blob": "5490925cc81bbf0485771c149dc8f638cd0bee18"
+     },
+     {
+       "path": "01_PRODUCT_REQUIREMENTS.md",
+@@ -114,9 +114,9 @@
+     },
+     {
+       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+-      "bytes": 181207,
+-      "sha256": "45e08d05e7c3bd6171ef8d1eb185d7added06934f32fd795686e60d5cc95965b",
+-      "git_blob": "7724e1d53801cffbd356d0b4a0bbe6483c392674"
++      "bytes": 181280,
++      "sha256": "f7d331b203729a7eae11f2f34fbcb3dc5cf9e8ef93121775f7a200414b9de1b6",
++      "git_blob": "b12027703c66c4c3175da945914d6c2a977c4c25"
+     },
+     {
+       "path": "07_UI_DESIGN_TASKS.md",
+--- a/docs/specs/agent-synchronized-engineering/README.md
++++ b/docs/specs/agent-synchronized-engineering/README.md
+@@ -8,7 +8,9 @@
+ **Target repository/branch:** `1alextest/Tesbooboo` / `development`.
+ **Purpose:** Tesbo is the shared human-and-agent engineering assurance and delivery platform: help QA, BA, developers, PM, policy/security reviewers and release owners understand what AI agents did, reconcile what an application should do with what actually changed, verify real behavior, and release faster with defensible evidence. Keep the code and its relevant engineering records evolving together for every relevant change.
+ 
+-## Current specification navigation and reconciliation — 26 November 2026
++## Historical specification navigation checkpoint — 26 November 2026
++
++**Historical observations at the source pins below.** Current navigation follows the canonical-home statement above and the [v1.4.49 continuation](#canonical-revision-1449--general-plugins-and-engineering-precedent) below. Preserve this dated checkpoint without treating its earlier PR/package state as current.
+ 
+ This is a navigation and reconciliation view, not a new source of requirements or an independent assurance verdict. Development at `899543a6` contains the exact eight-file v1.4.45 publication. Draft PR #295 contains the proposed v1.4.46 amendment. Both source manifests match all eight Git blob identities at the inspected heads. Approval, active assignment, implementation and release remain separate. Earlier source pins, revision-specific claims, test IDs and team receipts retain their original scope.
+ 

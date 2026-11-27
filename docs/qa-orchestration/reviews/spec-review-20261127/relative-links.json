@@ -1,0 +1,324 @@
+{
+  "scope": "New relative Markdown links in tracked change hunks plus the new analytical review README. Historical whole-repository links and external URL availability are not certified.",
+  "links": [
+    {
+      "source": "AGENTS.md",
+      "target": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#revision-1449--engineering-precedents-and-contextual-application",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/agent-scope-discipline.md#research-informed-engineering-and-team-handoff",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "CLAUDE.md",
+      "file_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/e2e-coverage-waves.md",
+      "file_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "file_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/qa-orchestration/source-manifest.json",
+      "file_exists": true
+    },
+    {
+      "source": "AGENTS.md",
+      "target": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/agent-scope-discipline.md",
+      "target": "qa-orchestration/reviews/PR264-application-journey-review.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/agent-scope-discipline.md",
+      "target": "qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#revision-1449--engineering-precedents-and-contextual-application",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "target": "06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "target": "07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "target": "reviews/plugin-ecosystem-obsidian-review.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "target": "reviews/spec-review-20261127/README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "target": "reviews/plugin-ecosystem-obsidian-review.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "target": "#reviewing-a-consequential-user-choice",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "target": "07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "target": "#portable-method-for-discovery-and-principle-distillation",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "target": "../agent-scope-discipline.md#research-informed-engineering-and-team-handoff",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "target": "reviews/plugin-ecosystem-obsidian-review.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "target": "#designing-and-verifying-a-consequential-choice",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "target": "06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "target": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "target": "../../qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#revision-1449--engineering-precedents-and-contextual-application",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "target": "../../qa-orchestration/source-manifest.json",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "target": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "target": "#canonical-revision-1449--general-plugins-and-engineering-precedent",
+      "file_exists": true,
+      "anchor_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "target": "../../qa-orchestration/reviews/spec-review-20261127/README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/design.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/design.md",
+      "target": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "target": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "target": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "target": "../../qa-orchestration/00_README.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "target": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/architecture-original.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/security-lifecycle-original.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/experience-original.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/white-independent.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "candidate-inputs.json",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "candidate-first.patch",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "research-candidate-first.patch",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/architecture-candidate.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/security-lifecycle-candidate.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/experience-candidate.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "candidate-final-inputs.json",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "candidate-final.patch",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "research-candidate-final.patch",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/architecture-corrected.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/security-lifecycle-corrected.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/experience-corrected.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/white-independent.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "candidate-publication-inputs.json",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "publication-delta.patch",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "receipts/white-informed.md",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "document-integrity.json",
+      "file_exists": true
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target": "relative-links.json",
+      "file_exists": true
+    }
+  ],
+  "failures": []
+}

@@ -1,6 +1,8 @@
 # UI/UX Design Tasks and Screen Specifications
 
-**Current package amendment:** 1.4.47 — 26 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.47 section for this update. Earlier revision headers and receipts below retain their historical scope.
+**Current package amendment:** 1.4.49 — 27 November 2026; PROPOSED / NOT FROZEN. Read the final revision 1.4.49 section for this update. Earlier revision headers and receipts below retain their historical scope.
+
+**UX and team review addendum · 26 November 2026.** See [Designing and verifying a consequential choice](#designing-and-verifying-a-consequential-choice).
 
 **Document ID:** TESBO-UX-007 | **Revision:** 1.4.45 — 22 November 2026. Evidence-derived application coverage. | **Status:** proposed extensions and scoped prototype evidence. NOT FROZEN.
 **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
@@ -914,3 +916,46 @@ Before approval or assignment, show what that exact action changes and which bin
 | Existing resume / incident handoff | Show what changed in authority, scope, Skill/input revision and attempt, plus unresolved old effects, before continuation. Keep the original stopped attempt visible. A fresh grant is not silently presented as a resume. Explain containment with observable policy facts and allow authorized correction of a false alarm. |
 
 Use existing component and role patterns, not a new fleet dashboard by default. Verify keyboard/focus/return, narrow viewport, readable long identities, permitted versus denied controls and stale/error/unknown readbacks against real contracts. Prototype data is not production proof; before implementation acceptance capture the authentic current surface and paired proposed change. Disabled actions explain the actual missing capability or authority without leaking restricted identities or credentials. No global new workflow enum is introduced for these fact projections.
+
+## Designing and verifying a consequential choice
+
+Make the intended subject, scope and consequence recognizable while the person can still choose. Where two destinations share a name, supply a distinction that person can use. When a material fact changes between inspection and commitment, show the difference and offer the next action allowed by the current state. If an acknowledgement is lost, give the person a way to inspect the original outcome when available.
+
+| Tesbo example | Observable outcome |
+|---|---|
+| Apply a skill version to selected actions | Before applying it, the person can identify the version, project and affected actions. An empty selection follows the documented contract. Any broader application requires deliberate intent. After a successful change, the result identifies the affected assignments. An out-of-scope assignment retains its prior version. |
+| Reopen a submission already decided | The reviewer can inspect the recorded decision, its exact version and supporting evidence. A pending submission exposes actions available to the current reviewer. Each entry’s label matches what opening it allows. |
+| The basis changes or a response is lost | When the governing contract requires a fresh decision, the prior preview cannot silently authorize the revised scope. When the outcome is uncertain, the person can distinguish checking the original occurrence from attempting a new change. Where evidence is unavailable, the interface identifies the unresolved outcome. |
+| Inspect proposed test coverage | A nominated case can be distinguished from a case with an observed execution result. A skipped or unreachable check identifies the gap. A claim about execution has evidence from the relevant run. |
+
+For a human comprehension claim, ask a representative person to predict the effect and then find evidence of the outcome. The [implementation-team brief](06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice) assigns the complementary contract and record checks. These are review targets. Runtime and human validation remain open until exercised.
+
+
+## Revision 1.4.48 — explain dependencies, corrections and reassessment
+
+**Proposed extension of existing Task/Agents, draft review, Run/Evidence and D-14 views; no new mockup or live acceptance.** Use canonical 02's journey and 03/04's exact source/capability contracts. Preserve the saved consequential-choice guidance, version comparison and role-specific controls.
+
+- Identify the bounded work, its current basis and the decision the person can make. Show a readable task/list view of prerequisites and responsible actors; a visual graph is optional. Separate application relationships, nominated checks, actual work and observed outcomes.
+- Explain why work waits or needs another check using authorized context: missing input, shared resource, changed dependency, unresolved decision, unsupported capability or unavailable evidence. Do not show unknown as complete or expose private neighbors through names/counts.
+- On a correction, identify what failed, supporting evidence, the proposed affected scope and what remains usable. Make changed shared dependencies and results requiring reassessment inspectable. Preserve earlier outputs and decisions as history, with their own basis; do not make successful unrelated work appear rewritten or silently carry stale approval forward.
+- Distinguish local check results from integrated review, actual native writes and release decisions. A complete-looking batch with an unobserved assertion must still show the gap. An uncertain response offers checking the original operation before initiating another change.
+- Keep routine authorized continuation usable without repeated confirmation. Where a new product/authority decision is required, explain its trigger, effect, alternatives and accountable reviewer. “Approve everything at the end” is not an interaction guarantee.
+- Link a suggested lesson to the original incident, causal limits, proposed version and human adoption state. A user can retain, revise, defer or reject it under the actual native contract. Show no invented learned-rule activation or model-confidence badge as approval.
+
+Verify one authorized correction, one refused/stale correction and an unaffected neighbor; include lost acknowledgement, changed shared input, valid no-change and unavailable dependency evidence. Use current components and keyboard/focus/return/zoom/reflow behavior. Record real participant comprehension separately from an agent walkthrough. All new runtime and human-validation outcomes remain NOT RUN.
+
+## Revision 1.4.49 — general plugin presentation and recovery
+
+**Proposed design under FR-125 / AC-094.** Extend the product's current settings, native workflow and review conventions after inspecting the actual screen and contract inventory. No marketplace layout, plugin tab, card grid or global administrator role is prescribed. Keep implementation diagnostics out of the ordinary user journey; show information that changes the user's decision.
+
+Separate the questions the interface must answer: What does this contribution help me do? Which package/version is available? Is it admitted? Which account and project does it use? What can it actually read, change, run or send? What still needs authorization or configuration? What happened last time? What will an update or removal affect? These are distinct facts that may share a coherent view; they are not a requirement to make seven separate pages or buttons.
+
+Show exact subject, project/account scope, current versus candidate version and consequential permission/dependency changes at the action point. Keep package trust, installation, connection, enabled state, effective permission and observed health distinguishable. A single green Installed/Ready badge cannot substitute for all of them. Use readable labels and progressive detail where appropriate; preserve access to source, complete dependency/permission evidence, history and support without overwhelming routine use. Unknown or inaccessible evidence stays visible as such.
+
+For each admitted profile, retain a direct route to its native outcome: source record and proposed links, Task/Run/evidence, analysis finding, authorized report or Skills review/assignment. Names and icons alone cannot disambiguate near-identical contributions or accounts. Where several plugins serve the same job, show the actual selected provider and scoped default; install order and a background fallback must not make that choice invisibly. A callback from an external application must preserve the correct task and permitted destination; cancel/back/reload restores useful context without unintended activation or loss of input. Exercise a departed connection owner: ordinary users receive a meaningful next step without admin power or an automatic replacement credential.
+
+Before updating, disabling, revoking or removing, show the actual action, exact affected scope, required/optional dependents, work that may be in flight, shared resources and retained-data treatment. Do not display Remove as synonymous with Purge, or Roll back as guaranteed reversal of migrated data. Verify that the admitted historical representation/export remains useful after the sole custom viewer disappears; keeping a download button for an opaque unsupported format is insufficient. Revalidate stale previews at commitment and explain recovery from partial/unknown outcomes. Users lacking the action's permission can still understand their status and appropriate next step without an ineffective enabled control.
+
+That preview applies to planned maintenance. Keep the already-authorized emergency stop/revoke interaction available when dependency inventory, telemetry or the catalog is unavailable, using revision 1.4.47's existing authority and controls. Identify the scoped action and actual acknowledgement promptly, show unknown collateral/in-flight effects honestly, and support subsequent reconciliation. Do not invent an unauthenticated override or claim a confirmed stop when its control is unavailable.
+
+Apply the existing paired current/proposed capability and field/contract map. Independently test meaningful entry points, keyboard/focus/close/return behavior, screen-reader names, narrow/zoomed views, long names, absent/denied/partial data, stale state, failed dependency, reconnect, retry and removal. Use at least two conditions requiring different decisions plus a valid no-plugin/manual path. These are proposed design checks; actual browser behavior and representative-human comprehension remain untested until observed. Product/UI plugins additionally require the admitted browser and data boundary in canonical 03/04. Relevant established interfaces supply hypotheses, not proof that their layout fits Tesbo.
