@@ -229,6 +229,7 @@ test("stale approval GET and pending POST never open or repaint a different link
     await panel.getByRole("button", { name: "Review for approval" }).click();
     await pendingGet;
     await routeTo(b.id);
+    if (!releaseGet) throw new Error("The delayed approval snapshot control was not installed.");
     releaseGet();
     releaseGet = undefined;
     await expect(review).toHaveCount(0);
@@ -253,6 +254,7 @@ test("stale approval GET and pending POST never open or repaint a different link
     await pendingPost;
     await routeTo(a.id);
     const finished = page.waitForResponse(response => response.url().includes(`${base}/${b.id}/approve`) && response.status() === 200);
+    if (!releasePost) throw new Error("The delayed approval submit control was not installed.");
     releasePost();
     releasePost = undefined;
     await finished;
