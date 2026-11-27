@@ -24,6 +24,11 @@ const referenceOracle = "The requirement exposes exactly one current approved li
  */
 test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, execution and evidence on pass and fault", async ({ request: human }) => {
   test.setTimeout(240_000);
+  // This proof grants a disposable API token and approves a fixture case. It must
+  // never run against a staging/production Tesbo project by accidental E2E_ENV selection.
+  const target = new URL(env.apiBaseUrl);
+  expect(["127.0.0.1", "localhost", "[::1]"], "Native reporter fixture requires a disposable loopback API")
+    .toContain(target.hostname);
   const projectId = stored.projectId;
   const runIds: string[] = [];
   let testcaseId: string | undefined;
