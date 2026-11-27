@@ -21,13 +21,17 @@ owner, a native execution, or production acceptance.
    later real run to the case without inventing an identity.
 5. Requires the coverage read to use the explicitly configured API origin, rejects credentials and
    non-loopback HTTP, and counts the logical approved case/requirement/criterion group before
-   comparing the sole link's native ID. A distinct second link is therefore caught rather than
-   filtered away.
+   comparing the sole link's native ID. Criterion arrays retain the native contract's exact order:
+   a reversed-only substitution is refused, while a valid separate reversed group does not count
+   toward the selected group's uniqueness. A distinct second matching link is caught rather than filtered away.
 6. Asserts the supported oracle for that case, requirement version, link and criterion keys, with
    the recorded case and approval revisions.
-7. Reads and checks the evidence file's packet digest and exact target, then attaches it before the
-   first coverage assertion, so a failed attempt still carries the selected packet identity while
-   never attaching the rejected response body.
+7. Checks the supplied evidence against the complete bounded identity (packet digest and the four
+   reviewed target fields). Rejects additional fields and invalid input before any coverage read.
+   Writes canonical identity JSON to the attempt's own output file and attaches that file before
+   the first coverage assertion; it does not forward the input file's raw bytes. The existing
+   reporter can therefore retain identity on a coverage failure without retaining unrelated input
+   bytes or the rejected response body. Identity is not itself evidence of a successful execution.
 
 The handoff packet now exports `native.testcase.externalId`; a generator no longer has to query
 around the contract or guess the reporter tag.
@@ -42,8 +46,13 @@ Playwright installation. It serves controlled responses for:
 - **Faults:** duplicated link, a different or wrong link ID, wrong requirement/approved version,
   wrong approval revision, and a private 503 body. Each fails the relevant assertion, retains the
   validated packet-evidence attachment, and never publishes the rejected response body.
-- **Legitimate unrelated links:** another case or different criteria on the same coverage response
-  do not block the selected case.
+- **Legitimate unrelated links:** another case, different criteria, or a separate reversed-order
+  group on the same coverage response do not block the selected case.
+
+The proposed ordered-identity and bounded-evidence follow-up adds generated-process controls for
+reversed-only substitution, valid reversed-order neighbors, extra evidence fields, and canonical
+attachment bytes when the input contains a shadowed field. These follow-up controls are NOT RUN
+until the exact candidate's CI supplies execution receipts. Earlier verified controls retain their scope.
 
 The test also verifies that a changed selection digest, missing/backslash external ID, changed
 repository, investigation revision or unsupported oracle is refused before a change is emitted,
