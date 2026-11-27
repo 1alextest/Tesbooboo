@@ -284,6 +284,8 @@ function retestFixture() {
     occurrences: [{
       sourceCycleItemId: id(33), sourceExecutionId: retestSelection.sourceExecutionId, testcaseId: basis.testcaseId,
       sourceApprovalRevision: basis.testcaseApprovalRevision,
+      sourceDefinitionBasis: 'reviewed_snapshot',
+      sourceDefinition: { case: { title: 'Original definition', steps: [{ action: 'Original step' }] }, customFields: [] },
       sourceResult: { id: retestSelection.sourceExecutionId, status: 'Failed', error_message: 'PRIVATE_SOURCE_DIAGNOSTIC' },
       sourceEvidence: [{ id: id(34), fileName: 'original.txt' }],
       sourceBugLinks: [{ id: id(35), bugId: id(36), executionId: retestSelection.sourceExecutionId }],
@@ -305,7 +307,7 @@ function retestFixture() {
       return structuredClone(preview);
     },
     confirm: async () => true, checkTarget: () => target,
-    readMapping: async () => ({upstreamCase:'TC-01', targetPath, repoRevision, targetBlob:'f'.repeat(40), risks:[{id:'R1'}]})
+    readMapping: async () => ({upstreamCase:'TC-01', targetPath, repoRevision, targetBlob:'f'.repeat(40), risks:[{id:'R1', observableFromBrowser:'yes', oracle:'Only matching tasks are returned'}]})
   };
   return {preview, calls, checks};
 }
@@ -326,8 +328,12 @@ test('prepares only the selected failed occurrence, rechecks native read and tar
   const {preview, calls, checks} = retestFixture();
   let confirmations = 0, targetChecks = 0;
   checks.checkTarget = () => { targetChecks++; return target; };
-  checks.confirm = async (p, hash) => {
+  checks.confirm = async (p, hash, comparison) => {
     confirmations++;
+    assert.deepEqual(comparison.sourceDefinition, preview.occurrences[0].sourceDefinition);
+    assert.deepEqual(comparison.currentReviewedDefinition, preview.occurrences[0].currentCase.reviewedContent);
+    assert.equal(comparison.sourceObservation.status, 'Failed');
+    assert.equal(JSON.stringify(comparison).includes('PRIVATE_SOURCE_DIAGNOSTIC'), false);
     assert.equal(p.purpose, 'prepare_native_retest_automation');
     assert.equal(p.executionAuthorized, false);
     assert.equal(p.native.sourcePreviewDigest, preview.previewDigest);
@@ -344,6 +350,8 @@ test('prepares only the selected failed occurrence, rechecks native read and tar
   assert.equal(packet.native.sourceBugLinks[0].bugId, id(36));
   assert.equal(JSON.stringify(packet).includes('PRIVATE_SOURCE_DIAGNOSTIC'), false);
   assert.equal(Object.hasOwn(packet.native, 'destinationRunId'), false);
+  assert.equal(Object.hasOwn(packet, 'reviewComparison'), false);
+  assert.equal(JSON.stringify(packet).includes('Original definition'), false);
 });
 
 for (const [name, change] of [
@@ -354,6 +362,9 @@ for (const [name, change] of [
   ['nonfailed result', p => {p.occurrences[0].sourceResult.status = 'Passed';}],
   ['multiple occurrences', p => {p.occurrences.push(structuredClone(p.occurrences[0]));}],
   ['stale case approval', p => {p.occurrences[0].currentCase.approvalCurrent = false;}],
+  ['nonboolean eligibility', p => {p.occurrences[0].eligible = 'true';}],
+  ['malformed digest', p => {p.previewDigest = ['e'.repeat(64)];}],
+  ['missing saved source definition', p => {delete p.occurrences[0].sourceDefinition;}],
   ['mismatched reviewed case', p => {p.occurrences[0].currentCase.reviewedContent.case.id = id(99);}],
   ['missing automation mapping', p => {p.occurrences[0].currentCase.reviewedContent.case.automation_path = null;}],
   ['foreign Bug occurrence', p => {p.occurrences[0].sourceBugLinks[0].executionId = id(99);}],
@@ -388,4 +399,18 @@ test('refuses an unrelated investigation commit and cancelled retest preparation
   fixture.checks.confirm = async () => false;
   await assert.rejects(prepareNativeRetestAutomation(retestSelection, fixture.checks), /cancelled/);
   assert.equal(fixture.calls.length, 1);
+});
+
+test('withholds preparation when the inspected risk cannot be observed by the selected driver', async () => {
+  const {checks} = retestFixture();
+  checks.readMapping = async () => ({upstreamCase:'TC-01', targetPath, repoRevision,
+    targetBlob:'f'.repeat(40), risks:[{id:'R1', observableFromBrowser:'partial', oracle:'Unobserved condition'}]});
+  await assert.rejects(prepareNativeRetestAutomation(retestSelection, checks), /selected committed target/);
+});
+test('withholds preparation when the target verifier returns a different branch or repository', async () => {
+  for (const value of [{...target, branch:'other'}, {...target, repository:'other/repo'}]) {
+    const {checks} = retestFixture();
+    checks.checkTarget = () => value;
+    await assert.rejects(prepareNativeRetestAutomation(retestSelection, checks), /selected committed target/);
+  }
 });
