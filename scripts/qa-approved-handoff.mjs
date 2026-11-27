@@ -121,6 +121,43 @@ export async function prepareHandoff(selection, {request, confirm, checkTarget =
   return { ...packet, selectionDigest: digest };
 }
 
+export function createHandoffRequest(apiOrigin, requestContext) {
+  return async (method, path, data) => {
+    let response;
+    try {
+      response = await requestContext.fetch(apiOrigin + path, { method, data, maxRedirects: 0, timeout: 20_000 });
+    } catch {
+      throw new Error('Could not verify the handoff request. Check the connection and Tesbo service availability, then start a fresh handoff.');
+    }
+    const status = response.status();
+    if (status !== 200) {
+      const recovery = {
+        400: 'Check the selected task and revision arguments, then start a fresh handoff.',
+        401: 'Sign in to Tesbo in the handoff browser, then start a fresh handoff.',
+        403: 'Verify that your signed-in account is authorized for the selected project and operation.',
+        404: 'Check the task link, API origin and your access to the selected project.',
+        409: 'Reopen the selected bundle and verify the current requirement, case approvals and active link before starting again.',
+        429: 'Retry only after the service allows another request; start a fresh handoff.',
+      }[status] ?? (status >= 300 && status < 400
+        ? 'An unexpected redirect was refused. Verify the API origin and sign-in session.'
+        : status >= 500 && status < 600
+          ? 'Tesbo could not verify the selection because of a service response error. Check service availability and retry with a fresh handoff.'
+          : 'The response did not establish eligibility. Verify the API origin and contact support if it persists.');
+      throw new Error('Handoff not verified (HTTP ' + status + '). ' + recovery);
+    }
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new Error('Handoff not verified (HTTP 200): expected a JSON object. Check the API origin and service response.');
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Handoff not verified (HTTP 200): expected a JSON object. Check the API origin and service response.');
+    }
+    return payload;
+  };
+}
+
 async function main(argv) {
   if (argv.includes('--help')) { console.log(usage); return; }
   const selection = parseSelection(argv);
@@ -133,11 +170,7 @@ async function main(argv) {
     const page = await context.newPage();
     await page.goto(selection.taskUrl, { waitUntil: 'domcontentloaded' });
     await terminal.question('Sign in to your Tesbo task in the browser, then press Enter here.\n');
-    const request = async (method, path, data) => {
-      const response = await context.request.fetch(selection.apiOrigin + path, { method, data, maxRedirects: 0, timeout: 20_000 });
-      if (response.status() !== 200) throw new Error('Tesbo refused or could not verify the handoff (HTTP ' + response.status() + '). Reopen the task and check its approvals.');
-      return response.json();
-    };
+    const request = createHandoffRequest(selection.apiOrigin, context.request);
     const confirm = async (packet, digest) => {
       // Quote all operator-visible strings. Strip directional controls that could disguise selected text.
       const preview = JSON.stringify(packet, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, ch =>

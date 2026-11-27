@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { parseSelection, prepareHandoff } from './qa-approved-handoff.mjs';
+import { createHandoffRequest, parseSelection, prepareHandoff } from './qa-approved-handoff.mjs';
 import { createHandoffFixture, fixtureGit as git } from './qa-handoff-fixture.mjs';
 import { HARNESS_REVISION } from './qa-investigation-mapping.mjs';
 
@@ -46,10 +46,10 @@ function session() {
     link: {id: id(12), criterionKeys: ['C1']}};
   const state = {
     cases: [structuredClone(current)], calls: [], expectedBasis: structuredClone(basis),
-    selected: structuredClone(native), receipt: structuredClone(receipt), refusal: false,
+    selected: structuredClone(native), receipt: structuredClone(receipt), refusalStatus: null,
   };
-  async function request(method, path, data) {
-    const incoming = new Request(new URL(path, origin), {method, body: data && JSON.stringify(data)});
+  const request = createHandoffRequest(origin, {fetch: async (url, {method, data}) => {
+    const incoming = new Request(url, {method, body: data && JSON.stringify(data)});
     const pathname = new URL(incoming.url).pathname;
     const body = incoming.body ? await incoming.json() : undefined;
     state.calls.push({method, path: pathname, body});
@@ -61,15 +61,14 @@ function session() {
       response = Response.json({requirementId: basis.requirementId, approvedVersionId: basis.requirementVersionId,
         readings: {approved: true, mixed: true, passing: true}, cases: state.cases});
     } else if (method === 'POST' && pathname === task + '/automation-handoff') {
-      if (state.refusal) response = Response.json({code: 'AUTOMATION_HANDOFF_UNAVAILABLE'}, {status: 409});
+      if (state.refusalStatus) response = Response.json({code: 'AUTOMATION_HANDOFF_UNAVAILABLE'}, {status: state.refusalStatus});
       else {
         assert.deepEqual(body, state.expectedBasis, 'read must submit the exact immutable selection');
         response = Response.json(state.selected);
       }
     } else assert.fail(method + ' ' + pathname);
-    if (response.status !== 200) throw new Error('Simulated native HTTP ' + response.status);
-    return response.json();
-  }
+    return {status: () => response.status, json: () => response.json()};
+  }});
   const checks = {
     request, confirm: async () => true, checkTarget: () => target,
     readMapping: async () => ({upstreamCase: 'TC-01', targetPath, risks: [{id: 'R1'}]}),
@@ -133,12 +132,14 @@ test('cancellation stops before final native and target rechecks', async () => {
   assert.deepEqual(state.calls.map(x => x.method), ['GET','GET','POST']);
 });
 
-test('native refusal after consent aborts with the original proposal and case revision', async () => {
-  const {state, checks} = session();
-  checks.confirm = async () => { state.refusal = true; return true; };
-  await assert.rejects(prepareHandoff(selection, checks), /HTTP 409/);
-  assert.deepEqual(state.calls.filter(x => x.method === 'POST').map(x => x.body), [basis, basis]);
-});
+for (const status of [401, 403, 409, 429, 503]) {
+  test('HTTP ' + status + ' after consent aborts with the original proposal and case revision', async () => {
+    const {state, checks} = session();
+    checks.confirm = async () => { state.refusalStatus = status; return true; };
+    await assert.rejects(prepareHandoff(selection, checks), new RegExp('HTTP ' + status));
+    assert.deepEqual(state.calls.filter(x => x.method === 'POST').map(x => x.body), [basis, basis]);
+  });
+}
 
 test('a different reviewer or unpinned payload at confirmation cannot be exported', async () => {
   for (const change of [
@@ -216,4 +217,60 @@ test('joins the real pinned investigation, published Git fixture, native HTTP co
   assert.equal(packet.native.provenance.reviewerId, id(8));
   assert.deepEqual(state.calls.filter(x => x.method === 'POST').map(x => x.body), [basis, basis]);
   assert.equal(git(local.repo, 'status', '--porcelain'), '');
+});
+
+const recoveryPath = '/api/projects/synthetic/requirements/proposals/synthetic/automation-handoff';
+for (const [status, guidance] of [
+  [302, /unexpected redirect/i], [400, /task and revision/i], [401, /sign in/i],
+  [403, /authorized for the selected project/i], [404, /task link, API origin and your access/i],
+  [409, /current requirement, case approvals and active link/i], [429, /after the service allows another request/i],
+  [503, /service availability/i], [418, /did not establish eligibility/i],
+]) {
+  test('handoff HTTP ' + status + ' refuses with relevant recovery and no response disclosure', async () => {
+    let calls = 0;
+    let bodyReads = 0;
+    const request = createHandoffRequest(origin, {fetch: async (url, options) => {
+      calls++;
+      assert.equal(url, origin + recoveryPath);
+      assert.deepEqual(options, {method: 'POST', data: {revision: 'fixture'}, maxRedirects: 0, timeout: 20_000});
+      return {status: () => status, json: async () => { bodyReads++; return {error: 'PRIVATE_FIXTURE_CANARY'}; }};
+    }});
+    await assert.rejects(request('POST', recoveryPath, {revision: 'fixture'}), error => {
+      assert.match(error.message, new RegExp('HTTP ' + status));
+      assert.match(error.message, guidance);
+      assert.doesNotMatch(error.message, /PRIVATE_FIXTURE_CANARY/);
+      return true;
+    });
+    assert.equal(calls, 1);
+    assert.equal(bodyReads, 0);
+  });
+}
+
+test('handoff transport error does not reveal raw exception content', async () => {
+  const request = createHandoffRequest(origin, {fetch: async () => { throw new Error('PRIVATE_FIXTURE_CANARY'); }});
+  await assert.rejects(request('GET', recoveryPath), error => {
+    assert.match(error.message, /connection and Tesbo service availability/);
+    assert.doesNotMatch(error.message, /PRIVATE_FIXTURE_CANARY/);
+    return true;
+  });
+});
+
+for (const [name, json] of [
+  ['malformed', async () => { throw new Error('PRIVATE_FIXTURE_CANARY'); }],
+  ['null', async () => null], ['array', async () => []], ['primitive', async () => 'wrong'],
+]) {
+  test('handoff refuses ' + name + ' successful JSON without exposing content', async () => {
+    const request = createHandoffRequest(origin, {fetch: async () => ({status: () => 200, json})});
+    await assert.rejects(request('GET', recoveryPath), error => {
+      assert.match(error.message, /HTTP 200.*expected a JSON object/);
+      assert.doesNotMatch(error.message, /PRIVATE_FIXTURE_CANARY/);
+      return true;
+    });
+  });
+}
+
+test('handoff returns the original object for a valid HTTP 200', async () => {
+  const payload = {id: 'fixture', current: true};
+  const request = createHandoffRequest(origin, {fetch: async () => ({status: () => 200, json: async () => payload})});
+  assert.equal(await request('GET', recoveryPath), payload);
 });

@@ -16,6 +16,39 @@ const stored = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context
 const originRepo = "1alextest/Tesbooboo";
 const referenceOracle = "The requirement exposes exactly one current approved link for the selected case and criteria.";
 
+function reportResults(report: any): any[] {
+  function visit(suite: any): any[] {
+    return [
+      ...(suite.specs ?? []).flatMap((spec: any) => (spec.tests ?? []).flatMap((item: any) => item.results ?? [])),
+      ...(suite.suites ?? []).flatMap(visit),
+    ];
+  }
+  return (report.suites ?? []).flatMap(visit);
+}
+
+function isReviewedUniquenessFailure(report: any): boolean {
+  const results = reportResults(report);
+  if (results.length !== 1 || results[0].status !== "failed" || (report.errors ?? []).length !== 0) return false;
+  const errors = results[0].errors ?? [];
+  if (errors.length !== 1 || typeof errors[0].message !== "string") return false;
+  const message = errors[0].message.replace(/\u001b\[[0-9;]*m/g, "").trimStart();
+  return /^(?:Error:\s*)?exactly one current approved link for the selected case and criteria(?:\s|$)/.test(message)
+    && /Expected length:\s*1\b/.test(message) && /Received length:\s*2\b/.test(message);
+}
+
+test("AUT-HANDOFF-01 diagnostic distinguishes the actual uniqueness assertion from report metadata", () => {
+  const label = "exactly one current approved link for the selected case and criteria";
+  const report = (message: string) => ({
+    config: { metadata: { gitDiff: label } },
+    stats: { unexpected: 1 },
+    suites: [{ suites: [{ specs: [{ tests: [{ results: [{ status: "failed", errors: [{ message }] }] }] }] }] }],
+  });
+  expect(isReviewedUniquenessFailure(report("Error: Coverage read HTTP status (body deliberately withheld)"))).toBe(false);
+  expect(isReviewedUniquenessFailure(report("Error: unrelated setup\n> expect(matching, '" + label + "').toHaveLength(1);\nExpected length: 1\nReceived length: 2"))).toBe(false);
+  expect(isReviewedUniquenessFailure(report("Error: " + label + "\nExpected length: 1\nReceived length: 3"))).toBe(false);
+  expect(isReviewedUniquenessFailure(report("Error: " + label + "\nExpected length: 1\nReceived length: 2"))).toBe(true);
+});
+
 /**
  * End-to-end reporter seam, not a claim of human approval of a live requirement:
  * the case is Draft then approved through the real native API by the disposable
@@ -40,8 +73,9 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
   const linkId = randomUUID();
   const targetRevision = "c".repeat(40);
   let currentCase: any;
+  const fixtureCredential = randomUUID();
   const server = createServer((req, res) => {
-    if (req.headers.authorization !== "Bearer disposable-loopback-control") {
+    if (req.headers.authorization !== "Bearer " + fixtureCredential) {
       res.writeHead(401).end();
       return;
     }
@@ -148,7 +182,7 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
         GITHUB_ACTIONS: "", GITHUB_RUN_ID: "", // two distinct native Runs, not shards of the CI run
         TESBO_BASE_URL: env.apiBaseUrl, TESBO_PROJECT_ID: projectId, TESBO_API_TOKEN: credential.token,
         TESBO_JOURNEY_API_ORIGIN: coverageOrigin, TESBO_JOURNEY_COVERAGE_URL: coverageOrigin + pathname,
-        TESBO_JOURNEY_TOKEN: "disposable-loopback-control", TESBO_JOURNEY_EVIDENCE_PATH: evidencePath,
+        TESBO_JOURNEY_TOKEN: fixtureCredential, TESBO_JOURNEY_EVIDENCE_PATH: evidencePath,
         NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost",
       };
       let succeeded = false;
@@ -193,9 +227,13 @@ test("AUT-HANDOFF-01 generated Playwright assertion reaches native Run, executio
       expect(Buffer.from(await fileRead.body())).toEqual(await readFile(evidencePath));
       const output = JSON.parse(await readFile(path.join(temp!, "report.json"), "utf8"));
       expect(output.stats[expectedPass ? "expected" : "unexpected"]).toBe(1);
+      expect(output.stats[expectedPass ? "unexpected" : "expected"]).toBe(0);
+      expect(output.errors ?? []).toHaveLength(0);
+      const results = reportResults(output);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe(expectedPass ? "passed" : "failed");
       if (!expectedPass) {
-        expect(JSON.stringify(output), "The defect must fail on the reviewed uniqueness oracle, not on an unrelated setup/transport error")
-          .toContain("exactly one current approved link");
+        expect(isReviewedUniquenessFailure(output), "The sole actual failed result must identify the reviewed uniqueness assertion and the seeded two-link fault").toBe(true);
       }
       return runId;
     }

@@ -114,6 +114,11 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
   assert.match(spec, /approved-handoff-evidence\.json/u);
 
   const server = createServer((req, res) => {
+    if (req.url === '/private-error') {
+      res.writeHead(503, { 'content-type': 'text/plain' });
+      res.end('PRIVATE_FIXTURE_CANARY');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     if (req.url === '/faulty') res.end(coverage([caseObject, { ...caseObject }]));
     else if (req.url === '/different-link-id') res.end(coverage([caseObject, { ...caseObject, linkId: '00000000-0000-4000-8000-000000000009' }]));
@@ -123,7 +128,6 @@ test('generated Playwright change is packet-bound and catches the duplicated-lin
     else if (req.url === '/wrong-revision') res.end(coverage([{ ...caseObject, testcaseApprovalRevision: 'f'.repeat(64) }]));
     else if (req.url === '/wrong-requirement') res.end(JSON.stringify({ requirementId: '00000000-0000-4000-8000-000000000009', approvedVersionId: REQUIREMENT_VERSION, cases: [caseObject] }));
     else if (req.url === '/wrong-approved-version') res.end(JSON.stringify({ requirementId: REQUIREMENT, approvedVersionId: '00000000-0000-4000-8000-000000000009', cases: [caseObject] }));
-    else if (req.url === '/private-error') { res.writeHead(503, { 'content-type': 'text/plain' }); res.end('PRIVATE_FIXTURE_CANARY'); }
     else res.end(coverage([caseObject]));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -151,9 +155,11 @@ export default defineConfig({ testDir: '.', workers: 1, retries: 0, reporter: [[
       assert.equal(candidate.ok, false, `${scenario} must fail its observed oracle`);
       assert.equal(candidate.report.stats.unexpected, 1);
       assert.equal(candidate.report.stats.expected, 0);
-      assert.match(JSON.stringify(candidate.report), /approved-handoff-evidence\.json/u,
+      assert.match(JSON.stringify(candidate.report.suites), /approved-handoff-evidence\.json/u,
         'failed attempts must retain validated packet-identity evidence');
-      assert.doesNotMatch(JSON.stringify(candidate.report), /PRIVATE_FIXTURE_CANARY/u,
+      // Inspect the test result surface, not config metadata: CI embeds the PR diff in the report,
+      // and that diff contains this fixture's canary string.
+      assert.doesNotMatch(JSON.stringify(candidate.report.suites), /PRIVATE_FIXTURE_CANARY/u,
         'a rejected coverage API body must not become public test evidence');
     }
     for (const scenario of ['other-case', 'different-criteria']) {
