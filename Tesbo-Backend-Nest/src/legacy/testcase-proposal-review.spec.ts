@@ -495,3 +495,46 @@ describe("native task kind read boundary", () => {
     }
   });
 });
+
+
+describe("native task kind mutation boundary", () => {
+  afterEach(() => jest.restoreAllMocks());
+  function fixture() {
+    // Future external rows cannot be inserted with the current producer fence.
+    // Model the SQL-filtered result, and assert the actual ownership predicate.
+    const query=jest.fn(async (_sql:string,_values:unknown[]=[])=>({rows:[],rowCount:0}));
+    const transaction=jest.fn((work:(client:unknown)=>Promise<unknown>)=>work({query}));
+    const svc=makeLegacy({query,transaction} as unknown as DatabaseService);
+    jest.spyOn(svc,"requireProjectAccess").mockResolvedValue({id:project,caller_role:"owner"} as never);
+    return {svc,query,internals:svc as unknown as Record<string,any>};
+  }
+  it.each(["delete","edit","close","append","suite"])("refuses a filtered task before %s changes any row",async(surface)=>{
+    const f=fixture();
+    const attempt=surface==="delete"?f.svc.zyraDeleteDraft(project,user,task,0,human)
+      :surface==="edit"?f.svc.zyraEditDraft(project,user,task,0,{title:"Changed"},human)
+      :surface==="close"?f.svc.zyraCloseTask(project,user,task,human)
+      :surface==="append"?f.internals.appendZyraReviewProposals(project,"session",task,[{opType:"create"}])
+      :f.internals.patchZyraPendingBatchSuite(project,task,null);
+    if(surface==="append")await expect(attempt).resolves.toEqual({closed:true,base:0});
+    else if(surface==="suite")await expect(attempt).resolves.toBeNull();
+    else await expect(attempt).rejects.toMatchObject({status:404});
+    const [sql,params]=f.query.mock.calls.find(([sql])=>sql.includes("FROM ai_generation_requests"))!;
+    expect(sql).toContain("task_kind IN ('legacy_generation_review','governed_proposal')");
+    expect(params).toEqual([task,project]);
+    expect(f.query.mock.calls.some(([sql])=>/^UPDATE |^INSERT /.test(sql))).toBe(false);
+  });
+  it("scopes late activity and requester notification to testcase review lanes",async()=>{
+    const f=fixture();
+    const notify=jest.spyOn(f.internals,"notifyUsers").mockResolvedValue(undefined);
+    await f.internals.appendZyraTaskActivity(project,task,"Late result","No mutation of other task kinds");
+    await f.internals.notifyZyraTask(project,task,"ready");
+    const queries=f.query.mock.calls.filter(([sql])=>sql.includes("ai_generation_requests"));
+    expect(queries).toHaveLength(2);
+    for(const [sql,params] of queries){
+      expect(sql).toContain("task_kind = 'legacy_generation_review'");
+      expect(sql).toContain("task_kind = 'governed_proposal' AND provider = 'external_proposal'");
+      expect(params?.slice(0,2)).toEqual([task,project]);
+    }
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
