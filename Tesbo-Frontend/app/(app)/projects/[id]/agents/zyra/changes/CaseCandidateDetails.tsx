@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getTestCase } from "@/lib/api";
+import Link from "next/link";
+import { getTestCase, listBugs } from "@/lib/api";
 
 type DisplayCase = { title: string; status: string; approvalCurrent: boolean };
 
@@ -10,13 +11,17 @@ type DisplayCase = { title: string; status: string; approvalCurrent: boolean };
  * Fetch a case's real, project-authorized identity only when the reviewer requests it.
  * Avoid a potentially unbounded fan-out on a history page with many candidates.
  */
-export function CaseCandidateDetails({ projectId, caseId }: {
+export function CaseCandidateDetails({ projectId, caseId, inspectDefectHistory = false }: {
   projectId: string;
   caseId: string;
+  inspectDefectHistory?: boolean;
 }) {
   const [caseDetails, setCaseDetails] = useState<DisplayCase | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "read" | "unavailable">("idle");
   const activeRead = useRef<AbortController | null>(null);
+  const defectRead = useRef<AbortController | null>(null);
+  const [defectState, setDefectState] = useState<"idle" | "loading" | "read" | "unavailable">("idle");
+  const [defects, setDefects] = useState<{ total: number; items: Array<{ id: string; title: string; status: string }> } | null>(null);
 
   useEffect(() => {
     // The parent keys this component by project and case. An in-flight response
@@ -24,6 +29,8 @@ export function CaseCandidateDetails({ projectId, caseId }: {
     return () => {
       activeRead.current?.abort();
       activeRead.current = null;
+      defectRead.current?.abort();
+      defectRead.current = null;
     };
   }, [projectId, caseId]);
 
@@ -35,6 +42,10 @@ export function CaseCandidateDetails({ projectId, caseId }: {
     // Clear previous identity before rechecking permission and current state.
     // An earlier authorized read is not permission to keep showing stale details.
     setCaseDetails(null);
+    defectRead.current?.abort();
+    defectRead.current = null;
+    setDefects(null);
+    setDefectState("idle");
     try {
       const current = await getTestCase(projectId, caseId, controller.signal);
       if (controller.signal.aborted || activeRead.current !== controller) return;
@@ -60,6 +71,41 @@ export function CaseCandidateDetails({ projectId, caseId }: {
       }
     } finally {
       if (activeRead.current === controller) activeRead.current = null;
+    }
+  }
+
+  async function inspectHistory(): Promise<void> {
+    if (!inspectDefectHistory || state !== "read" || defectRead.current || activeRead.current) return;
+    const controller = new AbortController();
+    defectRead.current = controller;
+    setDefects(null);
+    setDefectState("loading");
+    try {
+      const rows = await listBugs(projectId, { testcaseId: caseId }, controller.signal);
+      if (controller.signal.aborted || defectRead.current !== controller) return;
+      // Do not fall back to the denormalized testcase_id or infer cause from a title.
+      const ids = new Set<string>();
+      if (!Array.isArray(rows) || rows.some(row => {
+        if (!row || typeof row.id !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.id) ||
+            ids.has(row.id) || typeof row.title !== "string" || !row.title.trim() ||
+            typeof row.status !== "string" || !row.status.trim() ||
+            !Array.isArray(row.links) || !row.links.some(link => link?.testcaseId === caseId)) return true;
+        ids.add(row.id);
+        return false;
+      })) {
+        setDefectState("unavailable");
+        return;
+      }
+      // Bound display; no descriptions, attachments, reporter data or model context.
+      setDefects({ total: rows.length, items: rows.slice(0, 10).map(row => ({
+        id: row.id, title: row.title, status: row.status
+      })) });
+      setDefectState("read");
+    } catch {
+      if (!controller.signal.aborted && defectRead.current === controller) setDefectState("unavailable");
+    } finally {
+      if (defectRead.current === controller) defectRead.current = null;
     }
   }
 
@@ -89,6 +135,32 @@ export function CaseCandidateDetails({ projectId, caseId }: {
             Identity and approval are read-only snapshots, not proof of applicability,
             test execution or change coverage. Run attachment rechecks approval.
           </p>
+          {inspectDefectHistory && (
+            <section aria-label="Linked defect history" className="space-y-1 border-t border-[var(--border)] pt-2">
+              <button type="button" className="underline disabled:opacity-60" disabled={defectState === "loading"}
+                onClick={() => void inspectHistory()}>
+                {defectState === "loading" ? "Reading linked defects…" :
+                  defectState === "read" ? "Refresh linked defects" : "Inspect linked defect history"}
+              </button>
+              {defectState === "unavailable" && <p role="status">Linked defect history is unavailable or access has changed.</p>}
+              {defectState === "read" && defects && <>
+                <p>{defects.total} linked defect record(s) returned for this exact case.</p>
+                {defects.items.length > 0 && <ul className="list-disc pl-5">
+                  {defects.items.map(defect => <li key={defect.id}>
+                    <Link className="underline break-words" href={`/projects/${projectId}/bugs/${defect.id}`}>{defect.title}</Link>
+                    {" — "}{defect.status}
+                  </li>)}
+                </ul>}
+                {defects.total > defects.items.length && <p>Showing the first {defects.items.length} returned records; open the existing Defects view to investigate further.</p>}
+                <p className="text-[var(--muted)]">
+                  Compare the original trigger, actor, state transition, durable effect and verified correction with this change.
+                  A case link is a historical investigation lead, not a causal match or proof of recurrence.
+                  Zero linked records does not establish that no similar defects exist.
+                </p>
+              </>}
+            </section>
+          )}
+
         </div>
       )}
     </section>

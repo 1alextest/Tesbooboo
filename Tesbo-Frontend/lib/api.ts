@@ -3554,7 +3554,8 @@ export interface BugItem {
 
 export async function listBugs(
   projectId: string,
-  params?: { status?: string; cycleId?: string; assigneeId?: string; testcaseId?: string }
+  params?: { status?: string; cycleId?: string; assigneeId?: string; testcaseId?: string },
+  signal?: AbortSignal
 ): Promise<BugItem[]> {
   const sp = new URLSearchParams();
   if (params?.status) sp.set("status", params.status);
@@ -3562,7 +3563,7 @@ export async function listBugs(
   if (params?.assigneeId) sp.set("assigneeId", params.assigneeId);
   if (params?.testcaseId) sp.set("testcaseId", params.testcaseId);
   const query = sp.toString();
-  return api(`/api/projects/${projectId}/bugs${query ? `?${query}` : ""}`);
+  return api(`/api/projects/${projectId}/bugs${query ? `?${query}` : ""}`, { signal });
 }
 
 export async function getBug(bugId: string): Promise<BugItem> {
@@ -5350,6 +5351,15 @@ export type GraphQaConsequencePreview = {
   cachedRequirementReview?: {
     changedRequirementCount: number;
     withoutNomination: Array<{ requirementNodeId: string; change: "added" | "modified" | "removed" }>;
+  } | null;
+  sourceDeclarationReview?: {
+    version: 1;
+    changedFileCount: number;
+    declarationLeadCount: number;
+    filesWithoutDeclarationCount: number;
+    leads: Array<{ nodeId: string; change: "added" | "modified" | "removed" | "related_source_change";
+      beforeFileId: string | null; afterFileId: string | null }>;
+    filesWithoutDeclaration: string[];
   } | null;
   unlinkedCaseNodeIds: string[];
   changedNodeIds: string[];

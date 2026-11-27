@@ -1117,6 +1117,8 @@ test.describe("zyra / agents (UI)", () => {
     const contract = "tesbo-current-cached-requirement-links-v2";
     const scope = "e2e-nomination-" + suffix;
     let caseId: string | undefined;
+    let linkedBugId: string | undefined;
+    let unrelatedBugId: string | undefined;
     try {
       const human = await loginAs(tenant!.owner);
       try {
@@ -1125,6 +1127,16 @@ test.describe("zyra / agents (UI)", () => {
         });
         expect(created.status(), await created.text()).toBe(201);
         caseId = (await created.json()).id;
+        const linkedBug = await human.post(`/api/projects/${projectId}/bugs`, {
+          data: { title: "E2E linked defect " + suffix, links: [{ testcaseId: caseId }] }
+        });
+        expect(linkedBug.status(), await linkedBug.text()).toBe(201);
+        linkedBugId = (await linkedBug.json()).id;
+        const unrelatedBug = await human.post(`/api/projects/${projectId}/bugs`, {
+          data: { title: "E2E unrelated defect " + suffix }
+        });
+        expect(unrelatedBug.status(), await unrelatedBug.text()).toBe(201);
+        unrelatedBugId = (await unrelatedBug.json()).id;
       } finally { await human.dispose(); }
       const linked = JSON.stringify(["cached_requirement", projectId, "jira", "linked-" + suffix]);
       const missing = JSON.stringify(["cached_requirement", projectId, "jira", "unnominated-" + suffix]);
@@ -1158,6 +1170,35 @@ test.describe("zyra / agents (UI)", () => {
       const article = page.locator('section[aria-label="Graph change history"] article')
         .filter({ has: page.getByTestId("qa-review-focus-" + historyId) });
       const explanation = article.getByRole("region", { name: "Evidence-bounded impact explanation" });
+      const nativeCase = article.getByRole("region", { name: "Native case identity" });
+      await nativeCase.getByRole("button", { name: "Inspect case details" }).click();
+      const history = nativeCase.getByRole("region", { name: "Linked defect history" });
+      const defectResponse = page.waitForResponse(r => {
+        const url = new URL(r.url());
+        return url.pathname === `/api/projects/${projectId}/bugs` &&
+          url.searchParams.get("testcaseId") === caseId && r.request().method() === "GET";
+      });
+      await history.getByRole("button", { name: "Inspect linked defect history" }).click();
+      const observed = await defectResponse;
+      expect(observed.ok(), await observed.text()).toBeTruthy();
+      const observedBugs = await observed.json();
+      expect(observedBugs.map((b: { id: string }) => b.id)).toEqual([linkedBugId]);
+      await expect(history.getByRole("link", { name: "E2E linked defect " + suffix })).toHaveAttribute(
+        "href", `/projects/${projectId}/bugs/${linkedBugId}`);
+      await expect(history).not.toContainText("E2E unrelated defect " + suffix);
+      await expect(history).toContainText("not a causal match or proof of recurrence");
+      const mismatched = async (route: import("@playwright/test").Route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get("testcaseId") !== caseId) return route.continue();
+        await route.fulfill({ json: [{ ...observedBugs[0], title: "Mismatched private defect", links: [] }] });
+      };
+      await page.route(`**/api/projects/${projectId}/bugs?*`, mismatched);
+      try {
+        await history.getByRole("button", { name: "Refresh linked defects" }).click();
+        await expect(history).toContainText("Linked defect history is unavailable");
+        await expect(history).not.toContainText("E2E linked defect " + suffix);
+        await expect(history).not.toContainText("Mismatched private defect");
+      } finally { await page.unroute(`**/api/projects/${projectId}/bugs?*`, mismatched); }
       const endpoint = `**/agents/zyra/changes/${historyId}/analysis`;
       const response = page.waitForResponse(r => r.url().endsWith(`/agents/zyra/changes/${historyId}/analysis`) && r.request().method() === "GET");
       await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
@@ -1190,7 +1231,92 @@ test.describe("zyra / agents (UI)", () => {
     } finally {
       exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)}
         AND revision IN (${literal(baseRevision)},${literal(reviewRevision)});`);
+      // Delete only the two disposable fixture bugs through the existing owner.
+      if (linkedBugId || unrelatedBugId) {
+        const human = await loginAs(tenant!.owner);
+        try {
+          for (const id of [linkedBugId, unrelatedBugId]) if (id) {
+            const removed = await human.delete(`/api/bugs/${id}`);
+            expect(removed.ok(), await removed.text()).toBeTruthy();
+          }
+        } finally { await human.dispose(); }
+      }
       if (caseId) exec(`DELETE FROM testcases WHERE id=${literal(caseId)} AND project_id=${literal(projectId)};`);
+    }
+  });
+
+
+  test("Zyra opens native change review for source behavior leads and unresolved source scope", async ({ browser }) => {
+    const projectId = tenant!.mainProjectId, suffix = stamp("behavior-review");
+    const baseRevision = "base-" + suffix, reviewRevision = "change-" + suffix;
+    const oldRevision = "old-" + suffix;
+    const contract = "tesbo-implementation-declarations-v1", scope = "e2e-behavior-" + suffix;
+    const repository = "fixture/repository";
+    const file = (path: string) => JSON.stringify(["implementation_file", projectId, repository, path]);
+    const known = file("src/checkout.ts"), unknown = file("src/other.ts");
+    const journey = JSON.stringify(["source_declaration", projectId, repository, "journey", "Complete checkout"]);
+    const route = JSON.stringify(["source_declaration", projectId, repository, "route", "POST /checkout"]);
+    const capture = (revision: string) => JSON.stringify({
+      snapshot: { projectId, revision, nodes: [], edges: [] }, inventoryStatus: "complete",
+      unresolvedDiagnostics: [], contractId: contract, sourceScopeFingerprint: scope
+    });
+    const receipt = {
+      id: "receipt-" + suffix, projectId, status: "needs_qa_triage",
+      source: { contractId: contract, scopeFingerprint: scope, fromRevision: baseRevision, toRevision: reviewRevision },
+      changed: { addedNodeIds: [], modifiedNodeIds: [known, unknown, journey], removedNodeIds: [],
+        addedEdgeIds: [], modifiedEdgeIds: [], removedEdgeIds: [] },
+      candidates: [], unlinkedCaseNodeIds: [],
+      evidence: { basis: "verified_source_bytes_unverified_semantics", upstreamFreshness: "unverified",
+        coverageAssertion: "none", executionAssertion: "none", verification: "not_performed" },
+      sourceDeclarationReview: {
+        version: 1, changedFileCount: 2, declarationLeadCount: 2, filesWithoutDeclarationCount: 1,
+        leads: [
+          { nodeId: journey, change: "modified", beforeFileId: known, afterFileId: known },
+          { nodeId: route, change: "related_source_change", beforeFileId: known, afterFileId: known }
+        ],
+        filesWithoutDeclaration: [unknown]
+      }
+    };
+    try {
+      exec("INSERT INTO graph_capture_history (project_id,contract_id,source_scope_fingerprint,revision,capture_json) VALUES (" +
+        [projectId, contract, scope, baseRevision, capture(baseRevision)].map(literal).join(",") + "::jsonb);");
+      const persist = (revision: string, value: unknown) => scalar(
+        "INSERT INTO graph_capture_history (project_id,contract_id,source_scope_fingerprint,revision,capture_json,review_receipt_json) VALUES (" +
+        [projectId, contract, scope, revision].map(literal).join(",") + "," + literal(capture(revision)) + "::jsonb," +
+        literal(JSON.stringify(value)) + "::jsonb) RETURNING id;");
+      const historyId = persist(reviewRevision, receipt);
+      // Older stored receipts have no new projection. Do not reinterpret them as zero.
+      const older = persist(oldRevision, { ...receipt, id: "old-" + suffix, sourceDeclarationReview: undefined,
+        source: { ...receipt.source, toRevision: oldRevision } });
+      const page = await open(browser, "/agents/zyra/changes", "qa");
+      const explanationFor = (id: string) => page.locator('section[aria-label="Graph change history"] article')
+        .filter({ has: page.getByTestId("qa-review-focus-" + id) })
+        .getByRole("region", { name: "Evidence-bounded impact explanation" });
+      const explanation = explanationFor(historyId);
+      const response = page.waitForResponse(r => r.url().endsWith("/agents/zyra/changes/" + historyId + "/analysis") && r.request().method() === "GET");
+      await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+      const read = await response;
+      expect(read.ok(), await read.text()).toBeTruthy();
+      expect(await read.json()).toMatchObject({ receiptId: receipt.id, projectId, coverageAssertion: "none",
+        executionAssertion: "none", sourceDeclarationReview: receipt.sourceDeclarationReview });
+      const review = explanation.getByRole("region", { name: "Source behavior review" });
+      await expect(review).toContainText("2 declaration review lead(s) and 2 changed source file(s)");
+      await expect(review).toContainText("1 changed file(s) have no associated declaration");
+      await expect(review).toContainText("journey: Complete checkout");
+      await expect(review).toContainText("route: POST /checkout");
+      await expect(review).toContainText("Supporting source changed; declaration itself not recorded as changed");
+      await expect(review).toContainText("Missing semantic coverage is not established.");
+      await review.getByText("Inspect unresolved source files", { exact: true }).click();
+      await expect(review.getByText("src/other.ts", { exact: true })).toBeVisible();
+      const historical = explanationFor(older);
+      await historical.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+      await expect(historical).toContainText("Source behavior inventory is unavailable for this observation.");
+      await expect(historical.getByRole("region", { name: "Source behavior review" })).toHaveCount(0);
+      expect(Number(scalar("SELECT COUNT(*)::int FROM graph_review_run_case_links WHERE project_id=" +
+        literal(projectId) + " AND history_id IN (" + [historyId, older].map(literal).join(",") + ");"))).toBe(0);
+    } finally {
+      exec("DELETE FROM graph_capture_history WHERE project_id=" + literal(projectId) +
+        " AND revision IN (" + [baseRevision, reviewRevision, oldRevision].map(literal).join(",") + ");");
     }
   });
 
