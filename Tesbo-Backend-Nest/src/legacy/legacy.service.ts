@@ -23415,17 +23415,25 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
+  // Gate K: a worker may consume only its existing task lane. The governed
+  // testcase proposal subtype retains its existing feedback continuation.
+  private isLegacyProviderTask(row: Body, allowTestcaseFeedback = false): boolean {
+    return !this.isRequirementBundleTask(row) &&
+      (row.task_kind === "legacy_generation_review" ||
+        (allowTestcaseFeedback && row.task_kind === "governed_proposal" && row.provider === "external_proposal"));
+  }
+
   private async markZyraTaskFailed(projectId: string, taskId: string, detail: string) {
     const failedAt = new Date().toISOString();
     const activity = [{ actor: "agent", stage: "failed", title: "Generation failed", detail, createdAt: failedAt }];
     const failed = await this.db.transaction(async client => {
       // The worker's initial task lookup may itself have failed. Re-establish ownership here,
       // under the mutation lock, before either a status change or the late-failure activity.
-      const current = await client.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
-      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return false;
+      const current = await client.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], true)) return false;
       const res = await client.query(
         `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status IN ('todo', 'in_progress') RETURNING id`,
         [taskId, projectId, JSON.stringify(activity)]
       );
       if (res.rowCount) return true;
@@ -23435,7 +23443,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         createdAt: failedAt
       }];
       await client.query(
-        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
         [taskId, projectId, JSON.stringify(note)]
       );
       return false;
@@ -23454,7 +23462,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const taskRes = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
       const task = taskRes.rows[0];
       if (!task) return;
-      if (this.isRequirementBundleTask(task)) return;
+      if (!this.isLegacyProviderTask(task)) return;
       const allocation = await this.db.query(
         `SELECT k.provider, k.default_model, k.api_key, k.base_url, k.auth_header_name, k.auth_scheme
          FROM project_ai_key_allocations a
@@ -23480,7 +23488,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }];
       const startRes = await this.db.query(
         `UPDATE ai_generation_requests SET task_status = 'in_progress', activity_log = activity_log || $3::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'todo' RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'todo' RETURNING id`,
         [taskId, projectId, JSON.stringify(startedActivity)]
       );
       if (startRes.rowCount === 0) {
@@ -23555,7 +23563,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
              token_input = $5, token_output = $6, token_total = $7,
              source_summary = $8::jsonb, activity_log = activity_log || $9::jsonb,
              task_status = 'in_review', updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'in_progress' RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'in_progress' RETURNING id`,
         [taskId, projectId, drafts.length, JSON.stringify(drafts), tokenInput, tokenOutput, tokenInput + tokenOutput, JSON.stringify(sourceSummary), JSON.stringify(activity)]
       );
       // Logged regardless of whether the row above actually applied (see the rowCount===0 branch
@@ -23577,7 +23585,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           createdAt: droppedAt
         }];
         await this.db.query(
-          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review'",
           [taskId, projectId, JSON.stringify(note)]
         );
         return;
@@ -23642,6 +23650,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     this.assertOrdinaryProposalMutation(existing.rows[0]);
+    if (!this.isLegacyProviderTask(existing.rows[0], true)) throw new ConflictException({ code: "TASK_KIND_NOT_ADMITTED", error: "This task is not eligible for legacy provider feedback." });
     const statusBeforeFeedback = String(existing.rows[0].task_status || "");
     // Feedback only makes sense once there is something to review, or to retry after a failure.
     // Without this guard, feedback could be sent while processZyraTask was still mid-flight for
@@ -23700,7 +23709,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // Russian; feedback with no signal ("ok", a ticket key) keeps the task's language.
       `UPDATE ai_generation_requests SET task_status = 'todo', feedback = $3, activity_log = activity_log || $4::jsonb, updated_at = now(),
               language = COALESCE($6, language)
-       WHERE id = $1 AND project_id = $2 AND task_status = $5 RETURNING *`,
+       WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status = $5 RETURNING *`,
       [taskId, projectId, feedback, JSON.stringify(feedbackActivity), statusBeforeFeedback, detectScriptLanguage(feedbackText)]
     );
     if (claimRes.rowCount === 0) {
@@ -23799,8 +23808,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     try {
       // A queued continuation may outlive the request that admitted it. Keep the same immutable
       // task-owner boundary before collecting context or making any billable provider call.
-      const current = await this.db.query("SELECT provider, generated_payload FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
-      if (!current.rows[0] || this.isRequirementBundleTask(current.rows[0])) return;
+      const current = await this.db.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], true)) return;
       // These four snapshots are independent reads (knowledge base, Jira, Linear, existing
       // testcases) — gathering them concurrently instead of one after another cuts this stage's
       // wall time down to the slowest of the four instead of their sum, without changing what any
@@ -23857,7 +23866,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
              token_input = token_input + $6, token_output = token_output + $7, token_total = token_total + $8,
              activity_log = activity_log || $9::jsonb, source_summary = $10::jsonb, jira_issue_keys = $11::jsonb,
              linear_issue_keys = $12::jsonb, notion_page_ids = $13::jsonb, task_status = 'in_review', updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'todo'
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status = 'todo'
          RETURNING *`,
         [
           taskId,
@@ -23889,7 +23898,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           createdAt: droppedAt
         }];
         await this.db.query(
-          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
           [taskId, projectId, JSON.stringify(note)]
         );
         return;

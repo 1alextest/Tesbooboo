@@ -133,7 +133,7 @@ describe("requirement bundle lifecycle boundary", () => {
 
   function fixture() {
     const row: Record<string,any> = { id: task, project_id: project, requested_by: user,
-      provider: "external_requirement_proposal", task_status: "in_review", generated_payload: operations,
+      provider: "external_requirement_proposal", task_kind: "governed_proposal", task_status: "in_review", generated_payload: operations,
       activity_log: [], save_events: [], proposal_provenance: { issuerId: user } };
     const query = jest.fn(async (sql: string, _values: unknown[] = []) => {
       if (sql.includes("FROM ai_generation_requests")) return { rows: [row], rowCount: 1 };
@@ -161,7 +161,7 @@ describe("requirement bundle lifecycle boundary", () => {
   });
 
   it("retains the ordinary task close action", async () => {
-    const f=fixture(); f.row.provider="openai"; f.row.generated_payload=[{title:"Ordinary draft"}];
+    const f=fixture(); f.row.provider="openai"; f.row.task_kind="legacy_generation_review"; f.row.generated_payload=[{title:"Ordinary draft"}];
     f.query.mockImplementation(async sql => {
       if(sql.startsWith("UPDATE ai_generation_requests")) f.row.task_status="done";
       return {rows:[f.row],rowCount:1};
@@ -176,6 +176,45 @@ describe("requirement bundle lifecycle boundary", () => {
     const provider=jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
     if(kind==="generation")await f.internals.processZyraTask(project,task,{userId:user});
     else await f.internals.processZyraFeedback(project,task,{});
+    expect(provider).not.toHaveBeenCalled();
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+  });
+
+  // Synthetic future-kind rows exercise the application boundary while the
+  // database producer remains closed.
+  it.each([
+    ["external_qa_work", "external_qa_work"],
+    ["governed_proposal", "external_document_proposal"],
+    ["unknown", "openai"],
+    [undefined, "openai"]
+  ])("refuses provider workers for kind %s / provider %s", async (kind, lane) => {
+    const f=fixture(); f.row.task_kind=kind; f.row.provider=lane;
+    f.row.generated_payload=[]; f.row.task_status="todo";
+    const before=JSON.stringify(f.row);
+    const provider=jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
+    const notify=jest.spyOn(f.internals,"notifyZyraTask").mockResolvedValue(undefined);
+    await f.internals.processZyraTask(project,task,{userId:user});
+    await f.internals.processZyraFeedback(project,task,{});
+    await f.internals.markZyraTaskFailed(project,task,"Obsolete worker");
+    expect(JSON.stringify(f.row)).toBe(before);
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+    expect(provider).not.toHaveBeenCalled(); expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("rejects generic feedback for a future external task before provider allocation", async () => {
+    const f=fixture(); f.row.task_kind="external_qa_work"; f.row.provider="external_qa_work"; f.row.generated_payload=[];
+    const before=JSON.stringify(f.row);
+    await expect(f.svc.zyraFeedback(project,user,task,{feedback:"Retry"},human)).rejects.toMatchObject({status:409,response:{code:"TASK_KIND_NOT_ADMITTED"}});
+    expect(JSON.stringify(f.row)).toBe(before);
+    expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
+  });
+
+  it("keeps governed testcase feedback distinct from initial legacy generation", async () => {
+    const f=fixture(); f.row.task_kind="governed_proposal"; f.row.provider="external_proposal"; f.row.generated_payload=[];
+    expect(f.internals.isLegacyProviderTask(f.row)).toBe(false);
+    expect(f.internals.isLegacyProviderTask(f.row,true)).toBe(true);
+    const provider=jest.spyOn(f.internals,"generateZyraWithProvider").mockResolvedValue({drafts:[]});
+    await f.internals.processZyraTask(project,task,{userId:user});
     expect(provider).not.toHaveBeenCalled();
     expect(f.query.mock.calls.some(([sql])=>/UPDATE |INSERT |workspace_ai_keys/.test(sql))).toBe(false);
   });
@@ -225,7 +264,7 @@ describe("requirement bundle lifecycle boundary", () => {
   });
 
   it.each(["todo", "in_progress", "done"])("preserves ordinary %s failure handling and notification semantics",async status=>{
-    const f=failureFixture(status);f.row.provider="openai";f.row.generated_payload=[{title:"Ordinary draft"}];
+    const f=failureFixture(status);f.row.provider="openai";f.row.task_kind="legacy_generation_review";f.row.generated_payload=[{title:"Ordinary draft"}];
     await f.internals.markZyraTaskFailed(project,task,"Provider refused this ordinary task");
     expect(f.row.task_status).toBe(status==="done"?"done":"failed");
     expect(f.row.activity_log).toHaveLength(1);
@@ -237,7 +276,7 @@ describe("requirement bundle lifecycle boundary", () => {
     const f=fixture();
     f.row.generated_payload=[];
     await expect(f.svc.zyraFeedback(project,user,task,{feedback:"Retry"},human)).rejects.toMatchObject({status:409});
-    f.row.provider="openai";f.row.generated_payload=[{title:"Existing testcase draft"}];
+    f.row.provider="openai";f.row.task_kind="legacy_generation_review";f.row.generated_payload=[{title:"Existing testcase draft"}];
     f.query.mockImplementation(async sql=>{
       if(sql.includes("FROM project_ai_key_allocations"))return {rows:[{provider:"openai",default_model:"gpt-4o",api_key:"synthetic-unused"}],rowCount:1};
       if(sql.startsWith("UPDATE ai_generation_requests"))f.row.task_status="todo";
