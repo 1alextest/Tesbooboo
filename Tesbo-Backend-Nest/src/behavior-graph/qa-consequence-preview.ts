@@ -1,4 +1,5 @@
 import type { QaChangeReviewReceipt } from './qa-change-review-receipt';
+import { CURRENT_CACHE_PROJECTION_CONTRACT } from './current-cache-graph-projection';
 
 /**
  * A truthful, *read-only* explanation of one already-committed and project-authorized
@@ -21,6 +22,11 @@ export interface QaConsequencePreview {
     confidence: 'candidate_only';
     condition: 'independent_expectation_and_applicability_review_required';
   }>;
+  /** Receipt-time nominations only; null means this cached-graph projection is unavailable. */
+  cachedRequirementReview: {
+    changedRequirementCount: number;
+    withoutNomination: Array<{ requirementNodeId: string; change: 'added' | 'modified' | 'removed' }>;
+  } | null;
   unlinkedCaseNodeIds: string[];
   changedNodeIds: string[];
   unlinkedOrUnprovenChange: boolean;
@@ -35,6 +41,60 @@ export interface QaConsequencePreview {
   executionAssertion: 'none';
   sourceFreshness: 'unverified';
   nextAction: 'qa_review';
+}
+
+/** Keep the current cache projector's canonical tuple and project boundary.
+ * Unsupported graph contracts and invalid identities cannot certify an empty inventory.
+ */
+function cachedNodeKind(id: unknown, projectId: string): 'case' | 'requirement' | null {
+  if (typeof id !== 'string') return null;
+  try {
+    const parts: unknown = JSON.parse(id);
+    if (!Array.isArray(parts) || JSON.stringify(parts) !== id || parts[1] !== projectId) return null;
+    const nonempty = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
+    if (parts.length === 3 && parts[0] === 'test_case' && nonempty(parts[2])) return 'case';
+    if (parts.length === 4 && parts[0] === 'cached_requirement' &&
+        ['jira', 'linear', 'notion'].includes(parts[2]) && nonempty(parts[3])) return 'requirement';
+    return null;
+  } catch { return null; }
+}
+
+function summarizeCachedRequirementReview(receipt: QaChangeReviewReceipt): QaConsequencePreview['cachedRequirementReview'] {
+  if (receipt.source.contractId !== CURRENT_CACHE_PROJECTION_CONTRACT ||
+      receipt.evidence.basis !== 'cached_source_reference_only') return null;
+  const changes = new Map<string, 'added' | 'modified' | 'removed'>();
+  const seenNodes = new Set<string>();
+  for (const [change, ids] of [
+    ['added', receipt.changed.addedNodeIds],
+    ['modified', receipt.changed.modifiedNodeIds],
+    ['removed', receipt.changed.removedNodeIds]
+  ] as const) {
+    for (const id of ids) {
+      const kind = cachedNodeKind(id, receipt.projectId);
+      if (!kind || seenNodes.has(id)) return null;
+      seenNodes.add(id);
+      if (kind === 'requirement') changes.set(id, change);
+    }
+  }
+  const nominated = new Set<string>();
+  const seenCases = new Set<string>();
+  for (const candidate of receipt.candidates) {
+    if (cachedNodeKind(candidate.caseNodeId, receipt.projectId) !== 'case' ||
+        seenCases.has(candidate.caseNodeId) || !Array.isArray(candidate.requirementNodeIds)) return null;
+    seenCases.add(candidate.caseNodeId);
+    for (const id of candidate.requirementNodeIds) {
+      if (cachedNodeKind(id, receipt.projectId) !== 'requirement') return null;
+      nominated.add(id);
+    }
+  }
+  // A nomination may describe a historical edge, not a currently linked or approved case.
+  // Never translate the absence of a receipt-time nomination into confirmed missing coverage.
+  return {
+    changedRequirementCount: changes.size,
+    withoutNomination: [...changes].filter(([id]) => !nominated.has(id))
+      .map(([requirementNodeId, change]) => ({ requirementNodeId, change }))
+      .sort((a, b) => a.requirementNodeId.localeCompare(b.requirementNodeId))
+  };
 }
 
 export function explainQaConsequenceReceipt(receipt: QaChangeReviewReceipt): QaConsequencePreview {
@@ -71,6 +131,7 @@ export function explainQaConsequenceReceipt(receipt: QaChangeReviewReceipt): QaC
     status: 'needs_qa_triage',
     basis: receipt.evidence.basis,
     candidateEffects: effects,
+    cachedRequirementReview: summarizeCachedRequirementReview(receipt),
     unlinkedCaseNodeIds: [...receipt.unlinkedCaseNodeIds].sort(),
     changedNodeIds,
     // A reference-derived candidate is not independent assurance of actual consequences.

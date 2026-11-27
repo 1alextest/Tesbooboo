@@ -1,3 +1,4 @@
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { retestCreateInput, retestDigest, retestExecutionIds } from "./native-retest";
 
@@ -18,6 +19,31 @@ describe("native retest exact intent", () => {
     expect(retestDigest(a)).toBe(retestDigest(b));
     expect(retestDigest({ ...a, definition: "approved-B" })).not.toBe(retestDigest(a));
     expect(retestDigest({ ...a, result: "Passed" })).not.toBe(retestDigest(a));
+  });
+  it("preserves legacy manual intent and refuses a requested automation mode or unrecognized binding", () => {
+    const input = { requestKey: randomUUID(), executionIds: [first], expectedPreviewDigest: "a".repeat(64), name: "Manual verification" };
+    const legacy = retestCreateInput(input);
+    expect(retestCreateInput({ ...input, executionMode: "manual" })).toEqual(legacy);
+    expect(retestDigest(retestCreateInput({ ...input, executionMode: "manual" }))).toBe(retestDigest(legacy));
+    function captureRefusal(run: () => unknown): unknown {
+      try { run(); } catch (error) { return error; }
+      throw new Error("Expected retest command to be refused");
+    }
+    for (const executionMode of ["automation", "automated", "playwright", null, false, {}]) {
+      const error = captureRefusal(() => retestCreateInput({ ...input, executionMode }));
+      expect(error).toBeInstanceOf(ConflictException);
+      expect((error as ConflictException).getStatus()).toBe(409);
+      expect((error as ConflictException).getResponse()).toEqual({
+        code: "RETEST_AUTOMATION_UNAVAILABLE",
+        error: expect.stringContaining("Automated retest execution is not available"),
+      });
+    }
+    for (const extra of [{ automationBinding: {} }, { runnerTokenId: first }, { executionMode: "manual", automation: {} }]) {
+      const error = captureRefusal(() => retestCreateInput({ ...input, ...extra }));
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getStatus()).toBe(400);
+      expect((error as BadRequestException).getResponse()).toEqual({ error: expect.stringContaining("unsupported fields") });
+    }
   });
   it("requires exact reviewed preview and explicit useful name while keeping unknown build truthful", () => {
     const input = { requestKey: randomUUID(), executionIds: [first], expectedPreviewDigest: "a".repeat(64), name: "Manual verification" };

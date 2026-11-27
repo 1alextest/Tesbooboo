@@ -34,10 +34,11 @@ process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 type Body = Record<string, any>;
 type Call = { sql: string; params: unknown[] };
 
-function makeLegacy(options: { claimTaken?: boolean } = {}): { svc: LegacyService; calls: Call[] } {
+function makeLegacy(options: { claimTaken?: boolean; deliveryAdmitted?: boolean } = {}): { svc: LegacyService; calls: Call[] } {
   const calls: Call[] = [];
   const query = jest.fn(async (sql: string, params: unknown[] = []) => {
     calls.push({ sql, params });
+    if (/SELECT 1 FROM integration_ticket_comments c/.test(sql)) return {rows: options.deliveryAdmitted === false ? [] : [{admitted:1}]};
     if (/INSERT INTO integration_ticket_comments/.test(sql)) {
       return { rows: options.claimTaken ? [] : [{ id: `claim-${calls.length}` }] };
     }
@@ -350,6 +351,7 @@ describe("zyraRetryTicketComment — re-sending a failed comment", () => {
     };
     const query = jest.fn(async (sql: string, params: unknown[] = []) => {
       calls.push({ sql, params });
+      if (/SELECT 1 FROM integration_ticket_comments c/.test(sql)) return {rows:[{admitted:1}]};
       if (/SET status = 'pending'/.test(sql)) return { rows: options.claimed ? [failedRow] : [] };
       if (/SELECT status FROM integration_ticket_comments/.test(sql)) return { rows: options.existingStatus ? [{ status: options.existingStatus }] : [] };
       if (/FROM testcases WHERE project_id/.test(sql)) return { rows: options.testcases ?? [] };
@@ -375,6 +377,8 @@ describe("zyraRetryTicketComment — re-sending a failed comment", () => {
 
     const claim = calls.find((c) => /SET status = 'pending'/.test(c.sql))!;
     expect(claim.sql).toContain("AND status = 'failed'");
+    expect(claim.sql).toContain("r.task_kind = 'legacy_generation_review'");
+    expect(claim.sql).toContain("r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal'");
     expect(claim.params).toEqual([COMMENT_ID, PROJECT_ID, TASK_ID, "u2"]);
     expect(jiraPost).toHaveBeenCalledTimes(1);
     const text = JSON.stringify(jiraPost.mock.calls[0][2]);
@@ -404,5 +408,32 @@ describe("zyraRetryTicketComment — re-sending a failed comment", () => {
     expect(jiraPost).not.toHaveBeenCalled();
     const failed = calls.find((c) => /SET status = 'failed'/.test(c.sql))!;
     expect(String(failed.params[1])).toMatch(/None of the test cases/);
+  });
+});
+
+
+describe("task-kind boundary before ticket delivery", () => {
+  afterEach(() => jest.restoreAllMocks());
+  it("does not post a queued claim when its exact owner is not admitted", async () => {
+    const {svc,calls}=makeLegacy({deliveryAdmitted:false});
+    const jiraPost=jest.spyOn(svc as unknown as Internals,"jiraPostComment").mockResolvedValue("unused");
+    await (svc as unknown as {deliverZyraTicketComment:(...args:unknown[])=>Promise<void>}).deliverZyraTicketComment(
+      PROJECT_ID,TASK_ID,"claim-1","jira","EAD-11215",1,{markdown:"Controlled",adf:{}}
+    );
+    const check=calls.find(c=>c.sql.includes("SELECT 1 FROM integration_ticket_comments c"))!;
+    expect(check.sql).toContain("r.id=c.generation_request_id AND r.project_id=c.project_id");
+    expect(check.sql).toContain("r.task_kind = 'legacy_generation_review'");
+    expect(check.params).toEqual(["claim-1",PROJECT_ID,TASK_ID,"jira","EAD-11215"]);
+    expect(jiraPost).not.toHaveBeenCalled();
+    expect(statusUpdates(calls)).toHaveLength(0);
+  });
+  it("scopes comment listing to admitted task owners",async()=>{
+    const {svc,calls}=makeLegacy();
+    await expect(svc.zyraTaskTicketComments(PROJECT_ID,"u2",TASK_ID)).resolves.toEqual({list:[]});
+    const read=calls.find(c=>c.sql.includes("FROM integration_ticket_comments"))!;
+    expect(read.sql).toContain("r.id=integration_ticket_comments.generation_request_id");
+    expect(read.sql).toContain("r.project_id=integration_ticket_comments.project_id");
+    expect(read.sql).toContain("r.task_kind = 'legacy_generation_review'");
+    expect(read.params).toEqual([PROJECT_ID,TASK_ID]);
   });
 });

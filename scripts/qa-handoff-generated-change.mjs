@@ -105,9 +105,10 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
   } catch {
     throw new Error('The approved coverage API origin or URL is malformed.');
   }
-  expect(allowed.pathname, 'The approved API origin may not contain an alternate path').toBe('/');
-  expect(destination.origin, 'Coverage must use the explicitly approved API origin').toBe(allowed.origin);
-  expect(destination.username || destination.password, 'Coverage URLs may not carry credentials').toBe('');
+  expect(allowed.pathname === '/', 'The approved API origin may not contain an alternate path').toBe(true);
+  expect(destination.origin === allowed.origin, 'Coverage must use the explicitly approved API origin').toBe(true);
+  expect(!destination.username && !destination.password && !allowed.username && !allowed.password,
+    'Coverage URLs may not carry credentials').toBe(true);
   if (destination.protocol !== 'https:') {
     expect(['127.0.0.1', 'localhost', '[::1]'].includes(destination.hostname),
       'Unencrypted API traffic is allowed only for a loopback disposable fixture').toBe(true);
@@ -128,12 +129,27 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
   writeFileSync(validatedEvidence, JSON.stringify(identity), { flag: 'wx', mode: 0o600 });
   await test.info().attach('approved-handoff-evidence.json', { path: validatedEvidence, contentType: 'application/json' });
 
-  const response = await request.get(coverageUrl, {
-    headers: { Authorization: 'Bearer ' + token }, maxRedirects: 0
-  });
+  let response;
+  try {
+    response = await request.get(coverageUrl, {
+      headers: { Authorization: 'Bearer ' + token }, maxRedirects: 0
+    });
+  } catch {
+    // Playwright transport errors may contain the URL and Authorization header.
+    throw new Error('Coverage request failed (request details deliberately withheld).');
+  }
   expect(response.status(), 'Coverage read HTTP status (body deliberately withheld)').toBe(200);
-  const body = await response.json();
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error('Coverage response is not valid JSON (body deliberately withheld).');
+  }
   expect(body && typeof body === 'object' && !Array.isArray(body), 'A typed coverage result is required').toBe(true);
+  const isUuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+  const isDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  expect(isUuid(body.requirementId), 'Coverage requirement identity must be a UUID').toBe(true);
+  expect(isUuid(body.approvedVersionId), 'Coverage approved version identity must be a UUID').toBe(true);
   expect(body.requirementId, 'Coverage must be for the reviewed requirement').toBe(BASIS.requirementId);
   expect(body.approvedVersionId, 'Coverage must be for the reviewed approved version').toBe(BASIS.requirementVersionId);
   expect(Array.isArray(body.cases), 'Coverage cases must be a list').toBe(true);
@@ -142,11 +158,17 @@ test(${literal(title)}, { tag: ${literal(tag)} }, async ({ request }) => {
   // miss a second distinct link, and sorting keys would collapse valid neighbors.
   const sameKeys = (keys) => isDeepStrictEqual(keys, BASIS.criterionKeys);
   const matching = body.cases.filter((item) =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
     item.approved === true &&
     item.testcaseId === BASIS.caseId &&
     item.requirementVersionId === BASIS.requirementVersionId &&
     sameKeys(item.criterionKeys));
-  expect(matching, 'exactly one current approved link for the selected case and criteria').toHaveLength(1);
+  // Expose only cardinality to the assertion formatter. Passing native rows here
+  // would copy every returned property into error text and failure attachments.
+  expect({ length: matching.length }, 'exactly one current approved link for the selected case and criteria').toHaveLength(1);
+  expect(isUuid(matching[0].linkId), 'The selected link identity must be a UUID').toBe(true);
+  expect(isDigest(matching[0].testcaseRevision), 'The selected case edit revision must be a digest').toBe(true);
+  expect(isDigest(matching[0].testcaseApprovalRevision), 'The selected case approval revision must be a digest').toBe(true);
   expect(matching[0].linkId, 'The sole approved link must match the selected native link').toBe(BASIS.linkId);
   expect(matching[0].testcaseRevision, 'The selected case edit revision must match').toBe(BASIS.testcaseRevision);
   expect(matching[0].testcaseApprovalRevision, 'The selected case approval revision must match').toBe(BASIS.testcaseApprovalRevision);

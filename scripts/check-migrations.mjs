@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { resolveBase, listGitTree, readGitBlob } from "./git-quality.mjs";
+import { resolveBase, listGitTree, readGitBlob, exactCommitMergeBase } from "./git-quality.mjs";
 
 const migrationDirectory = "Tesbo-Backend-Nest/migrations";
 const filenamePattern = /^V([1-9]\d*)_[a-zA-Z0-9_]+\.sql$/;
@@ -117,7 +117,97 @@ export function validateAppendOnly(baseManifest, currentManifest) {
   return errors;
 }
 
-function readBaseFiles(cwd, commit) {
+/**
+ * Read-only projection of full target and candidate migration inventories.
+ * Each candidate is compared with its verified common ancestor, NOT with the
+ * target as though missing inherited target files were candidate deletions.
+ * No database ledger, applied state, SQL compatibility or merge permission.
+ */
+export function reviewMigrationAllocations(target, candidates) {
+  const isSha = value => typeof value === "string" && [40, 64].includes(value.length) && /^[a-f0-9]+$/.test(value);
+  if (!target || !isSha(target.head) || !Array.isArray(candidates) ||
+      candidates.length < 1 || candidates.length > 32) {
+    throw new Error("An exact target commit and 1–32 candidate inventories are required.");
+  }
+  const errors = validateMigrationManifest(target.manifest, "Target migration manifest");
+  const byVersion = new Map();
+  const seen = new Set();
+  const targetSlots = new Map();
+  if (errors.length) throw new Error(errors.join("; "));
+  for (const migration of target.manifest) {
+    targetSlots.set(migration.version, migration);
+  }
+  const same = (a, b) => a.name === b.name && a.checksum === b.checksum;
+  const rows = [];
+  for (const candidate of candidates) {
+    if (!candidate || !isSha(candidate.head) || !isSha(candidate.mergeBase) || seen.has(candidate.head)) {
+      throw new Error("Invalid or duplicate candidate commit inventory.");
+    }
+    seen.add(candidate.head);
+    const problems = [
+      ...validateAppendOnly(candidate.baseManifest, target.manifest),
+      ...validateAppendOnly(candidate.baseManifest, candidate.manifest)
+    ];
+    if (problems.length) throw new Error("Candidate " + candidate.head + ": " + problems.join("; "));
+    const inherited = new Set(candidate.baseManifest.map(migration => migration.name));
+    const additions = candidate.manifest.filter(migration => !inherited.has(migration.name))
+      .sort((a, b) => a.version - b.version)
+      .map(migration => {
+        const occupant = targetSlots.get(migration.version);
+        const targetMatch = !occupant ? "unallocated" : same(migration, occupant) ? "identical" : "occupied_different";
+        const allocation = { name: migration.name, version: migration.version, checksum: migration.checksum, targetMatch };
+        const entries = byVersion.get(migration.version) ?? [];
+        entries.push({ head: candidate.head, mergeBase: candidate.mergeBase, ...allocation });
+        byVersion.set(migration.version, entries);
+        return allocation;
+      });
+    rows.push({ head: candidate.head, mergeBase: candidate.mergeBase, additions });
+  }
+  const conflicts = [];
+  for (const [version, entries] of byVersion) {
+    const occupant = targetSlots.get(version) ?? null;
+    const distinct = new Set([...(occupant ? [occupant] : []), ...entries].map(m => JSON.stringify([m.name, m.checksum])));
+    if (distinct.size > 1) conflicts.push({
+      version,
+      target: occupant ? { name: occupant.name, version: occupant.version, checksum: occupant.checksum } : null,
+      candidates: entries.sort((a, b) => a.head.localeCompare(b.head))
+    });
+  }
+  return {
+    status: conflicts.length ? "review-required" : "no-detected-slot-conflict",
+    target: target.head,
+    candidates: rows.sort((a, b) => a.head.localeCompare(b.head)),
+    conflicts: conflicts.sort((a, b) => a.version - b.version),
+    databaseLedger: "not-inspected",
+    verification: "not-run",
+    limitations: [
+      "Only numbered SQL slots in the supplied committed inventories are compared. No PR discovery or exhaustive candidate inventory is asserted.",
+      "An identical name and canonical checksum is not evidence of independent work, applied schema, or merge readiness.",
+      "SQL effects, cross-version checksum reuse, dependencies and persistent migration history require separate authorized review."
+    ]
+  };
+}
+
+function reviewCommittedCandidates(cwd, target, heads) {
+  if (heads.length < 1 || heads.length > 32 || new Set(heads).size !== heads.length) {
+    throw new Error("Provide 1–32 distinct exact candidate commit SHAs.");
+  }
+  // Resolve every exact commit and common ancestor before reading any source blobs.
+  const pairs = heads.map(head => ({ head, mergeBase: exactCommitMergeBase(target, head, { cwd }) }));
+  const manifests = new Map(), blobs = new Map();
+  function read(commit) {
+    if (!manifests.has(commit)) {
+      const result = validateMigrationFiles(readBaseFiles(cwd, commit, blobs), "Commit " + commit);
+      if (result.errors.length) throw new Error(result.errors.join("; "));
+      manifests.set(commit, result.manifest);
+    }
+    return manifests.get(commit);
+  }
+  return reviewMigrationAllocations({ head: target, manifest: read(target) },
+    pairs.map(pair => ({ ...pair, baseManifest: read(pair.mergeBase), manifest: read(pair.head) })));
+}
+
+function readBaseFiles(cwd, commit, cache) {
   const tree = listGitTree(commit, `${migrationDirectory}/`, { cwd });
   const files = [];
   for (const { mode, type, objectId, path: filename } of tree) {
@@ -125,9 +215,10 @@ function readBaseFiles(cwd, commit) {
     if (type !== "blob" || !["100644", "100755"].includes(mode)) {
       throw new Error(`Invalid base migration metadata: ${filename} must be a regular SQL file.`);
     }
+    if (cache && !cache.has(objectId)) cache.set(objectId, readGitBlob(objectId, { cwd }));
     files.push({
       name: path.posix.basename(filename),
-      content: readGitBlob(objectId, { cwd }),
+      content: cache ? cache.get(objectId) : readGitBlob(objectId, { cwd }),
     });
   }
   return files;
@@ -146,13 +237,18 @@ function readCurrentFiles(cwd) {
 
 function main(args) {
   try {
+    if (args[0] === "--review-candidates") {
+      const result = reviewCommittedCandidates(process.cwd(), args[1], args.slice(2));
+      console.log(JSON.stringify(result, null, 2));
+      return result.conflicts.length ? 1 : 0;
+    }
     let base;
     if (args[0] === "--base" && (args.length === 1 || !args[1].trim())) {
       throw new Error("Missing git ref after --base.");
     }
     if (args.length) {
       if (args.length !== 2 || args[0] !== "--base") {
-        throw new Error("Usage: node scripts/check-migrations.mjs [--base <git-ref>]");
+        throw new Error("Usage: node scripts/check-migrations.mjs [--base <git-ref>] | --review-candidates <target-commit-sha> <candidate-commit-sha>...");
       }
       base = args[1];
     }

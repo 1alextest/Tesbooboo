@@ -233,7 +233,7 @@ export class ZyraArchiveSweepService {
     // — read here purely so this run doesn't spend Jira/Linear API budget re-checking a candidate
     // it already knows has an unresolved proposal sitting from a prior sweep.
     const res = await this.db.query<{ sweep_testcase_id: string }>(
-      "SELECT sweep_testcase_id FROM ai_generation_requests WHERE provider = 'zyra_archive_sweep' AND task_status <> 'done' AND sweep_testcase_id IS NOT NULL",
+      "SELECT sweep_testcase_id FROM ai_generation_requests WHERE provider = 'zyra_archive_sweep' AND task_kind = 'legacy_generation_review' AND task_status <> 'done' AND sweep_testcase_id IS NOT NULL",
       []
     );
     return new Set(res.rows.map((row) => row.sweep_testcase_id));

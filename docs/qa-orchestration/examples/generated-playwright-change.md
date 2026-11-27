@@ -1,9 +1,10 @@
 # Generated Playwright change from an approved handoff
 
-**Status:** reference journey increment. It consumes the exact packet from
-[approved-automation-handoff.md](approved-automation-handoff.md) and executes one generated
-Playwright test against a controlled coverage target. It is not a generator fleet, a new review
-owner, a native execution, or production acceptance.
+**Status:** the coupled generator/reporter increment is merged as #317 (`8b627402`) and #313
+(`f7788439`) and deployed. Hosted disposable CI executed the generated Playwright test through the
+real Tesbo reporter, and the joined governed scenario used an actual approved requirement/case/link.
+This remains disposable CI engineering evidence, not TESBOPROJECT execution, manual UAT or
+production acceptance.
 
 ## What is implemented
 
@@ -49,10 +50,12 @@ Playwright installation. It serves controlled responses for:
 - **Legitimate unrelated links:** another case, different criteria, or a separate reversed-order
   group on the same coverage response do not block the selected case.
 
-The proposed ordered-identity and bounded-evidence follow-up adds generated-process controls for
-reversed-only substitution, valid reversed-order neighbors, extra evidence fields, and canonical
-attachment bytes when the input contains a shadowed field. These follow-up controls are NOT RUN
-until the exact candidate's CI supplies execution receipts. Earlier verified controls retain their scope.
+The ordered-identity and bounded-evidence follow-up is now part of the merged generator. It adds
+generated-process controls for reversed-only substitution, valid reversed-order neighbors, extra
+evidence fields, and canonical attachment bytes when the input contains a shadowed field. Hosted
+CI smoke run `45975273556` (`#317`) and the reporter seam run `45985939679` (`#313` head
+`afb3722b`, merged as `f7788439`) executed these controls; the generated-process test passed in the
+pinned handoff CI step.
 
 The test also verifies that a changed selection digest, missing/backslash external ID, changed
 repository, investigation revision or unsupported oracle is refused before a change is emitted,
@@ -61,16 +64,15 @@ not textual inspection. It is wired into the pinned investigation/handoff CI ste
 
 ## Boundaries and unsupported associations
 
-- **No approved TESBOPROJECT case is used by this fixture.** The 26 November 2026 staging receipt
-  below records an unpublished proposal. Current project inventory and eligibility have not been
-  reverified in this session; this does not establish that no approved case exists today. Persistent
-  case publication and approval remain separate authorized human decisions. The test uses only
-  its admitted CI-disposable project.
-- **The standalone script does not report a native Run.** The existing reporter/automation
-  ingest remains the result owner. The separate `e2e/api/handoff-native-reporter.spec.ts` joins this
-  generator to that actual reporter with both synthetic and governed disposable inputs. Its exact
-  candidate must execute in hosted CI before native readback is credited; a passing standalone
-  generator test does not establish that seam.
+- **No approved TESBOPROJECT case is used by the hosted journey.** The governed scenario creates a
+  disposable approved requirement/case/link inside the admitted CI project through the real APIs.
+  Persistent TESBOPROJECT publication and approval remain separate authorized human decisions; no
+  project token or production approval is used.
+- **The standalone script does not report a native Run.** The separate
+  `e2e/api/handoff-native-reporter.spec.ts` joins this generator to the existing reporter with both
+  synthetic and governed disposable inputs. The hosted run verifies Completed/completed closure
+  with timestamps, exact execution/revisions, every observed attachment byte, failing/open
+  negative controls, the Bug-linked failed occurrence and the separate Untested manual retest.
 - **No source-to-code review is automated.** The generated file is a reviewable change; a human must
   review the diff before committing it to the approved target. This script does not push branches or
   approve code.
@@ -88,9 +90,19 @@ These are historical receipt fields, not a fresh read of the current task/revisi
 - status `in_review`, one unpublished Draft case in Requirements
 - review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/2f20c10e-c1d3-4480-ba08-51f4cb04eca7`
 
-No manual execution is evidenced by that receipt. Current native execution history must be read
-after reconnecting; no new manual execution is performed here. Staging is not approval, apply,
-a Test Run or evidence.
+No manual execution is evidenced by that receipt. No new manual execution is performed here.
+Staging is not approval, apply, a Test Run or evidence.
+
+A second, distinct Draft proposal records the governed reporter journey:
+
+- task `601cc4f6-08e8-4fae-8b95-933010f2dc54`
+- revision `72d4982203eec734585ac5560e78fd2c09b0ce1f558b7369654f8241866704cf`
+- request key `governed-handoff-native-run-20261127-1795778472668`
+- status `in_review`, one unpublished Draft case in Requirements
+- review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/601cc4f6-08e8-4fae-8b95-933010f2dc54`
+
+It remains separate from task `2f20c10e-…` (generated change/controls) and from #318's Bug/retest
+contract. Manual execution remains **UNRUN**; disposable CI is not an official native result.
 
 ## Where verification is visible
 
@@ -110,10 +122,10 @@ bytes. The original closure and full attachment checks remain at the API boundar
 native manual retest must still show **Untested** and retain its origin. It is not executed by the
 corrected automated Run.
 
-These are assertions in the candidate, not a claim of executed browser acceptance. On a completed
-hosted run, the existing compatibility HTML report retains Run/evidence screenshots and bounded
-`native-run-readback-<runId>.json` attachments with exact project/case/Run/execution identities,
-result, checkout commit/branch and evidence hashes. Fixture records are then deleted as required.
+These are executed assertions in the hosted disposable smoke run. Its existing compatibility HTML
+report retains Run/evidence screenshots and bounded `native-run-readback-<runId>.json` attachments
+with exact project/case/Run/execution identities, result, checkout commit/branch and evidence
+hashes. Fixture records are then deleted as required.
 The Git checkout identifies the disposable application build; the packet's separate target revision
 still identifies the controlled generated-change fixture. Neither is a production acceptance.
 
@@ -138,3 +150,40 @@ node --test scripts/qa-handoff-generated-change.test.mjs
 
 The test writes only under a temporary directory inside `e2e/` and removes it. It does not use a
 Tesbo token, create records or call a provider.
+
+## Diagnostic disclosure correction — 27 November 2026 candidate
+
+The independent Red review reproduced a narrower failure that packet-byte validation did not
+cover: the uniqueness assertion received entire coverage rows. On a duplicate, Playwright copied
+an extra runtime-only `internalReviewerNote` marker into its actual error, JSON report, console
+output and file-backed failure context. The canonical packet attachment remained clean. This was
+an isolated synthetic probe, not an observed production disclosure or a native upload.
+
+The generator now passes only `{ length: matching.length }` to the same length matcher. It keeps
+the reviewed uniqueness label and exact expected/received cardinality diagnostics consumed by
+the existing reporter-journey checker, while withholding unrelated response properties. Ordered
+criterion matching, exact sole-link/revision checks and native identity remain unchanged.
+
+EG then independently reproduced additional disclosure from malformed JSON, object-valued
+identities, URL credentials and a real loopback connection reset. The transport error included
+the synthetic bearer header. The coupled correction now replaces parser/request exceptions with
+fixed categories, validates UUID/digest primitives before value comparisons and evaluates URL
+refusals as booleans. It never forwards an original exception or cause containing body, path or
+header data. These are corrections within the same emitted-test owner.
+
+The regression puts the random marker into successful HTTP coverage responses on both the
+duplicate and valid-single-row paths. It checks the actual child error/report/output and every
+reported attachment's bytes, including failure context. The original private-503, ordered-group,
+identity and alternate-link controls remain. The added control failed before the generator fix;
+the complete two-case Node suite passed afterward, with its actual generated Playwright children.
+The extended suite also passed after EG’s corrections: seven malformed-body/field/transport
+controls and one rejected-userinfo control use runtime-only markers and inspect report, console
+and all reported attachment bytes. The socket-reset control uses its marker as the actual bearer
+token, so a formatter that reintroduces the request call log fails the regression.
+These local results qualify the emitted-test boundary. Hosted candidate CI, native diagnostic
+upload/readback, broader field-specific disclosure policy and live acceptance remain separate.
+
+The native reporter seam and governed requirement/case/link journey remain in #313; #319 was
+merged into that owner branch on 27 November. Their disposable record and execution evidence must remain attributed to their
+own candidates; they do not establish the ordinary New task/model-authoring path or mandatory
+Skill-content delivery. No new runner, draft owner or result service is introduced here.
