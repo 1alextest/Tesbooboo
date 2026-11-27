@@ -1,5 +1,6 @@
 import type { NextFunction, Response } from "express";
 import { AuthMiddleware } from "./auth.middleware";
+import type { McpOAuthServer } from "./mcp-oauth-server";
 import { AppConfigService } from "../config/app-config.service";
 import { ApiTokenService } from "./api-token.service";
 import { OtpService } from "./otp.service";
@@ -63,6 +64,77 @@ describe("AuthMiddleware bearer precedence", () => {
       if (authorization) expect(f.otp.resolveSession).not.toHaveBeenCalled();
     }
   );
+
+  it("attaches a verified opaque OAuth principal without upgrading its Tesbo user into a browser session", async () => {
+    const f = fixture(null);
+    const verified = {
+      kind: "oauth_access" as const, issuer: "https://tesbo.example/oauth", subject: "external-sub",
+      clientId: "https://client.example/id", grantId: "grant-1", userId: "member-1",
+      projectId: "project-1", resource: "https://tesbo.example/api/projects/project-1/mcp",
+      scopes: ["mcp:read"]
+    };
+    const oauth = { enabled: true, verifyAccessToken: jest.fn().mockResolvedValue(verified) };
+    const real = new AuthMiddleware(
+      { sessionCookieName: "session" } as unknown as AppConfigService,
+      f.otp as unknown as OtpService,
+      f.api as unknown as ApiTokenService,
+      oauth as unknown as McpOAuthServer
+    );
+    const req = {
+      headers: { authorization: "Bearer verified-oauth-opaque-value" },
+      cookies: { session: "more-privileged-browser" }
+    } as unknown as AuthenticatedRequest;
+    await real.use(req, {} as Response, f.next);
+    expect(req.oauthAccess).toEqual(verified);
+    expect(req.apiToken).toBeNull();
+    expect(req.userId).toBeNull();
+    expect(f.otp.resolveSession).not.toHaveBeenCalled();
+    expect(oauth.verifyAccessToken).toHaveBeenCalledWith("verified-oauth-opaque-value");
+  });
+
+  it("never substitutes an invalid OAuth bearer with a Tesbo browser cookie", async () => {
+    const f = fixture(null);
+    const oauth = { enabled: true, verifyAccessToken: jest.fn().mockResolvedValue(null) };
+    const real = new AuthMiddleware(
+      { sessionCookieName: "session" } as unknown as AppConfigService,
+      f.otp as unknown as OtpService,
+      f.api as unknown as ApiTokenService,
+      oauth as unknown as McpOAuthServer
+    );
+    const req = {
+      headers: { authorization: "Bearer rejected-oauth" },
+      cookies: { session: "existing-human" }
+    } as unknown as AuthenticatedRequest;
+    await real.use(req, {} as Response, f.next);
+    expect(req.userId).toBeNull();
+    expect(req.oauthAccess).toBeNull();
+    expect(req.apiToken).toBeNull();
+    expect(f.otp.resolveSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { authorization: "Bearer ", enabled: true, apiValid: false, expectedOAuthCalls: 1, expectedUser: null },
+    { authorization: "Bearer rejected", enabled: false, apiValid: false, expectedOAuthCalls: 0, expectedUser: null },
+    { authorization: "Bearer tsbo_read", enabled: true, apiValid: true, expectedOAuthCalls: 0, expectedUser: "machine" }
+  ])("keeps credential owners separate: %p", async ({ authorization, enabled, apiValid, expectedOAuthCalls, expectedUser }) => {
+    const f = apiValid ? fixture() : fixture(null);
+    const oauth = { enabled, verifyAccessToken: jest.fn().mockResolvedValue(null) };
+    const real = new AuthMiddleware(
+      { sessionCookieName: "session" } as unknown as AppConfigService,
+      f.otp as unknown as OtpService,
+      f.api as unknown as ApiTokenService,
+      oauth as unknown as McpOAuthServer
+    );
+    const req = { headers: { authorization }, cookies: { session: "valid" } } as unknown as AuthenticatedRequest;
+    await real.use(req, {} as Response, f.next);
+    expect(req.userId).toBe(expectedUser);
+    expect(req.oauthAccess).toBeNull();
+    expect(req.apiToken?.userId ?? null).toBe(expectedUser);
+    expect(f.otp.resolveSession).not.toHaveBeenCalled();
+    expect(oauth.verifyAccessToken).toHaveBeenCalledTimes(expectedOAuthCalls);
+    if (expectedOAuthCalls) expect(oauth.verifyAccessToken).toHaveBeenCalledWith(null);
+    expect(f.next).toHaveBeenCalledTimes(1);
+  });
 
   it("preserves browser cookie authentication when no bearer provided", async () => {
     const f = fixture();

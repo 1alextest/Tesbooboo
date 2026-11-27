@@ -23,7 +23,8 @@ describe("native requirement preview through both global HTTP guards", () => {
   const oldFlag = process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED;
   const projectLookup = { getProjectBasics: jest.fn().mockResolvedValue({ organizationId: "org", archivedAt: null }) };
   const billing = { assertProjectWritable: jest.fn().mockRejectedValue(new ForbiddenException({ error: "billing lock must not be reached by preview" })) };
-  const legacy = { requireProjectAccess: jest.fn(async (userId: string) => {
+  const legacy = { requirementAutomationHandoff: jest.fn().mockResolvedValue({ projectId: PROJECT }),
+    requireProjectAccess: jest.fn(async (userId: string) => {
     if (userId !== USER) throw new ForbiddenException({ error: "Project membership required" });
     return { id: PROJECT };
   }) };
@@ -84,6 +85,12 @@ describe("native requirement preview through both global HTTP guards", () => {
       expect(response.body).toMatchObject({ canPublish: false, authoritativeRequirementId: null, disposition: "preview_only" });
       expectNoBillingAccess();
     });
+  it("keeps the authenticated handoff read available on a locked project without billing effects", async () => {
+    const response = await send(USER, {}, `/requirements/proposals/${PROJECT}/automation-handoff`);
+    expect(response.status).toBe(200);
+    expect(legacy.requirementAutomationHandoff).toHaveBeenCalledWith(PROJECT, USER, PROJECT, {}, { kind: "human_session" });
+    expectNoBillingAccess();
+  });
   it.each(["", "foreign-user"])("refuses unauthorized caller %s before any billing access", async user => {
     for (const flag of [undefined, "1"]) {
       if (flag === undefined) delete process.env.TESBO_REQUIREMENT_PREVIEW_ENABLED;

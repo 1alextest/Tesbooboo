@@ -143,13 +143,20 @@ const MCP_TOOL_GROUPS: Array<{ category: string; tools: Array<{ name: string; bl
 
 export default function ApiTokensPage() {
   const params = useParams();
+  const { currentUser } = useAppData();
+  // A credential reveal or delayed list from another project/account must not survive navigation.
+  return <ApiTokensPageContent key={JSON.stringify([params.id, currentUser?.userId])} />;
+}
+
+function ApiTokensPageContent() {
+  const params = useParams();
   const router = useRouter();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
   const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
 
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const listRequest = useRef(0);
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [tokensLoading, setTokensLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -166,14 +173,19 @@ export default function ApiTokensPage() {
   const [connectTab, setConnectTab] = useState<ConnectTab>("claudeCode");
 
   const loadTokens = useCallback(async () => {
+    const request = ++listRequest.current;
+    setTokensLoading(true);
     try {
       const list = await listApiKeys(projectId);
+      if (request !== listRequest.current) return;
       setTokens(list);
       setListError(null);
     } catch {
+      if (request !== listRequest.current) return;
+      setTokens([]);
       setListError("Failed to load API tokens.");
     } finally {
-      setTokensLoading(false);
+      if (request === listRequest.current) setTokensLoading(false);
     }
   }, [projectId]);
 
@@ -182,14 +194,14 @@ export default function ApiTokensPage() {
       router.replace("/login");
       return;
     }
-    setCurrentUserId(currentUser.userId);
     loadTokens().catch(() => {});
+    return () => { listRequest.current++; };
   }, [loadTokens, projectId, router, currentUser]);
 
-  const currentUserRole = currentUserId
-    ? normalizeRole(projectMembers.find((m) => m.userId === currentUserId)?.role ?? "qa_engineer")
-    : "qa_engineer";
+  const currentMember = projectMembers.find((m) => m.userId === currentUser?.userId);
+  const currentUserRole = currentMember ? normalizeRole(currentMember.role) : null;
   const canManageApiTokens = currentUserRole === "owner" || currentUserRole === "manager";
+  const canCreateApiTokens = !!currentMember && !tokensLoading && !listError;
 
   function openCreateModal() {
     setNewTokenName("");
@@ -202,7 +214,11 @@ export default function ApiTokensPage() {
 
   async function handleCreateToken(e: FormEvent) {
     e.preventDefault();
-    if (creating) return;
+    if (creating || !canCreateApiTokens) return;
+    if (newTokenScopes.write && !canManageApiTokens) {
+      setCreateError("Your current role cannot issue write-scoped tokens.");
+      return;
+    }
     const name = newTokenName.trim();
     if (!name) {
       setCreateError("Name is required.");
@@ -228,25 +244,32 @@ export default function ApiTokensPage() {
         tokenPrefix: result.tokenPrefix,
         lastUsedAt: result.lastUsedAt,
         createdAt: result.createdAt,
+        canRevoke: result.canRevoke,
       };
       setTokens((prev) => [publicToken, ...prev]);
       setRevealedToken(result);
       setCreateStep("reveal");
+      void loadTokens();
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create token.");
+      // A lost response may have created an unrecoverable secret. Refresh the list before retry.
+      void loadTokens();
     } finally {
       setCreating(false);
     }
   }
 
   async function handleRevoke(tokenId: string) {
+    if (tokensLoading || listError || revokingId || !currentMember || !tokens.some(t => t.id === tokenId && t.canRevoke === true)) return;
     setRevokingId(tokenId);
     try {
       await revokeApiKey(projectId, tokenId);
       setTokens((prev) => prev.filter((t) => t.id !== tokenId));
       setRevealedToken((prev) => (prev?.id === tokenId ? null : prev));
+      await loadTokens();
     } catch {
-      setListError("Failed to revoke token.");
+      await loadTokens();
+      setListError("Revocation could not be confirmed. Reload the token list before retrying.");
     } finally {
       setRevokingId(null);
     }
@@ -268,7 +291,6 @@ export default function ApiTokensPage() {
 
   const mcpUrl = getMcpUrl(projectId);
   // Never embed a secret in copied shell/config snippets: it can outlive the one-time reveal.
-  const tokenForSnippets = "<YOUR_API_TOKEN>";
 
   /*
    * `--scope user`, not the CLI's default `local` scope. A local-scope server is stored in
@@ -277,18 +299,18 @@ export default function ApiTokensPage() {
    * `d:/repo`, so the server shows "Connected" in `claude mcp list` yet never appears in the IDE
    * extension. User scope isn't keyed by path, so every surface on the machine sees it.
    */
-  const claudeCodeCli = `claude mcp add --transport http --scope user tesbo ${mcpUrl} --header "Authorization: Bearer ${tokenForSnippets}"`;
+  const claudeCodeCli = `claude mcp add --transport http --scope user tesbo ${mcpUrl} --header 'Authorization: Bearer \${TESBO_API_TOKEN}'`;
   const mcpJsonSnippet = `{
   "mcpServers": {
     "tesbo": {
       "type": "http",
       "url": "${mcpUrl}",
-      "headers": { "Authorization": "Bearer ${tokenForSnippets}" }
+      "headers": { "Authorization": "Bearer \${TESBO_API_TOKEN}" }
     }
   }
 }`;
   const curlSnippet = `curl -X POST '${mcpUrl}' \\
-  -H 'Authorization: Bearer ${tokenForSnippets}' \\
+  -H "Authorization: Bearer $TESBO_API_TOKEN" \\
   -H 'Content-Type: application/json' \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`;
 
@@ -298,7 +320,7 @@ export default function ApiTokensPage() {
    * "A parameter cannot be found that matches parameter name 'X'." This is PowerShell-native
    * instead, so a Windows user has something that actually runs as pasted.
    */
-  const powershellSnippet = `$headers = @{ Authorization = "Bearer ${tokenForSnippets}" }
+  const powershellSnippet = `$headers = @{ Authorization = "Bearer $env:TESBO_API_TOKEN" }
 $body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 Invoke-RestMethod -Uri "${mcpUrl}" -Method Post -Headers $headers -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 10`;
 
@@ -371,20 +393,20 @@ export default defineConfig({
       {!canManageApiTokens && (
         <Card className="p-4">
           <p className="text-sm text-[var(--muted)]">
-            Only project managers and owners can create or revoke API tokens.
+            Project members can create read-only tokens and revoke their own tokens. Owners and managers approve MCP clients and manage write-scoped or other members’ credentials.
           </p>
         </Card>
       )}
 
-      {canManageApiTokens && (
+      {currentMember && (
         <div>
-          <Button type="button" onClick={openCreateModal}>
+          <Button type="button" onClick={openCreateModal} disabled={!canCreateApiTokens || !!revokingId}>
             Create token
           </Button>
         </div>
       )}
 
-      {listError && <p className="text-sm text-[var(--error-foreground)]">{listError}</p>}
+      {listError && <div className="flex items-center gap-2"><p role="alert" className="text-sm text-[var(--error-foreground)]">{listError}</p><Button type="button" variant="secondary" onClick={() => void loadTokens()} disabled={tokensLoading}>Reload tokens</Button></div>}
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -396,7 +418,7 @@ export default defineConfig({
                 <th className="px-4 py-3 font-medium">Scopes</th>
                 <th className="px-4 py-3 font-medium">Last used</th>
                 <th className="px-4 py-3 font-medium">Created</th>
-                {canManageApiTokens && <th className="px-4 py-3 font-medium text-right">Action</th>}
+                <th className="px-4 py-3 font-medium text-right">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -411,30 +433,30 @@ export default defineConfig({
                   </td>
                   <td className="px-4 py-3 text-[var(--muted)]">{formatDate(token.lastUsedAt)}</td>
                   <td className="px-4 py-3 text-[var(--muted)]">{formatDate(token.createdAt)}</td>
-                  {canManageApiTokens && (
-                    <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right">
+                    {currentMember && token.canRevoke === true ? (
                       <button
                         type="button"
                         onClick={() => handleRevoke(token.id)}
-                        disabled={revokingId === token.id}
+                        disabled={tokensLoading || !!listError || revokingId !== null}
                         className="text-[var(--error-foreground)] hover:underline disabled:opacity-50"
                       >
                         {revokingId === token.id ? "Revoking…" : "Revoke"}
                       </button>
-                    </td>
-                  )}
+                    ) : <span className="text-[var(--muted)]">—</span>}
+                  </td>
                 </tr>
               ))}
               {!tokensLoading && tokens.length === 0 && (
                 <tr>
-                  <td colSpan={canManageApiTokens ? 6 : 5} className="px-4 py-6 text-center text-[var(--muted)]">
+                  <td colSpan={6} className="px-4 py-6 text-center text-[var(--muted)]">
                     No API tokens yet.
                   </td>
                 </tr>
               )}
               {tokensLoading && (
                 <tr>
-                  <td colSpan={canManageApiTokens ? 6 : 5} className="px-4 py-6 text-center text-[var(--muted)]">
+                  <td colSpan={6} className="px-4 py-6 text-center text-[var(--muted)]">
                     Loading tokens…
                   </td>
                 </tr>
@@ -450,7 +472,7 @@ export default defineConfig({
           <p className="mt-1 text-sm text-[var(--muted)]">
             {revealedToken
               ? "Your new token was shown once. Keep it in a secret store; the examples use placeholders."
-              : <>Replace <code className="font-mono text-xs">&lt;YOUR_API_TOKEN&gt;</code> with a token saved securely when it was created. Existing tokens cannot be viewed again.</>}
+              : <>Use a separately issued and project-approved token for each personal client. Set <code className="font-mono text-xs">TESBO_API_TOKEN</code> in the client process or secret store; examples never contain the secret. Existing tokens cannot be viewed again.</>}
           </p>
         </div>
 
@@ -493,23 +515,20 @@ export default defineConfig({
           </button>
         </div>
 
-        {connectTab !== "opencode" && connectTab !== "other" && (
+        {connectTab === "claudeCode" && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Registering a new MCP server doesn&apos;t reach a session that&apos;s already running — it&apos;s only
-          picked up on startup. Start a new Claude Code session (or, in the VS Code / JetBrains extension, run{" "}
-          <strong>Developer: Reload Window</strong>) before the new tools show up in{" "}
-          <code className="font-mono">/mcp</code>.
+          Set the secret in the environment of Claude Code or its IDE host before connecting. The CLI example is for POSIX shells and PowerShell; keep the variable reference quoted literally. Check <code className="font-mono">/mcp</code> and reconnect or restart the client after credential or configuration changes. IDE hosts may require a reload.
         </div>
         )}
 
         {connectTab === "claudeCode" && (
           <div className="space-y-3">
-            <p className="text-sm text-[var(--muted)]">Run this once from your terminal:</p>
+            <p className="text-sm text-[var(--muted)]">Register this server from your terminal (user scope). Review existing entries first; use a distinct name and a separate secret variable for another Tesbo project.</p>
             <div className="relative">
               <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto">{claudeCodeCli}</pre>
               <CopyButton value={claudeCodeCli} iconOnly className="absolute right-2 top-2" />
             </div>
-            <p className="text-sm text-[var(--muted)]">Or add this to <code className="font-mono text-xs">.mcp.json</code> (project) or <code className="font-mono text-xs">~/.claude.json</code> (user):</p>
+            <p className="text-sm text-[var(--muted)]">Or merge this entry into <code className="font-mono text-xs">.mcp.json</code> (project) or <code className="font-mono text-xs">~/.claude.json</code> (user). Share the configuration, not the credential. Do not replace unrelated servers:</p>
             <div className="relative">
               <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpJsonSnippet}</pre>
               <CopyButton value={mcpJsonSnippet} iconOnly className="absolute right-2 top-2" />
@@ -520,19 +539,31 @@ export default defineConfig({
         {connectTab === "claudeDesktop" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Add this to your Claude Desktop config — macOS: <code className="font-mono text-xs">~/Library/Application Support/Claude/claude_desktop_config.json</code>, Windows: <code className="font-mono text-xs">%APPDATA%\Claude\claude_desktop_config.json</code>
+              For a remote connector in Claude Desktop or Claude on the web, open Customize → Connectors → Add custom connector.
+              Enter this project&apos;s MCP URL. Choose no sign-in for the fixed-header setup and add the request header below using a token from your secret store.
+              The remote connector uses Anthropic&apos;s cloud network, so the server must be reachable over public HTTPS.
             </p>
             <div className="relative">
-              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpJsonSnippet}</pre>
-              <CopyButton value={mcpJsonSnippet} iconOnly className="absolute right-2 top-2" />
+              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{mcpUrl}</pre>
+              <CopyButton value={mcpUrl} iconOnly className="absolute right-2 top-2" />
             </div>
+            <div className="relative">
+              <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">Authorization: Bearer &lt;YOUR_API_TOKEN&gt;</pre>
+              <CopyButton value="Authorization: Bearer <YOUR_API_TOKEN>" iconOnly className="absolute right-2 top-2" />
+            </div>
+            <p className="text-xs text-[var(--muted-soft)]">
+              Organization-wide fixed headers are shared credentials, not individual member attribution. Do not use a personal write token as a shared connector.
+              Local Claude Desktop stdio configuration is a separate mechanism; the Claude Code HTTP JSON above is not a verified local Desktop configuration.
+              After replacing or revoking a token, update the connector and verify access again.
+              See <a href="https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp" target="_blank" rel="noreferrer" className="text-[var(--primary)] hover:underline">Claude remote connector documentation</a>.
+            </p>
           </div>
         )}
 
         {connectTab === "opencode" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Merge this server entry into <code className="font-mono">opencode.jsonc</code> in your project, preserving other settings.
+              For OpenCode V2, merge this server entry into <code className="font-mono">opencode.jsonc</code> in your project, preserving other settings. Older client versions may use a different schema.
               Set <code className="font-mono">TESBO_API_TOKEN</code> in your local environment or secrets manager, not in source control.
             </p>
             <div className="relative">
@@ -548,7 +579,7 @@ export default defineConfig({
         {connectTab === "other" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--muted)]">
-              Any MCP-compatible client can call the JSON-RPC 2.0 endpoint directly:
+              Clients that support custom Authorization headers can call the JSON-RPC endpoint directly. These examples perform a Tesbo-specific discovery probe, not a complete MCP handshake. Inspect the JSON-RPC error as well as the HTTP status.
             </p>
             <div className="space-y-1">
               <p className="text-xs font-medium text-[var(--muted-soft)]">macOS / Linux (curl)</p>
@@ -559,7 +590,7 @@ export default defineConfig({
             </div>
             <div className="space-y-1">
               <p className="text-xs font-medium text-[var(--muted-soft)]">
-                Windows (PowerShell) — <code className="font-mono">curl</code> here is aliased to Invoke-WebRequest and rejects curl-style flags, so use this instead
+                Windows (PowerShell) — Windows PowerShell may alias <code className="font-mono">curl</code> to Invoke-WebRequest. Use this native example or curl.exe.
               </p>
               <div className="relative">
                 <pre className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] p-3 pr-12 font-mono text-xs text-[var(--foreground)] overflow-x-auto whitespace-pre">{powershellSnippet}</pre>
@@ -567,7 +598,7 @@ export default defineConfig({
               </div>
             </div>
             <p className="text-xs text-[var(--muted-soft)]">
-              Protocol methods: <code className="font-mono">initialize</code>, <code className="font-mono">ping</code>, <code className="font-mono">tools/list</code>, <code className="font-mono">tools/call</code>. An MCP client discovers its permitted tools and schemas through <code className="font-mono">tools/list</code>. The 47 tools below describe the default catalog; token scopes, project consent and named-client grants can narrow it. Live discovery is authoritative.
+              Protocol methods: <code className="font-mono">initialize</code>, <code className="font-mono">ping</code>, <code className="font-mono">tools/list</code>, <code className="font-mono">tools/call</code>. An MCP client discovers its permitted tools and schemas through <code className="font-mono">tools/list</code>. The reference below is illustrative; token scopes, project consent and named-client grants can narrow the actual catalog. Live discovery is authoritative.
             </p>
             <p className="text-xs text-[var(--muted-soft)]">
               Agents cannot publish official test-case changes directly. The proposal review preview is disabled by default.
@@ -711,8 +742,7 @@ export default defineConfig({
             </Field>
             <p className="text-xs text-[var(--muted)]">
               Project: <strong>{projectName || projectId}</strong>. Read is selected by default.
-              Enable Write only for agents or reporters that need to change data.
-              Automated Playwright reporting needs Read and Write.
+              {canManageApiTokens ? "Enable Write only for agents or reporters that need to change data. Automated Playwright reporting needs Read and Write." : "Your role can issue Read tokens. Ask an owner or manager to authorize a suitable integration if Write is needed."}
             </p>
             <div className="space-y-3">
               <label className="flex items-start gap-3 cursor-pointer">
@@ -736,7 +766,7 @@ export default defineConfig({
                   checked={newTokenScopes.write}
                   onChange={(e) => setNewTokenScopes((prev) => ({ ...prev, write: e.target.checked }))}
                   className="mt-0.5"
-                  disabled={creating}
+                  disabled={creating || !canManageApiTokens}
                 />
                 <div>
                   <span className="text-sm font-medium text-[var(--foreground)]">Write</span>
@@ -751,7 +781,7 @@ export default defineConfig({
               <Button type="button" variant="secondary" onClick={closeCreateModal} disabled={creating}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={creating}>
+              <Button type="submit" disabled={creating || !canCreateApiTokens || (newTokenScopes.write && !canManageApiTokens)}>
                 {creating ? "Creating…" : "Create token"}
               </Button>
             </div>

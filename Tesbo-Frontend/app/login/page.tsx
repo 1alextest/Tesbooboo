@@ -9,6 +9,7 @@ import {
   DEFAULT_SIGNED_IN_PATH,
   isRedirectBounce,
   noteRedirectAttempt,
+  navigateAfterSignIn,
   safeRedirectPath,
 } from "@/lib/redirect";
 import { AuthSplitShell } from "@/components/auth/AuthSplitShell";
@@ -96,7 +97,7 @@ function LoginForm() {
         }
         noteRedirectAttempt(target);
         setPendingTarget(target);
-        router.replace(target);
+        navigateAfterSignIn(router, target, "replace");
       })
       .catch(() => setCheckingSetup(false));
   }, [router, redirect]);
@@ -167,8 +168,7 @@ function LoginForm() {
         router.push(`/verify-otp?${qp.toString()}`);
       } else {
         await loginWithPassword(emailToUse, password);
-        router.push(redirect || DEFAULT_SIGNED_IN_PATH);
-        router.refresh();
+        navigateAfterSignIn(router, redirect || DEFAULT_SIGNED_IN_PATH);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed.");

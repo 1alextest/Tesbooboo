@@ -533,9 +533,9 @@ Evidence:
   child was inserted under the folder the paused delete had already soft-deleted. The same test is
   green with the fix (`e684b92f`, `actions/runs/45551136629`, 728 database tests).
 - The integration-worker defect was established from the coordinator→job folder-id lifecycle and is
-  pinned by a processor contract test that fails if the transaction, advisory lock or in-transaction
-  `ensureProviderFolder` call is removed; a deterministic queue/DB interleaving was not reproducible
-  in the DB suite.
+  pinned by a processor contract test that fails if the transaction, exact shared advisory key or
+  in-transaction `findProviderFolderForWrite` call is removed; a deterministic queue/DB interleaving
+  was not reproducible in the DB suite.
 - Protected paths already covered by #263: move document/folder, duplicate, ordinary and ancestor
   deletion, with observed advisory waits.
 - `setup.service.ts` seeds inside project creation before exposure; there is no product hard-delete of
@@ -562,3 +562,323 @@ not recreate a deleted provider folder, a corrected proposal was staged as task
 `3aff650be7f35792f0d49f06967ead360761688c1b110e9b06e52f635fa3842e`); the earlier task is left as
 history rather than deleted. Both remain `in_review`, **unassigned**, with no approved Skill
 assignment, so apply stays a human action; manual execution **UNRUN**.
+
+PR #268 merged into `development` as `313dd1e649bd21ae05356d0e82dea4f5db7f7e1a`; the Railway
+deployment succeeded and production `/api/health` returned that exact SHA. The approved-origin
+binding was created beside the existing project token as `tesbo-approved-origin` (exact origin,
+regular file, ACL restricted to the owning Windows principal), and the connection was verified as
+project `df072dfe-e4d0-406a-9350-e0d022c6323f` before staging.
+
+### 10.3 Native readback for the duplicate/delete pilot, 25 November 2026
+
+A signed-in read of TESBOPROJECT located the existing [REQ-WPB-04 correction](https://tesbooboo-production.up.railway.app/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/d2cae745-c550-4a58-b85e-6d000f28b472). AC-2 and step 3 of its staged case cover both orders of document duplication and ancestor deletion from #263. AC-5 covers rollback and renewed authority checks. The proposal incorporates #268's other writers. Keep revision `3aff650be7f35792f0d49f06967ead360761688c1b110e9b06e52f635fa3842e` as the reviewed reference. A second proposal for the same expectation would duplicate it.
+
+| Evidence checked | Observation |
+| --- | --- |
+| [Native repository](https://tesbooboo-production.up.railway.app/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/testcases) | 35 cases across seven suites. All 35 were Draft. The four Knowledge Base cases covered editing, lost acknowledgements or AI-memory review. The project dashboard showed no test runs. The source tag `TES-TC-352` on `KB-A-20` could not be matched to an approved case in this project. |
+| [Skills & Governance](https://tesbooboo-production.up.railway.app/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/settings/skills) | Requirements authoring v2 was approved with zero active bindings. Test-case authoring v1 was awaiting review. The three required contexts, requirement revision, requirement–case link and manual case creation, each showed Unassigned. The immutable task displayed its publication block. |
+| [Fresh disposable PostgreSQL run on the pre-fix revision](https://github.com/1alextest/Tesbooboo/actions/runs/45522403393/job/139250229892) | On `5214acf9`, the race left one live document under the deleted ancestor. The test expected zero. This was the only failure among 726 tests. |
+| [Fresh disposable PostgreSQL run on the #263 merge commit](https://github.com/1alextest/Tesbooboo/actions/runs/45528077400/job/139248435195) | 726/726 passed on `551e7eab4906f11a67c4046c2a02ca2be80dc8ce`. The original race check observed zero live documents in the deleted destination. That count alone cannot distinguish a correctly cascaded copy from a copy that was never persisted. |
+| [Targeted automation in #274](https://github.com/1alextest/Tesbooboo/pull/274) | The stronger database check tracks the returned copy and an unaffected sibling. The selected Playwright API case exercises ordinary duplication and independent editing. Both use disposable data. |
+
+**Native execution remains UNRUN.** The project owner can inspect the two Skill versions, review the proposed test-case Skill, and choose the appropriate approved version for each context. An authorized agent can then stage a refreshed proposal against those assignments. Human review and publication of the selected requirement, case and link precede approval of the exact case revision and creation of a native Run. Record the build, attempt, actual observations and evidence there. Verify the exact copy and unaffected sibling before crediting the race scenario. The six-step staged case also covers other writers, which need their own execution evidence.
+
+**What the reviewer needed to see.** One separate QA agent inspected selected excerpts from the pre-#268 revision `551e7eab` before seeing the coding agent’s explanation, the later sync policy, or the expected findings. It identified the child-folder creation race and distinguished initial project seeding, which occurs inside one transaction. Its first pass raised a later reimport question and missed deletion during the original sync. Providing the lines that [put the folder ID into the queued ticket](https://github.com/1alextest/Tesbooboo/blob/551e7eab/Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts#L216) and [consume that payload](https://github.com/1alextest/Tesbooboo/blob/551e7eab/Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts#L451) exposed the stale-destination risk. The reviewer then distinguished the integrity requirement from the policy choice that #268 later settled. This single, selected source-review exercise supports including producer/consumer code in a PR assessment. Deployed Zyra and human reviewer performance remain unevaluated.
+
+**26 November 2026 — production reviewer readback.** The signed-in Task window, Kanban card, quick view and full task for the [existing corrected proposal](https://tesbooboo-production.up.railway.app/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/d2cae745-c550-4a58-b85e-6d000f28b472) each showed three proposal operations, one case candidate and zero Draft cases created. Quick view listed the requirement revision, case candidate and requirement-to-case link under “Proposed changes (3)”. Requirements authoring v2 still had approval, case-authoring v1 remained submitted, and all three required assignments showed Unassigned. The project Runs screen showed “No test runs yet”. The WPB-04 candidate remains unpublished and its official execution is UNRUN. [Merged reviewer fix](https://github.com/1alextest/Tesbooboo/pull/283)
+
+**Input for the refreshed WPB-04 case.** The submitted case-authoring Skill v1 asks the author to specify actors, data and preconditions. Prepare two authorized editors in a disposable project, a source document under a child folder, and a known live document outside the subtree. For each ordering, start with fresh records and record their IDs. When duplication wins, capture the returned copy ID and confirm its destination. After the other editor deletes the ancestor, verify that both the original and that exact copy are soft-deleted and the outside document stays live. When ancestor deletion wins, verify that the subsequent duplication returns an explicit refusal, creates no copy and adds no successful duplication audit entry. The outside document must retain its identity, parent, content and live state. Record each observed outcome and its evidence against the approved case revision when a native Run exists. [Database and HTTP regression coverage](https://github.com/1alextest/Tesbooboo/pull/282)
+
+**Review of the full staged content.** The live WPB-04 bundle marked AC-6 as normative and linked the case to it, although AC-6 lists historical CI runs. The prepared revision keeps those references as informational context and links the case to AC-1 through AC-5. Step 4 now requires one identifiable live memory containing the submitted marker in the surviving root folder. A missing write fails. The case records the constituent automation separately from its six-step native procedure. The prepared staging arguments passed 11 offline checks, including the native schema and normalizer. Publication and native execution still require their own records.
+
+For this review, the assignments captured when the bundle was staged and the project's current assignments answer different questions. Reviewers need the affected operations, a route to the current assignments, and the instruction to stage a refreshed proposal after resolving them. A missing historical assignment record cannot establish which Skill is assigned today.
+
+---
+
+## 11. Human discovery of pending governable candidates
+
+The owner journey reuses the existing Zyra Tasks navigation: a fourth tab, **Document proposals**,
+lists pending `external_document_proposal` tasks from
+`GET /knowledge-base/document-proposals`. The existing duplicate-test-case Review Board stays a
+separate tab with its own contract and pricing behaviour; this list does not import or alter it.
+
+**API.** The dedicated list now returns `{ list, total, limit, offset, hasMore }` and accepts
+`limit`, `offset`, `q` (proposal title), `documentType`, `operation` and `status`
+(`pending`/`in_review`/`failed`). The count uses the same filtered predicate as the page, so a
+limited page is never presented as the whole set; invalid filters are 400 and another project is 404.
+Each item is the existing managed-proposal view, so content, metadata, diff, provenance, pinned Skill
+identity/digest, apply receipt and exact target/base revision stay available for review. The view
+adds `target.applicability` (`current`/`changed`/`missing`) so a candidate whose target moved after
+staging shows that blocker before apply.
+
+**UI.** Cards show title, manual/policy type, create/update intent, target/base identity, proposer
+(human or token), updated date, changes and diff summary. Blockers list missing/conflicting/stale
+Skill assignment, target drift, failed staging, missing review revision and the owner/manager role
+requirement. Opening a card goes to the existing exact task review surface; the list itself has no
+apply/reject controls, so submission and approval keep their separate controls. After returning, a
+refresh re-reads the filtered set and total.
+
+**States and safety.** Loading, successful-empty, preview-unavailable (501), denied (403/404) and
+generic retry are distinct. A request sequence number fences late responses after a project switch or
+filter change. The tab can be opened by any project member; the API still enforces project access and
+the preview gate, and a disabled preview keeps the existing redaction/confidentiality behaviour.
+
+**Coverage.** UI journey `e2e/ui/skills.spec.ts` stages eleven candidates, checks pagination ranges,
+filters, target drift after apply, stale Skill and the QA role blocker. API assertions in
+`e2e/api/requirements.spec.ts` pin the filtered total/limit/offset/hasMore, document-type filter,
+invalid filter 400 and cross-project 404. Native requirement/case staging: task
+`d15e29fc-b5c4-44e2-9d2c-fbf481c2084f`, revision
+`a290d99fd0a86f56683940a5322d913a0f2d9759afb869d03e70299c0cfe92ae`, `in_review`, unassigned.
+Manual execution remains **UNRUN**; native task-evidence writing is unavailable through the exposed
+tools.
+
+Review hardening: the list re-reads `target.applicability` in the reused detail panel and disables Apply for
+`changed`/`missing`; an out-of-range offset after a concurrent apply clamps to the last real page and reloads;
+`q` is escaped for `ILIKE` and NUL bytes; page + count come from one windowed statement when rows exist; the
+member list not being loaded yet suppresses (rather than falsely shows) the role blocker; the client keys the
+list by project so a previous project's cards cannot paint under a new one.
+
+PR #279 merged into `development` as `e45675c76f079acdba0c6df09a17f20fc93d4be4`; the Railway deployment
+succeeded and production `/api/health` returned that exact SHA. The deployed MCP catalog advertises the
+preview tool set and `list_document_proposals` returns the new `{list,total,limit,offset,hasMore}` shape
+against the verified TESBOPROJECT connection. The automated Playwright API/UI checks were run in GitHub
+Actions and passed; **manual execution of the native case remains UNRUN**, and native task-evidence
+writing (execution results) is still unavailable through the exposed tools.
+
+---
+
+## 12. Exact comparison journey
+
+**Agent proposals** reuse `ManagedDocumentProposalPanel`. The comparison is between the exact pinned base
+(`target.base.editRevision` + `contentDigest`) and the effective proposed document. Omitted
+`contentText`/`contentHtml`/`contentJson` are labelled **inherited** and carry the pinned value; an explicit
+`null`/empty value is a **clear**. Create proposals are labelled **New governed document** with no base.
+Title, plain text, stored HTML (inert text), editor JSON and governance metadata are compared independently, with metadata-only and HTML/JSON representation-only badges.
+
+**Governed versions** extend `GovernedDocumentPanel` with two comparisons of the submitted snapshot:
+1. an earlier immutable version selected from the exact version list — defaulting to the latest approved
+   snapshot earlier than the submission — labelled "historical, not current authority", with the live
+   decision binding shown on the current comparison instead; and
+2. the current persisted working revision, labelled with its status/edit revision and never described as an
+   approval.
+
+Both bases expose exact version ids/numbers, content digests and edit revisions, and "Open exact version"
+reuses the existing read-only version detail. First submission (no earlier immutable version) says so;
+identical states say so; missing/denied version reads and load failures show an explicit retry. Comparison
+fetching is read-only and sequence-fenced across project/document/selection changes; it never resets the
+metadata draft or editor state. Governed comparisons also include the digest-bound source/placement fields
+(folder, document type, provider/source identity, read-only), so a moved or re-sourced document cannot be
+reported as byte-identical to its submission.
+
+Excerpts are bounded (line/character caps), while every field keeps complete old/new values behind an explicit
+disclosure. Stored HTML is rendered only as `pre` text; interface labels sit outside content. History decisions
+remain distinguishable from the current document binding (`reviewedVersionId`/status).
+
+**Coverage.** `e2e/ui/skills.spec.ts` covers inherited vs cleared vs new-document proposals and a long
+document's bounded excerpt with full-value access. `e2e/ui/knowledge-base.spec.ts` KBU-79 covers first
+submission, current-identical, HTML/JSON-only, metadata-only, digest-bound folder placement, denied-version
+retry and historical-base comparison with exact-version access. PR #286 completed the identical-disclosure
+follow-up: the Identical summary stays while every field's full old/new values remain inspectable (failing-first
+KBU-79 run 45708009410; merged 33245701). A corrected native requirement proposal is staged as task
+`1d6995fb-431a-44be-8908-3a92362065d3`, revision
+`3770f45c35b7b6fc192490ee42dfb46fec8ec123bdaff0e66a57c049802d4a7f`, in_review/unassigned. Original
+requirement/case: task `1d61b5d5-48cd-4c84-9fe6-8aa8757868cf`, revision
+`1c957dfea4cc767b14bfe7c8f49906256e8a1de5d8ba13db31dcd18ba596c037`, `in_review`, unassigned. Manual
+execution remains **UNRUN**; native execution-evidence writing remains unavailable.
+
+
+PR #285 merged into `development` as `6f7799383fc3277f6586df4d94cdcaa3bd7c13d4`; the Railway deployment
+succeeded and production `/api/health` returned that exact SHA. The deployed MCP catalog and proposal-preview
+tool set were verified at that SHA. Automated UI checks (including KBU-79) ran in GitHub Actions and passed;
+manual execution of the native case remains **UNRUN**.
+
+---
+
+## 13. KB file/folder integrity continuation
+
+- `uploadKnowledgeFiles` writes bytes first (the storage API is not transactional), then inserts
+  under the project mutation advisory lock with a live folder `FOR SHARE` recheck, current
+  membership/archive authority and a transactional audit. If the destination disappeared or authority
+  changed, only that upload's newly written object is deleted; pre-existing objects are untouched.
+  If the upload wins, a later folder cascade includes the file.
+- `moveKnowledgeFile` now locks the file and destination in one transaction, revalidates current
+  authority and the file's creator rights, rechecks the destination is live and writes its audit with
+  the move. Existing preflight reads remain only as fast failures.
+- `restoreKnowledgeFolder` recursively checks the whole ancestor chain under the project lock and
+  refuses (400) while any ancestor remains deleted, so restoring a child cannot create a
+  live-but-invisible folder under a deleted ancestor; restoring the parent first still restores the
+  child subtree and documents. Its restore and audit now share one transaction.
+- `restoreKnowledgeFile` applies the same recursive ancestry rule, is idempotent for an already-live
+  file, revalidates owner/manager authority under the project lock, and writes its audit transactionally.
+- Upload compensation never deletes bytes when the transaction outcome is uncertain after an attempted
+  COMMIT. For a failure before COMMIT, reconciliation by the unique storage key must establish that
+  the upload row is absent before deleting only the new object. If reconciliation fails or finds a row,
+  the object is preserved. This protects referenced bytes; it does not establish complete upload recovery.
+- New HTTP contracts run in smoke: KB-A-80 (direct child restore refused, parent restore returns it)
+  and KBF-A-80 (upload/move into a deleted folder refused, existing file unchanged).
+- Existing integration-disconnect non-restorable refusals, storage-key cleanup on file delete, and the
+  document/folder/memory/sync protections are unchanged.
+
+Evidence: failing-first DB run `45731230795` (upload, move and folder-restore regressions all resolved
+pre-fix; 3 failed / 728 passed); the later tests-only commit `8f5e0d9d` characterized the lost-COMMIT
+compensation defect (database-integrity failed with one test). Green runs: `45732950964`, `45734330589`
+(file-restore parent regression added with the fix; its pre-fix failure is deterministic — the old
+code returned 200), `45742031601` (735 DB tests incl. uncertain-COMMIT reconciliation) and the final
+exact-head `46ec5644`, where database-integrity passed and smoke ran and passed KB-A-80 + KBF-A-80
+(46 tests in 3 files, run 45748345549). Remaining LOWs: filename uniqueness outside the lock, per-file
+batch atomicity, storage-delete retry, DB-global lock-wait helper, and no one-time repair of rows
+stranded by the old code.
+
+**Open lifecycle follow-ups (source inspection, not executed acceptance).** On merged development
+`6ea0b839a1037032dcfa8104504776f0e93dfd83`, `uploadKnowledgeFiles` generates a new storage key
+per attempt, propagates an uncertain COMMIT error, and dispatches transcription/embedding only after
+the transaction returns successfully. A database connectivity error can still instruct the caller to
+retry. The completed compensation regression verifies preservation of bytes, not request idempotency
+or eventual processing. Distinguish the following unresolved decisions and test obligations:
+
+- **Ambiguous upload retry:** establish the intended client/request identity and reconciliation contract
+  before implementing idempotency; the same logical retry must not create another committed file or
+  duplicate audit/effect, but a deliberate second upload must remain possible under the chosen policy.
+  Fault-inject both a committed-but-unacknowledged operation and a definite rollback, then retry and
+  check record IDs, stored objects, audit activity and caller-visible outcome. Do not infer identity
+  from filename or content equality alone.
+- **Dependent processing recovery:** the existing `RagIngestionService.resumeInterruptedEmbeddings`
+  can re-enqueue eligible files at restart, but its file query excludes pending extraction. Audio/video
+  transcription currently dispatches after the successful transaction return. Verify recovery of both
+  ordinary files and pending audio/video extraction after lost COMMIT acknowledgement and after process
+  restart, including current authority, duplicate work/external cost, and terminal unsupported/failed
+  outcomes. The restart embedding sweep is partial mitigation, not evidence that transcription resumes.
+
+These are source-level risks; runtime reproduction and severity/ownership disposition remain open.
+Do not describe them as resolved by #288, or claim native execution before the tests actually run.
+
+### 13.1 Upload request identity and restart-safe processing (implementation)
+
+`V166_knowledge_file_upload_recovery.sql` adds optional request identity and a transcription lease to
+`knowledge_files`. The contract is deliberately caller-driven because the service cannot infer intent:
+a retry of one logical upload and a deliberate second upload of identical bytes are indistinguishable
+from filenames or content alone.
+
+- The upload route accepts an optional multipart `requestKey` (trimmed, 1–160 characters when present).
+  It is scoped to `(project_id, uploaded_by)`; a key from another project or another uploader is a
+  different request. Omitting it preserves the previous non-idempotent behaviour, so existing clients
+  remain compatible.
+- Request identity is the key plus the zero-based batch position, protected by
+  `UNIQUE(project_id, uploaded_by, upload_request_key, upload_request_file_index)`. The stored digest
+  covers the destination folder and the ordered manifest (name, declared size, MIME type and SHA-256 of
+  each buffer). Reusing a key for different bytes, a different folder or a different order is a
+  `409 UPLOAD_REQUEST_CONFLICT`; it never overwrites or adopts the earlier row.
+- A fully committed request returns the original rows with `replayed: true` and performs no storage
+  write, insert or audit; the original folder need not still exist for that answer. A partially
+  committed batch returns `replayed: false`, rechecks the destination, and writes only the missing
+  positions. A committed row whose file was later deleted refuses replay with
+  `409 UPLOAD_REQUEST_CLOSED`; the upload does not resurrect deleted content under an old key.
+  A changed manifest is evaluated before plan storage, so a replay is not refused because the workspace
+  has since filled its storage allowance. A duplicated multipart `requestKey` field is refused rather
+  than silently treated as absent.
+- A concurrent retry that loses the unique-index race reconciles by the authoritative keyed row,
+  deletes only its own unreferenced object, and returns that row. A lost COMMIT acknowledgement still
+  skips reconciliation and compensation entirely; the client retries with the same key instead.
+- Audio/video extraction now has an explicit claim (`extraction_status = 'processing'`,
+  `extraction_claimed_at` and a UUID `extraction_claim_token`) taken by an atomic conditional UPDATE
+  that rechecks the file is live and the project is not archived. The claim has a five-minute lease,
+  refreshed every minute while bytes are read and while the provider call runs. The token fences every
+  terminal write, so a takeover cannot be clobbered by the previous owner. A provider failure remains
+  terminal `failed`; a missing OpenAI allocation remains terminal `unsupported`. A deleted file or
+  archived project is never claimed, and a project archived between claim and dispatch is released to
+  `pending`.
+- Background startup/periodic execution is controlled by `TESBO_KB_TRANSCRIPTION_RECOVERY_MODE` and
+  `TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID`, independently of graph recovery. Unset preserves the
+  existing automatic **global** sweep; explicit `off` registers and dispatches nothing; `project`
+  requires a UUID and constrains the same sweep to it; invalid explicit configuration fails closed.
+  The process-local timer is cleared on module shutdown. Authorized upload transcription is not gated
+  by this flag. See [knowledge-transcription-recovery-modes.md](knowledge-transcription-recovery-modes.md).
+  Native KB recovery coverage is staged separately as task
+  `aa42edf8-585c-49c1-adeb-44430752c0d4`, revision
+  `3ade16efbe499dafc222757f9ea07c18667b9630b2d36902b68047ee38e01565`, `in_review`, one unpublished
+  Draft case; manual execution remains **UNRUN**.
+- `resumeInterruptedKnowledgeTranscriptions` runs at boot and every five minutes, bounded to 25 rows per
+  sweep, ordered by least-recently-claimed, and can be scoped to one project. It claims before
+  reading bytes or dispatching, so overlapping sweeps and a live worker cannot both own the row; fencing
+  prevents duplicate state effects. It cannot prevent a *repeat provider call* if the process crashes
+  after the provider returned but before the result is persisted — the Whisper endpoint has no
+  idempotency key — so recovery is at-least-once externally and exactly-once in persisted state. A
+  missing object becomes terminal `failed`; a transient byte-read failure (including a bounded read
+  timeout) releases the claim to `pending` and records the attempt time so the next sweep does not
+  keep the same rows at the head. In-flight `processing` is surfaced to Zyra as "still in progress",
+  not as an unsupported file type. This complements, and does not replace,
+  `RagIngestionService.resumeInterruptedEmbeddings`: that sweep still covers ordinary-file embeddings
+  whose extraction already completed, while a pending transcript has no text to embed and is recovered
+  here.
+- The frontend generates one request key per upload batch and replays once — with that same key — on a
+  lost transport response or a 502/503/504 response, including the backend's explicit uncertain-COMMIT
+  503. The shared fetch wrapper still refuses to replay any other mutation without a key. A manual
+  re-selection after that one replay is a new logical upload; a duplicated multipart `requestKey` is
+  refused rather than silently dropped.
+- Internal coordination columns (`uploadRequestKey`, `uploadRequestFileIndex`, `uploadRequestDigest`,
+  `extractionClaimedAt`, `extractionClaimToken`) are stripped from every file response.
+- Database regressions in `knowledge-document-writes.db.spec.ts` cover full replay, digest conflict,
+  deliberate duplicate under a new key, partial-batch resume after a pre-COMMIT audit failure,
+  committed-but-unacknowledged retry, deleted-row refusal, a paused concurrent same-key insert that
+  exercises the unique-index race, concurrent sweep claiming, a live claim being left alone,
+  deleted/archived exclusion, terminal missing-object failure, transient read-release, stale-token
+  fencing on success and failure, and the in-progress AI-context wording. HTTP coverage is KBF-A-81–87
+  (including duplicated and whitespace-only keys, and ten concurrent same-name uploads); browser coverage KBU-80 lets the backend commit and then
+  replaces the acknowledgement with a 503, so the second request is a real replay and a missing key
+  would leave two rows. Fault injection is disclosed where used: the uncertain-COMMIT DB tests fault
+  acknowledgement delivery, and the race test pauses after the INSERT, not inside PostgreSQL.
+
+Evidence on final code head `5c76cba0` (merged as `72924518`): database-integrity job
+`139857636428` passed all 749 tests in 18 suites; backend-quality job `139857632241`,
+frontend-quality job `139857632644`, CodeQL and smoke run `45804954679` all passed. The smoke log
+shows KBF-A-81 (747 ms), KBF-A-82 (666 ms), KBF-A-83 (561 ms), KBF-A-84 (487 ms), KBF-A-85 (538 ms),
+KBF-A-86 (567 ms) and KBU-80 (2.2 s) passing, and the updated ci-smoke transport test passing with the
+same-key replay assertion. Production `/api/health` returned `72924518` with `status: ok` after the
+merge. These are CI results, not native manual execution; every native linked case remains **UNRUN**.
+
+**Decisions taken and remaining owner choices.** Request keys are optional (backward compatible) rather
+than mandatory; requiring them would give every client automatic retry safety but breaks existing
+integrations until all callers send one. Replay returns the original rows rather than a `202`-style
+"already accepted" response, because callers need the file IDs. A key is closed after any of its files
+is deleted, so a deleted position makes the whole logical batch non-replayable rather than silently
+resurrecting or filling around it. An explicitly supplied whitespace-only key is a `400`, not an
+absence, so a caller cannot believe it has retry safety it does not have; an empty multipart value is
+indistinguishable from an omitted field after parsing, so the transport-level case is documented
+rather than guessed at. Transcription failure is terminal instead
+of automatically retried, because a provider rejection is not evidence that a restart would succeed;
+manual re-upload remains the recovery path. The owner may still choose mandatory keys, per-position
+reopening after deletion, an explicit reconciliation endpoint, or automatic bounded retries for
+provider failures.
+
+**Upload filename allocation (fixed).** The displayed-name suffix used to be computed before the
+transaction, so concurrent uploads of the same name could both choose the unsuffixed one. It is now
+allocated on the transaction's own client after the project mutation advisory lock, so the second
+writer observes the first committed row and takes the next suffix. No new unique index or second
+naming owner is introduced; the upload writer is the only path using this allocation. This closes
+the upload-vs-upload race only: move, rename and restore still do not reallocate a displayed name,
+so the broader folder-wide uniqueness invariant remains a separate disposition. Native
+coverage is staged as task `5a9fa3ab-5fc9-468a-b673-bb7c1cbac3e9`, revision
+`d7da6e4267199877a951068f5555fe23cd3248c47a8f6f1413e27cc666646847`, `in_review`, one unpublished
+Draft case; manual execution remains **UNRUN**.
+
+**Separate dispositions (unchanged, not silently fixed here).** Per-file batch atomicity still
+permits committed prefixes before a later file fails (resume now makes that state recoverable but
+does not make the batch all-or-nothing); storage deletion is still best-effort with no retry queue;
+rows stranded by the pre-V166 code receive no one-time repair. The two new indexes are built non-concurrently by the existing migrator, so they hold
+a share lock on `knowledge_files` during deployment; that is the repository's established migration
+pattern, not a change in this PR. The global sweep still sees every tenant, matching the existing
+embedding sweep; a local backend booted against shared infrastructure can therefore recover another
+tenant's pending transcript. That is recorded as an operational risk and an owner decision (dedicated
+worker, configuration gate, or per-tenant scheduling), not silently accepted as correct.
+
+Native REQ-WPB-07 is staged as task
+`1a403a7e-db47-40dd-9e30-a54536615b85`, revision
+`e8cfe48f06af5c08ad36b19732ff295209a3d20492662d613e3c367eef2daa03`, `in_review`, unassigned.
+REQ-WPB-08 is staged as task `f0463d10-7acc-4b1d-8103-46cd2be3a40d`, revision
+`b5ed3de2541662f8dffdfbc2d8f075fc74809857e0772690a07b8aa4534b82b4`, `in_review`, unassigned, with
+its linked cases still **UNRUN**; this session had no native execution-evidence writer.
+
+PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f0e93dfd83`; PR #296
+merged as `729245181f72fa4d76a00adbd4188c9842d5be38`. Production `/api/health` returned the #288 and
+#296 merge SHAs; the deployed MCP catalog/proposal-preview tool set was verified at #288. Manual
+execution remains **UNRUN**; native execution-evidence writing remains unavailable.

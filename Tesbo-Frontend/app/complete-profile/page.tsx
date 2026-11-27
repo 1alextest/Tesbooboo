@@ -14,7 +14,7 @@ import {
   validateMobileNumber,
   validateName,
 } from "@/lib/validation";
-import { safeRedirectPath } from "@/lib/redirect";
+import { navigateAfterSignIn, safeRedirectPath } from "@/lib/redirect";
 
 function CompleteProfileForm() {
   const router = useRouter();
@@ -43,7 +43,7 @@ function CompleteProfileForm() {
       }
       // Nothing to complete — a direct visit, a reload after already finishing, or a stale link.
       if (me.profileComplete) {
-        router.replace(redirect);
+        navigateAfterSignIn(router, redirect, "replace");
         return;
       }
       setChecking(false);
@@ -77,8 +77,7 @@ function CompleteProfileForm() {
         lastName: lastName.trim(),
         mobileNumber: mobileNumber.trim() ? normalizeMobileNumber(mobileNumber.trim()) : undefined,
       });
-      router.push(redirect);
-      router.refresh();
+      navigateAfterSignIn(router, redirect);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to save your profile");
     } finally {

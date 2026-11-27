@@ -243,14 +243,27 @@ export class AutomationService {
    * A closed Run is readable/idempotently reusable only when no new case
    * attachments are requested. The lock makes this rule stable against closeRun.
    */
+  // A native retest receipt authorizes the selected human-operated occurrence,
+  // not an SDK write. Until a separately reviewed automation binding exists,
+  // do not admit a retest through generic ingest or external-ID replay.
+  private assertGenericAutomationTarget(run: { retest_source_cycle_id: string | null }) {
+    if (run.retest_source_cycle_id != null) {
+      throw new ConflictException({
+        code: "RETEST_AUTOMATION_REVIEW_REQUIRED",
+        error: "This native retest has no reviewed automation binding. Use its reviewed manual execution or prepare a separately authorized automated retest."
+      });
+    }
+  }
+
   private async reuseAutomationRun(runId: string, projectId: string, caseIds: string[]) {
     return this.db.transaction(async (client) => {
-      const res = await client.query<{ id: string; closed_at: Date | null }>(
-        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+      const res = await client.query<{ id: string; closed_at: Date | null; retest_source_cycle_id: string | null }>(
+        "SELECT id, closed_at, retest_source_cycle_id FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
         [runId, projectId]
       );
       const run = res.rows[0];
       if (!run) throw new NotFoundException({ error: "Run not found" });
+      this.assertGenericAutomationTarget(run);
       if (run.closed_at && caseIds.length) {
         throw new ConflictException({ error: "Automation run is closed; cannot attach test cases" });
       }
@@ -483,7 +496,7 @@ export class AutomationService {
    */
   async recordResult(userId: string | null | undefined, projectId: string, runId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
-    await this.requireRun(projectId, runId);
+    this.assertGenericAutomationTarget(await this.requireRun(projectId, runId));
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
     const caseId = this.boundedString(body?.caseId, "caseId", MAX_CASE_ID_LENGTH);
@@ -522,11 +535,12 @@ export class AutomationService {
     const errorStack = this.boundedString(body?.errorStack, "errorStack", MAX_ERROR_STACK_LENGTH);
 
     return this.db.transaction(async (client) => {
-      const lock = await client.query<{ id: string; closed_at: string | null }>(
-        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+      const lock = await client.query<{ id: string; closed_at: string | null; retest_source_cycle_id: string | null }>(
+        "SELECT id, closed_at, retest_source_cycle_id FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
         [runId, projectId]
       );
       if (!lock.rows[0]) throw new NotFoundException({ error: "Run not found" });
+      this.assertGenericAutomationTarget(lock.rows[0]);
       if (lock.rows[0].closed_at) throw new ConflictException({ error: "Automation run is closed; results cannot be changed" });
     // A case the run was not created with is attached now. This is not case *creation*: the case
     // already exists and was already approved by a person; a suite that grew a test since the run
@@ -672,6 +686,7 @@ export class AutomationService {
   async closeRun(userId: string | null | undefined, projectId: string, runId: string, body: Body) {
     await this.legacy.requireProjectAccess(userId, projectId);
     const run = await this.requireRun(projectId, runId);
+    this.assertGenericAutomationTarget(run);
     const actorId = (await this.resolveAutomationActorId()) ?? this.requireActor(userId);
 
     const requested = body?.status === undefined || body?.status === null ? "completed" : String(body.status).trim().toLowerCase();
@@ -680,12 +695,13 @@ export class AutomationService {
     }
 
     const closed = await this.db.transaction(async (client) => {
-      const lock = await client.query<{ id: string; closed_at: string | null }>(
-        "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+      const lock = await client.query<{ id: string; closed_at: string | null; retest_source_cycle_id: string | null }>(
+        "SELECT id, closed_at, retest_source_cycle_id FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
         [runId, projectId]
       );
       const lockedRun = lock.rows[0];
       if (!lockedRun) throw new NotFoundException({ error: "Run not found" });
+      this.assertGenericAutomationTarget(lockedRun);
     if (lockedRun.closed_at) {
       // Closing twice is what a retried CI step does. Report the run as it stands rather than
       // reopening it or erroring — but say so, so an SDK does not treat it as a fresh close.
@@ -845,6 +861,7 @@ export class AutomationService {
   ) {
     const project = await this.legacy.requireProjectAccess(userId, projectId);
     const run = await this.requireRun(projectId, runId);
+    this.assertGenericAutomationTarget(run);
     if (run.closed_at) {
       throw new ConflictException({ error: "This automated run is closed; evidence cannot be added" });
     }
@@ -912,11 +929,12 @@ export class AutomationService {
       }
 
       const created = await this.db.transaction(async (client) => {
-        const locked = await client.query<{ id: string; closed_at: Date | null }>(
-          "SELECT id, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        const locked = await client.query<{ id: string; closed_at: Date | null; retest_source_cycle_id: string | null }>(
+          "SELECT id, closed_at, retest_source_cycle_id FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
           [runId, projectId]
         );
         if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+        this.assertGenericAutomationTarget(locked.rows[0]);
         if (locked.rows[0].closed_at) {
           throw new ConflictException({ error: "This automated run closed while evidence was uploading" });
         }
@@ -1015,8 +1033,8 @@ export class AutomationService {
     // deleted_at IS NULL: a soft-deleted run must stop accepting result submissions, closes, etc.
     // through the automation ingest path exactly the way it stops resolving anywhere else
     // (hard-delete remediation Phase 1 — see progress log).
-    const res = await this.db.query<{ id: string; name: string; closed_at: string | null; source: string }>(
-      "SELECT id, name, closed_at, source FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL",
+    const res = await this.db.query<{ id: string; name: string; closed_at: string | null; source: string; retest_source_cycle_id: string | null }>(
+      "SELECT id, name, closed_at, source, retest_source_cycle_id FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL",
       [runId, projectId]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Run not found" });

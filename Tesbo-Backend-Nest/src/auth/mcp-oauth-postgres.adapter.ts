@@ -1,5 +1,6 @@
 import type { DatabaseService } from "../database/database.service";
 import { decryptSecret, encryptSecret, oauthReferenceFingerprint } from "../common/crypto.util";
+import { currentOAuthGrantBinding } from "./mcp-oauth-grant-binding";
 
 /**
  * Feature-OFF persistence adapter for a future vetted authorization server.
@@ -64,7 +65,10 @@ function expiresAt(model: string, lifetimeSeconds?: number): string | null {
   return new Date(limit).toISOString();
 }
 
-export function createMcpOAuthPostgresAdapter(db: Pick<DatabaseService, "query">): McpOAuthProviderAdapterConstructor {
+export function createMcpOAuthPostgresAdapter(
+  db: Pick<DatabaseService, "query">,
+  options: { requireLiveGrantBinding?: boolean } = {}
+): McpOAuthProviderAdapterConstructor {
   return class McpOAuthPostgresAdapter {
     private readonly model: string;
 
@@ -89,6 +93,14 @@ export function createMcpOAuthPostgresAdapter(db: Pick<DatabaseService, "query">
       )).rows[0];
       if (!row) return undefined;
       const payload = validatedPayload(JSON.parse(decryptSecret(row.encrypted_payload)) as unknown);
+      // The embedded OAuth issuer must refuse old authorization codes and refresh
+      // families even if the owner later reapproves the same client id. This is
+      // an additional model-load guard, not an alternative authorization owner.
+      if (options.requireLiveGrantBinding &&
+          ["Grant", "AuthorizationCode", "RefreshToken", "AccessToken"].includes(this.model)) {
+        const grantId = this.model === "Grant" ? value : payload.grantId;
+        if (typeof grantId !== "string" || !await currentOAuthGrantBinding(db, grantId)) return undefined;
+      }
       return row.consumed_at ? { ...payload, consumed: Math.trunc(new Date(row.consumed_at).getTime() / 1000) } : payload;
     }
 

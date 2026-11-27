@@ -134,6 +134,36 @@ Review Board has backend integration coverage, but no matching product E2E
 owner was found in the initial audit. Do not invent a spec filename to make the
 mapping look complete.
 
+#### Concurrent candidate impact
+
+In an authorized Git checkout containing the exact target and candidate
+objects, use the existing impact planner to review joint verification leads:
+
+```sh
+node scripts/test-impact.mjs --compare-candidates <target-sha> <candidate-a-sha> <candidate-b-sha> --format markdown
+```
+
+Supply 2–16 distinct candidate commit SHAs. The comparison uses each candidate's
+unique merge base with the target and the **target's committed** test-impact
+configuration and regular file inventory. It ignores dirty worktree and
+candidate-authored mapping changes. It lists target drift overlapping each
+candidate's changed paths, direct shared changed paths across candidates,
+optional supplied-graph consumer intersections, shared mapped domains,
+selected spec files and required checks. A test-only change may correctly select
+zero product specs; retain its directly changed E2E files and compare those
+with every other candidate's nominated regression evidence. The optional graph is explicitly
+unverified; do not infer runtime dependencies or semantic behavior.
+
+Structural intersections, changed-test/peer-selection intersections or incomplete
+mapping evidence require review. Changed tests remain separate from mapped
+product obligations, and never establish changed behavior or executed coverage. Shared
+mapped obligations alone do not establish a conflict. No merge is simulated,
+no tests run, and no coverage or release verdict is issued. Inspect the actual
+changed behavior and relevant requirements before proposing joint regression
+work. Use the existing Change Packet and authorized test/run owners for the
+next action. This is an opt-in review mode, not a new CI gate, scheduler or
+independent AI finding.
+
 ### Migration history
 
 The existing checker validates the current manifest and compares existing SQL
@@ -145,6 +175,44 @@ endings as a schema change.
 This is source-history protection, **not** proof of migration rollback, upgrade
 compatibility or the running database's checksums. The runtime migrator's
 historical-fork handling needs separately proven database regression work.
+
+#### Proactive concurrent migration review
+
+Before integrating concurrent schema changes, use the existing migration owner
+to compare a verified target commit with the exact heads of pending candidates
+in an authorized Git checkout containing their objects and ancestry:
+
+```sh
+node scripts/check-migrations.mjs --review-candidates <target-commit-sha> <candidate-commit-sha>...
+```
+
+Supply 1–32 distinct candidate heads. The command is read-only: it resolves
+each candidate's unique merge base with the target, validates the complete
+numbered migration inventories and append-only history on both sides, and
+compares candidate additions by version, filename and canonical LF checksum.
+It does not inspect or modify the checked-out worktree, execute SQL, fetch
+missing objects, enumerate open PRs, or read any database. Git replacement
+objects are disabled in the shared Git-quality reader to preserve exact object
+identity.
+
+The structured report separates additions already present with identical name
+and checksum, unallocated target slots, and slots occupied by distinct
+migrations. It also reports conflicts between candidates sharing a pending
+version, even when that version is not yet on the target. A branch behind the
+target is not treated as deleting newer target migrations merely because its
+ancestor predates them. Exit 1 means review required or invalid/unavailable
+input; exit 0 means no detected numbered-slot conflict within the supplied
+inventory, **not** release readiness, successful tests, or applied schema.
+Missing Git history, invalid migration sequences, ambiguous ancestry and changed
+historical files fail closed. Identical content is not independent work or
+proof of compatible SQL effects. Cross-version checksum reuse, dependencies,
+persistent migration history and deployment compatibility still require their
+existing authorized review. Do not automatically allocate a replacement number.
+
+Use these observations as source-qualified leads in the existing Change Packet
+/ PR assessment procedure, retaining exact candidate identities and scope.
+Do not turn them into an independent model score or a new migration gate.
+The normal migration-name and quality checks remain unchanged.
 
 ### SDK publish boundary
 

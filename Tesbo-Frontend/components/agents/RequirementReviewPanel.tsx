@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ApiError,
   approveRequirementVersion,
@@ -102,11 +102,12 @@ function currentCaseRows(cases: RequirementCoverageCase[], coverage: Requirement
   return [...byGroup.values()];
 }
 
-export function RequirementReviewPanel({ projectId, documentId, versionId, canApprove }: {
+export function RequirementReviewPanel({ projectId, documentId, versionId, canApprove, automationHandoff }: {
   projectId: string;
   documentId: string;
   versionId: string;
   canApprove: boolean;
+  automationHandoff?: { testcaseId: string; criterionKeys: string[]; setup: ReactNode };
 }) {
   const [document, setDocument] = useState<KnowledgeDocument | null>(null);
   const [version, setVersion] = useState<KnowledgeDocumentVersionDetail | null>(null);
@@ -398,13 +399,49 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
   const review = reviewState(document, reviewedVersion, versionId);
   const approvalReady = canApprove && !contentLoading && !contentError && Boolean(version) && Boolean(document) && !review.approved && !review.blocked && !approving;
 
+  // This is a projection of the already-read review/coverage records, not a new readiness authority.
+  // The actual CLI still verifies the original apply receipt, semantic revision and target at use.
+  function handoffPrerequisiteMessage(): string {
+    if (!automationHandoff) return "";
+    if (contentLoading || coverageLoading || approving || activatingLinkId) return "Checking current review prerequisites…";
+    if (contentError || coverageError || !coverage || !version || !document) {
+      return "Review prerequisites are unavailable. Refresh review and coverage before using the handoff.";
+    }
+    if (!approvedAs || coverage.approvedVersionId !== approvedAs.id) {
+      return "Approve the exact submitted requirement first, or review a refreshed bundle if its basis has changed.";
+    }
+    const selected = caseBases[automationHandoff.testcaseId];
+    if (selected?.loading) return "Checking the selected case revision…";
+    if (selected?.error || !selected?.basis || selected.basis.id !== automationHandoff.testcaseId) {
+      return "The selected case revision could not be verified. Refresh or open its exact linked record.";
+    }
+    if (!selected.basis.approvalCurrent || !selected.basis.approvalRevision) {
+      return "Approve the exact linked test case before activating its requirement link.";
+    }
+    const matching = coverage.cases.filter((item) => linkGroupKey(item) === linkGroupKey(automationHandoff)
+      && item.approved && item.requirementVersionId === coverage.approvedVersionId
+      && item.testcaseRevision === selected.basis!.editRevision
+      && item.testcaseApprovalRevision === selected.basis!.approvalRevision);
+    if (matching.length !== 1) {
+      return "Verify and activate one current link for this exact case and its reviewed criteria.";
+    }
+    return "Review prerequisites observed. The CLI must still verify the exact applied bundle, approved revisions and repository target before exporting.";
+  }
+
   return (
     <Card className="p-4 space-y-4" data-testid="requirement-review-panel">
-      <div>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
         <h2 className="text-lg font-semibold text-[var(--foreground)]">Requirement version review</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           Approval applies to the exact submitted version loaded here. It is separate from apply, from case approval and from any active link.
         </p>
+        </div>
+        <Button size="sm" variant="secondary"
+          disabled={contentLoading || coverageLoading || approving || Boolean(activatingLinkId)}
+          onClick={() => { setContentLoading(true); setCoverageLoading(true); reconcile(); }}>
+          Refresh review and coverage
+        </Button>
       </div>
 
       {contentLoading && <p className="text-sm text-[var(--muted)]" data-testid="requirement-review-loading">Loading the exact submitted requirement version…</p>}
@@ -573,6 +610,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                     <tr key={criterion.key} className="border-t border-[var(--border)]" data-testid={`requirement-coverage-criterion-${criterion.key}`}>
                       <td className="px-2 py-2 align-top">
                         <span className="font-mono text-xs text-[var(--muted)]">{criterion.key}</span>
+                        {!criterion.normative && <span className="ml-2 text-xs text-[var(--muted)]">Context only in the reviewed version</span>}
                         <div className="text-[var(--foreground)]">{criterion.text}</div>
                       </td>
                       <td className="px-2 py-2 align-top">{criterion.caseCount}</td>
@@ -616,7 +654,7 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0">
                         <Link
-                          href={`/projects/${projectId}/testcases?search=${encodeURIComponent(item.title)}`}
+                          href={`/projects/${projectId}/testcases?testcaseId=${encodeURIComponent(item.testcaseId)}`}
                           className="font-medium text-[var(--accent-light)] hover:underline"
                           data-testid="requirement-coverage-case-link"
                         >
@@ -740,6 +778,13 @@ export function RequirementReviewPanel({ projectId, documentId, versionId, canAp
           </>
         )}
       </div>
+      {automationHandoff && (
+        <section className="space-y-2 border-t border-[var(--border)] pt-4" aria-label="Automation handoff preparation">
+          <p className="text-sm text-[var(--foreground)]" data-testid="automation-handoff-prerequisites" role="status">{handoffPrerequisiteMessage()}</p>
+          <p className="text-xs text-[var(--muted)]">Setup instructions are available for planning; they are not an eligibility, generation or execution result.</p>
+          {automationHandoff.setup}
+        </section>
+      )}
     </Card>
   );
 }

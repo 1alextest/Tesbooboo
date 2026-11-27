@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  API_BASE,
   closeZyraTask,
   ApiError,
   deleteZyraTaskDraft,
@@ -50,6 +51,7 @@ import { sortActivitiesNewestFirst } from "@/components/agents/TaskQuickViewPane
 import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 
@@ -65,6 +67,30 @@ const TICKET_COMMENT_STATUS: Record<ZyraTicketComment["status"], { label: string
   skipped_disabled: { label: "Not posted — auto-comment off", tone: "neutral" },
   skipped_not_connected: { label: "Not posted — not connected", tone: "warning" },
 };
+
+function AutomationHandoffInstructions({ projectId, taskId }: { projectId: string; taskId: string }) {
+  const [command, setCommand] = useState("");
+  const showCommand = () => {
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const origin = window.location.origin;
+    const taskUrl = new URL(`/projects/${encodeURIComponent(projectId)}/agents/tasks/${encodeURIComponent(taskId)}`, origin);
+    setCommand([
+      "node scripts/qa-approved-handoff.mjs",
+      "--task-url " + quote(taskUrl.href),
+      "--api-origin " + quote(new URL(API_BASE, origin).origin),
+      '--repo "$TARGET_REPO" --branch "$TARGET_BRANCH" --revision "$TARGET_COMMIT"',
+      '--harness "$HARNESS_DIR" --investigation "$INVESTIGATION_ID" --case "$PLAN_CASE"',
+    ].join(" "));
+  };
+  return (
+    <details className="rounded-lg border border-[var(--border)] p-3" onToggle={event => { if (event.currentTarget.open) showCommand(); }}>
+      <summary className="cursor-pointer text-sm font-medium">Set up an automation handoff</summary>
+      <p className="my-2 text-sm">After approving the requirement and test case and activating their link, choose the existing Playwright spec and investigation case to send to your generator.</p>
+      <a className="text-sm underline" href="https://github.com/1alextest/Tesbooboo/blob/development/docs/qa-orchestration/examples/approved-automation-handoff.md" target="_blank" rel="noreferrer">Setup and command arguments</a>
+      {command && <div className="mt-2 space-y-2"><pre className="whitespace-pre-wrap break-all text-xs">{command}</pre><CopyButton value={command} label="Copy handoff command" /></div>}
+    </details>
+  );
+}
 
 function normalizeStatus(status: string): string {
   if (status === "accepted") return "done";
@@ -630,8 +656,9 @@ export default function ZyraTaskDetailPage() {
   // Mirrors the backend guard in zyraFeedback: feedback only makes sense once there's something
   // to review, or to retry after a failure. Disabling it here for todo/in_progress avoids a
   // pointless round trip that the server would reject with a 409 anyway.
-  const isRequirementBundle = task.provider === "external_requirement_proposal" || Boolean(task.requirementBundle?.length);
-  const isManagedDocumentProposal = task.provider === "external_document_proposal" || Boolean(task.managedDocumentProposal);
+  const output = summarizeZyraTaskOutput(task);
+  const isRequirementBundle = output.isRequirementBundle;
+  const isManagedDocumentProposal = output.isManagedDocumentProposal;
   const requirementApplyReceipt = task.requirementApplyReceipt;
   // Rejected and withdrawn bundles also end as `done`; only an apply receipt means publication.
   const requirementApplied = done && Boolean(requirementApplyReceipt);
@@ -653,6 +680,8 @@ export default function ZyraTaskDetailPage() {
   const bundleCriteria = Array.isArray(bundleRequirement?.criteria) ? bundleRequirement.criteria : [];
   const skillsResolved = task.skillContext?.status === "resolved";
   const bundleSkillAssignments = Array.isArray(task.skillContext?.assignments) ? task.skillContext.assignments : [];
+  const missingSkillTargets = Array.isArray(task.skillContext?.missing) ? task.skillContext.missing : [];
+  const conflictingSkillTargets = Array.isArray(task.skillContext?.conflicts) ? task.skillContext.conflicts : [];
   const allDraftsSelected = task.drafts.length > 0 && selectedDrafts.length === task.drafts.length;
   const copyableDrafts = selectedDrafts.length > 0 ? selectedDrafts.map((i) => task.drafts[i]) : task.drafts;
   const draftsTsv = toTsv(
@@ -669,7 +698,8 @@ export default function ZyraTaskDetailPage() {
     ])
   );
   const tabItems: Array<{ key: DetailTab; label: string; count?: number }> = [
-    { key: "testcases", label: t("task.tab.generated"), count: task.drafts.length },
+    { key: "testcases", label: isRequirementBundle || isManagedDocumentProposal ? "Proposal summary" : t("task.tab.generated"),
+      count: isRequirementBundle || isManagedDocumentProposal ? output.operationCount ?? undefined : task.drafts.length },
     { key: "feedback", label: t("task.tab.feedback"), count: feedbackActivities.length },
     { key: "activities", label: t("task.tab.activities"), count: task.activities.length },
     { key: "sources", label: t("task.tab.sources"), count: task.sources.length },
@@ -702,12 +732,14 @@ export default function ZyraTaskDetailPage() {
               </p>
             )}
             <p className="mt-2 text-sm text-[var(--muted)]">
-              {t("task.summary", {
-                generated: task.generatedCount,
-                saved: task.savedCount,
-                tokens: task.tokenUsage.total,
-                date: formatDateTime(task.updatedAt, t.locale),
-              })}
+              {isRequirementBundle || isManagedDocumentProposal
+                ? `${output.primary} · ${output.secondary} · ${task.tokenUsage.total} tokens · ${formatDateTime(task.updatedAt, t.locale)}`
+                : t("task.summary", {
+                  generated: task.generatedCount,
+                  saved: task.savedCount,
+                  tokens: task.tokenUsage.total,
+                  date: formatDateTime(task.updatedAt, t.locale),
+                })}
             </p>
             {zyraTaskTicketKeys(task).length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
@@ -823,9 +855,19 @@ export default function ZyraTaskDetailPage() {
               {bundleLink && (
                 <div data-testid="requirement-bundle-link">
                   <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">Link intent</p>
-                  <p className="mt-1 text-sm text-[var(--foreground)]">
-                    Criteria: {Array.isArray(bundleLink.criterionKeys) ? bundleLink.criterionKeys.join(", ") : "—"}
-                  </p>
+                  {Array.isArray(bundleLink.criterionKeys) && bundleLink.criterionKeys.length > 0 ? (
+                    <ul aria-label="Proposed case link criteria" className="mt-1 space-y-1 text-sm text-[var(--foreground)]">
+                      {bundleLink.criterionKeys.map((key, index) => {
+                        const criterion = bundleCriteria.find((item) => item.key === key);
+                        return (
+                          <li key={`${key}-${index}`}>
+                            <span className="font-mono">{key}</span>{" · "}
+                            {criterion ? (criterion.normative === false ? "Context only" : "Acceptance criterion") : "Criterion details unavailable"}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : <p className="mt-1 text-sm text-[var(--muted)]">No criterion keys recorded.</p>}
                 </div>
               )}
               {bundleSkillAssignments.length > 0 && (
@@ -853,7 +895,8 @@ export default function ZyraTaskDetailPage() {
                   {task.requirementDecision.reason && ` Reason: ${task.requirementDecision.reason}`}
                 </p>
               )}
-              <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm" data-testid="requirement-bundle-publication-gate">
+                <p>
                 {requirementApplied
                   ? "This bundle is published. Open the exact submitted version and its truthful coverage in the review panel below."
                   : done
@@ -861,9 +904,28 @@ export default function ZyraTaskDetailPage() {
                     : skillsResolved
                       ? "Publication uses the pinned, conflict-free effective skills shown above. Apply creates the exact submitted requirement revision and only the case/link candidates included in the bundle. Requirement approval and selected existing link activation remain separate human decisions."
                       : task.skillContext?.status === "conflict"
-                        ? "Publication is blocked: the effective-skill assignments conflict. Resolve the assignment conflict before applying."
-                        : "Publication is blocked: a required approved effective skill is unassigned. Reject or withdraw this bundle, or assign the required skills and stage a refreshed proposal."}
-              </p>
+                        ? "Publication is blocked. Multiple Skill assignments matched a required operation when this proposal was staged."
+                        : task.skillContext?.status === "unassigned" && missingSkillTargets.length > 0
+                          ? "Publication is blocked. A required operation had no approved Skill assigned when this proposal was staged."
+                          : "Publication is blocked. This proposal has no verified record of the required Skill assignments."}
+                </p>
+                {!done && !skillsResolved && <>
+                  {(missingSkillTargets.length > 0 || conflictingSkillTargets.length > 0) && (
+                    <ul className="mt-2 list-disc pl-5" aria-label="Skill assignments at staging">
+                      {missingSkillTargets.map(({ module, subtype, operation }) => (
+                        <li key={`${module}/${subtype}/${operation}`}>{module} / {subtype} / {operation} · Unassigned</li>
+                      ))}
+                      {conflictingSkillTargets.map(({ module, subtype, operation, matches }) => (
+                        <li key={`${module}/${subtype}/${operation}`}>{module} / {subtype} / {operation} · {matches} matching assignments</li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-2">
+                    A project owner or manager can review the current assignments. Once each required operation resolves to exactly one approved Skill, stage a refreshed proposal for review.
+                  </p>
+                  <Link className="mt-1 inline-block underline" href={`/projects/${projectId}/settings/skills?tab=assignments`}>View current Skill assignments</Link>
+                </>}
+              </div>
             </div>
             {!done && (
               <div className="flex shrink-0 gap-2">
@@ -891,6 +953,11 @@ export default function ZyraTaskDetailPage() {
           documentId={requirementApplyReceipt.requirement.documentId}
           versionId={requirementApplyReceipt.requirement.versionId}
           canApprove={canApproveRequirement}
+          automationHandoff={requirementApplied && requirementApplyReceipt.id && requirementApplyReceipt.testcase?.id
+            && requirementApplyReceipt.link?.criterionKeys.length && bundleCase?.draft?.automationRepo && bundleCase.draft.automationPath
+            && String(bundleCase.draft.automationFramework ?? "").trim().toLowerCase() === "playwright"
+            ? { testcaseId: requirementApplyReceipt.testcase.id, criterionKeys: requirementApplyReceipt.link.criterionKeys,
+                setup: <AutomationHandoffInstructions projectId={projectId} taskId={taskId} /> } : undefined}
         />
       )}
 
@@ -919,6 +986,17 @@ export default function ZyraTaskDetailPage() {
       </div>
 
       {activeTab === "testcases" && (
+        isRequirementBundle || isManagedDocumentProposal ? (
+          <Card className="p-4" data-testid="native-proposal-output-summary">
+            <h3 className="font-semibold text-[var(--foreground)]">{output.primary}</h3>
+            <p className="mt-2 text-sm text-[var(--muted)]">{output.secondary}</p>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              These are proposed artifact operations, not generated Test Cases.
+              The reviewed bundle or document panel above owns the authoritative
+              decision and native receipt. No test case can be saved from this summary.
+            </p>
+          </Card>
+        ) : (
         <div className="space-y-4">
           <Card className="overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] bg-[var(--surface-secondary)] px-4 py-3">
@@ -1017,6 +1095,7 @@ export default function ZyraTaskDetailPage() {
             </div>
           </Card>
         </div>
+        )
       )}
 
       {activeTab === "feedback" && (
@@ -1153,7 +1232,8 @@ export default function ZyraTaskDetailPage() {
             )}
             {!canGiveFeedback && (
               <p className="text-xs text-[var(--muted)]">
-                {isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
+                {isManagedDocumentProposal ? "Document proposals are reviewed through their dedicated panel above. Use its Apply or Reject action on the exact proposal instead of case-generation feedback."
+                  : isRequirementBundle ? "Requirement bundles are immutable. Use their exact review, Reject or Withdraw actions above."
                   : taskStatusNow === "in_progress" || taskStatusNow === "todo"
                   ? t("task.feedbackLocked")
                   : t("task.feedbackClosed")}

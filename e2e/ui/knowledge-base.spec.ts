@@ -384,6 +384,42 @@ test.describe("knowledge base (UI)", () => {
     expect(summary.files, "the summary counts the uploaded file").toBe(1);
   });
 
+  test("KBU-80 an upload whose response is lost after commit lands exactly one file", async ({ browser }) => {
+    const page = await openKb(browser);
+    const fileName = `kbu-80-${Date.now()}.txt`;
+    let attempts = 0;
+    await page.route(/\/knowledge-base\/files/, async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      attempts += 1;
+      if (attempts === 1) {
+        // Let the real backend commit the upload, then replace its acknowledgement with a 503.
+        // The browser can only recover because the retry carries the same requestKey; without it
+        // the second request would create a second file and the summary assertion below would fail.
+        await route.fetch();
+        return route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Simulated lost upload acknowledgement" }),
+        });
+      }
+      return route.continue();
+    });
+
+    await newMenu(page, "Upload file");
+    const dialog = modal(page, "Upload files");
+    await dialog.locator('input[type="file"]').setInputFiles({
+      name: fileName,
+      mimeType: "text/plain",
+      buffer: Buffer.from("KBU-80 retry fixture"),
+    });
+    await dialog.getByRole("button", { name: /Upload/ }).click();
+
+    await expect(row(page, fileName)).toBeVisible();
+    expect(attempts, "the upload was attempted twice").toBe(2);
+    const summary = await (await api.get(kbUrl("/summary"))).json();
+    expect(summary.files, "the retry did not duplicate the file").toBe(1);
+  });
+
   // ─── Validation ────────────────────────────────────────────────────────────
 
   test("KBU-05 the create button stays disabled for an empty or whitespace-only folder name", { tag: '@tesbo.testId("TES-TC-1004")' }, async ({
@@ -2828,6 +2864,118 @@ test.describe("knowledge base (UI)", () => {
     await expect(page.getByTestId("governed-version-detail")).toBeVisible();
     await qaPage.reload();
     await expect(qaPage.getByTestId("governed-decision")).toContainText("rejected");
+  });
+
+  test("KBU-79 a governed submission compares with an earlier approved version and the current working revision", async ({ browser }) => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const baseJson = { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Compare body" }] }] };
+    const created = await api.post(kbUrl("/documents"), {
+      data: {
+        title: stamp("Comparison manual"), folderId: rootFolderId, documentType: "user_manual",
+        contentText: "Compare body", contentHtml: "<p>Compare body</p>", contentJson: baseJson, governedMetadata: metadata,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const documentId = (await created.json()).id;
+    const firstSubmission = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: (await (await api.get(kbUrl(`/documents/${documentId}`))).json()).editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(firstSubmission.status(), await firstSubmission.text()).toBe(201);
+    const firstVersion = await firstSubmission.json();
+    const firstApproval = await api.post(kbUrl(`/documents/${documentId}/governed-approval`), { data: { versionId: firstVersion.id } });
+    expect(firstApproval.status(), await firstApproval.text()).toBe(201);
+    const firstApprovalBody = await firstApproval.json();
+    const approvedSnapshotId = firstApprovalBody.reviewedVersionId || firstApprovalBody.decidedVersionId;
+    const approved = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+
+    const page = await openDocument(browser, documentId);
+    await expect(page.getByTestId("governed-submitted-version")).toContainText("Submitted v");
+    // First submission has no earlier immutable base, but the current comparison still renders.
+    await expect(page.getByTestId("governed-comparison-first")).toBeVisible();
+    const identicalComparison = page.getByTestId("governed-current-comparison");
+    await expect(identicalComparison).toContainText("Identical");
+    // Identical is a summary, not a reason to withhold the evidence. The
+    // comparison contract promises complete old/new values for every field.
+    for (const field of ["title", "text", "html", "json", "source", "metadata"]) {
+      await expect(identicalComparison.getByTestId(`governed-current-comparison-field-${field}`)).toHaveAttribute("data-status", "unchanged");
+    }
+    const identicalText = identicalComparison.getByTestId("governed-current-comparison-field-text");
+    await expect(identicalText).toHaveAttribute("data-status", "unchanged");
+    await identicalText.getByText("Complete exact values for Plain text", { exact: true }).click();
+    await expect(identicalText.getByTestId("governed-current-comparison-old-text")).toBeVisible();
+    await expect(identicalText.getByTestId("governed-current-comparison-old-text")).toHaveText("Compare body");
+    await expect(identicalText.getByTestId("governed-current-comparison-new-text")).toBeVisible();
+    await expect(identicalText.getByTestId("governed-current-comparison-new-text")).toHaveText("Compare body");
+    const identicalJson = identicalComparison.getByTestId("governed-current-comparison-field-json");
+    await expect(identicalJson).toHaveAttribute("data-status", "unchanged");
+    await identicalJson.getByText("Complete exact values for Editor JSON", { exact: true }).click();
+    const oldJson = identicalJson.getByTestId("governed-current-comparison-old-json");
+    const newJson = identicalJson.getByTestId("governed-current-comparison-new-json");
+    await expect(oldJson).toBeVisible();
+    await expect(newJson).toBeVisible();
+    // PostgreSQL JSONB need not preserve the request object's property order.
+    // Compare both stored values semantically and the two visible representations exactly.
+    expect(JSON.parse((await oldJson.textContent())!)).toEqual(baseJson);
+    expect(JSON.parse((await newJson.textContent())!)).toEqual(baseJson);
+    expect(await oldJson.textContent()).toBe(await newJson.textContent());
+
+    // HTML/JSON-only change: text and metadata stay byte-identical, the representations change.
+    const repEdit = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: {
+        contentText: approved.contentText,
+        contentHtml: "<p>Compare body</p><p>Representation-only addition</p>",
+        contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Compare body" }] }, { type: "paragraph", content: [{ type: "text", text: "Representation-only addition" }] }] },
+        expectedRevision: approved.editRevision,
+      },
+    });
+    expect(repEdit.status(), await repEdit.text()).toBe(200);
+    const repRevision = await repEdit.json();
+    const repSubmission = await api.post(kbUrl(`/documents/${documentId}/submissions`), {
+      data: { expectedRevision: repRevision.editRevision, submissionKey: crypto.randomUUID() },
+    });
+    expect(repSubmission.status(), await repSubmission.text()).toBe(201);
+    // A denied exact version is an explicit retryable state, not a stale or empty comparison.
+    let deniedOnce = false;
+    await page.route(new RegExp(`/versions/${approvedSnapshotId}$`), async (route) => {
+      if (deniedOnce) return route.continue();
+      deniedOnce = true;
+      await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "E2E denied comparison version" }) });
+    });
+    await page.reload();
+    await expect(page.getByTestId("governed-comparison-error")).toBeVisible();
+    await page.getByRole("button", { name: "Retry comparison" }).click();
+    await expect(page.getByTestId("governed-historical-comparison")).toBeVisible();
+    await expect(page.getByTestId("governed-historical-comparison")).toContainText("historical, not current authority");
+    await expect(page.getByTestId("governed-historical-comparison")).toContainText("Representation only (HTML/JSON)");
+    await expect(page.getByTestId("governed-historical-comparison-field-text")).toHaveAttribute("data-status", "unchanged");
+    await expect(page.getByTestId("governed-historical-comparison-field-html")).toHaveAttribute("data-status", "changed");
+    // Both exact versions are openable from the comparison labels.
+    await page.getByTestId("governed-historical-comparison").getByRole("button", { name: "Open exact version" }).click();
+    await expect(page.getByTestId("governed-version-detail")).toBeVisible();
+
+    // A metadata-only working change is surfaced as metadata-only against the submission.
+    const current = await (await api.get(kbUrl(`/documents/${documentId}`))).json();
+    const metadataEdit = await api.patch(kbUrl(`/documents/${documentId}`), {
+      data: { governedMetadata: { ...metadata, confidentiality: "restricted" }, expectedRevision: current.editRevision },
+    });
+    expect(metadataEdit.status(), await metadataEdit.text()).toBe(200);
+    await page.reload();
+    await expect(page.getByTestId("governed-current-comparison")).toContainText("Metadata only");
+    await expect(page.getByTestId("governed-current-comparison-field-metadata")).toHaveAttribute("data-status", "changed");
+    await expect(page.getByTestId("governed-current-comparison-field-text")).toHaveAttribute("data-status", "unchanged");
+
+    // Folder placement is part of the approval digest even when the body/metadata are equal.
+    const destination = await api.post(kbUrl("/folders"), { data: { name: stamp("Comparison folder") } });
+    expect(destination.status(), await destination.text()).toBe(201);
+    const moved = await api.patch(kbUrl(`/documents/${documentId}/move`), { data: { folderId: (await destination.json()).id } });
+    expect(moved.status(), await moved.text()).toBe(200);
+    await page.reload();
+    await expect(page.getByTestId("governed-current-comparison")).not.toContainText("Identical");
+    await expect(page.getByTestId("governed-current-comparison-field-source")).toHaveAttribute("data-status", "changed");
   });
 
   test("KBU-71 a governed policy carries enforcement references through submit, decision and history", async ({ browser }) => {

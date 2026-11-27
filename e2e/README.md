@@ -1,12 +1,22 @@
-# Tesbo E2E Smoke Suite
+# Tesbo Playwright API and UI suite
 
-Playwright-based API + UI smoke tests that run against a **deployed** instance of Tesbo
-(local docker-compose by default, or any environment via env vars). This is deliberately a
-smoke suite, not full coverage: health check, login, and one create/read/update/delete pass
-each for the API and the UI, enough to catch a broken deploy.
+Tesbo runs end-to-end tests against its NestJS API and Next.js application. The main Playwright configuration groups tests into two projects. The API project uses HTTP requests and, where the scenario requires it, reads the database independently. The UI project drives Desktop Chrome through Chromium and records screenshots and traces on failure. The ticket regressions under `regression/api` and `regression/ui` belong to those same projects. A separate CI configuration exercises a small set of deployment smoke tests. [Main configuration](playwright.config.ts) · [Dedicated CI smoke configuration](playwright.ci-smoke.config.ts) · [Ticket regression scope](regression/README.md)
 
-Wiring this into GitHub Actions on every PR is a separate, later piece of work — this suite
-is meant to be run manually or from a post-deploy step for now.
+The [GitHub Actions workflow](../.github/workflows/smoke-security-quality.yml) starts isolated application services with PostgreSQL/pgvector and Redis, runs the dedicated smoke tests, and executes selected API and browser scenarios on pull requests. The [stage Jenkins pipeline](../Jenkinsfile.e2e) also defines a scheduled run. Coverage depends on the filters, environment, available fixtures and actual results of each invocation. The main configuration allows one retry in CI and zero locally. Browser coverage in this configuration is desktop Chromium. Native Android/Appium, Firefox and WebKit would each need their own target.
+
+### Inventory at development commit `399b1803`
+
+On November 25, 2026, Playwright Test 1.61.1 collected the following entries with the locked dependencies. The main collection used inert local context files for suites that read fixture identifiers during discovery. Test bodies did not execute.
+
+| Project | Core entries / files | Reported-ticket regression entries / files | Total entries / files |
+| --- | --- | --- | --- |
+| API | 1,849 / 46 | 52 / 4 | 1,901 / 50 |
+| UI | 1,144 / 34 | 47 / 9 | 1,191 / 43 |
+| Main configuration | 2,993 / 80 | 99 / 13 | 3,092 / 93 |
+
+The separate CI smoke configuration listed 19 tests in one file. In the main collection, the published reporter 0.2.0 recognized a declared Tesbo case marker on 1,465 entries, covering 1,384 distinct declared IDs. Another 1,627 entries carried no recognized marker at collection. A repeated ID can be intentional. Checking those IDs against a live project's cases and finding an actual Run receipt are separate operations. At this commit, the four `ZYR-P07` tests had no declared native case marker. All four did execute successfully in the [PR 281 CI job](https://github.com/1alextest/Tesbooboo/actions/runs/45666270840/job/139389141342). The [stale-save walkthrough](../docs/qa-orchestration/examples/zyra-stale-save.md) shows what the new reviewer would add to the existing test runner.
+
+The repository's separate coverage script found a source reference to 357 of 377 eligible HTTP method/route pairs and 57 of 59 eligible UI pages at that commit. It could not match the knowledge-base trash or project Skills settings pages. The count measures recognizable references in test source. Whether a test would catch the relevant defect requires inspecting and exercising its assertions. [Coverage script](scripts/coverage-report.ts)
 
 ## Running locally
 
@@ -23,7 +33,7 @@ To run the suite directly (stack already up):
 
 ```
 cd e2e
-npm install
+npm ci
 npm run install-browsers   # once, downloads the Chromium binary
 npm test                   # both projects
 npm run test:api           # API tests only
@@ -134,8 +144,7 @@ self-heal in sequence, but never run a local suite and a stage suite at the same
 
 ## Reporting results into Tesbo
 
-`playwright.config.ts` registers `@tesbox/playwright-reporter`, so a run posts its results back into
-the configured Tesbo project as one Test Run per `playwright test` invocation.
+`playwright.config.ts` registers `@tesbox/playwright-reporter`, which can submit linked results to the configured Tesbo project when reporting is enabled. A reporter override on the command line changes the active reporters. The stage wrapper uses list, JUnit and HTML output. [Stage runner](../scripts/e2e-ci.sh)
 
 **Never commit an API token.** The former `e2e/tesbo.config.json` contained a real-looking
 write-capable token and was removed from source control. That token must remain revoked.
@@ -175,8 +184,7 @@ test("ACT-A-01 an action in a project appears in that project's feed", { tag: '@
 - An untagged test is reported as `not linked to Tesbo` and does not fail anything. Tests generated
   in a loop from a single `test()` call are untagged for that reason: one call site cannot carry one
   id per generated test.
-- A tag pointing at a case that does not exist in the project fails the run at collection time.
-  Automation never creates cases — a QA engineer owns the repository.
+- An unknown case ID produces a warning in the default configuration. Strict mode makes it an error. The reporter can attach results to an existing case once the mapping resolves. [Reporter behavior](../sdk/playwright-reporter/README.md#untagged-tests)
 
 When adding a spec, look up the case in Tesbo and add its id. When there is no case yet, leave the
 test untagged rather than pointing it at an approximate one.

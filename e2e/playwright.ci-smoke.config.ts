@@ -5,10 +5,10 @@ if (!process.env.CI_API_BASE_URL || !process.env.CI_WEB_BASE_URL) {
 }
 export default defineConfig({
   testDir: __dirname,
-  testMatch: "ci-smoke.spec.ts",
+  testMatch: ["ci-smoke.spec.ts", "ui/oauth-login-continuation.spec.ts"],
   timeout: 30_000,
   retries: 0,
   workers: 1,
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report-ci" }]],
-  use: { ...devices["Desktop Chrome"], trace: "retain-on-failure", screenshot: "only-on-failure" },
+  use: { ...devices["Desktop Chrome"], baseURL: process.env.CI_WEB_BASE_URL, trace: "retain-on-failure", screenshot: "only-on-failure" },
 });

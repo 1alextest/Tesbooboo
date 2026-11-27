@@ -288,17 +288,19 @@ describe("Zyra provider usage parsing (cached input tokens)", () => {
 
   it("does not report a transcription generation when allocation rejects before fetch", async () => {
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one", extraction_claim_token: "claim-token" }] });
     const internal = svc as unknown as Internals;
     jest.spyOn(internal, "zyraAiAllocation").mockRejectedValue(new Error("synthetic allocation failure"));
     mockResponse({});
     await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio"), "mp3", "audio/mpeg", "sample.mp3");
     expect(global.fetch).not.toHaveBeenCalled();
     expect(recorded).not.toHaveBeenCalled();
-    expect((svc as unknown as { db: { query: jest.Mock } }).db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'failed'"), ["file-one"]);
+    expect((svc as unknown as { db: { query: jest.Mock } }).db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'failed'"), ["file-one", "claim-token"]);
   });
 
   it.each(["success", "network failure"])("does record transcription after a real request attempt: %s", async (outcome) => {
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
+    (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one", extraction_claim_token: "claim-token" }] });
     const internal = svc as unknown as Internals;
     jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key: openAiKey });
     if (outcome === "success") mockResponse({ text: "" });
@@ -485,6 +487,8 @@ describe("knowledge transcription provider ingress", () => {
 
   it.each(["HTTP", "transport", "JSON", "api_key", "auth_header_name", "auth_scheme"])("keeps a failed %s transcription out of logs and observations", async (kind) => {
     const svc = makeLegacy();
+    // The claim UPDATE must succeed before the provider call is attempted.
+    (svc as unknown as { db: { query: jest.Mock } }).db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one", extraction_claim_token: "claim-token" }] });
     const key: Record<string, unknown> = { ...openAiKey };
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
     const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
@@ -501,7 +505,7 @@ describe("knowledge transcription provider ingress", () => {
     const surfaces = JSON.stringify({ warnings: warning.mock.calls, observations: recorded.mock.calls });
     expect(surfaces).not.toContain("pvt-audio");
     expect(surfaces).not.toContain("synthetic-private-transcription-context");
-    expect((svc as unknown as { db: { query: jest.Mock } }).db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'failed'"), ["file-one"]);
+    expect((svc as unknown as { db: { query: jest.Mock } }).db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'failed'"), ["file-one", "claim-token"]);
     const headerFailure = ["api_key", "auth_header_name", "auth_scheme"].includes(kind);
     expect(recorded).toHaveBeenCalledTimes(headerFailure ? 0 : 1);
     expect(global.fetch).toHaveBeenCalledTimes(headerFailure ? 0 : 1);
@@ -513,7 +517,7 @@ describe("knowledge transcription provider ingress", () => {
     const internal = svc as unknown as Internals & { enqueueEmbedding: (...args: unknown[]) => void };
     const enqueue = jest.spyOn(internal, "enqueueEmbedding").mockImplementation(() => undefined);
     const db = (svc as unknown as { db: { query: jest.Mock } }).db;
-    db.query.mockResolvedValue({ rows: [{ organization_id: "org-one" }] });
+    db.query.mockResolvedValue({ rows: [{ id: "file-one", organization_id: "org-one", extraction_claim_token: "claim-token" }] });
     const recorded = jest.spyOn(aiTrace, "recordStandaloneGeneration").mockResolvedValue(undefined);
     jest.spyOn(internal, "zyraAiAllocation").mockResolvedValue({ key: { ...openAiKey, auth_header_name: "X-Audio-Key", auth_scheme: "Custom" } });
     global.fetch = jest.fn(async (_url, init) => {
@@ -526,7 +530,7 @@ describe("knowledge transcription provider ingress", () => {
       return new Response(JSON.stringify({ text: " The synthetic transcript. " }));
     }) as typeof fetch;
     await internal.transcribeKnowledgeFile("project-one", "file-one", Buffer.from("audio fixture"), "mp3", "audio/mpeg", "sample.mp3");
-    expect(db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'ready'"), ["file-one", "The synthetic transcript."]);
+    expect(db.query).toHaveBeenCalledWith(expect.stringContaining("extraction_status = 'ready'"), ["file-one", "The synthetic transcript.", "claim-token"]);
     expect(enqueue).toHaveBeenCalledWith("org-one", "project-one", "file", "file-one", "transcribed");
     expect(recorded.mock.calls[0][0]).toMatchObject({ output: { status: "ready", transcriptChars: 25 } });
   });

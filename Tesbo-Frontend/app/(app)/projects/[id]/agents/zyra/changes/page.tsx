@@ -5,6 +5,7 @@ import { ModelDraftPreview } from "./ModelDraftPreview";
 import { SourceBindingSettings } from "./SourceBindingSettings";
 import { ReviewCaseRunSetup } from "./ReviewCaseRunSetup";
 import { GraphConsequencePreview } from "./GraphConsequencePreview";
+import { CaseCandidateDetails } from "./CaseCandidateDetails";
 import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -168,13 +169,14 @@ export default function ZyraChangeReviewPage() {
             Observed source and requirement changes, linked test-case candidates, and remaining verification gaps.
           </p>
         </div>
-        <button type="button" onClick={() => void capture()} disabled={capturing}
-          className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-60">
-          {capturing ? "Capturing…" : "Capture configured source"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => void capture()} disabled={capturing}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm disabled:opacity-60">
+            {capturing ? "Capturing…" : "Capture configured source"}
+          </button>
+          <Link href="#source-setup" className="text-sm underline">Configure source</Link>
+        </div>
       </div>
-      <SourceBindingSettings key={projectId} projectId={projectId} />
-      <ModelDraftPreview key={projectId} projectId={projectId} />
       <section aria-label="Manual QA verification actions" className="rounded-lg border border-[var(--border)] p-4 text-sm">
         <h2 className="font-semibold">Continue verification in existing Tesbo records</h2>
         <p className="mt-1 text-[var(--muted)]">
@@ -211,10 +213,37 @@ export default function ZyraChangeReviewPage() {
                 <p className="text-xs text-[var(--muted)]">Revision: <code>{entry.revision.slice(0, 16)}</code></p>
                 {receipt ? (
                   <>
-                    <p className="text-sm">
-                      {receipt.candidates.length} linked case candidate(s) ·
-                      {(delta?.modifiedNodeIds.length ?? 0) + (delta?.addedNodeIds.length ?? 0) + (delta?.removedNodeIds.length ?? 0)} changed node(s)
-                    </p>
+                    <section aria-label="Human QA review focus" data-testid={`qa-review-focus-${entry.id}`}
+                      className="space-y-2 rounded-lg border border-[var(--border)] p-3 text-sm">
+                      <h3 className="font-semibold">
+                        {receipt.candidates.length
+                          ? "Assess nominated case references for this change"
+                          : "Identify affected behavior before selecting tests"}
+                      </h3>
+                      <p>
+                        The recorded source observation contains{" "}
+                        {(delta?.modifiedNodeIds.length ?? 0) + (delta?.addedNodeIds.length ?? 0) + (delta?.removedNodeIds.length ?? 0)}
+                        {" changed graph node(s) and "}
+                        {receipt.candidates.length} nominated case reference(s). These are investigation leads,
+                        not verified product outcomes or test coverage.
+                      </p>
+                      <p>
+                        <strong>Still unknown:</strong> whether each candidate reflects the applicable approved
+                        expectation, whether other behavior is affected, and whether any current build passed
+                        an actual execution. Source freshness is unverified.
+                      </p>
+                      <p>
+                        <strong>Next human action:</strong>{" "}
+                        {receipt.candidates.length
+                          ? "Inspect nominated case references and approved requirements, confirm applicability, then select eligible approved cases for a native run below."
+                          : "Investigate the changed behavior and approved requirements, find or propose applicable cases, then prepare a native run."}
+                      </p>
+                      <p className="text-xs text-[var(--muted)]">
+                        Authority: this page can help prepare QA work and notify reviewers. It does not
+                        approve a requirement, test case, policy, execution result or release; each decision
+                        remains with its authorized native owner.
+                      </p>
+                    </section>
                     {delta && [...delta.addedNodeIds, ...delta.modifiedNodeIds, ...delta.removedNodeIds].length > 0 && (
                       <details><summary className="cursor-pointer text-sm">Observed changed nodes</summary>
                         <ul className="mt-2 list-disc pl-5 text-xs">
@@ -224,14 +253,24 @@ export default function ZyraChangeReviewPage() {
                       </details>
                     )}
                     {receipt.candidates.length > 0 ? <ul className="space-y-2 text-sm">
-                      {receipt.candidates.map((candidate) =>
-                        <li key={candidate.caseNodeId} className="rounded border border-[var(--border)] p-2">
-                          {canonicalReviewCaseId(candidate.caseNodeId, projectId) ? (
-                            <Link className="break-all text-sm underline"
-                              href={`/projects/${projectId}/testcases/${canonicalReviewCaseId(candidate.caseNodeId, projectId)}`}>
-                              Open existing test case
-                            </Link>
-                          ) : <code className="break-all">{candidate.caseNodeId}</code>}
+                      {receipt.candidates.map((candidate) => {
+                        const caseId = canonicalReviewCaseId(candidate.caseNodeId, projectId);
+                        return <li key={candidate.caseNodeId} className="rounded border border-[var(--border)] p-2">
+                          {caseId ? (
+                            <>
+                              <Link className="break-all text-sm underline"
+                                href={`/projects/${projectId}/testcases/${caseId}`}>
+                                Open existing test case
+                              </Link>
+                              <CaseCandidateDetails key={`${projectId}:${caseId}`}
+                                projectId={projectId} caseId={caseId} />
+                            </>
+                          ) : (
+                            <div className="space-y-1">
+                              <p className="text-xs">Noncanonical or foreign-project case reference; no native case read was attempted.</p>
+                              <code className="break-all text-xs">{candidate.caseNodeId}</code>
+                            </div>
+                          )}
                           <div className="text-xs text-[var(--muted)]">Review reason: {candidate.reasons.join(", ")}</div>
                           {candidate.requirementNodeIds.length > 0 && (
                             <details className="mt-2 text-xs">
@@ -240,7 +279,8 @@ export default function ZyraChangeReviewPage() {
                                 <li key={id} className="break-all"><code>{id}</code></li>)}</ul>
                             </details>
                           )}
-                        </li>)}
+                        </li>;
+                      })}
                     </ul> : <p className="text-sm text-[var(--muted)]">
                       No explicit case reference was identified. This does not establish that no tests are affected.
                     </p>}
@@ -248,7 +288,7 @@ export default function ZyraChangeReviewPage() {
                       Evidence basis: {receipt.evidence.basis}. Source freshness unverified;
                       execution and coverage unverified. QA must choose and run applicable cases separately.
                     </p>
-                    <GraphConsequencePreview key={`${projectId}:${entry.id}`} projectId={projectId} historyId={entry.id} />
+                    <GraphConsequencePreview key={`${projectId}:${entry.id}:${receipt.id}`} projectId={projectId} historyId={entry.id} receiptId={receipt.id} />
                     <ReviewCaseRunSetup projectId={projectId} receiptId={entry.id}
                       candidateCaseIds={receipt.candidates.map((candidate) =>
                         canonicalReviewCaseId(candidate.caseNodeId, projectId)
@@ -275,6 +315,15 @@ export default function ZyraChangeReviewPage() {
         className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">
         Older observations
       </button>}
+      <section id="source-setup" aria-label="Source configuration and draft model inspection" className="space-y-3">
+        <h2 className="text-base font-semibold">Source setup and draft model inspection</h2>
+        <p className="text-sm text-[var(--muted)]">
+          Configure the observed source or inspect an unapproved model draft here.
+          Neither action verifies an expected behavior or records a test result.
+        </p>
+        <SourceBindingSettings key={projectId} projectId={projectId} />
+        <ModelDraftPreview key={projectId} projectId={projectId} />
+      </section>
     </main>
   );
 }

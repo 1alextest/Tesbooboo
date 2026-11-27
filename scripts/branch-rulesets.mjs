@@ -28,7 +28,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['sdk-quality','frontend-quality','backend-quality','architecture-quality']},
  {path:'.github/workflows/behavioral-quality.yml',sha:'b2f9ce02a06a7a688591b03e555008246df9e985',
   contexts:['api-mcp-contracts','database-integrity','transactional-concurrency']},
- {path:'.github/workflows/smoke-security-quality.yml',sha:'df925a57c30f6c281dec27c82b77be517e0e33ae',
+ {path:'.github/workflows/smoke-security-quality.yml',sha:'276a31a562f27c2b0e785aa119a7173a2244e577',
   contexts:['playwright-smoke','dependency-audit','container-security']},
  {path:'.github/workflows/security-analysis.yml',sha:'39249b3ae3702887e51bafbd5d26ea4d7b6befad',
   contexts:['codeql-javascript-typescript','dependency-lock-integrity (sdk/playwright-reporter)',
@@ -38,7 +38,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['current-tree-secrets','workflow-security']},
  {path:'.github/workflows/repository-secret-guard.yml',sha:'3e30e6abdd3c0ea15f74f036b0ef70c3e6eada1f',
   contexts:['secret-guard','reporter-safety']},
- {path:'.github/workflows/mutation-quality.yml',sha:'d5d62ede4ffae82d9bf85194902c5939a353867b',
+ {path:'.github/workflows/mutation-quality.yml',sha:'fd3215b707a3ba253fb75bf4ddffc41cd5b44bdc',
   contexts:['mutation-critical']}
 ];
 export const CHECKS=WORKFLOW_SOURCES.flatMap(source=>source.contexts);

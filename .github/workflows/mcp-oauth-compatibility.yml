@@ -6,9 +6,15 @@ on:
       - ".github/workflows/mcp-oauth-compatibility.yml"
       - "Tesbo-Backend-Nest/scripts/ci/embedded-oauth-spike.cjs"
       - "Tesbo-Backend-Nest/scripts/ci/embedded-oauth-state-spike.cjs"
-      - "Tesbo-Backend-Nest/migrations/V164_mcp_oauth_provider_artifacts.sql"
+      - "Tesbo-Backend-Nest/scripts/ci/oauth-interaction-redirect.cjs"
       - "Tesbo-Backend-Nest/src/common/crypto.util.ts"
       - "Tesbo-Backend-Nest/src/auth/**"
+      - "Tesbo-Backend-Nest/src/mcp/**"
+      - "Tesbo-Backend-Nest/src/legacy/legacy.service.ts"
+      - "Tesbo-Backend-Nest/src/main.ts"
+      - "Tesbo-Backend-Nest/src/database/**"
+      - "Tesbo-Backend-Nest/migrations/**"
+      - "Tesbo-Backend-Nest/tsconfig*.json"
       - "Tesbo-Backend-Nest/src/common/request.types.ts"
       - "Tesbo-Backend-Nest/Dockerfile"
       - "Tesbo-Backend-Nest/package*.json"
@@ -87,11 +93,17 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm run build
+      - name: Verify compiled issuer redirects to Tesbo login and consent
+        working-directory: Tesbo-Backend-Nest
+        run: node scripts/ci/oauth-interaction-redirect.cjs
       - name: Migrate disposable database and verify repeatable migration
         working-directory: Tesbo-Backend-Nest
         run: |
           npm run migrate
           npm run migrate
+      - name: Verify the owner transaction and consent bindings on disposable PostgreSQL
+        working-directory: Tesbo-Backend-Nest
+        run: npm test -- --runTestsByPath src/auth/mcp-oauth-grant-binding.db.spec.ts
       - name: Install and audit pinned authorization server ONLY into isolated test directory
         shell: bash
         run: |

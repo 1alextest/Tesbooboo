@@ -1409,7 +1409,9 @@ const enabled = /\/tesbo_ci(?:\?|$)/.test(url);
           if (callback) return original(sql, values ?? [], callback);
           return (async () => {
             const result = await execute(sql, values);
-            if (/SELECT id, closed_at FROM cycles/.test(sql) && /FOR UPDATE/.test(sql)) {
+            // Observe the scoped parent row lock, not a particular projection of its columns.
+            if (/^\s*SELECT\s+[^;]+?\s+FROM\s+cycles\s+WHERE\s+id\s*=\s*\$1\s+AND\s+project_id\s*=\s*\$2\s+AND\s+deleted_at\s+IS\s+NULL\s+FOR\s+UPDATE\s*$/i.test(sql) &&
+                values?.[0] === batchRun && values?.[1] === projectId) {
               pid = Number((await execute("SELECT pg_backend_pid() AS pid")).rows[0].pid); locked(); await mayClose;
             }
             return result;

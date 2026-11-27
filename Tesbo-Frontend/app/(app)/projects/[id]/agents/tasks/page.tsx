@@ -18,7 +18,10 @@ import { Button, Field, FieldLabel, Modal, PageLoader, Select, StatusChip, Texta
 import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
 import TaskQuickViewPanel, { JIRA_BADGE_CLASS, latestFailureDetail, normalizeTaskStatus as normalizeStatus, taskStatusLabel, taskStatusTone as tone } from "@/components/agents/TaskQuickViewPanel";
 import ReviewBoard from "@/components/agents/ReviewBoard";
+import ManagedDocumentProposalList from "@/components/agents/ManagedDocumentProposalList";
 import { markdownToPlainText, renderMarkdown } from "@/lib/markdown";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
+import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
@@ -36,7 +39,7 @@ const columns = [
   { key: "done", label: "Done", dot: "var(--success)" },
 ] as const;
 
-type TaskView = "tasks" | "kanban" | "review";
+type TaskView = "tasks" | "kanban" | "review" | "documents";
 
 const PLAIN_TEXT_BLOCK_TAGS = new Set([
   "P", "DIV", "LI", "UL", "OL", "H1", "H2", "H3", "H4", "H5", "H6",
@@ -113,13 +116,25 @@ function splitAcceptanceCriteria(text: string): { body: string; acceptanceCriter
   return { body, acceptanceCriteria };
 }
 
+/** Display typed proposal operations and actual Draft receipts distinctly from generated test cases. */
+function TaskOutputCount({ task }: { task: ZyraTask }) {
+  const summary = summarizeZyraTaskOutput(task);
+  return <span className="block text-sm text-[var(--foreground)]">
+    <span className="block">{summary.primary}</span>
+    {summary.secondary && <span className="block text-xs text-[var(--muted)]">{summary.secondary}</span>}
+  </span>;
+}
+
 export default function ZyraTasksPage() {
   const params = useParams();
   const router = useRouter();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
-  const { project } = useProjectData();
+  const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
+  const canApproveDocuments = projectMembers.length === 0
+    ? null
+    : isKnowledgeOwnerOrManager(projectMembers.find((member) => member.userId === currentUser?.userId)?.role);
   const cacheKey = `agents-tasks:${projectId}`;
   const cached = getPageCache<AgentsTasksPageData>(cacheKey);
   const [state, setState] = useState<ZyraAgentState | null>(cached?.state ?? null);
@@ -341,6 +356,7 @@ export default function ZyraTasksPage() {
             { key: "tasks" as const, label: "Task window" },
             { key: "kanban" as const, label: "Kanban board" },
             { key: "review" as const, label: "Review Board" },
+            { key: "documents" as const, label: "Document proposals" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -378,7 +394,7 @@ export default function ZyraTasksPage() {
             <span>Task</span>
             <span>Status</span>
             <span>Jira</span>
-            <span>Generated</span>
+            <span>Output</span>
             <span>Tokens</span>
           </div>
           <div className="divide-y divide-[var(--border)]">
@@ -405,7 +421,7 @@ export default function ZyraTasksPage() {
                   {zyraTaskTicketKeys(task).length === 0 && <span className="text-xs text-[var(--muted)]">No tickets</span>}
                   {zyraTaskTicketKeys(task).length > 2 && <span className="text-xs text-[var(--muted)]">+{zyraTaskTicketKeys(task).length - 2}</span>}
                 </div>
-                <span className="text-sm text-[var(--foreground)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"}</span>
+                <TaskOutputCount task={task} />
                 <span className="font-mono text-sm text-[var(--muted)]">{task.tokenUsage.total}</span>
               </button>
             ))}
@@ -414,6 +430,8 @@ export default function ZyraTasksPage() {
         </section>
       ) : activeView === "review" ? (
         <ReviewBoard projectId={projectId} />
+      ) : activeView === "documents" ? (
+        <ManagedDocumentProposalList key={projectId} projectId={projectId} canApprove={canApproveDocuments} members={projectMembers} />
       ) : (
         <div className="grid gap-4 xl:grid-cols-5">
           {columns.map((column) => {
@@ -454,7 +472,7 @@ export default function ZyraTasksPage() {
                           )}
                         </div>
                       )}
-                      <p className="mt-2 text-xs text-[var(--muted)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"} generated - {task.tokenUsage.total} tokens</p>
+                      <div className="mt-2 text-xs text-[var(--muted)]"><TaskOutputCount task={task} /><span className="block mt-1">{task.tokenUsage.total} tokens</span></div>
                     </button>
                   ))}
                   {columnTasks.length === 0 && <div className="rounded-lg border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--muted)]">No tasks</div>}

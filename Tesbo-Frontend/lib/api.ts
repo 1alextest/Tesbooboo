@@ -1084,6 +1084,8 @@ export interface ZyraTask {
   /** Exact server revision of the reviewable operations and their target context. */
   proposalRevision?: string;
   proposalSnapshot?: Record<string, unknown>;
+  /** Producer identity pinned at staging (api_token/human_session, token, issuer). */
+  proposalProvenance?: Record<string, unknown> | null;
   sources: Array<{ type: string; title: string; detail: string }>;
   activities: Array<{ actor: "user" | "agent" | string; stage: string; title: string; detail: string; createdAt: string; kind?: string }>;
   tokenUsage: { input: number; output: number; total: number };
@@ -1094,6 +1096,9 @@ export interface ZyraTask {
 }
 
 export interface RequirementApplyReceipt {
+  id?: string;
+  proposalRevision?: string;
+  selectedIndex?: number;
   requirement: { documentId: string; versionId: string; versionNumber: number | null; editRevision: string | null };
   testcase: { id: string; title: string | null; editRevision: string | null } | null;
   link: { id: string; criterionKeys: string[] } | null;
@@ -1106,6 +1111,7 @@ export interface ManagedDocumentProposal {
   target: {
     documentId: string;
     editRevision: string;
+    applicability?: "current" | "changed" | "missing" | null;
     base: {
       title: string; contentJson: unknown; contentHtml: string | null; contentText: string | null;
       governedMetadata: Record<string, unknown>; documentType: string; status: string;
@@ -1582,8 +1588,26 @@ export async function getManagedDocumentProposal(projectId: string, taskId: stri
   return api<ZyraTask>(`/api/projects/${projectId}/knowledge-base/document-proposals/${taskId}`);
 }
 
-export async function listManagedDocumentProposals(projectId: string): Promise<{ list: ZyraTask[] }> {
-  return api(`/api/projects/${projectId}/knowledge-base/document-proposals`);
+export interface ManagedDocumentProposalPage {
+  list: ZyraTask[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
+export async function listManagedDocumentProposals(projectId: string, params: {
+  limit?: number; offset?: number; q?: string;
+  documentType?: "user_manual" | "policy" | "";
+  status?: "pending" | "in_review" | "failed";
+  operation?: "create" | "update" | "";
+} = {}): Promise<ManagedDocumentProposalPage> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return api(`/api/projects/${projectId}/knowledge-base/document-proposals${suffix}`);
 }
 
 /** Protected human apply of the exact reviewed candidate; publishes a native Draft only. */
@@ -1902,13 +1926,24 @@ export async function removeProjectMember(projectId: string, userId: string): Pr
   await api(`/api/projects/${projectId}/members/${userId}`, { method: "DELETE" });
 }
 
-export type McpClientGrant = {
+/** Existing named token client grants keep their exact API shape. */
+export type ApiMcpClientGrant = {
   tokenId: string;
   clientName: string;
   scopes: Array<"read" | "write">;
   allowedTools: string[] | null;
   expiresAt: string | null;
 };
+/** Owner preapproval only; OAuth login and end-user consent are separate. */
+export type OAuthMcpClientGrant = {
+  kind: "oauth_client";
+  oauthClientId: string;
+  clientName: string;
+  scopes: Array<"read">;
+  allowedTools: string[] | null;
+  expiresAt: string | null;
+};
+export type McpClientGrant = ApiMcpClientGrant | OAuthMcpClientGrant;
 export type ProjectMcpAccess = { enabled: boolean; revision: number; clients: McpClientGrant[] };
 export async function getProjectMcpAccess(projectId: string): Promise<ProjectMcpAccess> {
   return api(`/api/projects/${projectId}/mcp-access`);
@@ -1917,9 +1952,34 @@ export async function updateProjectMcpAccess(projectId: string, access: ProjectM
   return api(`/api/projects/${projectId}/mcp-access`, { method: "PUT", body: access });
 }
 
+/** A human consent record, not proof that the client is currently online. */
+export type MyMcpOAuthConsent = {
+  id: string; // Opaque binding ID; never the bearer or provider Grant ID.
+  clientId: string;
+  clientName: string;
+  resource: string;
+  status: "consent_current" | "reconsent_required" | "revoked";
+  currentAllowedTools: string[] | null;
+  createdAt: string;
+  revokedAt: string | null;
+};
+export async function listMyMcpOAuthConsents(projectId: string): Promise<{
+  consents: MyMcpOAuthConsent[]; truncated: boolean;
+}> {
+  return api("/api/projects/" + projectId + "/mcp-oauth-consents");
+}
+export async function revokeMyMcpOAuthConsent(projectId: string, consentId: string): Promise<{
+  id: string; status: "revoked"; replayed: boolean;
+}> {
+  return api("/api/projects/" + projectId + "/mcp-oauth-consents/" + encodeURIComponent(consentId),
+    { method: "DELETE" });
+}
+
 export interface ApiToken {
   id: string;
   name: string;
+  /** Advisory capability returned by the current server for the signed-in caller. */
+  canRevoke?: boolean;
   scopes: string[];
   tokenPrefix: string;
   lastUsedAt: string | null;
@@ -2091,8 +2151,10 @@ export async function listTestCases(
   });
 }
 
-export async function getTestCase(projectId: string, testcaseId: string): Promise<Record<string, unknown>> {
-  return api(`/api/projects/${projectId}/testcases/${testcaseId}`);
+export async function getTestCase(
+  projectId: string, testcaseId: string, signal?: AbortSignal
+): Promise<Record<string, unknown>> {
+  return api(`/api/projects/${projectId}/testcases/${testcaseId}`, { signal });
 }
 
 export interface TestCaseRevisionBasis {
@@ -4899,13 +4961,33 @@ async function uploadKnowledgeFileBatch(
   folderId: string,
   files: File[]
 ): Promise<{ list: KnowledgeFile[]; total: number }> {
-  const formData = new FormData();
-  formData.append("folderId", folderId);
-  for (const file of files) formData.append("files", file);
-  const res = await fetchWithNetworkErrorMessage(
-    `${API_BASE}/api/projects/${projectId}/knowledge-base/files/upload`,
-    { method: "POST", credentials: "include", body: formData }
-  );
+  // One key per logical batch, reused only by the single retry below. The server treats a replay
+  // with this key as the same request, so a committed batch whose response was lost (including a
+  // 503 raised after an uncertain COMMIT) cannot become a second set of files.
+  const requestKey = crypto.randomUUID();
+  const send = () => {
+    const formData = new FormData();
+    formData.append("folderId", folderId);
+    formData.append("requestKey", requestKey);
+    for (const file of files) formData.append("files", file);
+    return fetchWithNetworkErrorMessage(
+      `${API_BASE}/api/projects/${projectId}/knowledge-base/files/upload`,
+      { method: "POST", credentials: "include", body: formData }
+    );
+  };
+  let res: Response | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      res = await send();
+      // A gateway/503 response can arrive after the upload committed (the backend deliberately
+      // answers 503 when it cannot know the COMMIT outcome). With a request key both that and a
+      // lost transport response are safe to replay once; a definite refusal is not retried.
+      if (![502, 503, 504].includes(res.status) || attempt === 1) break;
+    } catch (error) {
+      if (!(error instanceof MutationOutcomeUnknownError) || attempt === 1) throw error;
+    }
+  }
+  if (!res) throw new MutationOutcomeUnknownError();
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error((err as { error?: string }).error || String(res.status));
@@ -5264,6 +5346,11 @@ export type GraphQaConsequencePreview = {
     confidence: "candidate_only";
     condition: "independent_expectation_and_applicability_review_required";
   }>;
+  /** Optional for rolling compatibility with older API builds; never infer zero from absence. */
+  cachedRequirementReview?: {
+    changedRequirementCount: number;
+    withoutNomination: Array<{ requirementNodeId: string; change: "added" | "modified" | "removed" }>;
+  } | null;
   unlinkedCaseNodeIds: string[];
   changedNodeIds: string[];
   unlinkedOrUnprovenChange: boolean;

@@ -14,7 +14,7 @@ import { startFakeAiServer, type FakeAiServer } from "../utils/fake-ai-server";
 import { env } from "../utils/env";
 import { parseSseEvents } from "../utils/sse";
 import { filesFormWith } from "../utils/uploads";
-import { issueMcpTestToken } from "../utils/mcp-access";
+import { approveMcpTestClient, issueMcpTestToken } from "../utils/mcp-access";
 import { readZyraProposal, saveReviewedZyraTask } from "../utils/zyra-proposals";
 import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapture, type OtlpSpan } from "../utils/langfuse-capture";
 
@@ -1288,6 +1288,76 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id=${literal(staged.id)} AND action='testcase_proposals_applied';`)).toBe("1");
     } finally {
       await asOwner.delete(url(`/apikeys/${token.id}`));
+    }
+  });
+
+  test("ZYR-P07 distinct MCP credentials keep separate proposals and issuer provenance for the same request key", async () => {
+    const projectId = tenant!.mainProjectId;
+    const requestKey = randomUUID();
+    const tokenIds: string[] = [];
+    const clients: APIRequestContext[] = [];
+    let createdCaseId: string | undefined;
+    const producers = [
+      { human: asOwner, issuerId: tenant!.owner.userId, title: `Owner proposal ${requestKey}` },
+      { human: asManager, issuerId: tenant!.manager.userId, title: `Manager proposal ${requestKey}` },
+    ];
+    const storedCases = () => column(`SELECT title FROM testcases WHERE project_id=${literal(projectId)}
+      AND title IN (${producers.map(p => literal(p.title)).join(",")}) ORDER BY title;`);
+    try {
+      const proposals: { id: string; actorId: string }[] = [];
+      for (const producer of producers) {
+        const issued = await producer.human.post(url("/apikeys"), { data: { name: producer.title, scopes: ["read", "write"] } });
+        expect(issued.status()).toBe(201);
+        const token = await issued.json();
+        tokenIds.push(token.id);
+        await approveMcpTestClient(asOwner, projectId, token);
+        const client = await anonymousContext();
+        clients.push(client);
+        const stage = async () => {
+          const response = await client.post(url("/mcp"), {
+            headers: { Authorization: `Bearer ${token.token}` },
+            data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+              name: "stage_testcase_changes", arguments: { requestKey, operations: [{ opType: "create", draft: { title: producer.title } }] },
+            } },
+          });
+          expect(response.ok(), await response.text()).toBe(true);
+          const rpc = await response.json();
+          expect(rpc.error).toBeUndefined();
+          return JSON.parse(rpc.result.content[0].text);
+        };
+        const first = await stage();
+        expect(first).toMatchObject({ publication: "unpublished", task: { taskStatus: "in_review",
+          proposalProvenance: { kind: "api_token", issuerId: producer.issuerId, tokenId: token.id, actorId: expect.any(String) } } });
+        expect((await stage()).taskId).toBe(first.taskId);
+        proposals.push({ id: first.taskId, actorId: first.task.proposalProvenance.actorId });
+      }
+
+      expect(new Set(tokenIds).size).toBe(2);
+      expect(proposals[0].id).not.toBe(proposals[1].id);
+      // The shared MCP technical actor cannot identify which human operated a token.
+      expect(proposals[0].actorId).toBe(proposals[1].actorId);
+      expect(producers.map(p => p.issuerId)).not.toContain(proposals[0].actorId);
+      expect(storedCases()).toEqual([]);
+      const saveUrl = url(`/agents/zyra/tasks/${proposals[1].id}/save`);
+      const reviewed = await readZyraProposal(asOwner, saveUrl);
+      const applied = await asOwner.post(saveUrl, { data: {
+        expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0],
+      } });
+      expect(applied.status(), await applied.text()).toBe(201);
+      const saved = await applied.json();
+      createdCaseId = saved.testcases[0].id;
+      expect(saved.testcases[0]).toMatchObject({ title: producers[1].title, status: "Draft" });
+      expect(saved.saveReceipt).toMatchObject({
+        principalKind: "human_session", reviewerId: tenant!.owner.userId, reviewedSnapshot: reviewed.proposalSnapshot,
+        provenance: { kind: "api_token", tokenId: tokenIds[1], issuerId: producers[1].issuerId, actorId: proposals[1].actorId },
+      });
+      expect(storedCases()).toEqual([producers[1].title]);
+      const remaining = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${proposals[0].id}/save`));
+      expect(remaining.taskStatus).toBe("in_review");
+    } finally {
+      if (createdCaseId) await asOwner.delete(url(`/testcases/${createdCaseId}`), { failOnStatusCode: false });
+      for (const id of tokenIds) await asOwner.delete(url(`/apikeys/${id}`));
+      await Promise.all(clients.map(client => client.dispose()));
     }
   });
 

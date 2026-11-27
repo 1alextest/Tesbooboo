@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { generateKeyPairSync } from "node:crypto";
 import { requireApprovedMcpEndpoint } from "./mcp-approved-origin.mjs";
 import { REQUIRED_TOOLS, PROPOSAL_TOOLS, NATIVE_PILOT_READ_TOOLS,
   readOnlyPilotCatalogGaps, summarizeNativePilotCases, catalogFingerprint, catalogGaps,
@@ -13,6 +14,8 @@ import { REQUIRED_TOOLS, PROPOSAL_TOOLS, NATIVE_PILOT_READ_TOOLS,
 const text = { type: "string" };
 const citations = { type: "array" };
 const caseFields = { title: text, attachments: text, postconditions: text, estimatedDuration: text, sourceRefs: citations };
+const publicOAuthKey = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
+const publicEncryptionKey = generateKeyPairSync("x25519").publicKey.export({ format: "jwk" });
 
 function tool(name, properties = {}, nested = false) {
   // Clone per tool: tests mutate the returned schema to simulate a regression, and a shared
@@ -336,7 +339,7 @@ globalThis.fetch = async (url, init = {}) => {
   } finally { x.dispose(); }
 });
 
-function invokeSyntheticMcp({ script = "mcp-deploy-check.mjs", mode = "complete", fileToken = "synthetic-file-token", environmentToken = "synthetic-other-token", endpoint = "https://trusted.example.test/api/projects/example/mcp" } = {}) {
+function invokeSyntheticMcp({ script = "mcp-deploy-check.mjs", mode = "complete", fileToken = "synthetic-file-token", environmentToken = "synthetic-other-token", endpoint = "https://trusted.example.test/api/projects/example/mcp", oauthReadiness = false } = {}) {
   const x = privateMcpFixture();
   try {
     writeFileSync(x.token, fileToken, { mode: 0o600 });
@@ -364,15 +367,62 @@ const tools = ${JSON.stringify(tools)};
 globalThis.fetch = async (url, init = {}) => {
   const pathname = new URL(url).pathname;
   const authorization = init.headers?.Authorization ?? init.headers?.authorization ?? null;
-  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, JSON.stringify({ pathname, authorization, redirect: init.redirect, method: pathname === "/api/health" ? null : JSON.parse(init.body).method, tool: pathname === "/api/health" ? null : JSON.parse(init.body).params?.name || null, environmentBearerPresent: Boolean(process.env.TESBO_MCP_TOKEN) }) + "\\n");
+  const rpc = init.body ? JSON.parse(init.body) : {};
+  appendFileSync(process.env.TESBO_MCP_TEST_EVENTS, JSON.stringify({ pathname, authorization, redirect: init.redirect, credentials: init.credentials, cache: init.cache, referrerPolicy: init.referrerPolicy, httpMethod: init.method || "GET", method: rpc.method || null, tool: rpc.params?.name || null, environmentBearerPresent: Boolean(process.env.TESBO_MCP_TOKEN) }) + "\\n");
   const mode = process.env.TESBO_MCP_TEST_MODE;
   if (mode === "native-header-validation") new Request(url, init);
   if (mode === "transport-error") throw new Error("Synthetic transport rejected " + authorization);
   if (pathname === "/api/health") {
-    return new Response(JSON.stringify({ gitSha: "a".repeat(40) }), {
+    return new Response(JSON.stringify({ gitSha: (mode === "oauth-health-mismatch" ? "b" : "a").repeat(40) }), {
       status: mode === "health-redirect" ? 302 : 200,
-      headers: { location: "https://unapproved.example.test/api/health" }
+      headers: { location: "https://unapproved.example.test/api/health", "content-type": "application/json" }
     });
+  }
+  if (mode === "oauth-disabled" && pathname.startsWith("/.well-known/")) {
+    return new Response(JSON.stringify({error: "OAuth discovery is not available"}), {
+      status: 404, headers: {"content-type": "application/json"}
+    });
+  }
+  if (mode.startsWith("oauth-") && !authorization) {
+    const origin = new URL(url).origin;
+    const resource = process.env.TESBO_MCP_URL;
+    const metadataUrl = origin + "/.well-known/oauth-protected-resource" + new URL(resource).pathname;
+    const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
+      status, headers: {"content-type": "application/json", ...headers}
+    });
+    if (mode === "oauth-transport-error") throw new Error("Sensitive " + process.env.TESBO_MCP_TOKEN);
+    if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
+      if (mode === "oauth-html") return new Response("<html>Sensitive</html>", {headers: {"content-type":"text/html"}});
+      if (mode === "oauth-redirect") return json({}, 302, {location:"https://unapproved.example.test/metadata"});
+      if (mode === "oauth-oversized") return json({padding:"x".repeat(65_537)});
+      return json({resource: mode === "oauth-wrong-resource" ? resource + "/wrong" : resource,
+        authorization_servers: [mode === "oauth-foreign-issuer" ? "https://unapproved.example.test/oauth" : origin + "/oauth"],
+        scopes_supported: mode === "oauth-write-scope" ? ["mcp:read","mcp:write"] : ["mcp:read"]});
+    }
+    if (pathname === "/.well-known/oauth-authorization-server/oauth") {
+      if (mode === "oauth-preview-only") return json({error:"Issuer is not mounted"}, 404);
+      return json({issuer:origin + "/oauth", authorization_endpoint:origin + "/oauth/auth",
+        token_endpoint:mode === "oauth-foreign-token" ? "https://unapproved.example.test/token" : origin + "/oauth/token",
+        jwks_uri:origin + "/oauth/jwks", code_challenge_methods_supported:["S256"],
+        response_types_supported:mode === "oauth-string-code" ? "code" : ["code"],
+        token_endpoint_auth_methods_supported:["none"], client_id_metadata_document_supported:true,
+        grant_types_supported:mode === "oauth-wrong-grant" ? ["client_credentials"] :
+          mode === "oauth-missing-grant" ? undefined : ["authorization_code","refresh_token"]});
+    }
+    if (pathname === "/oauth/jwks") return json({keys:mode === "oauth-mixed-keys"
+      ? [${JSON.stringify(publicEncryptionKey)},${JSON.stringify(publicOAuthKey)}]
+      : [mode === "oauth-encryption-only" ? ${JSON.stringify(publicEncryptionKey)}
+      : mode === "oauth-encryption-use" ? {...${JSON.stringify(publicOAuthKey)},use:"enc",key_ops:["deriveKey"]}
+      : mode === "oauth-private-key"
+      ? {...${JSON.stringify(publicOAuthKey)},d:"synthetic-private-material"}
+      : mode === "oauth-invalid-key" ? {kty:"RSA"} : ${JSON.stringify(publicOAuthKey)}]}, 200,
+      mode === "oauth-jwk-media" ? {"content-type":"application/jwk-set+json"} : {});
+    if (init.method !== "POST") return json({error:"POST required"},405);
+    if (mode === "oauth-cancel-error") return new Response(new ReadableStream({
+      cancel() { throw new Error("Sensitive " + process.env.TESBO_MCP_TOKEN); }
+    }), {status:401,headers:{"www-authenticate":'Bearer resource_metadata="' + metadataUrl + '", scope="mcp:read"'}});
+    return json({error:"Authentication required"}, 401, mode === "oauth-wrong-challenge" ? {}
+      : {"www-authenticate":'Bearer resource_metadata="' + metadataUrl + '", scope="mcp:read"'});
   }
   if (mode === "rpc-redirect") return new Response("", { status: 302, headers: { location: "https://unapproved.example.test/mcp" } });
   if (mode.startsWith("consent-")) {
@@ -406,15 +456,126 @@ globalThis.fetch = async (url, init = {}) => {
     const shell = script.endsWith(".sh");
     const child = spawnSync(shell ? "bash" : process.execPath, shell ? [target] : ["--import", pathToFileURL(hook).href, target], {
       env: { ...process.env, NODE_OPTIONS: shell ? `--import=${pathToFileURL(hook).href}` : "", TESBO_MCP_URL: endpoint,
-        TESBO_MCP_TOKEN_FILE: x.token, TESBO_MCP_TOKEN: environmentToken,
+        TESBO_MCP_TOKEN_FILE: mode === "oauth-no-credential-file" ? x.token + ".absent" : x.token, TESBO_MCP_TOKEN: environmentToken,
         EXPECTED_GIT_SHA: "a".repeat(40), EXPECTED_TOOL_COUNT: "", REQUIRE_PROPOSAL_PREVIEW: "",
-        TESBO_PILOT_READ_ONLY: mode.startsWith("pilot-") ? "1" : "", TESBO_API_HEALTH_URL: "", TESBO_MCP_TEST_EVENTS: events, TESBO_MCP_TEST_MODE: mode },
+        TESBO_PILOT_READ_ONLY: mode.startsWith("pilot-") ? "1" : "", TESBO_API_HEALTH_URL: "", TESBO_MCP_TEST_EVENTS: events, TESBO_MCP_TEST_MODE: mode,
+        TESBO_MCP_OAUTH_READINESS: typeof oauthReadiness === "string" ? oauthReadiness : oauthReadiness ? "1" : "0" },
       encoding: "utf8", timeout: 12000
     });
     assert.equal(child.error, undefined, child.error?.message);
     return { ...child, requests: readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map(row => JSON.parse(row)) };
   } finally { x.dispose(); }
 }
+
+test("explicit OAuth readiness cannot inherit a healthy API-token catalog while OAuth is disabled", () => {
+  const legacy = invokeSyntheticMcp({ mode: "oauth-disabled",
+    endpoint: "https://trusted.example.test/api/projects/11111111-2222-4333-8444-555555555555/mcp" });
+  assert.equal(legacy.status, 0, legacy.stdout + legacy.stderr);
+  assert.equal(legacy.requests.filter(row => row.authorization).length, 2);
+  const result = invokeSyntheticMcp({ mode: "oauth-disabled", oauthReadiness: true,
+    endpoint: "https://trusted.example.test/api/projects/11111111-2222-4333-8444-555555555555/mcp" });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /OAuth.*protected-resource metadata.*404/);
+  assert.ok(result.requests.every(row => row.authorization === null));
+  assert.equal(result.requests.some(row => row.method === "tools/call"), false);
+});
+
+const oauthEndpoint = "https://trusted.example.test/api/projects/11111111-2222-4333-8444-555555555555/mcp";
+
+test("OAuth public readiness validates the whole deployed metadata chain without any credential or tool call", () => {
+  const result = invokeSyntheticMcp({ mode: "oauth-no-credential-file", oauthReadiness: true, endpoint: oauthEndpoint });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    ok: true, verification: "oauth_public_metadata", gitSha: "a".repeat(40), resource: oauthEndpoint,
+    issuer: "https://trusted.example.test/oauth", cimdAdvertised: true, refreshAdvertised: true,
+    clientAuthorization: "not_verified", toolCalls: 0, tokenIssuance: "not_attempted"
+  });
+  assert.deepEqual(result.requests.map(row => row.pathname), ["/api/health",
+    "/.well-known/oauth-protected-resource/api/projects/11111111-2222-4333-8444-555555555555/mcp",
+    "/.well-known/oauth-authorization-server/oauth", "/oauth/jwks", new URL(oauthEndpoint).pathname]);
+  assert.ok(result.requests.every(row => row.authorization === null && row.credentials === "omit" &&
+    row.redirect === "manual" && row.cache === "no-store" && row.referrerPolicy === "no-referrer"));
+  assert.deepEqual(result.requests.map(row => row.method), [null, null, null, null, "initialize"]);
+  assert.deepEqual(result.requests.map(row => row.httpMethod), ["GET", "GET", "GET", "GET", "POST"]);
+  assert.ok(!result.stdout.includes("synthetic-other-token"));
+});
+
+test("OAuth readiness accepts the registered JWK Set media type", () => {
+  const result = invokeSyntheticMcp({ mode: "oauth-jwk-media", oauthReadiness: true, endpoint: oauthEndpoint });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test("OAuth readiness permits a mixed public key set containing a legitimate signing key", () => {
+  const result = invokeSyntheticMcp({ mode: "oauth-mixed-keys", oauthReadiness: true, endpoint: oauthEndpoint });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
+test("OAuth status and MIME refusals cancel unread bodies without leaking cancellation errors", async () => {
+  const { verifyOAuthDeployment } = await import("./mcp-deploy-check.mjs");
+  for (const status of [503, 200]) {
+    let requests = 0;
+    let cancelled = false;
+    const fetcher = async () => {
+      if (++requests === 1) return Response.json({ gitSha: "a".repeat(40) });
+      return new Response(new ReadableStream({ cancel() {
+        cancelled = true;
+        throw new Error("synthetic-private-cancellation");
+      } }), { status, headers: { "content-type": "text/html" } });
+    };
+    await assert.rejects(verifyOAuthDeployment({ endpoint: oauthEndpoint, expectedGitSha: "a".repeat(40), fetcher }),
+      status === 503 ? /metadata unavailable \(HTTP 503\)/ : /metadata did not return JSON/);
+    assert.equal(cancelled, true);
+    assert.equal(requests, 2);
+  }
+});
+
+for (const [mode, message, calls] of [
+  ["oauth-health-mismatch", /health does not match/, 1],
+  ["oauth-html", /protected-resource metadata did not return JSON/, 2],
+  ["oauth-redirect", /protected-resource metadata unavailable \(HTTP 302\)/, 2],
+  ["oauth-oversized", /metadata was invalid or exceeded its limit/, 2],
+  ["oauth-wrong-resource", /resource, issuer or read-only scope/, 2],
+  ["oauth-foreign-issuer", /resource, issuer or read-only scope/, 2],
+  ["oauth-write-scope", /resource, issuer or read-only scope/, 2],
+  ["oauth-preview-only", /authorization-server metadata unavailable \(HTTP 404\)/, 3],
+  ["oauth-foreign-token", /same-origin public-client PKCE contract/, 3],
+  ["oauth-string-code", /same-origin public-client PKCE contract/, 3],
+  ["oauth-wrong-grant", /same-origin public-client PKCE contract/, 3],
+  ["oauth-missing-grant", /same-origin public-client PKCE contract/, 3],
+  ["oauth-private-key", /contain private material/, 4],
+  ["oauth-invalid-key", /not valid asymmetric public keys/, 4],
+  ["oauth-encryption-only", /signature-verification key/, 4],
+  ["oauth-encryption-use", /signature-verification key/, 4],
+  ["oauth-wrong-challenge", /did not refuse with the exact project read-only challenge/, 5],
+  ["oauth-cancel-error", /challenge cleanup failed \(details withheld\)/, 5],
+  ["oauth-transport-error", /request failed \(details withheld\)/, 2],
+]) {
+  test(`${mode} refuses readiness without forwarding credentials or trusting remote error text`, () => {
+    const result = invokeSyntheticMcp({ mode, oauthReadiness: true, endpoint: oauthEndpoint });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, message);
+    assert.equal(result.requests.length, calls);
+    assert.ok(result.requests.every(row => row.authorization === null));
+    for (const privateValue of ["synthetic-file-token", "synthetic-other-token", "synthetic-private-material", "Sensitive"]) {
+      assert.ok(!result.stdout.includes(privateValue) && !result.stderr.includes(privateValue));
+    }
+  });
+}
+
+test("OAuth readiness rejects noncanonical resources and missing intent before any request", () => {
+  for (const endpoint of [oauthEndpoint.replace("https:", "http:"), oauthEndpoint + "/", oauthEndpoint + "?secret=value",
+    oauthEndpoint.replace("trusted.example.test", "user:secret@trusted.example.test"),
+    "https://trusted.example.test/api/mcp"]) {
+    const result = invokeSyntheticMcp({ mode: "oauth-ready", oauthReadiness: true, endpoint });
+    assert.equal(result.status, 1);
+    assert.deepEqual(result.requests, []);
+    assert.ok(!result.stderr.includes("secret"));
+  }
+  const invalid = invokeSyntheticMcp({ mode: "oauth-ready", oauthReadiness: "true", endpoint: oauthEndpoint });
+  assert.equal(invalid.status, 2);
+  assert.deepEqual(invalid.requests, []);
+  assert.match(invalid.stderr, /must be 0 or 1/);
+});
 
 test("the validated credential file is the only bearer source, even when a different environment token is present", () => {
   const result = invokeSyntheticMcp();

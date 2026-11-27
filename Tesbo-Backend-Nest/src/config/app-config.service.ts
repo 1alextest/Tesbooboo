@@ -3,6 +3,39 @@ import * as dotenv from "dotenv";
 import { existsSync } from "fs";
 import { join } from "path";
 
+export type GraphQaRecoveryMode = "off" | "project" | "global";
+export type KbTranscriptionRecoveryMode = "off" | "project" | "global";
+
+/**
+ * KB transcription recovery has no legacy enable flag. Its pre-existing behaviour is automatic
+ * global recovery, so unset means global; an explicitly invalid value fails closed.
+ */
+export function resolveKbTranscriptionRecoveryMode(explicitMode: string | undefined): KbTranscriptionRecoveryMode {
+  const explicit = (explicitMode ?? "").trim().toLowerCase();
+  if (explicit === "off" || explicit === "project" || explicit === "global") return explicit;
+  if (explicit) return "off";
+  return "global";
+}
+
+/** A deliberate off is silent; a non-empty unrecognised value must be diagnosable. */
+export function isKbTranscriptionRecoveryModeInvalid(rawMode: string | undefined): boolean {
+  const value = (rawMode ?? "").trim().toLowerCase();
+  return Boolean(value) && !["off", "project", "global"].includes(value);
+}
+
+/** Explicit mode wins; the legacy ENABLED=1 flag remains an alias for global when MODE is unset. */
+export function resolveGraphQaRecoveryMode(
+  explicitMode: string | undefined,
+  legacyEnabled: string | undefined
+): GraphQaRecoveryMode {
+  const explicit = (explicitMode ?? "").trim().toLowerCase();
+  if (explicit === "off" || explicit === "project" || explicit === "global") return explicit;
+  // An unknown value is a configuration mistake; fail closed rather than guessing a wider scope.
+  if (explicit) return "off";
+  // Preserve the legacy guard's exact comparison: " 1" or "1\n" was off before and must stay off.
+  return (legacyEnabled ?? "") === "1" ? "global" : "off";
+}
+
 @Injectable()
 export class AppConfigService {
   private readonly env = this.loadEnv();
@@ -10,6 +43,24 @@ export class AppConfigService {
   readonly port = this.integer("PORT", 7000);
   /** Server-owned checkout allowlist; unset means source capture is disabled. */
   readonly graphApprovedCheckoutsJson = this.optionalString("TESBO_GRAPH_APPROVED_CHECKOUTS_JSON");
+  // Explicit execution scope for the existing durable QA receipt recovery worker. `off` is the
+  // default. `project` is for development/e2e and requires the project id below. `global` keeps the
+  // legacy cluster-wide sweep. When MODE is unset, the older ENABLED=1 flag still means global so an
+  // existing deployment does not lose a worker merely by upgrading.
+  readonly graphQaRecoveryMode: GraphQaRecoveryMode = this.parseGraphQaRecoveryMode();
+  readonly graphQaRecoveryProjectId = this.optionalString("TESBO_GRAPH_QA_RECOVERY_PROJECT_ID") || null;
+  // Explicit execution scope for the KB transcription restart sweep. This is intentionally separate
+  // from the graph QA flag: either may be disabled without changing the other. Unset keeps the
+  // existing automatic global recovery.
+  private readonly kbTranscriptionRecoveryModeRaw = this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_MODE");
+  readonly kbTranscriptionRecoveryMode: KbTranscriptionRecoveryMode =
+    resolveKbTranscriptionRecoveryMode(this.kbTranscriptionRecoveryModeRaw);
+  // Distinguishes a deliberate off from a typo that resolved closed; the former is silent, the
+  // latter must be diagnosable.
+  readonly kbTranscriptionRecoveryModeInvalid =
+    isKbTranscriptionRecoveryModeInvalid(this.kbTranscriptionRecoveryModeRaw);
+  readonly kbTranscriptionRecoveryProjectId =
+    this.optionalString("TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID") || null;
   readonly databaseUrl = this.normalizeDatabaseUrl(this.string("DATABASE_URL", "postgresql://localhost:5432/tesbo"));
   readonly databaseUser = this.optionalString("DATABASE_USER");
   readonly databasePassword = this.optionalString("DATABASE_PASSWORD");
@@ -211,6 +262,15 @@ export class AppConfigService {
     if (value.startsWith("jdbc:postgresql://")) return value.slice("jdbc:".length);
     if (value.startsWith("jdbc:postgres://")) return value.slice("jdbc:".length);
     return value;
+  }
+
+  private parseGraphQaRecoveryMode(): GraphQaRecoveryMode {
+    return resolveGraphQaRecoveryMode(
+      this.optionalString("TESBO_GRAPH_QA_RECOVERY_MODE"),
+      // The legacy guard read process.env directly. Reading it from the merged .env view could
+      // remove an enabled worker solely because a local file disagreed with the real environment.
+      process.env.TESBO_GRAPH_QA_RECOVERY_ENABLED
+    );
   }
 
   private string(key: string, defaultValue: string): string {

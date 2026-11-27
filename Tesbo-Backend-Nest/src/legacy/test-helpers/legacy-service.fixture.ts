@@ -21,7 +21,7 @@ import type Redis from "ioredis";
 
 
 export function makeLegacy(db: DatabaseService, collaborators: {
-  config?: AppConfigService; storage?: StorageService; planLimits?: PlanLimitsService; requestCache?: RequestCacheService;
+  config?: AppConfigService; storage?: StorageService; planLimits?: PlanLimitsService; requestCache?: RequestCacheService; apiTokens?: ApiTokenService;
 } = {}): LegacyService {
   const requestCache = collaborators.requestCache ?? new RequestCacheService({} as unknown as AppConfigService);
   const suitesCache = new SuitesCacheService({} as unknown as Redis, {} as unknown as AppConfigService);
@@ -36,7 +36,7 @@ export function makeLegacy(db: DatabaseService, collaborators: {
     {} as unknown as RagIngestionService,
     {} as unknown as RagRetrievalService,
     {} as unknown as IntegrationSyncService,
-    {} as unknown as ApiTokenService,
+    collaborators.apiTokens ?? {} as unknown as ApiTokenService,
     collaborators.planLimits ?? {} as unknown as PlanLimitsService,
     requestCache,
     new ProjectLookupService(db, requestCache),
