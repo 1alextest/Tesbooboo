@@ -57,6 +57,24 @@ The underlying API is a human-session read implemented as `POST /api/projects/{p
 
 The exported Skill pins tell a reviewer which method governed the original application. A consumer that later authors or edits a Tesbo case over MCP must independently resolve the current approved assignment/version through the existing writer and submit a new revision through shared review. A historical pin in a downloaded packet grants no write scope. For team conformance, give two separately authenticated members the same task and Skill revision, check the required case structure, then run both resulting assertions against the same good and faulty fixtures. The wording can differ while both cases satisfy the same obligation. A credential shared by two people proves which grant acted. Individual attribution requires separately authenticated member/delegated identities. [Existing Skill delivery and conformance specification](../../specs/agent-synchronized-engineering/skills-governance.md#mandatory-skill-delivery-and-cross-member-authoring-conformance)
 
+## Prepare a future automated native retest (candidate)
+
+Use the same trusted CLI, Git verifier and pinned investigation checker with `--retest-url` instead of `--task-url`. Supply the **original failed execution's** full native URL:
+
+```sh
+node scripts/qa-approved-handoff.mjs \
+  --retest-url 'https://tesbo.example/projects/project-uuid/cycles/run-uuid/execute/execution-uuid' \
+  --api-origin 'https://api.tesbo.example' \
+  --repo /path/to/consumer-project --branch feature/filter --revision "$TARGET_COMMIT" \
+  --harness /path/to/qa-investigation-harness --investigation CASE-300 --case TC-01
+```
+
+The bounded first preparation supports one failed observation in a completed Run, a current exactly approved native case with a tracked Playwright target, and one existing reviewed investigation risk. It reads the existing native retest preview for that exact source occurrence, derives the target from the approved case snapshot, checks the published branch/commit and target bytes, displays the reviewed case and oracle for comparison, and rereads the same source and current definition after explicit terminal confirmation. It retains source evidence and Bug **references**, not original attachment bytes or raw error messages. The private JSON packet has purpose `prepare_native_retest_automation` and `executionAuthorized: false`; it binds the source preview digest, current approval revision, exact reviewed file/commit and investigation evidence. An observed current case change remains explicit.
+
+**Preparation only.** The packet neither creates a destination Run nor approves an automation binding, starts target actions, assigns an executor, grants a credential or records a result. The existing generated-change consumer accepts its own different purpose only; this is not an input that authorizes it to execute a retest. Retain normal manual retest creation and exact v1 request/recovery digests. The native command refuses an explicit unsupported execution mode or unknown binding field rather than silently creating a manual Run. An explicit `executionMode: "manual"` is equivalent to omitting that field.
+
+The next execution increment must extend the existing task/attempt and native retest owners with reviewed destination authority, pre-effect admission, exact-occurrence reporter binding, recovery and all-writer safeguards. See [native retest owner](../../specs/agent-synchronized-engineering/reviews/2026-11-20-native-qa/README.md). No new scheduler or separate result authority is introduced here. Tests at this candidate include the actual existing native preview wire shape in controlled HTTP fixtures, wrong identities, stale approval, changed evidence after consent and legitimate preparation. These do not establish a live automated retest or independent acceptance. Fresh hosted evidence is required.
+
 ## Verification and native records
 
 The existing Playwright requirements suite owns the applied-bundle → approval → activation → handoff scenario and its refusal cases. The Task browser test owns discovery of the command. For the standalone matrix and CLI checks, use a checkout of the pinned upstream source and run:
