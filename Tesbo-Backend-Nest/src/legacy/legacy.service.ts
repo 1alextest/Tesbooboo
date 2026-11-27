@@ -4272,8 +4272,8 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       const seq = isUuid(task) ? null : seqOf(task, "TASK");
       if (!isUuid(task) && seq === null) throw new NotFoundException({ error: "Zyra task not found" });
       const res = isUuid(task)
-        ? await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])", [task, projectId, ZYRA_AGENT_NAMES])
-        : await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[])", [seq, projectId, ZYRA_AGENT_NAMES]);
+        ? await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[]) AND task_kind IN ('legacy_generation_review','governed_proposal')", [task, projectId, ZYRA_AGENT_NAMES])
+        : await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[]) AND task_kind IN ('legacy_generation_review','governed_proposal')", [seq, projectId, ZYRA_AGENT_NAMES]);
       if (!res.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       out.taskId = res.rows[0].id;
       out.taskRef = `${prefix}-TASK-${res.rows[0].seq}`;
@@ -6670,7 +6670,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
          FROM (
            SELECT id, task_status, updated_at, jsonb_array_elements_text(${column}) AS key
            FROM ai_generation_requests
-           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL
+           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL AND task_kind IN ('legacy_generation_review','governed_proposal')
          ) t
          ORDER BY key, updated_at DESC`,
       [projectId, ZYRA_AGENT_NAMES]
@@ -16425,9 +16425,9 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
                 requested_count, generated_count, generated_payload, saved_count, save_events, created_at, updated_at,
                 agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
-                source_summary, activity_log
+                source_summary, activity_log, task_kind
          FROM ai_generation_requests
-         WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL
+         WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL AND task_kind IN ('legacy_generation_review','governed_proposal')
          ORDER BY updated_at DESC LIMIT 50`,
         [projectId, ZYRA_AGENT_NAMES]
       ),
@@ -16464,6 +16464,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
         `SELECT COALESCE(SUM(saved_count), 0) AS saved, COALESCE(SUM(generated_count), 0) AS generated
            FROM ai_generation_requests
           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'
+             AND task_kind IN ('legacy_generation_review','governed_proposal')
             -- Only completed testcase proposal batches are eligible. Requirement
             -- bundles count revision/link operations; managed document requests
             -- count documents. Neither is a generated testcase denominator.
@@ -17034,7 +17035,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException({ error: "operation must be create or update" });
     }
     const search = typeof query.q === "string" ? query.q.trim().slice(0, 200) : "";
-    const conditions = ["project_id=$1", "provider='external_document_proposal'"];
+    const conditions = ["project_id=$1", "task_kind='governed_proposal'", "provider='external_document_proposal'"];
     const params: unknown[] = [projectId];
     const bind = (value: unknown) => { params.push(value); return `$${params.length}`; };
     conditions.push(status === "pending" ? "task_status IN ('in_review','failed')" : `task_status=${bind(status)}`);
@@ -17245,6 +17246,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.db.query(
       `SELECT id FROM ai_generation_requests
         WHERE project_id=$1 AND task_status IN ('in_review','failed')
+          AND task_kind IN ('legacy_generation_review','governed_proposal')
           AND generated_payload @> '[{"opType":"requirement_revision"}]'::jsonb
         ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
       [projectId, limit, offset]
@@ -18209,7 +18211,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
              WHERE ar.project_id=r.project_id AND ar.testcase_id=testcases.id AND ar.semantic_revision=$8
                AND ar.principal_kind='human_session' AND ar.reviewed_snapshot IS NOT NULL
              ORDER BY ar.created_at DESC, ar.id DESC LIMIT 1) case_decision ON TRUE
-           WHERE r.project_id=$1 AND r.id=$2 AND r.provider='external_requirement_proposal' AND r.task_status='done'
+           WHERE r.project_id=$1 AND r.id=$2 AND r.task_kind='governed_proposal' AND r.provider='external_requirement_proposal' AND r.task_status='done'
              AND saved.receipt->>'id'=$3 AND saved.receipt->>'action'='requirement_bundle_apply'
              AND saved.receipt->>'principalKind'='human_session'`,
         [projectId, taskId, receiptId, requirementId, requirementVersionId, linkId, testcaseId, testcaseApprovalRevision]
@@ -18722,7 +18724,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
 
   async listTestcaseProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
-    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' AND provider IS DISTINCT FROM 'external_document_proposal' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
+    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' AND task_kind IN ('legacy_generation_review','governed_proposal') AND provider IS DISTINCT FROM 'external_document_proposal' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
     return { list: await Promise.all(rows.rows.map(row => this.zyraTask(projectId, userId, String(row.id)))) };
   }
 
@@ -18788,7 +18790,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async readTestcaseProposal(runner: QueryRunner, projectId: string, taskId: string): Promise<Body> {
-    const result = await runner.query("SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2", [taskId,projectId]);
+    const result = await runner.query("SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2 AND r.task_kind IN ('legacy_generation_review','governed_proposal')", [taskId,projectId]);
     if (!result.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
     const row = result.rows[0];
     if (row.provider === "external_document_proposal") {
@@ -23631,6 +23633,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const managedPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     const res = await this.db.query(
       `SELECT * FROM ai_generation_requests WHERE project_id = $1
+         AND task_kind IN ('legacy_generation_review','governed_proposal')
          AND ($4::boolean OR provider IS DISTINCT FROM 'external_document_proposal')
        ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
       [projectId, limit, offset, managedPreview]

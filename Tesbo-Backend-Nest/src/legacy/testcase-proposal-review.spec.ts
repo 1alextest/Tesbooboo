@@ -448,3 +448,50 @@ describe("native proposal producer identity — stable review/replay lineage", (
   });
 });
 
+
+
+describe("native task kind read boundary", () => {
+  const previousPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+  afterEach(() => {
+    if (previousPreview === undefined) delete process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED;
+    else process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED = previousPreview;
+    jest.restoreAllMocks();
+  });
+  function fixture() {
+    const query = jest.fn(async (_sql: string, _values: unknown[] = []) => ({rows:[]}));
+    const svc=makeLegacy({query,transaction:jest.fn()} as unknown as DatabaseService);
+    jest.spyOn(svc,"requireProjectAccess").mockResolvedValue({id:project,caller_role:"owner"} as never);
+    return {svc,query};
+  }
+  it.each(["history","testcase","requirement","detail"])("scopes %s to existing review kinds at the query boundary", async (surface) => {
+    const f=fixture();
+    if(surface==="history") await expect(f.svc.aiHistory(project,user,{limit:2,offset:1})).resolves.toEqual({list:[]});
+    else if(surface==="testcase") await expect(f.svc.listTestcaseProposals(project,user,{limit:2,offset:1})).resolves.toEqual({list:[]});
+    else if(surface==="requirement") await expect(f.svc.listRequirementProposals(project,user,{limit:2,offset:1})).resolves.toEqual({list:[]});
+    else await expect(f.svc.zyraTask(project,user,task)).rejects.toMatchObject({status:404});
+    const [sql,params]=f.query.mock.calls.find(([sql])=>sql.includes("FROM ai_generation_requests"))!;
+    expect(sql).toContain("task_kind IN ('legacy_generation_review','governed_proposal')");
+    if(surface==="detail"){
+      expect(sql).toContain("r.id=$1 AND r.project_id=$2 AND r.task_kind");
+      expect(params).toEqual([task,project]);
+    } else {
+      expect(sql.indexOf("task_kind IN")).toBeLessThan(sql.indexOf("LIMIT"));
+      expect(params?.slice(0,3)).toEqual([project,2,1]);
+    }
+    if(surface==="history") expect(sql).toContain("provider IS DISTINCT FROM 'external_document_proposal'");
+    if(surface==="testcase") expect(sql).toContain("provider IS DISTINCT FROM 'external_document_proposal'");
+    if(surface==="requirement") expect(sql).toContain("generated_payload @>");
+  });
+  it("uses the governed document subtype for both the page and empty-page count",async()=>{
+    process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED="1";
+    const f=fixture();
+    await expect(f.svc.listManagedDocumentProposals(project,user,{limit:2,offset:1})).resolves.toMatchObject({list:[],total:0});
+    const queries=f.query.mock.calls.filter(([sql])=>sql.includes("FROM ai_generation_requests"));
+    expect(queries).toHaveLength(2);
+    for(const [sql,params] of queries){
+      expect(sql).toContain("task_kind='governed_proposal'");
+      expect(sql).toContain("provider='external_document_proposal'");
+      expect(params?.[0]).toBe(project);
+    }
+  });
+});
