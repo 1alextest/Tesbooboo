@@ -2206,9 +2206,15 @@ test.describe("execution evidence and automation provenance", () => {
       // The generic writer refuses automation runs; showing that button would strand the run after
       // a reporter crash. The automation-owned close is the only recoverable screen action.
       await expect(page.getByRole("button", { name: "Mark Completed", exact: true })).toHaveCount(0);
+      // Adding cases to an open automation run is still supported by the generic owner.
+      await expect(page.getByRole("button", { name: "Add Test Cases", exact: true })).toBeVisible();
+      page.once("dialog", (dialog) => dialog.accept());
       await page.getByRole("button", { name: "Close as incomplete", exact: true }).click();
       await expect(page.getByRole("button", { name: "Close as incomplete", exact: true })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Reopen", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Add Test Cases", exact: true })).toHaveCount(0);
+      // The visible distinction is the Incomplete badge; status alone still reads Completed.
+      await expect(page.getByText("Incomplete", { exact: true })).toBeVisible();
 
       const detail = await (await api.get(`/api/projects/${ctx.projectId}/automation/runs/${runId}`)).json();
       expect(detail).toMatchObject({ status: "Completed", closeStatus: "incomplete" });

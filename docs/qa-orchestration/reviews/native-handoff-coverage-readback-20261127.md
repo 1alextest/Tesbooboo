@@ -12,15 +12,16 @@ execution.
 | `601cc4f6-08e8-4fae-8b95-933010f2dc54` | `72d4982203eec734585ac5560e78fd2c09b0ce1f558b7369654f8241866704cf` | `in_review` | 1 generated, 0 saved; generated-but-unsaved case proposal for governed packet → reporter → closed Run/evidence |
 | `55cf92ac-2d99-4952-9514-1283a7388f08` | `caabf4baf87b642cf99f5267623f77e92ac6cef17226a5cb77e1370f4d437743` | `in_review` | 1 generated, 0 saved; distinct automation failure → Bug → native manual retest contract proposal |
 
-`0 saved` means neither proposal produced a persisted native testcase. Neither task has an apply
+`0 saved` means none of these proposals produced a persisted native testcase. None has an apply
 receipt, a native approval, a Test Run or execution evidence. They must not be described as saved
 Draft cases.
 
 ## Official case inventory
 
-The project returned 75 official test cases. Filtering their titles for handoff, automation,
-generated, Playwright, reporter, retest or Bug returned only the existing Bug-link cases
-`TES-TC-8`/`TES-TC-9`; no official case duplicates either proposal.
+At this readback (27 November 2026), the project returned 75 official test cases. Filtering their
+titles for handoff, automation, generated, Playwright, reporter, retest or Bug returned only the
+existing Bug-link cases `TES-TC-8`/`TES-TC-9`; no official case duplicates these proposals. This is
+an inventory read, not a claim that no related case could be created later.
 
 ## Evidence boundary
 
