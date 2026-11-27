@@ -12,8 +12,9 @@ import { readInvestigationMapping } from './qa-investigation-mapping.mjs';
 
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const sha = /^[0-9a-f]{40}$/;
-const options = Object.fromEntries(['task-url', 'api-origin', 'repo', 'branch', 'revision', 'harness', 'investigation', 'case'].map(key => [key, { type: 'string' }]));
-const usage = 'node scripts/qa-approved-handoff.mjs --task-url URL --api-origin ORIGIN --repo DIR --branch BRANCH --revision FULL_SHA --harness DIR --investigation ID --case TC-01';
+const commonOptions = ['api-origin', 'repo', 'branch', 'revision', 'harness', 'investigation', 'case'];
+const options = Object.fromEntries(['task-url', 'retest-url', ...commonOptions].map(key => [key, { type: 'string' }]));
+const usage = 'node scripts/qa-approved-handoff.mjs (--task-url URL | --retest-url URL) --api-origin ORIGIN --repo DIR --branch BRANCH --revision FULL_SHA --harness DIR --investigation ID --case TC-01';
 
 function git(root, args) {
   return execFileSync('git', ['--no-replace-objects', '-c', 'core.fsmonitor=false', '-C', root, ...args], {
@@ -25,8 +26,10 @@ function git(root, args) {
 
 export function parseSelection(argv) {
   const { values } = parseArgs({ args: argv, options });
-  for (const key of Object.keys(options)) if (!values[key]?.trim()) throw new Error(usage);
-  const task = new URL(values['task-url']);
+  for (const key of commonOptions) if (!values[key]?.trim()) throw new Error(usage);
+  if (Boolean(values['task-url']?.trim()) === Boolean(values['retest-url']?.trim())) throw new Error(usage);
+  const retest = Boolean(values['retest-url']?.trim());
+  const task = new URL(retest ? values['retest-url'] : values['task-url']);
   const api = new URL(values['api-origin']);
   for (const url of [task, api]) {
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -34,11 +37,16 @@ export function parseSelection(argv) {
       throw new Error('Use a Tesbo HTTPS address or an explicitly selected loopback test installation.');
     }
   }
-  const match = task.pathname.match(/^\/projects\/([^/]+)\/agents\/tasks\/([^/]+)\/?$/);
+  const match = retest
+    ? task.pathname.match(/^\/projects\/([^/]+)\/cycles\/([^/]+)\/execute\/([^/]+)\/?$/)
+    : task.pathname.match(/^\/projects\/([^/]+)\/agents\/tasks\/([^/]+)\/?$/);
   if (api.pathname !== '/' || !match || !match.slice(1).every(id => uuid.test(id)) || !sha.test(values.revision)) {
-    throw new Error('Use the full native task URL with both UUIDs, the API origin and a 40-character Git commit.');
+    throw new Error(retest
+      ? 'Use the full native execution URL with project, Run and execution UUIDs, the API origin and a 40-character Git commit.'
+      : 'Use the full native task URL with both UUIDs, the API origin and a 40-character Git commit.');
   }
-  return { taskUrl: task.href, apiOrigin: api.origin, projectId: match[1], taskId: match[2],
+  return { ...(retest ? { retestUrl: task.href, sourceCycleId: match[2].toLowerCase(), sourceExecutionId: match[3].toLowerCase() }
+    : { taskUrl: task.href, taskId: match[2] }), apiOrigin: api.origin, projectId: retest ? match[1].toLowerCase() : match[1],
     repoRoot: resolve(values.repo), harnessRoot: resolve(values.harness), branch: values.branch,
     repoRevision: values.revision, investigationId: values.investigation, upstreamCase: values.case.toUpperCase() };
 }
@@ -121,7 +129,86 @@ export async function prepareHandoff(selection, {request, confirm, checkTarget =
   return { ...packet, selectionDigest: digest };
 }
 
-export function createHandoffRequest(apiOrigin, requestContext) {
+
+// This is preparation for one future reviewed retest, not authorization to
+// execute or a request to convert a manual Run into an automation Run.
+export async function prepareNativeRetestAutomation(selection, {request, confirm, checkTarget = verifyTarget, readMapping = readInvestigationMapping}) {
+  const { projectId, sourceCycleId, sourceExecutionId } = selection;
+  const hex = /^[a-f0-9]{64}$/;
+  if (![projectId, sourceCycleId, sourceExecutionId].every(value => typeof value === 'string' && uuid.test(value))) {
+    throw new Error('Select the exact native project, source Run and source execution.');
+  }
+  const previewPath = '/api/cycles/' + sourceCycleId + '/retests/preview?executionIds=' + sourceExecutionId;
+  const read = async () => {
+    const preview = await request('GET', previewPath);
+    if (preview.projectId !== projectId || preview.sourceCycleId !== sourceCycleId ||
+        preview.sourceRun?.id !== sourceCycleId || !hex.test(preview.previewDigest ?? '') ||
+        !Array.isArray(preview.occurrences) || preview.occurrences.length !== 1) {
+      throw new Error('The native retest preview did not identify exactly the selected source observation.');
+    }
+    const occurrence = preview.occurrences[0];
+    const current = occurrence?.currentCase;
+    const definition = current?.reviewedContent?.case;
+    if (!occurrence || occurrence.sourceExecutionId !== sourceExecutionId ||
+        !uuid.test(occurrence.sourceCycleItemId ?? '') || !uuid.test(occurrence.testcaseId ?? '') ||
+        occurrence.sourceResult?.id !== sourceExecutionId || occurrence.sourceResult.status !== 'Failed' ||
+        preview.sourceRun.status !== 'Completed' || !occurrence.eligible || current?.approvalCurrent !== true ||
+        current.status !== 'Approved' || current.id !== occurrence.testcaseId ||
+        !hex.test(current.approvalRevision ?? '') || !definition || definition.id !== current.id ||
+        definition.project_id !== projectId || typeof current.externalId !== 'string' || !current.externalId ||
+        definition.external_id !== current.externalId) {
+      throw new Error('This preparation requires one failed observation in a completed Run and its current exactly approved native case.');
+    }
+    // References only; never copy the original attachment bytes or raw runner error into the plan.
+    if (!Array.isArray(occurrence.sourceEvidence) || !occurrence.sourceEvidence.every(item => uuid.test(item?.id ?? '')) ||
+        !Array.isArray(occurrence.sourceBugLinks) || !occurrence.sourceBugLinks.every(item =>
+          uuid.test(item?.id ?? '') && uuid.test(item.bugId ?? '') && item.executionId === sourceExecutionId)) {
+      throw new Error('The selected source evidence or Bug associations could not be verified.');
+    }
+    const testcase = {
+      id: current.id, externalId: current.externalId, title: current.title,
+      automationRepo: definition.automation_repo, automationPath: definition.automation_path,
+      automationFramework: definition.automation_framework, automationTestName: definition.automation_test_name ?? null,
+      steps: definition.steps ?? null, preconditions: definition.preconditions ?? null,
+      expectedResult: definition.expected_result ?? null, postconditions: definition.postconditions ?? null,
+      testData: definition.test_data ?? null,
+    };
+    if (typeof testcase.automationFramework !== 'string' || typeof testcase.automationPath !== 'string' ||
+        typeof testcase.automationRepo !== 'string' || !/\.(spec|test)\.(?:[cm]?[jt]sx?)$/.test(testcase.automationPath)) {
+      throw new Error('The current reviewed case needs an existing Playwright automation target.');
+    }
+    return { preview, native: {
+      projectId, sourceCycleId, sourceCycleItemId: occurrence.sourceCycleItemId, sourceExecutionId,
+      sourceStatus: 'Failed', sourcePreviewDigest: preview.previewDigest,
+      sourceApprovalRevision: occurrence.sourceApprovalRevision ?? null,
+      targetApprovalRevision: current.approvalRevision, definitionChanged: occurrence.definitionChanged === true,
+      sourceEvidenceIds: occurrence.sourceEvidence.map(item => item.id),
+      sourceBugLinks: occurrence.sourceBugLinks.map(item => ({ id: item.id, bugId: item.bugId, executionId: item.executionId })),
+      testcase
+    } };
+  };
+  const initial = await read();
+  const target = checkTarget(selection, initial.native.testcase);
+  const mapping = await readMapping({ ...selection, targetPath: target.path });
+  if (mapping.targetPath !== target.path || mapping.upstreamCase !== selection.upstreamCase ||
+      mapping.repoRevision !== target.revision || !sha.test(mapping.targetBlob ?? '') ||
+      !Array.isArray(mapping.risks) || mapping.risks.length !== 1) {
+    throw new Error('The investigation does not identify one reviewed risk at the selected committed target.');
+  }
+  const packet = {
+    schemaVersion: 1, purpose: 'prepare_native_retest_automation', executionAuthorized: false,
+    native: initial.native, target, investigation: { id: selection.investigationId, ...mapping }
+  };
+  const digest = createHash('sha256').update(JSON.stringify(packet)).digest('hex');
+  if (!await confirm(packet, digest)) throw new Error('Handoff cancelled.');
+  if (!isDeepStrictEqual(checkTarget(selection, initial.native.testcase), target) ||
+      !isDeepStrictEqual((await read()).preview, initial.preview)) {
+    throw new Error('The selected source observation, case or target changed during review. Start again.');
+  }
+  return { ...packet, selectionDigest: digest };
+}
+
+export function createHandoffRequest(apiOrigin, requestContext, kind = 'requirement') {
   return async (method, path, data) => {
     let response;
     try {
@@ -132,11 +219,11 @@ export function createHandoffRequest(apiOrigin, requestContext) {
     const status = response.status();
     if (status !== 200) {
       const recovery = {
-        400: 'Check the selected task and revision arguments, then start a fresh handoff.',
+        400: kind === 'retest' ? 'Check the source Run and execution selection, then start a fresh retest preparation.' : 'Check the selected task and revision arguments, then start a fresh handoff.',
         401: 'Sign in to Tesbo in the handoff browser, then start a fresh handoff.',
         403: 'Verify that your signed-in account is authorized for the selected project and operation.',
-        404: 'Check the task link, API origin and your access to the selected project.',
-        409: 'Reopen the selected bundle and verify the current requirement, case approvals and active link before starting again.',
+        404: kind === 'retest' ? 'Check the original execution link, API origin and your project access.' : 'Check the task link, API origin and your access to the selected project.',
+        409: kind === 'retest' ? 'Reload the source observation and current case approval before preparing a new retest.' : 'Reopen the selected bundle and verify the current requirement, case approvals and active link before starting again.',
         429: 'Retry only after the service allows another request; start a fresh handoff.',
       }[status] ?? (status >= 300 && status < 400
         ? 'An unexpected redirect was refused. Verify the API origin and sign-in session.'
@@ -168,18 +255,22 @@ async function main(argv) {
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.goto(selection.taskUrl, { waitUntil: 'domcontentloaded' });
-    await terminal.question('Sign in to your Tesbo task in the browser, then press Enter here.\n');
-    const request = createHandoffRequest(selection.apiOrigin, context.request);
+    await page.goto(selection.retestUrl ?? selection.taskUrl, { waitUntil: 'domcontentloaded' });
+    await terminal.question(selection.retestUrl ? 'Sign in to your Tesbo source execution in the browser, then press Enter here.\n' : 'Sign in to your Tesbo task in the browser, then press Enter here.\n');
+    const request = createHandoffRequest(selection.apiOrigin, context.request, selection.retestUrl ? 'retest' : 'requirement');
     const confirm = async (packet, digest) => {
       // Quote all operator-visible strings. Strip directional controls that could disguise selected text.
       const preview = JSON.stringify(packet, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, ch =>
         '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
       process.stderr.write(preview + '\n');
-      return (await terminal.question('Compare the approved criteria and the investigation oracle. To prepare this exact handoff, enter ' +
-        digest.slice(0, 8) + ' (Enter cancels): ')).trim() === digest.slice(0, 8);
+      const prompt = selection.retestUrl
+        ? 'Compare the original failed observation, current approved definition, committed target and investigation oracle. This prepares a selection only and does not authorize execution. Enter '
+        : 'Compare the approved criteria and the investigation oracle. To prepare this exact handoff, enter ';
+      return (await terminal.question(prompt + digest.slice(0, 8) + ' (Enter cancels): ')).trim() === digest.slice(0, 8);
     };
-    const packet = await prepareHandoff(selection, { request, confirm });
+    const packet = selection.retestUrl
+      ? await prepareNativeRetestAutomation(selection, { request, confirm })
+      : await prepareHandoff(selection, { request, confirm });
     process.stdout.write(JSON.stringify(packet, null, 2) + '\n');
   } finally {
     terminal.close();
