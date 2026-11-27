@@ -1,5 +1,6 @@
 import { explainQaConsequenceReceipt } from './qa-consequence-preview';
 import type { QaChangeReviewReceipt } from './qa-change-review-receipt';
+import { CURRENT_CACHE_PROJECTION_CONTRACT } from './current-cache-graph-projection';
 
 const receipt: QaChangeReviewReceipt = {
   id: 'receipt', projectId: 'project',
@@ -60,5 +61,66 @@ describe('read-only, evidence-bounded QA consequence preview', () => {
       coverageAssertion: 'passed' as never } })).toThrow('Malformed authoritative');
     expect(() => explainQaConsequenceReceipt({ ...receipt, source: {} as never })).toThrow('Malformed authoritative');
     expect(() => explainQaConsequenceReceipt(null as never)).toThrow('Malformed authoritative');
+  });
+});
+
+describe('changed cached-requirement nomination inventory', () => {
+  const req = (id: string, project = 'project') => JSON.stringify(['cached_requirement', project, 'jira', id]);
+  const tc = JSON.stringify(['test_case', 'project', 'case']);
+  const mixed: QaChangeReviewReceipt = {
+    ...receipt,
+    source: { ...receipt.source, contractId: CURRENT_CACHE_PROJECTION_CONTRACT },
+    changed: { ...receipt.changed, addedNodeIds: [req('added')], modifiedNodeIds: [req('linked'), req('modified'), tc],
+      removedNodeIds: [req('removed')] },
+    candidates: [{ caseNodeId: tc, reasons: ['requirement_reference'], requirementNodeIds: [req('linked')] }]
+  };
+
+  it('identifies each unnominated changed requirement even beside an explicit case nomination', () => {
+    const original = JSON.stringify(mixed);
+    const result = explainQaConsequenceReceipt(mixed);
+    expect(result.cachedRequirementReview).toEqual({
+      changedRequirementCount: 4,
+      withoutNomination: [
+        { requirementNodeId: req('added'), change: 'added' },
+        { requirementNodeId: req('modified'), change: 'modified' },
+        { requirementNodeId: req('removed'), change: 'removed' }
+      ]
+    });
+    expect(result.coverageAssertion).toBe('none');
+    expect(result.executionAssertion).toBe('none');
+    expect(JSON.stringify(mixed)).toBe(original);
+    const reordered = { ...mixed, changed: { ...mixed.changed, modifiedNodeIds: [...mixed.changed.modifiedNodeIds].reverse() } };
+    expect(explainQaConsequenceReceipt(reordered).cachedRequirementReview).toEqual(result.cachedRequirementReview);
+  });
+
+  it('keeps historical nominations as receipt-time references without asserting current links', () => {
+    const result = explainQaConsequenceReceipt({ ...mixed,
+      candidates: [{ ...mixed.candidates[0], requirementNodeIds: [req('added'), req('linked'), req('modified'), req('removed')] }]
+    });
+    expect(result.cachedRequirementReview).toEqual({ changedRequirementCount: 4, withoutNomination: [] });
+    expect(result.coverageAssertion).toBe('none');
+  });
+
+  it('does not manufacture changed requirements from an edge-only change', () => {
+    const result = explainQaConsequenceReceipt({ ...mixed, changed: {
+      ...mixed.changed, addedNodeIds: [], modifiedNodeIds: [], removedNodeIds: [], removedEdgeIds: ['link']
+    } });
+    expect(result.cachedRequirementReview).toEqual({ changedRequirementCount: 0, withoutNomination: [] });
+    expect(result.unlinkedOrUnprovenChange).toBe(true);
+  });
+
+  it('reports unavailable rather than an empty inventory for unsupported or invalid source identities', () => {
+    const incompatible: QaChangeReviewReceipt[] = [
+      receipt,
+      { ...mixed, source: { ...mixed.source, contractId: 'other' } },
+      { ...mixed, evidence: { ...mixed.evidence, basis: 'source_declaration_unattested' } },
+      { ...mixed, changed: { ...mixed.changed, addedNodeIds: [req('foreign', 'other')] } },
+      { ...mixed, changed: { ...mixed.changed, addedNodeIds: ['not-a-cached-graph-tuple'] } },
+      { ...mixed, changed: { ...mixed.changed, addedNodeIds: [req('linked')] } },
+      { ...mixed, candidates: [{ ...mixed.candidates[0], caseNodeId: JSON.stringify(['test_case', 'other', 'case']) }] },
+      { ...mixed, candidates: [{ ...mixed.candidates[0], requirementNodeIds: [req('foreign', 'other')] }] },
+      { ...mixed, candidates: [...mixed.candidates, mixed.candidates[0]] }
+    ];
+    for (const candidate of incompatible) expect(explainQaConsequenceReceipt(candidate).cachedRequirementReview).toBeNull();
   });
 });
