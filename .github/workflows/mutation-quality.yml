@@ -23,9 +23,26 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
-      - run: npm ci --ignore-scripts
+      - id: dependencies
+        run: npm ci --ignore-scripts
       - name: Mutate bounded critical security utility and run real Jest assertions
         run: npm run test:mutation
+      - name: Check that the pilot selects executable guards and refuses source decoys
+        id: qa_scope
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: node --test stryker.qa-handoff.config.test.cjs
+      - name: Record the existing handoff and producer-identity test baseline
+        id: qa_baseline
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.qa_scope.outcome == 'success' }}
+        run: |
+          mkdir -p reports/mutation
+          ./node_modules/.bin/jest --config jest.qa-handoff-mutation.config.cjs --runInBand --json --outputFile=reports/mutation/qa-handoff-baseline.json
+      - name: Probe the three reviewed handoff and attribution guards
+        if: ${{ !cancelled() && steps.qa_baseline.outcome == 'success' }}
+        run: ./node_modules/.bin/stryker run stryker.qa-handoff.config.cjs
+      - name: Recheck the original code after mutation testing
+        if: ${{ !cancelled() && steps.qa_baseline.outcome == 'success' }}
+        run: ./node_modules/.bin/jest --config jest.qa-handoff-mutation.config.cjs --runInBand --json --outputFile=reports/mutation/qa-handoff-restored.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

@@ -38,7 +38,7 @@ export const WORKFLOW_SOURCES=[
   contexts:['current-tree-secrets','workflow-security']},
  {path:'.github/workflows/repository-secret-guard.yml',sha:'3e30e6abdd3c0ea15f74f036b0ef70c3e6eada1f',
   contexts:['secret-guard','reporter-safety']},
- {path:'.github/workflows/mutation-quality.yml',sha:'d5d62ede4ffae82d9bf85194902c5939a353867b',
+ {path:'.github/workflows/mutation-quality.yml',sha:'fd3215b707a3ba253fb75bf4ddffc41cd5b44bdc',
   contexts:['mutation-critical']}
 ];
 export const CHECKS=WORKFLOW_SOURCES.flatMap(source=>source.contexts);
