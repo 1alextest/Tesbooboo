@@ -257,10 +257,18 @@ jobs:
           # API/UI report above, losing its test inventory and successful visual attachments.
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22" --list
           PLAYWRIGHT_HTML_OUTPUT_DIR=playwright-report-testcase-issue-keys npx playwright test -c playwright.config.ts api/tail.spec.ts --workers=10 --output=test-results-tail -g "TAI-A-22"
+      - name: Exercise the pinned investigation adapter and handoff contract
+        run: |
+          checkout="$RUNNER_TEMP/qa-investigation-harness"
+          git init -q "$checkout"
+          git -C "$checkout" fetch -q --depth=1 https://github.com/QAtools-tech/qa-investigation-harness.git a468921c2bead820520a97df897168487b2b4985
+          git -C "$checkout" checkout -q --detach FETCH_HEAD
+          QA_INVESTIGATION_HARNESS_ROOT="$checkout" node --test scripts/qa-investigation-mapping.test.mjs scripts/qa-approved-handoff.test.mjs
       - name: Verify requirement change bundle staging and review
         working-directory: e2e
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report-requirements
+          QA_INVESTIGATION_HARNESS_ROOT: ${{ runner.temp }}/qa-investigation-harness
         run: |
           # Work Package A Slice 1: staging/review/reject-withdraw only. Publication is blocked by
           # the effective-skills gate, and the API spec proves the refused apply writes no official
