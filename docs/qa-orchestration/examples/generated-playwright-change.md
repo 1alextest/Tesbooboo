@@ -61,9 +61,11 @@ not textual inspection. It is wired into the pinned investigation/handoff CI ste
 
 ## Boundaries and unsupported associations
 
-- **No approved TESBOPROJECT case is used.** The authorized project currently has staged/unapplied
-  coverage proposals and Draft cases, and this session must not approve production records. The
-  journey remains a CI-disposable contract until a human applies and approves one exact bundle.
+- **No approved TESBOPROJECT case is used by this fixture.** The 26 November 2026 staging receipt
+  below records an unpublished proposal. Current project inventory and eligibility have not been
+  reverified in this session; this does not establish that no approved case exists today. Persistent
+  case publication and approval remain separate authorized human decisions. The test uses only
+  its admitted CI-disposable project.
 - **The standalone script does not report a native Run.** The existing reporter/automation
   ingest remains the result owner. The separate `e2e/api/handoff-native-reporter.spec.ts` joins this
   generator to that actual reporter with both synthetic and governed disposable inputs. Its exact
@@ -77,7 +79,8 @@ not textual inspection. It is wired into the pinned investigation/handoff CI ste
 
 ## Native coverage
 
-A separate Draft case proposal was staged through the authorized MCP path:
+A separate Draft case proposal was recorded through the authorized MCP path on 26 November 2026 (America/Bogota).
+These are historical receipt fields, not a fresh read of the current task/revision/status:
 
 - task `2f20c10e-c1d3-4480-ba08-51f4cb04eca7`
 - revision `44cff570c008a8b1b8bb46eb4712f61642c73b5aaf305702e1fd3cd5ffab9dcd`
@@ -85,7 +88,9 @@ A separate Draft case proposal was staged through the authorized MCP path:
 - status `in_review`, one unpublished Draft case in Requirements
 - review path `/projects/df072dfe-e4d0-406a-9350-e0d022c6323f/agents/tasks/2f20c10e-c1d3-4480-ba08-51f4cb04eca7`
 
-Manual execution remains **UNRUN**. Staging is not approval, apply, a Test Run or evidence.
+No manual execution is evidenced by that receipt. Current native execution history must be read
+after reconnecting; no new manual execution is performed here. Staging is not approval, apply,
+a Test Run or evidence.
 
 ## Where verification is visible
 
