@@ -6585,7 +6585,7 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await expect(page.getByPlaceholder(RU_PLACEHOLDER)).toHaveCount(0);
   });
 
-  test("ZYU-L-03 Russian test cases are shown under Russian column headers, and a later English message switches back", async ({ browser }) => {
+  test("ZYU-L-03 Russian test cases are shown with localized review controls, and a later English message switches back", async ({ browser }) => {
     await allocateFakeAiKey();
     const page = await openChat(browser);
     const title = `Вход с неверным паролем отклонён ${Date.now() % 100000}`;
@@ -6613,10 +6613,20 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await expect(page.getByText(/В базе знаний проекта нет ничего об этом/)).toBeVisible();
     await expect(page.getByText(/Я всё равно написал\(а\) 1 тест-кейс\(ов\) на основе общей практики/)).toBeVisible();
     await expect(page.getByText(/Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/)).toHaveCount(0);
-    await expect(page.getByText("Первый шаг").first()).toBeVisible();
-    await expect(page.getByText("Выбрать все").first()).toBeVisible();
+    // The live review is a list of cards, not a table. Verify the actual step and
+    // localized accessible controls, not a column heading used only for TSV export.
+    const review = page.getByRole("list", { name: "Предложенные тест-кейсы" });
+    const row = review.getByRole("listitem").filter({ hasText: title });
+    await expect(row).toHaveCount(1);
+    await expect(row.getByText("Ввести неверный пароль", { exact: true })).toBeVisible();
+    const selectRow = row.getByRole("checkbox", { name: "Выбрать предложенный тест-кейс 1" });
+    await expect(selectRow).toBeEnabled();
+    await selectRow.uncheck();
+    await expect(page.getByRole("button", { name: "Выбрать все", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Выбрать все", exact: true }).click();
+    await expect(selectRow).toBeChecked();
     // The severity a draft carries is stored as High and displayed in Russian.
-    await expect(page.getByText("Высокая").first()).toBeVisible();
+    await expect(row.getByText("Высокая", { exact: true })).toBeVisible();
 
     // Now an English message: the next reply and the labels go back to English.
     const english = "Sure — these cover the wrong-password path.";

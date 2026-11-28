@@ -8178,6 +8178,10 @@ test.describe("zyra — writes in the language the user writes in (fake provider
     expect(englishReply).toContain("I've still written 1 test case(s) from general practice");
     expect(englishReply).not.toContain("I drafted 1 test case(s) after reading");
 
+    // The first turn persists the agent scratchpad as a general KB document. A second
+    // turn is no longer a source-empty fixture; the memory alone is not confirmed coverage.
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = 'Zyra AI Memory' AND document_type = 'general' AND is_ai_generated = true AND is_deleted = false;`)).toBe("1");
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)} AND is_deleted = false;`)).toBe("1");
     ai.reset();
     queueCreateTurn("Вход с неверным паролем отклонён");
     const res = await send(sessionId, "Создай тест-кейс для неверного пароля на странице входа.");
@@ -8196,8 +8200,8 @@ test.describe("zyra — writes in the language the user writes in (fake provider
 
     // The backend's own reply text is Russian; the draft suite keeps its real (English) name.
     const reply = await lastAssistant(sessionId);
-    expect(String(reply.content)).toContain("В базе знаний проекта нет ничего об этом");
-    expect(String(reply.content)).toContain("Я всё равно написал(а) 1 тест-кейс(ов) на основе общей практики");
+    expect(String(reply.content)).toContain("лишь отдалённо соответствует запросу — этого недостаточно, чтобы считать это реальным покрытием");
+    expect(String(reply.content)).toContain("Я всё равно написал(а) 1 тест-кейс(ов) на основе найденного и общей практики");
     expect(String(reply.content)).not.toContain("Я подготовил(а) 1 тест-кейс(ов), изучив:");
     expect(String(reply.content)).toContain("**Zyra generated test cases**");
     expect(String(reply.content)).not.toContain("I drafted");
