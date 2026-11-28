@@ -276,6 +276,11 @@ export default function ZyraTaskDetailPage() {
   // modal's backdrop, so a failed save looked like the button had done nothing.
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNeedsReload, setSaveNeedsReload] = useState(false);
+  const [draftNeedsReload, setDraftNeedsReload] = useState(false);
+  const taskRef = useRef<ZyraTask | null>(null);
+  const taskReadSequenceRef = useRef(0);
+  const taskMutationRef = useRef(false);
+  const draftNeedsReloadRef = useRef(false);
   const pollInFlightRef = useRef(false);
   // The task's own language (set server-side from the script of what the user typed); English
   // until the task has loaded, or when it carries none.
@@ -287,7 +292,42 @@ export default function ZyraTaskDetailPage() {
     langRef.current = lang;
   }, [lang]);
 
-  const loadData = useCallback(async () => {
+  // An index is meaningful only within the proposal it was selected from. Only our own
+  // acknowledged deletion can safely translate it into the next snapshot.
+  const acceptTask = useCallback((next: ZyraTask, deletion?: { revision: string; index: number }) => {
+    const previous = taskRef.current;
+    const sameProposal = previous?.id === next.id && Boolean(next.proposalRevision) &&
+      previous.proposalRevision === next.proposalRevision && next.taskStatus === "in_review";
+    const acknowledgedDeletion = previous?.id === next.id && previous.proposalRevision === deletion?.revision &&
+      next.taskStatus === "in_review";
+    taskRef.current = next;
+    setTask(next);
+    setSelectedDrafts((selected) => {
+      if (sameProposal) return selected;
+      if (acknowledgedDeletion && deletion) {
+        return selected.filter((index) => index !== deletion.index).map((index) => index > deletion.index ? index - 1 : index);
+      }
+      return [];
+    });
+  }, []);
+
+  function beginTaskMutation() {
+    taskMutationRef.current = true;
+    // A GET started before the write must never replace its acknowledged result.
+    taskReadSequenceRef.current += 1;
+  }
+
+  function requireDraftReload(err: unknown) {
+    draftNeedsReloadRef.current = true;
+    setDraftNeedsReload(true);
+    setSelectedDrafts([]);
+    setError(err instanceof ApiError && err.status < 500
+      ? `${err.message} ${t("draft.refreshRequired")}`
+      : t("draft.mutationUnconfirmed"));
+  }
+
+  const loadData = useCallback(async (reconcileDrafts = false) => {
+    const sequence = ++taskReadSequenceRef.current;
     try {
       const [taskData, suiteList, jiraStatus, linearStatus, notionStatus, comments] = await Promise.all([
         getZyraTask(projectId, taskId),
@@ -297,10 +337,15 @@ export default function ZyraTaskDetailPage() {
         getNotionStatus(projectId).catch(() => ({ connected: false })),
         listZyraTaskTicketComments(projectId, taskId).catch(() => [] as ZyraTicketComment[]),
       ]);
-      setTask(taskData);
+      if (sequence !== taskReadSequenceRef.current) return;
+      acceptTask(taskData);
       setSuites(suiteList);
       setTicketComments(comments);
-      setSelectedDrafts((prev) => prev.filter((index) => index < taskData.drafts.length));
+      if (reconcileDrafts) {
+        draftNeedsReloadRef.current = false;
+        setDraftNeedsReload(false);
+        setSelectedDrafts([]);
+      }
       if (jiraStatus.connected) {
         const tickets = await listJiraTickets(projectId, { limit: 50 }).catch(() => ({ list: [], total: 0 }));
         setJiraTickets(tickets.list || []);
@@ -319,13 +364,13 @@ export default function ZyraTaskDetailPage() {
       } else {
         setNotionPages([]);
       }
-      setError(null);
+      if (sequence === taskReadSequenceRef.current && !draftNeedsReloadRef.current) setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : zyraText(langRef.current)("task.err.load"));
+      if (sequence === taskReadSequenceRef.current) setError(err instanceof Error ? err.message : zyraText(langRef.current)("task.err.load"));
     } finally {
-      setLoading(false);
+      if (sequence === taskReadSequenceRef.current) setLoading(false);
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, acceptTask]);
 
   useEffect(() => {
     if (!currentUser) router.replace("/login");
@@ -334,19 +379,19 @@ export default function ZyraTaskDetailPage() {
 
   // Lighter than loadData (skips suites/Jira) — just re-reads this task so Zyra finishing (or
   // failing) generation server-side shows up here without a manual reload.
-  const refreshTask = useCallback(async () => {
-    if (pollInFlightRef.current) return;
+  const refreshTask = useCallback(async (afterRejectedDecision = false) => {
+    if (pollInFlightRef.current || (taskMutationRef.current && !afterRejectedDecision) || draftNeedsReloadRef.current) return;
     pollInFlightRef.current = true;
+    const sequence = ++taskReadSequenceRef.current;
     try {
       const taskData = await getZyraTask(projectId, taskId);
-      setTask(taskData);
-      setSelectedDrafts((prev) => prev.filter((index) => index < taskData.drafts.length));
+      if (sequence === taskReadSequenceRef.current) acceptTask(taskData);
     } catch {
       // A missed poll tick isn't worth surfacing; the next one usually succeeds.
     } finally {
       pollInFlightRef.current = false;
     }
-  }, [projectId, taskId]);
+  }, [projectId, taskId, acceptTask]);
 
   useEffect(() => {
     if (!task) return;
@@ -367,11 +412,11 @@ export default function ZyraTaskDetailPage() {
     const timer = setInterval(() => {
       void Promise.all([
         listZyraTaskTicketComments(projectId, taskId).then(setTicketComments),
-        getZyraTask(projectId, taskId).then(setTask),
+        refreshTask(),
       ]).catch(() => undefined);
     }, 3000);
     return () => clearInterval(timer);
-  }, [hasPendingTicketComment, projectId, taskId]);
+  }, [hasPendingTicketComment, projectId, taskId, refreshTask]);
 
   async function handleRetryTicketComment(comment: ZyraTicketComment) {
     setRetryingCommentId(comment.id);
@@ -392,12 +437,13 @@ export default function ZyraTaskDetailPage() {
   }
 
   async function handleRequirementBundleDecision(decision: "rejected" | "withdrawn") {
-    if (!task || done || bundleWorking) return;
+    if (!task || done || bundleWorking || taskMutationRef.current) return;
     if (!task.proposalRevision) {
       setError("Reload this bundle to verify the exact content before deciding.");
       return;
     }
     const reviewedRevision = task.proposalRevision;
+    beginTaskMutation();
     setBundleWorking(true);
     setMessage(null);
     setError(null);
@@ -405,7 +451,7 @@ export default function ZyraTaskDetailPage() {
       const updated = decision === "rejected"
         ? await rejectRequirementProposal(projectId, taskId, reviewedRevision)
         : await withdrawRequirementProposal(projectId, taskId, reviewedRevision);
-      setTask(updated);
+      acceptTask(updated);
       if (!updated.requirementDecision) {
         setError("The recorded decision could not be verified. Reload this task before continuing.");
         return;
@@ -415,14 +461,16 @@ export default function ZyraTaskDetailPage() {
         : "Requirement change bundle withdrawn. Nothing was published.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The requirement change bundle could not be updated.");
-      if (err instanceof ApiError && err.status === 409) await refreshTask();
+      if (err instanceof ApiError && err.status === 409) await refreshTask(true);
     } finally {
+      taskMutationRef.current = false;
       setBundleWorking(false);
     }
   }
 
   async function handleRequirementBundleApply() {
-    if (!task || done || bundleWorking || !task.proposalRevision || task.skillContext?.status !== "resolved") return;
+    if (!task || done || bundleWorking || taskMutationRef.current || !task.proposalRevision || task.skillContext?.status !== "resolved") return;
+    beginTaskMutation();
     setBundleWorking(true);
     setMessage(null);
     setError(null);
@@ -434,12 +482,14 @@ export default function ZyraTaskDetailPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The requirement change bundle could not be applied.");
     } finally {
+      taskMutationRef.current = false;
       setBundleWorking(false);
     }
   }
 
   async function handleManagedDocumentApply() {
-    if (!task || done || bundleWorking || !task.proposalRevision) return;
+    if (!task || done || bundleWorking || taskMutationRef.current || !task.proposalRevision) return;
+    beginTaskMutation();
     setBundleWorking(true);
     setMessage(null);
     setError(null);
@@ -450,12 +500,14 @@ export default function ZyraTaskDetailPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The governed document candidate could not be applied.");
     } finally {
+      taskMutationRef.current = false;
       setBundleWorking(false);
     }
   }
 
   async function handleManagedDocumentReject(reason: string) {
-    if (!task || done || bundleWorking || !task.proposalRevision) return;
+    if (!task || done || bundleWorking || taskMutationRef.current || !task.proposalRevision) return;
+    beginTaskMutation();
     setBundleWorking(true);
     setMessage(null);
     setError(null);
@@ -466,16 +518,18 @@ export default function ZyraTaskDetailPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The governed document candidate could not be rejected.");
     } finally {
+      taskMutationRef.current = false;
       setBundleWorking(false);
     }
   }
 
   function toggleDraft(index: number) {
+    if (!canReviewDrafts) return;
     setSelectedDrafts((prev) => prev.includes(index) ? prev.filter((item) => item !== index) : [...prev, index]);
   }
 
   function selectAllDrafts() {
-    if (!task || done) return;
+    if (!task || !canReviewDrafts) return;
     setSelectedDrafts(task.drafts.map((_, index) => index));
   }
 
@@ -491,10 +545,11 @@ export default function ZyraTaskDetailPage() {
     saveMode === "none" ||
     (saveMode === "existing" && Boolean(targetSuiteId)) ||
     (saveMode === "new" && !newSuiteNameError);
-  const canSave = !working && !saveNeedsReload && Boolean(savingProposal?.proposalRevision) &&
+  const canSave = !working && !bundleWorking && !saveNeedsReload && !draftNeedsReload && task?.taskStatus === "in_review" && Boolean(savingProposal?.proposalRevision) &&
     (savingDraftIndexes || selectedDrafts).length > 0 && saveTargetValid;
 
   function openSaveModal(indexes?: number[]) {
+    if (!canReviewDrafts) return;
     if (!task?.proposalRevision || !task.proposalSnapshot) {
       setError("The current proposal could not be verified. Reload this task before reviewing it.");
       return;
@@ -522,7 +577,8 @@ export default function ZyraTaskDetailPage() {
   }
 
   async function handleFeedback() {
-    if (!task || !feedback.trim()) return;
+    if (!task || !feedback.trim() || taskMutationRef.current) return;
+    beginTaskMutation();
     setWorking(true);
     setMessage(null);
     setError(null);
@@ -534,7 +590,7 @@ export default function ZyraTaskDetailPage() {
         linearIssueKeys: selectedLinearKeys,
         notionPageIds: selectedNotionIds,
       });
-      setTask(result.task);
+      acceptTask(result.task);
       setFeedback("");
       setReferenceNote("");
       setSelectedJiraKeys([]);
@@ -545,51 +601,64 @@ export default function ZyraTaskDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : t("task.err.feedback"));
     } finally {
+      taskMutationRef.current = false;
       setWorking(false);
     }
   }
 
   async function handleDeleteDraft(index: number) {
-    if (!task) return;
+    if (!task?.proposalRevision || !canReviewDrafts || taskMutationRef.current) return;
+    const revision = task.proposalRevision;
+    beginTaskMutation();
     setWorking(true);
     setMessage(null);
     setError(null);
     try {
-      const updated = await deleteZyraTaskDraft(projectId, task.id, index);
-      setTask(updated);
-      setSelectedDrafts((prev) => prev.filter((item) => item !== index).map((item) => item > index ? item - 1 : item));
+      const updated = await deleteZyraTaskDraft(projectId, task.id, index, revision);
+      acceptTask(updated, { revision, index });
       setMessage(t("task.draftDeleted"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("task.err.deleteDraft"));
+      requireDraftReload(err);
     } finally {
+      taskMutationRef.current = false;
       setWorking(false);
     }
   }
 
   async function handleDeleteSelectedDrafts() {
-    if (!task || selectedDrafts.length === 0) return;
+    if (!task?.proposalRevision || !canReviewDrafts || selectedDrafts.length === 0 || taskMutationRef.current) return;
+    beginTaskMutation();
     setWorking(true);
     setMessage(null);
     setError(null);
+    let confirmed = 0;
     try {
       let updated = task;
       const indexes = [...selectedDrafts].sort((a, b) => b - a);
       for (const index of indexes) {
-        updated = await deleteZyraTaskDraft(projectId, task.id, index);
+        const revision = updated.proposalRevision;
+        if (!revision || updated.taskStatus !== "in_review") throw new Error(t("draft.refreshRequired"));
+        updated = await deleteZyraTaskDraft(projectId, task.id, index, revision);
+        // Commit each acknowledgement to the visible list before sending the next deletion.
+        // Never fetch a new revision and replay indexes after an intervening change.
+        acceptTask(updated, { revision, index });
+        confirmed += 1;
       }
-      setTask(updated);
       setSelectedDrafts([]);
       setMessage(t("task.draftsDeleted", { n: indexes.length }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("task.err.deleteDrafts"));
+      if (confirmed) setMessage(t("task.draftsDeleted", { n: confirmed }));
+      requireDraftReload(err);
     } finally {
+      taskMutationRef.current = false;
       setWorking(false);
     }
   }
 
   async function handleSave() {
-    if (!task || !canSave || !savingProposal?.proposalRevision) return;
+    if (!task || !canSave || !savingProposal?.proposalRevision || taskMutationRef.current) return;
     const indexes = savingDraftIndexes || selectedDrafts;
+    beginTaskMutation();
     setWorking(true);
     setMessage(null);
     setError(null);
@@ -611,26 +680,31 @@ export default function ZyraTaskDetailPage() {
       await loadData();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : t("task.err.save"));
-      setSaveNeedsReload(!(err instanceof ApiError) || err.status === 409 || err.status >= 500);
+      const needsReload = !(err instanceof ApiError) || err.status === 409 || err.status >= 500;
+      setSaveNeedsReload(needsReload);
+      if (needsReload) requireDraftReload(err);
     } finally {
+      taskMutationRef.current = false;
       setWorking(false);
     }
   }
 
   async function handleCloseTask() {
-    if (!task) return;
+    if (!task || taskMutationRef.current) return;
+    beginTaskMutation();
     setWorking(true);
     setMessage(null);
     setError(null);
     try {
       const updated = await closeZyraTask(projectId, task.id);
-      setTask(updated);
+      acceptTask(updated);
       setSelectedDrafts([]);
       setMessage(t("task.closed"));
       await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("task.err.close"));
     } finally {
+      taskMutationRef.current = false;
       setWorking(false);
     }
   }
@@ -657,6 +731,7 @@ export default function ZyraTaskDetailPage() {
 
   const done = normalizeStatus(task.taskStatus) === "done";
   const taskStatusNow = normalizeStatus(task.taskStatus);
+  const canReviewDrafts = taskStatusNow === "in_review" && Boolean(task.proposalRevision) && !working && !bundleWorking && !draftNeedsReload;
   // Defensive: activity_log is jsonb server-side and not schema-enforced, so a malformed or
   // missing value must render an empty history rather than throw.
   const feedbackActivities = Array.isArray(task.activities) ? task.activities.filter(isFeedbackActivity) : [];
@@ -726,7 +801,8 @@ export default function ZyraTaskDetailPage() {
       }
     >
       {message && <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm">{message}</p>}
-      {error && <p className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]">{error}</p>}
+      {error && <p role="alert" className="rounded-lg border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-sm text-[var(--error-foreground)]">{error}</p>}
+      {draftNeedsReload && <Button variant="secondary" disabled={working || bundleWorking} onClick={() => void loadData(true)}>{t("draft.reload")}</Button>}
 
       <Card className="p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1015,11 +1091,11 @@ export default function ZyraTaskDetailPage() {
                 <span className="font-semibold text-[var(--foreground)]">{selectedDrafts.length}</span>{t("task.selectedOf", { n: task.drafts.length })}
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button variant="secondary" onClick={allDraftsSelected ? clearDraftSelection : selectAllDrafts} disabled={done || task.drafts.length === 0}>
+                <Button variant="secondary" onClick={allDraftsSelected ? clearDraftSelection : selectAllDrafts} disabled={!canReviewDrafts || task.drafts.length === 0}>
                   {allDraftsSelected ? t("review.unselectAll") : t("review.selectAll")}
                 </Button>
                 {!allDraftsSelected && (
-                  <Button variant="secondary" onClick={clearDraftSelection} disabled={done || selectedDrafts.length === 0}>{t("task.clearSelection")}</Button>
+                  <Button variant="secondary" onClick={clearDraftSelection} disabled={!canReviewDrafts || selectedDrafts.length === 0}>{t("task.clearSelection")}</Button>
                 )}
                 {task.drafts.length > 0 && (
                   <span title={selectedDrafts.length > 0 ? t("task.copySelectedTitle") : t("task.copyAllTitle")}>
@@ -1030,8 +1106,8 @@ export default function ZyraTaskDetailPage() {
                     />
                   </span>
                 )}
-                <Button variant="secondary" onClick={() => openSaveModal()} disabled={done || selectedDrafts.length === 0}>{t("task.saveSelected")}</Button>
-                <Button variant="secondary" onClick={() => void handleDeleteSelectedDrafts()} disabled={done || working || selectedDrafts.length === 0}>{t("task.deleteSelected")}</Button>
+                <Button variant="secondary" onClick={() => openSaveModal()} disabled={!canReviewDrafts || selectedDrafts.length === 0}>{t("task.saveSelected")}</Button>
+                <Button variant="secondary" onClick={() => void handleDeleteSelectedDrafts()} disabled={!canReviewDrafts || selectedDrafts.length === 0}>{t("task.deleteSelected")}</Button>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -1043,7 +1119,7 @@ export default function ZyraTaskDetailPage() {
                         type="checkbox"
                         checked={allDraftsSelected}
                         onChange={allDraftsSelected ? clearDraftSelection : selectAllDrafts}
-                        disabled={done || task.drafts.length === 0}
+                        disabled={!canReviewDrafts || task.drafts.length === 0}
                         aria-label={t("task.selectAllAria")}
                       />
                     </th>
@@ -1061,7 +1137,7 @@ export default function ZyraTaskDetailPage() {
                   {task.drafts.map((draft, index) => (
                     <tr key={`${task.id}-${index}`} className="border-t border-[var(--border)] align-top">
                       <td className="px-3 py-3">
-                        <input type="checkbox" checked={selectedDrafts.includes(index)} onChange={() => toggleDraft(index)} disabled={done} aria-label={t("task.selectRow", { n: index + 1 })} />
+                        <input type="checkbox" checked={selectedDrafts.includes(index)} onChange={() => toggleDraft(index)} disabled={!canReviewDrafts} aria-label={t("task.selectRow", { n: index + 1 })} />
                       </td>
                       <td className="max-w-[260px] px-3 py-3">
                         {draft.action && (
@@ -1090,8 +1166,8 @@ export default function ZyraTaskDetailPage() {
                       <td className="max-w-[260px] px-3 py-3 text-[var(--muted)]">{draft.expectedSummary}</td>
                       <td className="px-3 py-3">
                         <div className="flex justify-end gap-2">
-                          <Button variant="secondary" onClick={() => openSaveModal([index])} disabled={done || working}>{t("save")}</Button>
-                          <Button variant="secondary" onClick={() => void handleDeleteDraft(index)} disabled={done || working}>{t("task.delete")}</Button>
+                          <Button variant="secondary" onClick={() => openSaveModal([index])} disabled={!canReviewDrafts}>{t("save")}</Button>
+                          <Button variant="secondary" onClick={() => void handleDeleteDraft(index)} disabled={!canReviewDrafts}>{t("task.delete")}</Button>
                         </div>
                       </td>
                     </tr>

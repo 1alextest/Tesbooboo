@@ -139,7 +139,7 @@ type Body=Record<string,any>;
       await expect(admin.query(`UPDATE ai_generation_requests SET ${assignment} WHERE id=$1`,[review.id])).rejects.toThrow(/immutable/);
     }
     expect((await admin.query("SELECT save_events,proposal_provenance,proposal_request_key,proposal_request_digest FROM ai_generation_requests WHERE id=$1",[review.id])).rows[0]).toEqual(before);
-    const deleted=await service().zyraDeleteDraft(project,user,review.id,0,human);
+    const deleted=await service().zyraDeleteDraft(project,user,review.id,0,{expectedProposalRevision:(await read(review.id)).proposalRevision},human);
     expect(deleted).toMatchObject({generatedCount:2,savedCount:1,drafts:[]});
     expect(deleted.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
     expect(deleted.proposalSnapshot).toEqual((await read(review.id)).proposalSnapshot);
@@ -159,7 +159,7 @@ type Body=Record<string,any>;
 
   it("rejects a changed proposal or dependency before creating a chosen suite",async()=>{
     const review=await stage([{opType:"create",draft:{title:"Original proposal",steps:[{action:"Preserve",expectedResult:"Still visible"}]}}]);
-    const edited=await service().zyraEditDraft(project,user,review.id,0,{title:"Changed proposal"},human);
+    const edited=await service().zyraEditDraft(project,user,review.id,0,{title:"Changed proposal",expectedProposalRevision:review.proposalRevision},human);
     const name=`No orphan ${randomUUID()}`,before=(await nativeCases()).rows;
     await expect(save(review,[0],{suiteName:name})).rejects.toMatchObject({status:409});
     expect((await nativeCases()).rows).toEqual(before);expect((await admin.query("SELECT id FROM suites WHERE project_id=$1 AND name=$2",[project,name])).rows).toHaveLength(0);
@@ -369,8 +369,8 @@ type Body=Record<string,any>;
       const staged=await stageBundle(ops());
       const before=await docCounts(),taskBefore=(await tasks()).rows.length;
       await expect(save(staged,[0])).rejects.toMatchObject({status:409,response:{code:"SKILL_CONTEXT_UNAVAILABLE"}});
-      await expect(service().zyraDeleteDraft(project,user,staged.id,0,human)).rejects.toMatchObject({status:409});
-      await expect(service().zyraEditDraft(project,user,staged.id,0,{title:"Tampered"},human)).rejects.toMatchObject({status:409});
+      await expect(service().zyraDeleteDraft(project,user,staged.id,0,{expectedProposalRevision:staged.proposalRevision},human)).rejects.toMatchObject({status:409});
+      await expect(service().zyraEditDraft(project,user,staged.id,0,{title:"Tampered",expectedProposalRevision:staged.proposalRevision},human)).rejects.toMatchObject({status:409});
       const taskRowBefore=(await admin.query("SELECT * FROM ai_generation_requests WHERE id=$1",[staged.id])).rows;
       await expect(service().zyraCloseTask(project,user,staged.id,human)).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});
       await expect(service().zyraFeedback(project,user,staged.id,{feedback:"Regenerate the bundle"},human)).rejects.toMatchObject({status:409,response:{code:"REQUIREMENT_BUNDLE_IMMUTABLE"}});

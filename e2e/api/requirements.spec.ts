@@ -140,9 +140,9 @@ test("requirement change bundles cannot be applied or edited while approved effe
     });
     expect(save.status()).toBe(409);
     expect(await save.json()).toMatchObject({ code: "SKILL_CONTEXT_UNAVAILABLE" });
-    const remove = await request.delete(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false });
+    const remove = await request.delete(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false });
     expect(remove.status()).toBe(409);
-    const edit = await request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered" }, failOnStatusCode: false });
+    const edit = await request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered", expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false });
     expect(edit.status()).toBe(409);
     for (const action of ["feedback", "close"]) {
       const response = await request.post(`${base}/agents/zyra/tasks/${staged.id}/${action}`, {
@@ -1169,8 +1169,8 @@ test("an agent-staged governed manual candidate is inert and only an owner appli
     // The generic draft editor is a different surface for a different owner. It must not rewrite or
     // delete the exact candidate the owner is about to decide.
     for (const tamper of [
-      () => request.delete(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { failOnStatusCode: false }),
-      () => request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered candidate" }, failOnStatusCode: false }),
+      () => request.delete(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false }),
+      () => request.patch(`${base}/agents/zyra/tasks/${staged.id}/drafts/0`, { data: { title: "Tampered candidate", expectedProposalRevision: staged.proposalRevision }, failOnStatusCode: false }),
     ]) {
       const refused = await tamper();
       expect(refused.status(), await refused.text()).toBe(409);

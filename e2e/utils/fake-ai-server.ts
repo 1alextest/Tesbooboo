@@ -44,6 +44,8 @@ export interface FakeAiServer {
    * local stack, loopback when the backend is a host process (every CI workflow).
    */
   backendBaseUrl: string;
+  /** Direct HTTP endpoint for the test runner, even when the backend runs in Docker. */
+  runnerBaseUrl: string;
   /** Every chat-completion request this server received, in arrival order — for asserting on what the backend sent. */
   requests: FakeAiRequest[];
   /**
@@ -64,6 +66,8 @@ export interface FakeAiServer {
    * for a test that wants to exercise the "model returned prose instead of JSON" fallback.
    */
   queueReply(content: Record<string, unknown> | string): void;
+  /** Reserve one FIFO reply before the trigger; observe its arrival and release it explicitly. */
+  queueHeldReply(content: Record<string, unknown> | string): { readonly request: FakeAiRequest | null; readonly pending: boolean; release(): void };
   /** Queue one HTTP 200 JSON embedding response, separate from chat replies and endpoint failures. */
   queueEmbeddingReply(content: Record<string, unknown>): void;
   /** Set to a status code to make the NEXT call fail (consumed once), exercising the error path. */
@@ -104,7 +108,9 @@ export interface FakeAiServer {
 }
 
 export async function startFakeAiServer(): Promise<FakeAiServer> {
-  const queue: string[] = [];
+  type Hold = { arrive(request: FakeAiRequest): void; ready: Promise<void> };
+  const queue: Array<{ content: string; hold?: Hold }> = [];
+  const releases = new Set<() => void>();
   const requests: FakeAiRequest[] = [];
   const embeddingRequests: FakeAiEmbeddingRequest[] = [];
   const embeddingReplies: string[] = [];
@@ -169,25 +175,26 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
       // delayNextReplyMs useful: a test can poll `ai.requests.length` to learn "this call has
       // definitely started" and act (e.g. call stop-plan) while the RESPONSE is still being held
       // back, rather than only finding out once it's too late to matter.
-      requests.push({ model: String(body.model || ""), messages: Array.isArray(body.messages) ? body.messages : [], stream: body.stream === true });
+      const observed = { model: String(body.model || ""), messages: Array.isArray(body.messages) ? body.messages : [], stream: body.stream === true };
+      requests.push(observed);
       const prompt = JSON.stringify(body.messages ?? []);
       const matchIndex = matched.findIndex((entry) => prompt.includes(entry.match));
       const matchedReply = matchIndex >= 0 ? matched.splice(matchIndex, 1)[0].reply : undefined;
+      // Reserve the outcome at request arrival, not response delivery. Otherwise a
+      // later fast request steals the delayed request's FIFO reply or one-shot error.
+      const matchedFailure = matchedReply !== undefined && typeof matchedReply !== "string" ? matchedReply : undefined;
+      const failure = matchedFailure
+        ? { status: matchedFailure.failStatus, message: matchedFailure.message || "stubbed provider failure" }
+        : failStatus !== null ? { status: failStatus, message: failMessage } : undefined;
+      if (!matchedFailure && failStatus !== null) failStatus = null;
+      const entry = !failure && typeof matchedReply !== "string" ? queue.shift() : undefined;
+      const next = failure ? undefined : typeof matchedReply === "string" ? matchedReply : entry?.content;
       const respond = () => {
-        if (matchedReply !== undefined && typeof matchedReply !== "string") {
-          res.writeHead(matchedReply.failStatus, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: { message: matchedReply.message || "stubbed provider failure" } }));
+        if (failure) {
+          res.writeHead(failure.status, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: failure.message } }));
           return;
         }
-        if (failStatus !== null) {
-          const status = failStatus;
-          failStatus = null;
-          res.writeHead(status, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: { message: failMessage } }));
-          return;
-        }
-        // The error-reply branch returned above; narrow again inside this delayed callback.
-        const next = typeof matchedReply === "string" ? matchedReply : queue.shift();
         const content = next ?? JSON.stringify({
           reply: "fake-ai-server: no scripted response was queued for this call.",
           reasoningSummary: "fake-ai-server exhausted its queue.",
@@ -224,22 +231,46 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
         }));
       };
-      if (thisDelay && thisDelay > 0) setTimeout(respond, thisDelay);
-      else respond();
+      const deliver = () => {
+        if (thisDelay && thisDelay > 0) setTimeout(respond, thisDelay);
+        else respond();
+      };
+      if (entry?.hold) {
+        entry.hold.arrive(observed);
+        void entry.hold.ready.then(deliver);
+      } else deliver();
     });
   });
 
   await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
   const port = (server.address() as { port: number }).port;
+  const runnerBaseUrl = `http://127.0.0.1:${port}/v1`;
+  const baseUrl = `http://host.docker.internal:${port}/v1`;
 
   return {
-    baseUrl: `http://host.docker.internal:${port}/v1`,
-    backendBaseUrl: env.ci ? `http://127.0.0.1:${port}/v1` : `http://host.docker.internal:${port}/v1`,
+    baseUrl,
+    backendBaseUrl: env.ci ? runnerBaseUrl : baseUrl,
+    runnerBaseUrl,
     requests,
     embeddingRequests,
     transcriptionRequests,
     queueReply(content) {
-      queue.push(typeof content === "string" ? content : JSON.stringify(content));
+      queue.push({ content: typeof content === "string" ? content : JSON.stringify(content) });
+    },
+    queueHeldReply(content) {
+      let request: FakeAiRequest | null = null;
+      let released = false;
+      let resolve!: () => void;
+      const ready = new Promise<void>(done => { resolve = done; });
+      const release = () => {
+        if (released) return;
+        released = true;
+        releases.delete(release);
+        resolve();
+      };
+      releases.add(release);
+      queue.push({ content: typeof content === "string" ? content : JSON.stringify(content), hold: { ready, arrive: value => { request = value; } } });
+      return { get request() { return request; }, get pending() { return request !== null && !released; }, release };
     },
     queueEmbeddingReply(content) {
       embeddingReplies.push(JSON.stringify(content));
@@ -262,6 +293,7 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
       streamChunkDelayMs = ms;
     },
     reset() {
+      for (const release of releases) release();
       queue.length = 0;
       requests.length = 0;
       embeddingRequests.length = 0;
@@ -275,6 +307,7 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
       streamChunkDelayMs = 0;
     },
     close() {
+      for (const release of releases) release();
       return new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

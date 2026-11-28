@@ -1492,7 +1492,7 @@ test.describe("zyra / agents (UI)", () => {
 
   interface ChatEntry {
     opType: "create" | "update" | "archive";
-    draft?: { title: string; description?: string; preconditions?: string; stepsJson?: string; testData?: string; priority?: string; suiteId?: string | null; severity?: string; component?: string };
+    draft?: { title: string; description?: string; preconditions?: string; stepsJson?: string; testData?: string; priority?: string; suiteId?: string | null; suiteName?: string; severity?: string; component?: string };
     testcaseId?: string;
     externalId?: string;
     fields?: Record<string, unknown>;
@@ -1551,11 +1551,18 @@ test.describe("zyra / agents (UI)", () => {
       },
       { opType: "create", draft: { suiteId: null, title: "Sign in with a wrong password", description: "", preconditions: "", stepsJson: "[]", priority: "P2" } },
     ];
+    // Native create proposals store resolved citations inside draft; update/archive proposals
+    // store them beside fields. The message snapshot must not be the sole provenance owner.
+    const persistedEntries = entries.map((entry) => {
+      if (entry.opType !== "create") return entry;
+      const { sourceRefs, ...rest } = entry;
+      return { ...rest, draft: { ...entry.draft, ...(sourceRefs ? { sourceRefs } : {}) } };
+    });
     exec(
       "INSERT INTO ai_generation_requests (project_id, requested_by, provider, model, user_story, requested_count, " +
         "generated_count, generated_payload, agent_name, task_status, chat_session_id) VALUES (" +
         `${literal(t.mainProjectId)}, ${literal(t.owner.userId)}, 'zyra_chat', 'gpt-4o-mini', 'Zyra chat proposal', ` +
-        `${entries.length}, ${entries.length}, ${literal(JSON.stringify(entries))}::jsonb, ${literal(ZYRA_AGENT_NAME)}, ` +
+        `${entries.length}, ${entries.length}, ${literal(JSON.stringify(persistedEntries))}::jsonb, ${literal(ZYRA_AGENT_NAME)}, ` +
         `${literal(options.status ?? "in_review")}, ${literal(sessionId)});`,
     );
     const taskId = scalar(
@@ -1604,6 +1611,19 @@ test.describe("zyra / agents (UI)", () => {
     const page = await ctx.newPage();
     await page.goto(`/projects/${tenant!.mainProjectId}${path}`);
     return page;
+  }
+
+  // Canonical browser URLs use the readable project key. Resolve it through
+  // the same authorized route contract rather than accepting any project slug.
+  async function expectCanonicalProjectPath(page: Page, path: string) {
+    const response = await api.get("/api/route-resolve", { params: { project: tenant!.mainProjectId } });
+    expect(response.ok(), "the exact project must resolve").toBeTruthy();
+    const resolved = await response.json();
+    expect(resolved.projectId).toBe(tenant!.mainProjectId);
+    expect(resolved.projectKey).toEqual(expect.any(String));
+    expect(resolved.projectKey.length).toBeGreaterThan(0);
+    await expect(page).toHaveURL(url =>
+      url.pathname === `/projects/${encodeURIComponent(resolved.projectKey)}${path}`);
   }
 
   test("requirement change bundle is reviewed and rejected from the native task page without publishing", async ({ browser }) => {
@@ -1947,11 +1967,11 @@ test.describe("zyra / agents (UI)", () => {
     await expect(board).toHaveAttribute("href", new RegExp(`/projects/${tenant!.mainProjectId}/agents/tasks$`));
 
     await page.getByRole("link", { name: /Agent workspace/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra$`));
+    await expectCanonicalProjectPath(page, "/agents/zyra");
     await expect(page.getByRole("heading", { name: "Zyra", level: 1 })).toBeVisible();
   });
 
-  test("ZYU-40 the Agents card shows nothing until used, then an absolute last-used date, and the chat sidebar's own timestamps are untouched", async ({
+  test("ZYU-40 the Agents card shows nothing until used, then an absolute last-used date, and the chat sidebar retains its date and time", async ({
     browser,
   }) => {
     /*
@@ -1959,13 +1979,12 @@ test.describe("zyra / agents (UI)", () => {
      * activity was through chat rather than the task board (see api/zyra.spec.ts ZYR-A-43/44 for the
      * backend half). The card now shows nothing at all in that footer slot until Zyra has actually
      * been used — no "Not used yet" placeholder either — and once used reads "Last used on
-     * DD/MM/YYYY"; this pins both states and that it never regresses back to a relative "…ago"
+     * DD Mon YYYY"; this pins both states and that it never regresses back to a relative "…ago"
      * string.
      *
-     * The Zyra chat screen's own "Conversations" sidebar renders each session's timestamp with its
-     * own long-standing `formatTime` (e.g. "Aug 24, 08:08 PM") and was explicitly asked NOT to change
-     * — pinned here too, on the same seeded session, so a future edit to the card's date logic can't
-     * silently leak into the sidebar.
+     * The sitewide date contract now uses "DD Mon YYYY" for the card and includes the time
+     * ("DD Mon YYYY, HH:MM AM/PM") in the Conversations sidebar. Pin the different precision
+     * of these surfaces on the same seeded session; neither may fall back to a relative date.
      */
     // Same selector convention as ZYU-02: the whole card is one <button>, and its accessible name is
     // the concatenation of everything visible inside it — heading, role text, description, chips,
@@ -1994,33 +2013,38 @@ test.describe("zyra / agents (UI)", () => {
       `INSERT INTO zyra_chat_messages (session_id, project_id, user_id, role, content, status) VALUES ` +
         `(${literal(sessionId)}, ${literal(tenant!.mainProjectId)}, ${literal(tenant!.owner.userId)}, 'user', 'Write me some test cases', 'sent');`,
     );
-    exec(`UPDATE zyra_chat_sessions SET updated_at = now() WHERE id = ${literal(sessionId)};`);
+    const sessionTitle = stamp("Last-used session");
+    exec(`UPDATE zyra_chat_sessions SET title = ${literal(sessionTitle)}, updated_at = now() WHERE id = ${literal(sessionId)};`);
 
     await cleanPage.reload();
-    const usedLabel = agentCard(cleanPage).getByText(/^Last used on \d{2}\/\d{2}\/\d{4}$/);
+    const usedLabel = agentCard(cleanPage).getByText(/^Last used on \d{2} [A-Za-z]{3} \d{4}$/);
     await expect(usedLabel).toBeVisible();
     await expect(agentCard(cleanPage).getByText(/ago$/)).toHaveCount(0);
 
-    // The date is DD/MM/YYYY and within a day of "now" either side of a UTC/local boundary — not
+    // The date is DD Mon YYYY and within a day of "now" either side of a UTC/local boundary — not
     // asserted against an exact string, since the browser's and the DB's timezone need not match.
     const labelText = (await usedLabel.textContent())!;
-    const [, dd, mm, yyyy] = labelText.match(/(\d{2})\/(\d{2})\/(\d{4})/)!;
-    const shown = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    const [, dd, mon, yyyy] = labelText.match(/(\d{2}) ([A-Za-z]{3}) (\d{4})/)!;
+    const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(mon);
+    expect(month, "the English abbreviated month must be valid").toBeGreaterThanOrEqual(0);
+    const shown = new Date(Number(yyyy), month, Number(dd));
+    expect(shown.getDate()).toBe(Number(dd));
     const today = new Date();
     const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const dayDiff = Math.abs(shown.getTime() - todayMidnight.getTime()) / 86_400_000;
     expect(dayDiff, `"${labelText}" is not close to today's date`).toBeLessThanOrEqual(1);
 
-    // The chat screen's own "Conversations" sidebar timestamp is untouched by this fix — still its
-    // pre-existing locale format, not DD/MM/YYYY.
+    // The Conversations sidebar retains time precision under the sitewide date/time contract.
     const chatPage = await open(browser, "/agents/zyra");
-    const sidebarRow = chatPage.locator("aside button").first();
+    // The first native button is New, not a conversation. The session rows are role=button divs.
+    const sidebar = chatPage.locator("aside").filter({ has: chatPage.getByText("Conversations", { exact: true }) });
+    const sidebarRow = sidebar.getByRole("button").filter({ has: chatPage.getByText(sessionTitle, { exact: true }) });
+    await expect(sidebarRow).toHaveCount(1);
     await expect(sidebarRow).toBeVisible();
-    const sidebarTimestamp = (await sidebarRow.locator("span").nth(1).textContent()) ?? "";
-    expect(sidebarTimestamp, "the chat sidebar's own timestamp regressed to DD/MM/YYYY").not.toMatch(
-      /^\d{2}\/\d{2}\/\d{4}$/,
-    );
-    expect(sidebarTimestamp.trim().length, "the sidebar row lost its timestamp entirely").toBeGreaterThan(0);
+    const timestamp = sidebarRow.getByText(/^\d{2} [A-Za-z]{3} \d{4}, (0[1-9]|1[0-2]):[0-5]\d (AM|PM)$/);
+    await expect(timestamp, "the sidebar must retain the date and absolute time").toBeVisible();
+    const sidebarTimestamp = (await timestamp.textContent()) ?? "";
+    expect(sidebarTimestamp.split(", ")[0], "both surfaces describe the seeded session's date").toBe(labelText.replace("Last used on ", ""));
   });
 
   // ─── The unconfigured-provider state, which is most workspaces ─────────────
@@ -2093,6 +2117,21 @@ test.describe("zyra / agents (UI)", () => {
     await expect(dialog.getByText(/^Linear/)).toHaveCount(0);
   });
 
+  // Selecting a nonempty document renders Context as Markdown by default. Assert
+  // that the populated preview is present, then use the actual Edit action to
+  // verify its underlying textarea value without changing the product state.
+  async function openPopulatedContextEditor(dialog: Locator, expectedPreview: string): Promise<Locator> {
+    const edit = dialog.getByRole("button", { name: "Edit", exact: true });
+    const editor = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    await expect(edit).toBeVisible();
+    await expect(editor).toHaveCount(0);
+    await expect(dialog.locator(".zyra-prose").filter({ hasText: expectedPreview })).toBeVisible();
+    await edit.click();
+    await expect(editor).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Preview", exact: true })).toBeVisible();
+    return editor;
+  }
+
   test("ZYU-51 selecting a Knowledge Base document maps its Acceptance Criteria section to a dedicated field, not Context", async ({
     browser,
   }) => {
@@ -2109,7 +2148,7 @@ test.describe("zyra / agents (UI)", () => {
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
     const story = dialog.getByPlaceholder("As a user, I want...");
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Users should be able to log in");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(story).toHaveValue(new RegExp(title));
@@ -2152,9 +2191,8 @@ test.describe("zyra / agents (UI)", () => {
     const { dialog } = await openCreateModal(browser);
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
-    await expect(dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...")).toHaveValue(
-      /Just a plain note/,
-    );
+    const context = await openPopulatedContextEditor(dialog, "Just a plain note");
+    await expect(context).toHaveValue(/Just a plain note/);
     await expect(dialog.getByPlaceholder("Given ..., when ..., then ...")).toHaveValue("");
   });
 
@@ -2173,7 +2211,7 @@ test.describe("zyra / agents (UI)", () => {
     const { dialog } = await openCreateModal(browser);
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Do the thing well");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(acceptanceCriteria).toHaveValue(/Case one applies/);
@@ -2201,7 +2239,7 @@ test.describe("zyra / agents (UI)", () => {
     const { dialog } = await openCreateModal(browser);
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Do the thing well");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(context).toHaveValue(/Do the thing well/);
@@ -2228,7 +2266,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(dialog.getByPlaceholder("Given ..., when ..., then ...")).toHaveValue("");
     // The modal, and the page under it, are still fully responsive.
     await expect(dialog.getByRole("button", { name: "Create task" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Zyra", exact: false })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Zyra", exact: true, level: 1 })).toBeVisible();
   });
 
   test("ZYU-56 removing a selected document's chip and reselecting it does not duplicate its content", async ({ browser }) => {
@@ -2246,7 +2284,7 @@ test.describe("zyra / agents (UI)", () => {
 
     await select.selectOption({ label: `${title} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Some unique reselection content.");
     const value = await context.inputValue();
     const occurrences = value.split("Some unique reselection content.").length - 1;
     expect(occurrences, `content was duplicated in Context:\n${value}`).toBe(1);
@@ -2269,7 +2307,7 @@ test.describe("zyra / agents (UI)", () => {
     await select.selectOption({ label: `${titleA} - general` });
     await select.selectOption({ label: `${titleB} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Doc A body text");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(context).toHaveValue(/Doc A body text/);
@@ -2283,7 +2321,7 @@ test.describe("zyra / agents (UI)", () => {
   test("ZYU-06 a capability toggle persists across a reload", { tag: '@tesbo.testId("TES-TC-1091")' }, async ({ browser }) => {
     const page = await open(browser, "/agents/zyra/settings");
 
-    const knowledgeBase = page.getByRole("switch").nth(1);
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
     await expect(knowledgeBase).toBeChecked();
     await knowledgeBase.click();
     await expect(knowledgeBase).not.toBeChecked();
@@ -2292,7 +2330,7 @@ test.describe("zyra / agents (UI)", () => {
     await page.reload();
 
     await expect(
-      page.getByRole("switch").nth(1),
+      page.getByRole("switch", { name: "Knowledge base access", exact: true }),
       "a capability the user turned off stays off",
     ).not.toBeChecked();
   });
@@ -2379,15 +2417,16 @@ test.describe("zyra / agents (UI)", () => {
   test("ZYU-08 reset to defaults puts every capability back on", { tag: '@tesbo.testId("TES-TC-1093")' }, async ({ browser }) => {
     const page = await open(browser, "/agents/zyra/settings");
 
-    const first = page.getByRole("switch").first();
+    const first = page.getByRole("switch", { name: "Test case generation", exact: true });
+    await expect(first).toBeChecked();
     await first.click();
     await expect(first).not.toBeChecked();
     await page.getByRole("button", { name: "Save settings" }).click();
 
     await page.getByRole("button", { name: "Reset to defaults" }).click();
 
-    for (const index of [0, 1, 2, 3]) {
-      await expect(page.getByRole("switch").nth(index), `capability ${index} is back on`).toBeChecked();
+    for (const name of ["Test case generation", "Knowledge base access", "Test case storage operations", "Suite operations"]) {
+      await expect(page.getByRole("switch", { name, exact: true }), `${name} is back on`).toBeChecked();
     }
   });
 
@@ -2413,7 +2452,8 @@ test.describe("zyra / agents (UI)", () => {
     // Status labels render Title Case ("In Review"), never the raw lowercase enum value ("in_review").
     await expect(card).toContainText("In Review");
     await expect(card).not.toContainText("in review");
-    await expect(card, "the board summarises how much was generated").toContainText("2 testcases");
+    await expect(card, "the board summarises how much was generated").toContainText("2 test cases");
+    await expect(card.getByText("30", { exact: true })).toBeVisible();
   });
 
   test("ZYU-11 the board switches to the Kanban view and keeps the task", { tag: '@tesbo.testId("TES-TC-1096")' }, async ({ browser }) => {
@@ -2465,7 +2505,8 @@ test.describe("zyra / agents (UI)", () => {
     // The description <p> only renders when task.context is truthy — confirm the empty string
     // doesn't leave a blank paragraph behind, by checking the card's text is exactly what the
     // non-description fields produce (status, story, generated/token summary — no extra line).
-    await expect(cardContainer.locator("p")).toHaveCount(1);
+    await expect(cardContainer.getByText("2 test cases", { exact: true })).toBeVisible();
+    await expect(cardContainer.locator("p")).toHaveCount(0);
 
     await cardContainer.click();
     const panel = page.locator(".slide-in-right");
@@ -2687,9 +2728,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/tasks");
     await page.getByRole("tab", { name: "Kanban board" }).click();
     const card = page.locator("button", { has: page.getByText(userStory) });
-    // The card's second <p> is its "N testcases generated" summary line; the description is first.
-    await expect(card.locator("p")).toHaveCount(2);
-    const text = (await card.locator("p").first().textContent()) ?? "";
+    // The output summary is now a separate span; only the description is a paragraph.
+    await expect(card.getByText("2 test cases", { exact: true })).toBeVisible();
+    await expect(card.locator("p")).toHaveCount(1);
+    const text = (await card.locator("p").textContent()) ?? "";
     expect(text, "the card preview carries no Markdown syntax").not.toMatch(MARKDOWN_SYNTAX);
     expect(text).toContain("LIN-05: Submit an Expense Claim Module: Claim");
   });
@@ -2752,8 +2794,9 @@ test.describe("zyra / agents (UI)", () => {
 
     await page.getByRole("tab", { name: "Kanban board" }).click();
     const card = page.locator("button", { has: page.getByText(userStory) });
-    // Only the card's own summary line, as in ZYU-25 — no blank description paragraph.
-    await expect(card.locator("p")).toHaveCount(1);
+    // The output summary is rendered separately; there must be no description paragraph.
+    await expect(card.getByText("2 test cases", { exact: true })).toBeVisible();
+    await expect(card.locator("p")).toHaveCount(0);
 
     await card.click();
     const panel = page.locator(".slide-in-right");
@@ -2803,8 +2846,8 @@ test.describe("zyra / agents (UI)", () => {
 
     const card = page.getByRole("button", { name: new RegExp(userStory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) });
     await expect(card).toBeVisible();
-    await expect(card).toContainText("failed");
-    await expect(card, "must not read back as the pre-generation 'todo' status").not.toContainText("todo");
+    await expect(card.getByText("Failed", { exact: true })).toBeVisible();
+    await expect(card.getByText("To Do", { exact: true }), "must not read back as the pre-generation todo status").toHaveCount(0);
     await expect(card, "the failure reason must be visible without opening the Activity tab").toContainText(
       "E2E simulated provider timeout",
     );
@@ -2957,13 +3000,19 @@ test.describe("zyra / agents (UI)", () => {
   }
 
   test("ZYU-138 a short task description shows in full with no View more toggle", async ({ browser }) => {
-    const taskId = seedTask({ userStory: stamp("Short description story"), context: TICKET_MARKDOWN, linearIssueKeys: ["LIN-S1"] });
+    // The full TICKET_MARKDOWN fixture is used by the rich-rendering tests; it can exceed
+    // the 256px rendered-height cap. Use a genuinely short rendered description here.
+    const shortContext = "### LIN-05: Submit an Expense Claim\n\nReceipt is mandatory.";
+    const taskId = seedTask({ userStory: stamp("Short description story"), context: shortContext, linearIssueKeys: ["LIN-S1"] });
     const page = await open(browser, `/agents/tasks/${taskId}`);
 
     const description = page.getByTestId("task-description");
     await expect(description.locator("h3")).toHaveText("LIN-05: Submit an Expense Claim");
-    await expect(description.getByRole("button", { name: /View (more|less)/ })).toHaveCount(0);
+    await expect(description.getByText("Receipt is mandatory.", { exact: true })).toBeVisible();
+    // Establish the test precondition with actual layout, not Markdown character count.
     const heights = await descriptionHeights(page);
+    expect(heights.scroll, "short fixture must render below the collapse cap").toBeLessThan(COLLAPSED_MAX_PX);
+    await expect(description.getByRole("button", { name: /View (more|less)/ })).toHaveCount(0);
     expect(heights.client, "a description under the cap is not clipped").toBe(heights.scroll);
     // No fade either — the mask is applied only while there is hidden content.
     const mask = await page.locator("#task-description-content").evaluate((el) => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage);
@@ -3271,6 +3320,167 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByRole("button", { name: "Clear selection" })).toBeDisabled();
   });
 
+  function draftTaskPath(taskId: string): string {
+    return `/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${taskId}`;
+  }
+
+  async function readDraftTask(taskId: string) {
+    const response = await api.get(draftTaskPath(taskId));
+    expect(response.ok(), await response.text()).toBeTruthy();
+    return response.json();
+  }
+
+  test("ZYU-DRAFT-REV task refresh clears indexes selected from a different proposal", async ({ browser }) => {
+    const [a, b, c] = [stamp("Revision A"), stamp("Revision B"), stamp("Revision C")];
+    const taskId = seedTask({ drafts: [a, b, c].map(title => ({ title, priority: "P2", steps: [] })) });
+    // A real pending comment enables the existing task readback poll, including while in_review.
+    await seedTicketComment(taskId, { status: "pending" });
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox").check();
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    const after = await removed.json();
+
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toHaveCount(0);
+    await expect(page.getByText("0 of 2 testcases selected")).toBeVisible();
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(c)) }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("button", { name: "Delete selected", exact: true })).toBeDisabled();
+
+    // A deliberate selection after reviewing the new list addresses B's new index, never C's.
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox").check();
+    const sent = page.waitForRequest(request => request.method() === "DELETE" && new URL(request.url()).pathname === `${draftTaskPath(taskId)}/drafts/0`);
+    await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+    expect((await sent).postDataJSON()).toMatchObject({ expectedProposalRevision: after.proposalRevision });
+    await expect.poll(() => draftTitles(taskId)).toEqual([c]);
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(c)) })).toBeVisible();
+  });
+
+  test("ZYU-DRAFT-REV a delayed pre-delete GET cannot restore rows or serve as fresh reconciliation", async ({ browser }) => {
+    const [a, b, c] = [stamp("Delayed A"), stamp("Delayed B"), stamp("Delayed C")];
+    const taskId = seedTask({ drafts: [a, b, c].map(title => ({ title, priority: "P2", steps: [] })) });
+    await seedTicketComment(taskId, { status: "pending" });
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toBeVisible();
+    let ready = false;
+    let held = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route(url => url.pathname === draftTaskPath(taskId), async route => {
+      if (route.request().method() !== "GET" || held) return route.continue();
+      held = true;
+      const oldResponse = await route.fetch();
+      expect((await oldResponse.json()).drafts.map((draft: { title: string }) => draft.title)).toEqual([a, b, c]);
+      ready = true;
+      await gate;
+      await route.fulfill({ response: oldResponse });
+    });
+    try {
+      await expect.poll(() => ready, { message: "hold the actual readback captured before deletion" }).toBe(true);
+      await page.getByRole("row", { name: new RegExp(escapeRegExp(a)) }).getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 2 testcases selected")).toBeVisible();
+      expect(draftTitles(taskId)).toEqual([b, c]);
+
+      // A second write commits without an acknowledgement. Explicit reconciliation must issue
+      // a new GET instead of joining the still-held read through the generic GET deduplicator.
+      await page.route(url => url.pathname === `${draftTaskPath(taskId)}/drafts/0`, async route => {
+        if (route.request().method() !== "DELETE") return route.continue();
+        const committed = await route.fetch();
+        expect(committed.ok(), await committed.text()).toBeTruthy();
+        await route.abort("connectionreset");
+      });
+      await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("button", { name: "Delete", exact: true }).click();
+      await expect(page.getByRole("alert").filter({ hasText: "The draft change was not confirmed" })).toBeVisible();
+      await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 1 testcase selected")).toBeVisible();
+      const delayed = page.waitForResponse(response => response.request().method() === "GET" && new URL(response.url()).pathname === draftTaskPath(taskId));
+      release();
+      await delayed;
+      // Let the fulfilled response reach React before checking that it was rejected by the fence.
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(a)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 1 testcase selected")).toBeVisible();
+      expect(draftTitles(taskId)).toEqual([c]);
+    } finally {
+      release();
+    }
+  });
+
+  test("ZYU-DRAFT-REV bulk deletion keeps each acknowledgement and reconciles a lost committed response", async ({ browser }) => {
+    const [a, b, c, d] = [stamp("Bulk A"), stamp("Bulk B"), stamp("Bulk C"), stamp("Bulk D")];
+    const taskId = seedTask({ drafts: [a, b, c, d].map(title => ({ title, priority: "P2", steps: [] })) });
+    const page = await open(browser, `/agents/tasks/${taskId}`);
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("checkbox").check();
+    await page.getByRole("row", { name: new RegExp(escapeRegExp(d)) }).getByRole("checkbox").check();
+    const before = await readDraftTask(taskId);
+    const writes: Array<{ index: number; revision: string }> = [];
+    let firstRevision = "";
+    let secondCommitted = false;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route(url => url.pathname.startsWith(`${draftTaskPath(taskId)}/drafts/`), async route => {
+      if (route.request().method() !== "DELETE") return route.continue();
+      writes.push({ index: Number(new URL(route.request().url()).pathname.split("/").at(-1)), revision: route.request().postDataJSON().expectedProposalRevision });
+      const response = await route.fetch();
+      expect(response.ok(), await response.text()).toBeTruthy();
+      if (writes.length === 1) {
+        firstRevision = (await response.json()).proposalRevision;
+        return route.fulfill({ response });
+      }
+      if (writes.length === 2) {
+        // The second write really commits; only its acknowledgement is lost.
+        secondCommitted = true;
+        await gate;
+        return route.abort("connectionreset");
+      }
+      return route.fulfill({ response });
+    });
+    try {
+      await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+      await expect.poll(() => secondCommitted).toBe(true);
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(d)) }), "the first acknowledgement is rendered before the batch completes").toHaveCount(0);
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }), "the unacknowledged response has not changed the visible snapshot").toBeVisible();
+      expect(writes).toEqual([{ index: 3, revision: before.proposalRevision }, { index: 1, revision: firstRevision }]);
+      expect(firstRevision).not.toBe(before.proposalRevision);
+      release();
+      await expect(page.getByRole("alert").filter({ hasText: "The draft change was not confirmed" })).toBeVisible();
+      await expect(page.getByText("0 of 3 testcases selected")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Delete selected", exact: true })).toBeDisabled();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) }).getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+      expect(writes).toHaveLength(2);
+      expect(draftTitles(taskId)).toEqual([a, c]);
+
+      await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(b)) })).toHaveCount(0);
+      await expect(page.getByText("0 of 2 testcases selected")).toBeVisible();
+      const refreshed = await readDraftTask(taskId);
+      await page.getByRole("row", { name: new RegExp(escapeRegExp(a)) }).getByRole("checkbox").check();
+      await page.getByRole("button", { name: "Delete selected", exact: true }).click();
+      await expect.poll(() => draftTitles(taskId)).toEqual([c]);
+      expect(writes).toHaveLength(3);
+      expect(writes[2]).toEqual({ index: 0, revision: refreshed.proposalRevision });
+      await expect(page.getByRole("row", { name: new RegExp(escapeRegExp(c)) })).toBeVisible();
+    } finally {
+      release();
+    }
+  });
+
+  for (const status of ["in_progress", "failed", "done"]) {
+    test(`ZYU-DRAFT-REV ${status} task rows cannot be selected, saved or deleted`, async ({ browser }) => {
+      const title = stamp(`Closed review ${status}`);
+      const taskId = seedTask({ status, drafts: [{ title, priority: "P2", steps: [] }] });
+      const page = await open(browser, `/agents/tasks/${taskId}`);
+      const row = page.getByRole("row", { name: new RegExp(escapeRegExp(title)) });
+      await expect(row.getByRole("checkbox")).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+      await expect(row.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
+      expect(draftTitles(taskId)).toEqual([title]);
+    });
+  }
+
   test("ZYU-14 saving a draft into a new suite creates a real test case", { tag: '@tesbo.testId("TES-TC-1099")' }, async ({ browser }) => {
     const taskId = seedTask();
     const suiteName = stamp("Suite");
@@ -3364,7 +3574,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(dialog.locator("pre")).toContainText(originalTitle);
     await dialog.getByRole("combobox").selectOption("new");
     await dialog.getByRole("textbox").fill(suiteName);
-    const changed = await api.patch(`${base}/agents/zyra/tasks/${task.id}/drafts/0`, { data: { title: changedTitle } });
+    const changed = await api.patch(`${base}/agents/zyra/tasks/${task.id}/drafts/0`, { data: { title: changedTitle, expectedProposalRevision: task.proposalRevision } });
     expect(changed.ok(), await changed.text()).toBeTruthy();
     const response = page.waitForResponse((res) => isSaveRequest(task.id)(res.request()));
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -3848,25 +4058,27 @@ test.describe("zyra / agents (UI)", () => {
      * status directly (the real job isn't exercisable here — no AI provider is called, per the
      * file header) and assert the change lands without ever calling page.reload().
      */
-    const taskId = seedTask({ status: "in_progress" });
+    const userStory = stamp("Polling board story");
+    const taskId = seedTask({ userStory, status: "in_progress" });
     const page = await open(browser, "/agents/tasks");
-    await expect(page.getByText("in progress", { exact: true })).toBeVisible();
+    const row = page.getByRole("button").filter({ has: page.getByText(userStory, { exact: true }) });
+    await expect(row.getByText("In Progress", { exact: true })).toBeVisible();
 
     exec(`UPDATE ai_generation_requests SET task_status = 'in_review' WHERE id = ${literal(taskId)};`);
 
-    await expect(page.getByText("in review", { exact: true })).toBeVisible({ timeout: 9000 });
-    await expect(page.getByText("in progress", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("In Review", { exact: true })).toBeVisible({ timeout: 9000 });
+    await expect(row.getByText("In Progress", { exact: true })).toHaveCount(0);
   });
 
   test("ZYU-25 the task detail page reflects Zyra finishing a task without a page reload", async ({ browser }) => {
     const taskId = seedTask({ status: "todo" });
     const page = await open(browser, `/agents/tasks/${taskId}`);
-    await expect(page.getByText("todo", { exact: true })).toBeVisible();
+    await expect(page.getByText("To Do", { exact: true })).toBeVisible();
 
     exec(`UPDATE ai_generation_requests SET task_status = 'failed' WHERE id = ${literal(taskId)};`);
     seedFailureActivity(taskId, "E2E simulated provider timeout while this page was open");
 
-    await expect(page.getByText("failed", { exact: true })).toBeVisible({ timeout: 9000 });
+    await expect(page.getByText("Failed", { exact: true })).toBeVisible({ timeout: 9000 });
     await expect(page.getByText("E2E simulated provider timeout while this page was open")).toBeVisible();
   });
 
@@ -4180,6 +4392,20 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByRole("button", { name: `${linearKey} x` })).toBeVisible();
       await expect(page.getByRole("button", { name: `${jiraKey} x` })).toBeVisible();
 
+      // This scenario expects actual regeneration, not the fake gateway's empty answer fallback.
+      const regeneratedTitle = `Combined Jira and Linear coverage ${suffix}`;
+      ai.queueReply({
+        drafts: [{
+          title: regeneratedTitle,
+          preconditions: "",
+          stepsJson: JSON.stringify([{ stepNumber: 1, action: "Exercise the combined ticket workflow", expectedResult: "The workflow satisfies both ticket rules" }]),
+          testData: "",
+          expectedSummary: "Both ticket rules are satisfied.",
+          priority: "P1",
+          tags: ["zyra"],
+          sourceRefs: [],
+        }],
+      });
       await page.getByPlaceholder("Ask Zyra to improve coverage, add edge cases, remove duplicates, or focus on a missed rule.").fill("Use both tickets");
       const sent = page.waitForRequest((req) => isFeedbackRequest(req.url(), req.method()));
       await page.getByRole("button", { name: "Send feedback" }).click();
@@ -4187,6 +4413,9 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByText(/Feedback sent\./)).toBeVisible();
 
       expect(await waitForTaskSettled(taskId)).toBe("in_review");
+      expect(ai.requests.length, "the regeneration must reach the allocated fake gateway").toBeGreaterThan(0);
+      const regenerated = scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
+      expect(regenerated, "the scripted draft must actually be persisted").toContain(regeneratedTitle);
       expect(JSON.parse(scalar(`SELECT jira_issue_keys::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`))).toEqual([jiraKey]);
       expect(JSON.parse(scalar(`SELECT linear_issue_keys::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`))).toEqual([linearKey]);
     } finally {
@@ -4337,7 +4566,8 @@ test.describe("zyra / agents (UI)", () => {
     await expect(title).toBeVisible();
     await expect(panel.getByText("User context", { exact: true }), "the old label must not still be rendered").toHaveCount(0);
 
-    const sourceCard = panel.locator("div.rounded-lg", { has: title });
+    const sourceCard = panel.locator("div.rounded-lg", { has: page.getByRole("heading", { name: "User Story Context", level: 3, exact: true }) });
+    await expect(sourceCard).toHaveCount(1);
     await expect(
       sourceCard.locator(".zyra-prose p"),
       "each line of the context must stay on its own row, not collapse into one paragraph",
@@ -4470,7 +4700,8 @@ test.describe("zyra / agents (UI)", () => {
     await panel.getByRole("button", { name: /^Sources/ }).click();
     await expect(panel.getByText(longToken, { exact: false })).toBeVisible();
 
-    const scrollArea = panel.locator(".overflow-y-auto");
+    const scrollArea = panel.locator(".overflow-y-auto").filter({ has: page.getByText(longToken, { exact: false }) });
+    await expect(scrollArea).toHaveCount(1);
     const { scrollWidth, clientWidth } = await scrollArea.evaluate((el) => ({
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
@@ -4541,9 +4772,11 @@ test.describe("zyra / agents (UI)", () => {
     .join("\n")
     .slice(0, 320);
 
-  async function expectLinearContextRendered(scope: Page | Locator) {
-    const title = scope.getByRole("heading", { name: "User Story Context", level: 3 });
+  async function expectLinearContextRendered(page: Page, scope: Page | Locator = page) {
+    // Playwright evaluates has relative to each candidate; do not embed the enclosing panel.
+    const title = page.getByRole("heading", { name: "User Story Context", level: 3, exact: true });
     const sourceCard = scope.locator("div.rounded-lg", { has: title });
+    await expect(sourceCard).toHaveCount(1);
     await expect(sourceCard.getByRole("heading", { name: "QAB-241: LIN-01: Create a System User", level: 1 })).toBeVisible();
     await expect(sourceCard.locator("li")).toHaveCount(8);
     await expect(sourceCard.locator("li").first()).toHaveText("Status: Backlog");
@@ -4570,7 +4803,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const panel = page.locator(".slide-in-right");
     await panel.getByRole("button", { name: /^Sources/ }).click();
-    await expectLinearContextRendered(panel);
+    await expectLinearContextRendered(page, panel);
   });
 
   test("ZYU-127 jira and linear sources render Markdown too, a link cut mid-syntax stays plain text, and HTML stays escaped", async ({
@@ -4608,86 +4841,80 @@ test.describe("zyra / agents (UI)", () => {
 
   // ─── Transient network failures (fix for "Failed to fetch" on Zyra staging) ─
 
-  test("ZYU-33 a transport-level failure on save is retried once instead of surfacing to the user", async ({ browser }) => {
-    /*
-     * Regression test for intermittent "Failed to fetch — browser blocked or could not reach the
-     * API" reports on Zyra staging. RCA: browsers refuse to silently retry a POST/PATCH written
-     * into a keep-alive connection the server already closed while idle (nginx's default
-     * keepalive_timeout, 75s, is shorter than the gaps a real chat session leaves between
-     * requests) — fetch() throws a transport TypeError instead, which used to reach the user
-     * verbatim. A page refresh "fixed" it only because it opened a fresh connection. lib/api.ts's
-     * fetchWithNetworkErrorMessage now retries exactly once on that error class before surfacing
-     * anything, since the failed write never reached the server in the first place.
-     *
-     * Settings save (PATCH .../agents/zyra/settings) stands in for the chat POST here because it
-     * needs no AI key (see file header) and already has an observable persisted side effect
-     * (ZYU-06/07). route.abort("failed") reproduces the exact browser-level failure — Chromium
-     * surfaces it to fetch() as `TypeError: Failed to fetch`, the same string production code
-     * matches on.
-     */
+  // A transport error cannot tell the client whether a mutation reached the server.
+  // The shared API contract retries reads only. Exercise both sides of that ambiguity
+  // against the real settings endpoint; never reintroduce automatic write replay.
+  const unknownSettingsOutcome = "Request outcome unconfirmed. This action may already have been applied. Refresh to check before trying again.";
+
+  async function persistedKnowledgeAccess(): Promise<boolean> {
+    const res = await api.get(`/api/projects/${tenant!.mainProjectId}/agents/zyra`, { failOnStatusCode: false });
+    expect(res.status(), await res.text()).toBe(200);
+    return (await res.json()).settings.capabilities.knowledgeBase;
+  }
+
+  test("ZYU-33 a transport failure before settings delivery is not replayed and explicit retry after refresh persists", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra/settings");
     const settingsPath = `/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`;
-
     let patchAttempts = 0;
-    // Matched by pathname predicate, not a glob: the frontend posts to the backend's own origin
-    // while the page is served from the frontend's, and a relative glob is resolved against
-    // baseURL — see NAV-B-07 in navigation.spec.ts for the same gotcha.
-    await page.route(
-      (url) => url.pathname === settingsPath,
-      async (route) => {
-        if (route.request().method() !== "PATCH") {
-          await route.continue();
-          return;
-        }
-        patchAttempts++;
-        if (patchAttempts === 1) {
-          await route.abort("failed");
-        } else {
-          await route.continue();
-        }
-      },
-    );
+    await page.route((url) => url.pathname === settingsPath, async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      patchAttempts++;
+      if (patchAttempts === 1) return route.abort("failed");
+      await route.continue();
+    });
 
-    const knowledgeBase = page.getByRole("switch").nth(1);
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
+    await expect(knowledgeBase).toBeChecked();
+    expect(await persistedKnowledgeAccess()).toBe(true);
     await knowledgeBase.click();
+    await expect(knowledgeBase).not.toBeChecked();
     await page.getByRole("button", { name: "Save settings" }).click();
-
-    await expect(page.getByText("All changes saved.")).toBeVisible();
-    await expect(page.getByText(/Failed to fetch|browser blocked or could not reach the API/)).toHaveCount(0);
-    expect(patchAttempts, "the first attempt fails and the client retries exactly once").toBe(2);
+    await expect(page.getByText(unknownSettingsOutcome, { exact: true })).toBeVisible();
+    expect(patchAttempts, "an uncertain mutation is never automatically replayed").toBe(1);
+    expect(await persistedKnowledgeAccess(), "the deliberately undelivered write changed nothing").toBe(true);
 
     await page.reload();
-    await expect(
-      page.getByRole("switch").nth(1),
-      "the retried request actually persisted the change, not just the UI's optimism",
-    ).not.toBeChecked();
-  });
-
-  test("ZYU-34 a failure that survives the retry still reaches the user", async ({ browser }) => {
-    // The other half of ZYU-33: a genuinely dead backend (both attempts fail) must not be silently
-    // swallowed — the user still needs to see it, just after one automatic retry rather than zero.
-    const page = await open(browser, "/agents/zyra/settings");
-    const settingsPath = `/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`;
-
-    let patchAttempts = 0;
-    await page.route(
-      (url) => url.pathname === settingsPath,
-      async (route) => {
-        if (route.request().method() !== "PATCH") {
-          await route.continue();
-          return;
-        }
-        patchAttempts++;
-        await route.abort("failed");
-      },
-    );
-
-    const knowledgeBase = page.getByRole("switch").nth(1);
+    await expect(knowledgeBase).toBeChecked();
+    expect(patchAttempts).toBe(1);
+    // A new explicit action after reconciliation is safe; this is not a transport retry.
     await knowledgeBase.click();
     await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.getByText("All changes saved.", { exact: true })).toBeVisible();
+    expect(patchAttempts).toBe(2);
+    expect(await persistedKnowledgeAccess()).toBe(false);
+    await page.reload();
+    await expect(knowledgeBase).not.toBeChecked();
+    expect(patchAttempts).toBe(2);
+  });
 
-    await expect(page.getByText(/browser blocked or could not reach the API/)).toBeVisible();
-    expect(patchAttempts, "still only one retry, not an unbounded loop").toBe(2);
+  test("ZYU-34 a committed settings write with a lost response is not replayed and refresh reveals the committed state", async ({ browser }) => {
+    const page = await open(browser, "/agents/zyra/settings");
+    const settingsPath = `/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`;
+    let patchAttempts = 0;
+    const upstreamStatuses: number[] = [];
+    await page.route((url) => url.pathname === settingsPath, async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      patchAttempts++;
+      // Complete the real request, then withhold its response from the browser.
+      const upstream = await route.fetch({ maxRetries: 0 });
+      upstreamStatuses.push(upstream.status());
+      await route.abort("failed");
+    });
+
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
+    await expect(knowledgeBase).toBeChecked();
+    expect(await persistedKnowledgeAccess()).toBe(true);
+    await knowledgeBase.click();
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.getByText(unknownSettingsOutcome, { exact: true })).toBeVisible();
+    expect(patchAttempts, "no automatic replay after a committed write").toBe(1);
+    expect(upstreamStatuses).toEqual([200]);
+    expect(await persistedKnowledgeAccess(), "the write was committed despite response loss").toBe(false);
+
+    await page.reload();
+    await expect(knowledgeBase).not.toBeChecked();
+    expect(patchAttempts, "refresh reconciles by reading, not by replaying the write").toBe(1);
+    expect(await persistedKnowledgeAccess()).toBe(false);
   });
 
   // ─── Continue / resume (the misleading "Resuming…" hang fix) ───────────────
@@ -4835,6 +5062,97 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByText(a)).toBeVisible();
     await expect(page.getByRole("listitem").filter({ hasText: c }), "a saved draft must not reappear as staged").toHaveCount(0);
     await expect(page.getByText(/1 of 1 selected/)).toBeVisible();
+  });
+
+  test("ZYU-DRAFT-REV chat remount restores selections only for the same proposal revision", async ({ browser }) => {
+    const [a, b, c] = [stamp("Remembered A"), stamp("Remembered B"), stamp("Remembered C")];
+    const { taskId } = seedChatReviewBatch({ entries: [a, b, c].map(title => ({ opType: "create", draft: { title, priority: "P2", stepsJson: "[]" } })) });
+    const page = await open(browser, "/agents/zyra");
+    await page.getByRole("button", { name: "Unselect all", exact: true }).click();
+    await page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox").check();
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: b })).toHaveCount(0);
+    await page.getByRole("button").filter({ hasText: "E2E chat review" }).first().click();
+    await expect(page.getByText(/1 of 3 selected/)).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox")).toBeChecked();
+
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: b })).toHaveCount(0);
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    await page.getByRole("button").filter({ hasText: "E2E chat review" }).first().click();
+    await expect(page.getByText(/0 of 2 selected/)).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: a })).toHaveCount(0);
+    await expect(page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("listitem").filter({ hasText: c }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("button", { name: /Save .*to repository/ })).toBeDisabled();
+    expect(draftTitles(taskId)).toEqual([b, c]);
+  });
+
+  test("ZYU-DRAFT-REV chat background resync clears stale selected indexes", async ({ browser }) => {
+    const [a, b, c] = [stamp("Polling A"), stamp("Polling B"), stamp("Polling C")];
+    const { taskId } = seedChatReviewBatch({ entries: [a, b, c].map(title => ({ opType: "create", draft: { title, priority: "P2", stepsJson: "[]" } })) });
+    // This is the persisted assistant-message state while more rows are still being generated.
+    // It enables the panel's existing fallback read; this scenario does not call a model.
+    exec(`UPDATE zyra_chat_messages SET status = 'generating' WHERE review_request_id = ${literal(taskId)};`);
+    const page = await open(browser, "/agents/zyra");
+    await expect(page.getByTestId("zyra-review-progress")).toBeVisible();
+    await page.getByRole("button", { name: "Unselect all", exact: true }).click();
+    await page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox").check();
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    await expect(page.getByRole("listitem").filter({ hasText: a })).toHaveCount(0);
+    await expect(page.getByText(/0 of 2 selected/)).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ hasText: b }).getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByRole("listitem").filter({ hasText: c }).getByRole("checkbox")).not.toBeChecked();
+    expect(draftTitles(taskId)).toEqual([b, c]);
+  });
+
+  test("ZYU-DRAFT-REV chat pins the editor revision and preserves typed values across a conflict", async ({ browser }) => {
+    const [a, b, c] = [stamp("Editor A"), stamp("Editor B"), stamp("Editor C")];
+    const editedB = stamp("Reviewed B edit");
+    const { taskId } = seedChatReviewBatch({ entries: [a, b, c].map(title => ({ opType: "create", draft: { title, priority: "P2", stepsJson: "[]", testData: "original" } })) });
+    const page = await open(browser, "/agents/zyra");
+    const bRow = page.getByRole("listitem").filter({ hasText: b });
+    await bRow.getByRole("button", { name: "Edit", exact: true }).click();
+    await editorControl(bRow, "Title").fill(editedB);
+    await editorTextarea(bRow, "Test Data").fill("keep this unsaved input");
+    await expect(page.getByRole("listitem").filter({ hasText: a }).getByRole("button", { name: "Discard", exact: true })).toBeDisabled();
+    await expect(page.getByRole("listitem").filter({ hasText: c }).getByRole("button", { name: "Edit", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Discard all", exact: true })).toBeDisabled();
+
+    const before = await readDraftTask(taskId);
+    const removed = await api.delete(`${draftTaskPath(taskId)}/drafts/0`, { data: { expectedProposalRevision: before.proposalRevision } });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    const current = await removed.json();
+    const sent = page.waitForRequest(request => request.method() === "PATCH" && new URL(request.url()).pathname === `${draftTaskPath(taskId)}/drafts/1`);
+    const rejected = page.waitForResponse(response => response.request().method() === "PATCH" && new URL(response.url()).pathname === `${draftTaskPath(taskId)}/drafts/1`);
+    await bRow.getByRole("button", { name: "Save edit", exact: true }).click();
+    expect((await sent).postDataJSON()).toMatchObject({ expectedProposalRevision: before.proposalRevision, title: editedB });
+    expect((await rejected).status()).toBe(409);
+    await expect(editorControl(bRow, "Title")).toHaveValue(editedB);
+    await expect(editorTextarea(bRow, "Test Data")).toHaveValue("keep this unsaved input");
+    await expect(bRow.getByRole("button", { name: "Save edit", exact: true })).toBeDisabled();
+    await expect(page.getByText(/Your unsaved values are still in this editor/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reload proposal", exact: true })).toBeDisabled();
+    expect(draftTitles(taskId)).toEqual([b, c]);
+    expect(readDraftField(taskId, c, "testData")).toBe("original");
+
+    // Recovery is an explicit cancellation and fresh review, not a silent resubmit onto C.
+    await bRow.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "Reload proposal", exact: true }).click();
+    await expect(page.getByRole("listitem").filter({ hasText: a })).toHaveCount(0);
+    await expect(page.getByText(/0 of 2 selected/)).toBeVisible();
+    await bRow.getByRole("button", { name: "Edit", exact: true }).click();
+    await editorControl(bRow, "Title").fill(editedB);
+    const fresh = page.waitForRequest(request => request.method() === "PATCH" && new URL(request.url()).pathname === `${draftTaskPath(taskId)}/drafts/0`);
+    await bRow.getByRole("button", { name: "Save edit", exact: true }).click();
+    expect((await fresh).postDataJSON()).toMatchObject({ expectedProposalRevision: current.proposalRevision, title: editedB });
+    await expect(page.getByRole("listitem").filter({ hasText: editedB })).toBeVisible();
+    await expect.poll(() => draftTitles(taskId)).toEqual([editedB, c]);
+    expect(readDraftField(taskId, c, "testData")).toBe("original");
   });
 
   test("ZYU-66 editing a proposed row updates what's displayed and what's stored", async ({ browser }) => {
@@ -5060,8 +5378,10 @@ test.describe("zyra / agents (UI)", () => {
     await editorTextarea(row, "Test Data").fill("after");
     await row.getByRole("button", { name: "Save edit" }).click();
 
-    await expect(page.getByText(/Simulated edit failure|Failed to save the edit/)).toBeVisible();
+    await expect(page.getByText(/The draft change was not confirmed/)).toBeVisible();
     await expect(row.getByRole("button", { name: "Save edit" }), "the editor must stay open so the edit isn't lost").toBeVisible();
+    await expect(row.getByRole("button", { name: "Save edit" }), "an unconfirmed write requires reconciliation before another attempt").toBeDisabled();
+    await expect(row.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
     await expect(editorTextarea(row, "Test Data")).toHaveValue("after");
     expect(readDraftField(taskId, title, "testData")).toBe("before");
   });
@@ -5210,7 +5530,8 @@ test.describe("zyra / agents (UI)", () => {
   test("ZYU-127 an unlinked message whose rows name two different batches gets no guessed review panel", async ({ browser }) => {
     const label = stamp("Ambiguous batch");
     const { sessionId, taskId } = seedChatReviewBatch({ entries: planBatch(label, 2) });
-    const otherTask = seedChatReviewBatch({ sessionId, entries: planBatch(stamp("Other batch"), 1) }).taskId;
+    const otherLabel = stamp("Other batch");
+    const otherTask = seedChatReviewBatch({ sessionId, entries: planBatch(otherLabel, 1) }).taskId;
     // Rewrite the first message as unlinked, with its second row pointing at the other batch.
     const rows = JSON.parse(
       scalar(`SELECT testcases::text FROM zyra_chat_messages WHERE review_request_id = ${literal(taskId)};`) || "[]",
@@ -5222,7 +5543,7 @@ test.describe("zyra / agents (UI)", () => {
     );
     const page = await open(browser, "/agents/zyra");
 
-    await expect(page.getByText(/Other batch case 1/)).toBeVisible();
+    await expect(page.getByText(`${otherLabel} case 1`, { exact: true })).toBeVisible();
     await expect(page.getByText(/1 of 1 selected — pending review/)).toBeVisible();
     // Only the other, properly linked batch gets a panel — no actions are offered against a guess.
     await expect(page.getByText(/of 2 selected — pending review/)).toHaveCount(0);
@@ -5240,7 +5561,7 @@ test.describe("zyra / agents (UI)", () => {
     // The unselected draft is still on screen, still checked, still actionable — the batch did not
     // resolve just because one of its two drafts was saved.
     await expect(page.getByText("Sign in with a wrong password")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Discard", exact: true })).toBeVisible();
     await expect
       .poll(() => scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`))
       .toBe("in_review");
@@ -5308,12 +5629,12 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByText("Zyra generated test cases")).toHaveCount(0);
     await expect(page.getByText(/0 test cases across 0 suites/)).toBeVisible();
 
-    // Leaving suiteId null means the backend files this under its default "Zyra generated test
-    // cases" suite (LegacyService.ZYRA_DRAFT_SUITE_NAME) — a suite that does not exist yet, so its
-    // very appearance after saving is itself proof the repository picked up the new data.
+    // The chat generation route stages the default destination as suiteName when no suite ID
+    // exists yet. The native Save resolves that reviewed name atomically; null alone means
+    // unassigned. Seed the actual proposal shape without creating a suite before approval.
     const draftTitle = stamp("Fresh from Zyra");
     seedChatReviewBatch({
-      entries: [{ opType: "create", draft: { suiteId: null, title: draftTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P2" } }],
+      entries: [{ opType: "create", draft: { suiteId: null, suiteName: "Zyra generated test cases", title: draftTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P2" } }],
     });
 
     // Client-side navigation only, via the same sidebar/modal links a real user clicks (ZYU-02) —
@@ -5322,10 +5643,11 @@ test.describe("zyra / agents (UI)", () => {
     await page.getByRole("link", { name: "Agents", exact: true }).click();
     await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
     await page.getByRole("link", { name: /Agent workspace/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra$`));
+    await expectCanonicalProjectPath(page, "/agents/zyra");
 
     const suitesPath = `/api/projects/${tenant!.mainProjectId}/suites`;
     await expect(page.getByText(draftTitle)).toBeVisible();
+    expect(Number(scalar(`SELECT COUNT(*) FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Zyra generated test cases' AND deleted_at IS NULL;`)), "the proposed suite must not exist before Save").toBe(0);
     // Set up the wait before clicking — the background refresh's request can land before the next
     // line would otherwise get a chance to start listening for it.
     const backgroundRefresh = page.waitForResponse(
@@ -5407,7 +5729,7 @@ test.describe("zyra / agents (UI)", () => {
     await page.getByRole("link", { name: "Agents", exact: true }).click();
     await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
     await page.getByRole("link", { name: /Agent workspace/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra$`));
+    await expectCanonicalProjectPath(page, "/agents/zyra");
 
     const dashboardPath = `/api/projects/${tenant!.mainProjectId}/dashboard`;
     await expect(page.getByText(draftTitle)).toBeVisible();
@@ -5437,7 +5759,7 @@ test.describe("zyra / agents (UI)", () => {
     // (app/(app)/projects/[id]/page.tsx does router.replace to .../dashboard), still client-side
     // navigation throughout, so pageDataCache's module state survives the hop.
     await page.getByRole("link", { name: "Project home" }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/dashboard$`));
+    await expectCanonicalProjectPath(page, "/dashboard");
 
     // Correct immediately, sourced from the background-refreshed cache — not from the mount's own
     // fetch, which is still artificially stuck mid-flight.
@@ -5565,6 +5887,14 @@ test.describe("zyra / agents (UI)", () => {
   // both a native Knowledge Base document and a Jira-mirrored one render correctly, since they are
   // the same row shape and the same component.
 
+  async function expectPersistedCitation(taskId: string, document: { id: string; title: string }) {
+    const response = await api.get(`/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${taskId}`, { failOnStatusCode: false });
+    expect(response.status(), "read the authoritative staged task before opening the citation drawer").toBe(200);
+    const task = await response.json();
+    expect(task.drafts).toHaveLength(1);
+    expect(task.drafts[0].sourceRefs).toEqual([{ type: "knowledge_document", id: document.id, title: document.title }]);
+  }
+
   test("ZYU-77 the citation drawer renders a cited document's Markdown as formatted HTML, not raw symbols", async ({
     browser,
   }) => {
@@ -5578,7 +5908,7 @@ test.describe("zyra / agents (UI)", () => {
         "See [Open in Jira](https://example.atlassian.net/browse/KAN-9) for the source ticket.",
     });
 
-    seedChatReviewBatch({
+    const { taskId } = seedChatReviewBatch({
       entries: [
         {
           opType: "create",
@@ -5591,8 +5921,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra");
     const titleRe = new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
+    await expectPersistedCitation(taskId, doc);
     await expect(page.getByText("E2E citation drafted case")).toBeVisible();
-    await page.getByRole("button", { name: "Context used (1)" }).click();
+    await expect(page.getByRole("button", { name: "Context used (1)", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Context used (1)", exact: true }).click();
     await page.getByRole("button", { name: titleRe }).click();
 
     const drawer = page.locator('div[role="presentation"]').last();
@@ -5629,7 +5961,7 @@ test.describe("zyra / agents (UI)", () => {
       contentText: `<img src=x onerror="window.__zyraDrawerXss='${marker}'">`,
     });
 
-    seedChatReviewBatch({
+    const { taskId } = seedChatReviewBatch({
       entries: [
         {
           opType: "create",
@@ -5642,8 +5974,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra");
     const titleRe = new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
+    await expectPersistedCitation(taskId, doc);
     await expect(page.getByText("E2E injection drafted case")).toBeVisible();
-    await page.getByRole("button", { name: "Context used (1)" }).click();
+    await expect(page.getByRole("button", { name: "Context used (1)", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Context used (1)", exact: true }).click();
     await page.getByRole("button", { name: titleRe }).click();
 
     const drawer = page.locator('div[role="presentation"]').last();
@@ -5671,7 +6005,7 @@ test.describe("zyra / agents (UI)", () => {
       contentText: 'See [details](https://example.com"onmouseover=alert(1)) for the source ticket.',
     });
 
-    seedChatReviewBatch({
+    const { taskId } = seedChatReviewBatch({
       entries: [
         {
           opType: "create",
@@ -5684,8 +6018,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra");
     const titleRe = new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
+    await expectPersistedCitation(taskId, doc);
     await expect(page.getByText("E2E link injection drafted case")).toBeVisible();
-    await page.getByRole("button", { name: "Context used (1)" }).click();
+    await expect(page.getByRole("button", { name: "Context used (1)", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Context used (1)", exact: true }).click();
     await page.getByRole("button", { name: titleRe }).click();
 
     const drawer = page.locator('div[role="presentation"]').last();
@@ -6103,7 +6439,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
 
     // Then generation finishes: the progress line goes, every other draft is there exactly once, and
     // the discarded one stays gone.
-    await expect(page.getByText(/19 of 19 selected/)).toBeVisible({ timeout: 60_000 });
+    // Arrival changes the review revision; new rows no longer inherit an earlier selection.
+    await expect(page.getByText(/\d+ of 19 selected/)).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId("zyra-review-progress")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Discard all" }), "available again once generation finishes").toBeEnabled();
     await expect(page.getByText(`E2E live draft 20 ${stamp}`)).toHaveCount(1);
@@ -6177,7 +6514,7 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await expect(page.getByTestId("zyra-review-progress")).toBeVisible({ timeout: 30_000 });
 
     // Generation finishes: every draft exactly once, nothing staged twice.
-    await expect(page.getByText(/20 of 20 selected/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/\d+ of 20 selected/)).toBeVisible({ timeout: 90_000 });
     await expect(page.getByTestId("zyra-review-progress")).toHaveCount(0);
     await expect(page.getByTestId("zyra-review-number")).toHaveText(Array.from({ length: 20 }, (_, i) => `${i + 1}.`));
     for (const n of [1, 10, 20]) await expect(page.getByText(`E2E switch draft ${n} ${stamp}`)).toHaveCount(1);
@@ -6315,6 +6652,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
   });
 
   test("ZYU-119 a request that failed before any reply shows its trace under the request, with the step that failed", async ({ browser }) => {
+    // Keep provider availability independent from the persisted turn state under test.
+    await allocateFakeAiKey();
     seedRequest("failed", traceJson("failed", [
       { stage: "received", status: "ok" },
       { stage: "routing", status: "failed", meta: { status: "failed", reason: "This turn did not complete." } },
@@ -6330,6 +6669,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
   });
 
   test("ZYU-120 a request left processing by a turn that died reads as interrupted, and the conversation is not locked", async ({ browser }) => {
+    // Keep provider availability independent from the persisted turn state under test.
+    await allocateFakeAiKey();
     seedRequest("processing", traceJson("running", [
       { stage: "received", status: "ok" },
       { stage: "routing", status: "active", meta: { totalContextItems: 2 } },
@@ -6343,6 +6684,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
   });
 
   test("ZYU-121 a request still running elsewhere (another tab, or before a reload) shows its steps so far from the persisted trace", async ({ browser }) => {
+    // Keep provider availability independent from the persisted turn state under test.
+    await allocateFakeAiKey();
     seedRequest("processing", traceJson("running", [
       { stage: "received", status: "ok" },
       { stage: "context:jira", status: "empty", meta: { items: [], count: 0 } },
@@ -6394,10 +6737,11 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await expect(page.getByPlaceholder(RU_PLACEHOLDER)).toHaveCount(0);
   });
 
-  test("ZYU-L-03 Russian test cases are shown under Russian column headers, and a later English message switches back", async ({ browser }) => {
+  test("ZYU-L-03 Russian test cases are shown with localized review controls, and a later English message switches back", async ({ browser }) => {
     await allocateFakeAiKey();
     const page = await openChat(browser);
     const title = `Вход с неверным паролем отклонён ${Date.now() % 100000}`;
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
     ai.queueReply({ reply: "", reasoningSummary: "Создание.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: 1, exhaustive: false });
     ai.queueReply({
       drafts: [{
@@ -6418,11 +6762,23 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await composer(page).press("Enter");
     await expect(page.getByText(title).first()).toBeVisible({ timeout: 30_000 });
     // The backend's own reply text and the screen's labels around the drafts are Russian.
-    await expect(page.getByText(/Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/)).toBeVisible();
-    await expect(page.getByText("Первый шаг").first()).toBeVisible();
-    await expect(page.getByText("Выбрать все").first()).toBeVisible();
+    await expect(page.getByText(/В базе знаний проекта нет ничего об этом/)).toBeVisible();
+    await expect(page.getByText(/Я всё равно написал\(а\) 1 тест-кейс\(ов\) на основе общей практики/)).toBeVisible();
+    await expect(page.getByText(/Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/)).toHaveCount(0);
+    // The live review is a list of cards, not a table. Verify the actual step and
+    // localized accessible controls, not a column heading used only for TSV export.
+    const review = page.getByRole("list", { name: "Предложенные тест-кейсы" });
+    const row = review.getByRole("listitem").filter({ hasText: title });
+    await expect(row).toHaveCount(1);
+    await expect(row.getByText("Ввести неверный пароль", { exact: true })).toBeVisible();
+    const selectRow = row.getByRole("checkbox", { name: "Выбрать предложенный тест-кейс 1" });
+    await expect(selectRow).toBeEnabled();
+    await selectRow.uncheck();
+    await expect(page.getByRole("button", { name: "Выбрать все", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Выбрать все", exact: true }).click();
+    await expect(selectRow).toBeChecked();
     // The severity a draft carries is stored as High and displayed in Russian.
-    await expect(page.getByText("Высокая").first()).toBeVisible();
+    await expect(row.getByText("Высокая", { exact: true })).toBeVisible();
 
     // Now an English message: the next reply and the labels go back to English.
     const english = "Sure — these cover the wrong-password path.";

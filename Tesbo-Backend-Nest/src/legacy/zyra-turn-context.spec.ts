@@ -81,6 +81,8 @@ type Refs = {
 type SourceRef = { type: string; id: string; title: string };
 
 type Statics = {
+  zyraScopeRetrievedKnowledge: (namedTickets: KnowledgeItem[], retrieved: KnowledgeItem[]) => KnowledgeItem[];
+  zyraSelectTurnKnowledge: (resolved: KnowledgeItem[], fallback: KnowledgeItem[]) => { knowledge: KnowledgeItem[]; usedRecencyFallback: boolean };
   mergeZyraTurnSources: (own: Sources, carried: Sources) => Sources;
   normalizeZyraContextRefs: (raw: unknown) => Refs | null;
   zyraContextRefsFor: (sources: Sources) => Refs;
@@ -123,6 +125,47 @@ describe("Zyra turn context carry-over", () => {
       const merged = statics().mergeZyraTurnSources(none(), { ...none(), jira: [hotelTicket] });
       const index = internals(makeLegacy()).zyraSourceRefIndex({ knowledge: merged.knowledge, jira: merged.jira, existingTestcases: [] });
       expect(statics().sanitizeZyraSourceRefs(["HBP-99"], index)).toEqual([]);
+    });
+  });
+
+  describe("zyraScopeRetrievedKnowledge", () => {
+    it("keeps named tickets and ordinary supporting documents but rejects sibling ticket search hits", () => {
+      const named = doc("named", "ABC-1: Leave approval");
+      const sibling = doc("sibling", "ABC-2: Payroll export");
+      const support = doc("support", "General leave policy");
+      const second = doc("second", "OTHER-9: Related named ticket");
+      expect(statics().zyraScopeRetrievedKnowledge([named, second], [sibling, support, named, second]))
+        .toEqual([support, named, second]);
+    });
+
+    it("preserves relevance results when the request resolves no explicit ticket", () => {
+      const retrieved = [doc("one", "ABC-1: Leave"), doc("two", "ABC-2: Payroll")];
+      expect(statics().zyraScopeRetrievedKnowledge([], retrieved)).toEqual(retrieved);
+    });
+  });
+
+  describe("zyraSelectTurnKnowledge", () => {
+    it("does not duplicate a named document or add an unrelated recency document", () => {
+      const named = doc("named", "ABC-1: Leave policy");
+      const unrelated = doc("other", "ABC-2: Payroll export");
+      expect(statics().zyraSelectTurnKnowledge([named], [named, unrelated])).toEqual({
+        knowledge: [named], usedRecencyFallback: false
+      });
+    });
+
+    it("preserves multiple resolved documents and their order instead of widening a carried or broad scope", () => {
+      const resolved = [doc("two"), doc("one")];
+      expect(statics().zyraSelectTurnKnowledge(resolved, [doc("one"), doc("extra")])).toEqual({
+        knowledge: resolved, usedRecencyFallback: false
+      });
+    });
+
+    it("uses a deduplicated recency fallback only when nothing resolved", () => {
+      const recent = doc("recent");
+      expect(statics().zyraSelectTurnKnowledge([], [recent, recent])).toEqual({
+        knowledge: [recent], usedRecencyFallback: true
+      });
+      expect(statics().zyraSelectTurnKnowledge([], [])).toEqual({ knowledge: [], usedRecencyFallback: false });
     });
   });
 

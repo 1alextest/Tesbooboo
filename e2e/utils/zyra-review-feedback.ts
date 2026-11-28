@@ -5,12 +5,18 @@ const COPY = {
   en: {
     selectSecond: "Select proposed test case 2", saveOne: "Save 1 to repository", discard: "Discard all",
     saved: "1 test case saved to the repository.",
+    unconfirmed: "The draft change was not confirmed. It may have been saved. Reload the proposal and review the remaining rows before continuing.",
+    reload: "Reload proposal", refresh: "Reload the proposal and review the remaining rows before continuing.",
+    saveButton: /^Save(?: \d+)? to repository$/,
     closed: "Batch closed — no additional test cases were saved to the repository.",
     resolved: "This batch was already saved or closed — nothing left here to review.",
   },
   ru: {
     selectSecond: "Выбрать предложенный тест-кейс 2", saveOne: "Сохранить 1 в репозиторий", discard: "Отклонить все",
     saved: "Сохранено в репозиторий: 1 тест-кейс.",
+    unconfirmed: "Изменение черновика не подтверждено. Возможно, оно уже сохранено. Обновите предложение и проверьте оставшиеся строки, прежде чем продолжить.",
+    reload: "Обновить предложение", refresh: "Обновите предложение и проверьте оставшиеся строки, прежде чем продолжить.",
+    saveButton: /^Сохранить(?: \d+)? в репозиторий$/,
     closed: "Пакет закрыт — дополнительные тест-кейсы в репозиторий не сохранены.",
     resolved: "Этот пакет уже сохранён или закрыт — проверять здесь больше нечего.",
   },
@@ -56,22 +62,44 @@ export async function verifyZyraReviewCloseFeedback(input: {
   expect(before.drafts).toHaveLength(saveFirst ? 1 : 2);
   const stored = await repositorySnapshot();
   const closeUrl = `${taskUrl}/close`;
+  let refusedRequests = 0;
   const refuse = async (route: import("@playwright/test").Route) => {
+    refusedRequests++;
     await route.fulfill({ status: 503, json: { error: "E2E close refused" } });
   };
   // Explicit failure injection, not a simulated success: the request never reaches Nest.
   await page.route(closeUrl, refuse);
   try {
     await page.getByRole("button", { name: copy.discard, exact: true }).click();
-    await expect(page.getByText("E2E close refused", { exact: true })).toBeVisible();
+    await expect(page.getByText(copy.unconfirmed, { exact: true })).toBeVisible();
+    await expect(page.getByText(copy.refresh, { exact: true })).toBeVisible();
+    await expect(page.getByText("E2E close refused", { exact: true })).toHaveCount(0);
     await expect(page.getByText(copy.closed, { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: copy.discard, exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: copy.discard, exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: copy.saveButton })).toBeDisabled();
+    expect(refusedRequests).toBe(1);
     expect(await task()).toEqual(before);
     expect(await repositorySnapshot()).toEqual(stored);
     await capture?.("refused");
   } finally {
     await page.unroute(closeUrl, refuse);
   }
+
+  // A transport error does not establish whether the close committed. Reconcile the same
+  // native task first; in this deliberate pre-server refusal the current revision is unchanged.
+  expect(before.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+  const fresh = page.waitForResponse((response) => response.url() === taskUrl && response.request().method() === "GET");
+  await page.getByRole("button", { name: copy.reload, exact: true }).click();
+  const freshResponse = await fresh;
+  expect(freshResponse.ok(), await freshResponse.text()).toBeTruthy();
+  expect(await freshResponse.json()).toMatchObject({ taskStatus: "in_review", proposalRevision: before.proposalRevision, savedCount: before.savedCount });
+  await expect(page.getByText(copy.unconfirmed, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(copy.refresh, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: copy.discard, exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: copy.saveButton })).toBeDisabled();
+  expect(await task()).toEqual(before);
+  expect(await repositorySnapshot()).toEqual(stored);
+  await capture?.("reconciled");
 
   const pending = page.waitForResponse((response) => response.url() === closeUrl && response.request().method() === "POST");
   await page.getByRole("button", { name: copy.discard, exact: true }).click();

@@ -36,6 +36,94 @@ import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapt
  * a Zyra chat transcript contains whatever the team told the agent about their product.
  */
 
+// Direct fixture controls: use real HTTP, no backend/model/tenant dependencies.
+// The end-to-end ZYR-A-135 failure (slow reply delivered to fast session) exposed
+// this seam. Keep the product session-isolation assertions intact.
+test.describe("fake AI provider request ownership", () => {
+  async function call(server: FakeAiServer, prompt: string) {
+    const endpoint = new URL(server.runnerBaseUrl + "/chat/completions");
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fake", messages: [{ role: "user", content: prompt }] }),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  test("ZYR-FIXTURE-01 delayed FIFO reply belongs to the arriving request", async () => {
+    const server = await startFakeAiServer();
+    try {
+      server.queueReply("first");
+      server.queueReply("second");
+      server.delayNextReplyMs(2_000);
+      const first = call(server, "first request");
+      await expect.poll(() => server.requests.length).toBe(1);
+      const second = call(server, "second request");
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.choices[0].message.content).toBe("first");
+      expect(b.body.choices[0].message.content).toBe("second");
+      expect(server.requests.map(r => r.messages[0].content)).toEqual(["first request", "second request"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("ZYR-FIXTURE-03 reserved hold belongs to the intended FIFO request and releases independently", async () => {
+    const server = await startFakeAiServer();
+    let pending: ReturnType<typeof call> | undefined;
+    const first = "first response";
+    try {
+      server.queueReply(first);
+      const hold = server.queueHeldReply("held response");
+      server.queueReply("neighbor response");
+      expect(hold.pending).toBe(false);
+      expect((await call(server, "first request")).body.choices[0].message.content).toBe(first);
+      expect(hold.pending).toBe(false);
+      pending = call(server, "held request");
+      await expect.poll(() => hold.pending).toBe(true);
+      expect(hold.request?.messages[0].content).toBe("held request");
+      expect((await call(server, "neighbor request")).body.choices[0].message.content).toBe("neighbor response");
+      expect(hold.pending).toBe(true);
+      hold.release();
+      hold.release();
+      expect((await pending).body.choices[0].message.content).toBe("held response");
+      expect(hold.pending).toBe(false);
+    } finally {
+      await server.close();
+      if (pending) await pending.catch(() => undefined);
+    }
+  });
+
+  test("ZYR-FIXTURE-02 delayed one-shot failure belongs to the arriving request without consuming FIFO", async () => {
+    const server = await startFakeAiServer();
+    try {
+      server.queueReply("surviving FIFO");
+      server.failNextWith(503, "first request failure");
+      server.delayNextReplyMs(2_000);
+      const first = call(server, "first request");
+      await expect.poll(() => server.requests.length).toBe(1);
+      const second = call(server, "second request");
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.status).toBe(503);
+      expect(a.body.error.message).toBe("first request failure");
+      expect(b.status).toBe(200);
+      expect(b.body.choices[0].message.content).toBe("surviving FIFO");
+      server.queueReply("FIFO");
+      server.queueReplyMatching("matched request", { failStatus: 429, message: "matched failure" });
+      server.failNextWith(502, "next generic failure");
+      expect((await call(server, "matched request")).status).toBe(429);
+      expect((await call(server, "generic request")).status).toBe(502);
+      const remaining = await call(server, "remaining request");
+      expect(remaining.status).toBe(200);
+      expect(remaining.body.choices[0].message.content).toBe("FIFO");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 test.describe("zyra — agent, chat, tasks and AI keys", () => {
   let tenant: RbacTenant | null = null;
   let asOwner: APIRequestContext;
@@ -364,6 +452,19 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect([400, 401, 403, 404], `${what} answered with ${res.status()}: ${await res.text()}`).toContain(res.status());
   }
 
+  /** Positive fixtures read once before deciding; a refused mutation is never retried here. */
+  async function reviewedDraftRevision(taskId: string, human = asOwner): Promise<string> {
+    return (await readZyraProposal(human, url(`/agents/zyra/tasks/${taskId}`))).proposalRevision;
+  }
+
+  /** Includes bookkeeping so a refused edit/delete cannot quietly change the batch's history. */
+  function draftMutationState(taskId: string): string {
+    return scalar(`SELECT json_build_object(
+      'payload', generated_payload, 'activity', activity_log, 'revision', proposal_revision,
+      'status', task_status, 'generatedCount', generated_count, 'savedCount', saved_count,
+      'updatedAt', updated_at)::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
+  }
+
   /** A chat session, created through the product's own route. */
   async function createSession(
     title = `E2E session ${Date.now()}`,
@@ -504,7 +605,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   /** Every project-scoped Zyra route, for the authorization sweeps. */
   function zyraRoutes(
     api: APIRequestContext,
-    ids: { sessionId: string; taskId: string },
+    ids: { sessionId: string; taskId: string; proposalRevision: string },
     projectId?: string,
   ): Array<[string, () => Promise<APIResponse>]> {
     const opts = { failOnStatusCode: false } as const;
@@ -549,11 +650,15 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       ],
       [
         "DELETE tasks/:id/drafts/:index",
-        () => api.delete(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), opts),
+        () => api.delete(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), {
+          data: { expectedProposalRevision: ids.proposalRevision }, ...opts,
+        }),
       ],
       [
         "PATCH tasks/:id/drafts/:index",
-        () => api.patch(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), { data: { title: "probe" }, ...opts }),
+        () => api.patch(url(`/agents/zyra/tasks/${ids.taskId}/drafts/0`, projectId), {
+          data: { expectedProposalRevision: ids.proposalRevision, title: "probe" }, ...opts,
+        }),
       ],
       ["POST tasks/:id/close", () => api.post(url(`/agents/zyra/tasks/${ids.taskId}/close`, projectId), { data: {}, ...opts })],
       [
@@ -585,8 +690,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     // without a session.
     const session = await createSession("Secret planning chat");
     const taskId = seedTask();
+    const initialDraftState = draftMutationState(taskId);
+    expect(JSON.parse(initialDraftState).status).toBe("in_review");
 
-    for (const [what, attempt] of zyraRoutes(anon, { sessionId: session.id, taskId })) {
+    for (const [what, attempt] of zyraRoutes(anon, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) })) {
       await expectRefused(await attempt(), `${what} (anonymous)`);
     }
 
@@ -598,15 +705,16 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       "an anonymous caller created a chat session",
     ).toBe("1");
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(
-      "awaiting_review",
+      "in_review",
     );
+    expect(draftMutationState(taskId), "refused requests must preserve the complete draft state").toBe(initialDraftState);
   });
 
   test("ZYR-A-02 no Zyra route answers a workspace member with no access to the project", { tag: '@tesbo.testId("TES-TC-595")' }, async () => {
     const session = await createSession("Not the guest's chat");
     const taskId = seedTask();
 
-    for (const [what, attempt] of zyraRoutes(asGuest, { sessionId: session.id, taskId })) {
+    for (const [what, attempt] of zyraRoutes(asGuest, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) })) {
       await expectRefused(await attempt(), `${what} (non-member)`);
     }
     const sessions = await asGuest.get(url("/agents/zyra/chat/sessions"), { failOnStatusCode: false });
@@ -617,7 +725,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const session = await createSession();
     const taskId = seedTask();
     // The qa_engineer belongs to the main project only.
-    for (const [what, attempt] of zyraRoutes(asQa, { sessionId: session.id, taskId }, tenant!.secondProjectId)) {
+    for (const [what, attempt] of zyraRoutes(asQa, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) }, tenant!.secondProjectId)) {
       await expectRefused(await attempt(), `${what} (wrong project)`);
     }
   });
@@ -625,7 +733,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-04 a malformed project id never produces a 500", { tag: '@tesbo.testId("TES-TC-597")' }, async () => {
     const session = await createSession();
     const taskId = seedTask();
-    for (const [what, attempt] of zyraRoutes(asOwner, { sessionId: session.id, taskId }, "not-a-uuid")) {
+    for (const [what, attempt] of zyraRoutes(asOwner, { sessionId: session.id, taskId, proposalRevision: await reviewedDraftRevision(taskId) }, "not-a-uuid")) {
       const res = await attempt();
       expect(res.status(), `${what} answered ${res.status()}: ${await res.text()}`).toBeLessThan(500);
     }
@@ -634,6 +742,8 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-05 a session or task from another project is not reachable through this project's URL", { tag: '@tesbo.testId("TES-TC-598")' }, async () => {
     const session = await createSession();
     const taskId = seedTask();
+    const initialDraftState = draftMutationState(taskId);
+    expect(JSON.parse(initialDraftState).status).toBe("in_review");
 
     // Reached for through the SECOND project's URL by someone who is a member of both.
     for (const attempt of [
@@ -650,8 +760,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
       expect(res.status(), `a cross-project id answered ${res.status()}: ${await res.text()}`).toBe(404);
     }
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(
-      "awaiting_review",
+      "in_review",
     );
+    expect(draftMutationState(taskId), "refused requests must preserve the complete draft state").toBe(initialDraftState);
   });
 
   // ─── Agent state with no AI provider configured ───────────────────────────
@@ -1108,7 +1219,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-18 a draft is discarded from a task without touching the others", { tag: '@tesbo.testId("TES-TC-612")' }, async () => {
     const taskId = seedTask({ drafts: 3 });
-    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), { failOnStatusCode: false });
+    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), {
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId) }, failOnStatusCode: false,
+    });
     expect(res.status(), `deleting a draft — ${await res.text()}`).toBe(200);
 
     // Asserted against the drafts themselves, not the whole payload: deleting a draft appends an
@@ -1132,9 +1245,9 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
     for (const index of ["9", "-1", "notanumber"]) {
       const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/${index}`), {
-        failOnStatusCode: false,
+        data: { expectedProposalRevision: await reviewedDraftRevision(taskId) }, failOnStatusCode: false,
       });
-      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBeLessThan(500);
+      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBe(400);
     }
     expect(
       scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`),
@@ -1369,7 +1482,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(response.status(), await response.text()).toBe(201);
     const staged = await response.json(), saveUrl = url(`/agents/zyra/tasks/${staged.id}/save`);
     const reviewed = await readZyraProposal(asOwner, saveUrl);
-    const edit = await asOwner.patch(url(`/agents/zyra/tasks/${staged.id}/drafts/0`), { data: { title: `Revised ${marker}` } });
+    const edit = await asOwner.patch(url(`/agents/zyra/tasks/${staged.id}/drafts/0`), { data: { expectedProposalRevision: reviewed.proposalRevision, title: `Revised ${marker}` } });
     expect(edit.status(), await edit.text()).toBe(200);
     const edited = await edit.json();
     expect(edited.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
@@ -2046,16 +2159,19 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
      * the time this runs. It now refuses that status outright.
      */
     const taskId = seedTask({ status: "in_progress" });
+    const initialState = draftMutationState(taskId);
+    const initialCaseCount = scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`);
+    expect(JSON.parse(initialState).status).toBe("in_progress");
     const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), {
       data: { selectedDraftIndexes: [0] },
       failOnStatusCode: false,
     });
     expect(res.status(), `saving an in-progress task — ${await res.text()}`).toBe(409);
     const body = await res.json();
-    expect(body.error).toContain("generating");
-    expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(
-      "in_progress",
-    );
+    expect(body.code).toBe("PROPOSAL_REVIEW_CONFLICT");
+    expect(body.error).toContain("not awaiting review");
+    expect(draftMutationState(taskId), "refused save must preserve the exact task state").toBe(initialState);
+    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`), "refused save must not create a testcase").toBe(initialCaseCount);
   });
 
   test("ZYR-A-37 closing an already-closed task is a true no-op, not a duplicate activity entry", async () => {
@@ -2337,7 +2453,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-46 editing a pending chat-staged create draft updates its fields, not just the task-board shape", async () => {
     const { taskId } = seedChatReviewTask();
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { title: "Edited via review", priority: "P0", preconditions: "Signed in", description: "Sees the edited result" },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "Edited via review", priority: "P0", preconditions: "Signed in", description: "Sees the edited result" },
       failOnStatusCode: false,
     });
     expect(res.status(), `editing a chat draft — ${await res.text()}`).toBe(200);
@@ -2362,7 +2478,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         entries: [{ opType: "update", testcaseId, externalId: "E2E-1", fields: { priority: "P1" }, reason: "" }],
       });
       const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-        data: { priority: "P0" },
+        data: { expectedProposalRevision: await reviewedDraftRevision(taskId), priority: "P0" },
         failOnStatusCode: false,
       });
       expect(res.status(), `editing an update proposal — ${await res.text()}`).toBe(200);
@@ -2382,7 +2498,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const { taskId } = seedChatReviewTask();
     const before = scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { title: "x".repeat(600) },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "x".repeat(600) },
       failOnStatusCode: false,
     });
     expect(res.status(), `an overlong title — ${await res.text()}`).toBe(400);
@@ -2397,10 +2513,10 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     const before = scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
     for (const index of ["9", "-1", "notanumber"]) {
       const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/${index}`), {
-        data: { title: "probe" },
+        data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "probe" },
         failOnStatusCode: false,
       });
-      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBeLessThan(500);
+      expect(res.status(), `draft index "${index}" answered ${res.status()}: ${await res.text()}`).toBe(400);
     }
     expect(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(before);
   });
@@ -2408,7 +2524,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
   test("ZYR-A-50 an edit is refused once the batch is no longer in_review", async () => {
     const { taskId } = seedChatReviewTask({ status: "done" });
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { title: "too late" },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), title: "too late" },
       failOnStatusCode: false,
     });
     expect(res.status(), `editing a resolved batch — ${await res.text()}`).toBe(409);
@@ -2445,7 +2561,7 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(beforeRow.expectedSummary, "the description must still be served on the review row").toBe("The order is placed");
 
     const res = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
-      data: { testData: "card: 4000 0000 0000 0002" },
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), testData: "card: 4000 0000 0000 0002" },
       failOnStatusCode: false,
     });
     expect(res.status(), `editing test data — ${await res.text()}`).toBe(200);
@@ -2462,8 +2578,12 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
     expect(before.status()).toBe(200);
     expect((await before.json()).drafts[0].testData, "absent test data must be '' on the row, never undefined").toBe("");
 
-    await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { data: { testData: "temporary" }, failOnStatusCode: false });
-    const cleared = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { data: { testData: "" }, failOnStatusCode: false });
+    const populated = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId), testData: "temporary" }, failOnStatusCode: false,
+    });
+    expect(populated.status(), await populated.text()).toBe(200);
+    expect((await populated.json()).drafts[0].testData).toBe("temporary");
+    const cleared = await asOwner.patch(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { data: { expectedProposalRevision: await reviewedDraftRevision(taskId), testData: "" }, failOnStatusCode: false });
     expect(cleared.status(), `clearing test data — ${await cleared.text()}`).toBe(200);
     const stored = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
     expect(stored[0].draft.testData, "clearing must persist as empty, not be ignored").toBe("");
@@ -2696,12 +2816,17 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
 
   test("ZYR-A-55 an explicitly empty selection saves nothing and leaves the batch in review", async () => {
     const { taskId } = seedChatReviewTask();
+    // This tenant is reused; earlier successful saves may leave cases behind.
+    const caseIds = () => column(`SELECT id FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} ORDER BY id;`);
+    const beforeIds = caseIds();
+    const beforeTask = draftMutationState(taskId);
     const res = await saveReviewedZyraTask(asOwner, url(`/agents/zyra/tasks/${taskId}/save`), { data: { selectedDraftIndexes: [] }, failOnStatusCode: false });
     expect(res.status(), `an explicit empty selection — ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.savedCount, "an explicitly empty selection must not fall back to saving everything").toBe(0);
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
-    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
+    expect(caseIds(), "an empty selection creates or removes no native cases").toEqual(beforeIds);
+    expect(draftMutationState(taskId), "an empty selection leaves the proposal unchanged").toBe(beforeTask);
   });
 
   test("ZYR-A-56 omitting the selection is refused without effects; an explicit reviewed selection applies the batch", async () => {
@@ -2711,14 +2836,23 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         { opType: "create", draft: { suiteId: null, title: `E2E omit-selection B ${Date.now()}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
       ],
     });
+    const caseIds = () => column(`SELECT id FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} ORDER BY id;`);
+    const beforeIds = caseIds();
     const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}/save`));
+    const beforeTask = draftMutationState(taskId);
     const res = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false });
     expect(res.status(), `an omitted selection — ${await res.text()}`).toBe(400);
-    expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
+    expect(caseIds(), "an omitted selection creates or removes no native cases").toEqual(beforeIds);
+    expect(draftMutationState(taskId), "an omitted selection leaves the proposal unchanged").toBe(beforeTask);
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("in_review");
     const selected = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/save`), { data: { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: [0, 1] } });
     expect(selected.status(), await selected.text()).toBe(201);
-    expect((await selected.json()).savedCount).toBe(2);
+    const applied = await selected.json();
+    expect(applied.savedCount).toBe(2);
+    const addedIds: string[] = applied.testcases.map((row: { id: string }) => row.id);
+    expect(new Set(addedIds).size).toBe(2);
+    expect(addedIds.every(id => !beforeIds.includes(id))).toBe(true);
+    expect(caseIds(), "only the two explicitly selected cases are added").toEqual([...beforeIds, ...addedIds].sort());
     expect(scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("done");
   });
 
@@ -2801,35 +2935,245 @@ test.describe("zyra — agent, chat, tasks and AI keys", () => {
         { opType: "create", draft: { suiteId: null, title: "E2E chat discard B", description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" }, reason: "" },
       ],
     });
-    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { failOnStatusCode: false });
+    const res = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+      data: { expectedProposalRevision: await reviewedDraftRevision(taskId) }, failOnStatusCode: false,
+    });
     expect(res.status(), `discarding a chat-staged draft — ${await res.text()}`).toBe(200);
     const stored = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
     expect(stored.map((d: any) => d.draft.title)).toEqual(["E2E chat discard B"]);
   });
 
-  test("ZYR-A-62 two concurrent discards of different drafts from the same batch both take effect", async () => {
-    // Regression coverage for zyraDeleteDraft's read-modify-write, now locked with FOR UPDATE — an
-    // unlocked pair of concurrent deletes can each read the same array and one silently overwrite
-    // the other's removal.
+  test("ZYR-A-62 two reviewers cannot discard a shifted draft from the same reviewed revision", async () => {
+    // A row lock serializes writes but cannot preserve a user's index selection by itself. Both
+    // people select from one version; exactly one wins and the other must inspect the new version.
+    const titles = Array.from({ length: 4 }, (_, i) => `E2E concurrent discard ${i}`);
     const { taskId } = seedChatReviewTask({
-      entries: Array.from({ length: 4 }, (_, i) => ({
+      entries: titles.map(title => ({
         opType: "create",
-        draft: { suiteId: null, title: `E2E concurrent discard ${i}`, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" },
+        draft: { suiteId: null, title, description: "", preconditions: "", stepsJson: "[]", priority: "P2", type: "Functional", status: "Draft" },
         reason: "",
       })),
     });
+    const ownerRevision = await reviewedDraftRevision(taskId, asOwner);
+    const managerRevision = await reviewedDraftRevision(taskId, asManager);
+    expect(managerRevision).toBe(ownerRevision);
     const [a, b] = await Promise.all([
-      asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), { failOnStatusCode: false }),
-      asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), { failOnStatusCode: false }),
+      asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+        data: { expectedProposalRevision: ownerRevision }, failOnStatusCode: false,
+      }),
+      asManager.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), {
+        data: { expectedProposalRevision: managerRevision }, failOnStatusCode: false,
+      }),
     ]);
-    expect(a.status(), `first concurrent discard — ${await a.text()}`).toBeLessThan(500);
-    expect(b.status(), `second concurrent discard — ${await b.text()}`).toBeLessThan(500);
-    // Whichever commits first shifts the later indexes down by one, so which two titles survive is
-    // legitimately order-dependent — not asserted here. What FOR UPDATE actually guarantees is that
-    // an unlocked read-modify-write can't lose: both removals apply, landing on exactly 2 remaining,
-    // never 3 (one removal silently overwritten) or corrupted.
+    expect([a.status(), b.status()].sort(), `owner: ${await a.text()}; manager: ${await b.text()}`).toEqual([200, 409]);
+    const winnerIndex = a.status() === 200 ? 0 : 1;
+    const winner = await (winnerIndex === 0 ? a : b).json();
+    const survivingTitles = titles.filter((_, index) => index !== winnerIndex);
+    expect(winner.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(survivingTitles);
+    expect(winner.proposalRevision).not.toBe(ownerRevision);
+    const current = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    expect(current.proposalRevision).toBe(winner.proposalRevision);
+    expect(current.proposalSnapshot).toEqual(winner.proposalSnapshot);
+
+    const losingHuman = winnerIndex === 0 ? asManager : asOwner;
+    const intendedTitle = titles[winnerIndex === 0 ? 1 : 0];
+    const refreshed = await readZyraProposal(losingHuman, url(`/agents/zyra/tasks/${taskId}`));
+    const freshIndex = refreshed.proposalSnapshot.operations.findIndex((op: any) => op.draft.title === intendedTitle);
+    expect(freshIndex).toBeGreaterThanOrEqual(0);
+    const fresh = await losingHuman.delete(url(`/agents/zyra/tasks/${taskId}/drafts/${freshIndex}`), {
+      data: { expectedProposalRevision: refreshed.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(fresh.status(), await fresh.text()).toBe(200);
+    const finished = await fresh.json();
+    expect(finished.proposalRevision).not.toBe(refreshed.proposalRevision);
+    expect(finished.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(titles.slice(2));
     const stored = JSON.parse(scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
-    expect(stored, "a race between two discards lost one of the removals").toHaveLength(2);
+    expect(stored.map((op: any) => op.draft.title)).toEqual(titles.slice(2));
+    const activity = JSON.parse(scalar(`SELECT activity_log::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`));
+    const removals = activity.filter((entry: any) => entry.title === "Deleted testcase draft");
+    expect(removals).toHaveLength(2);
+    expect(removals.map((entry: any) => entry.issuerId).sort()).toEqual([tenant!.owner.userId, tenant!.manager.userId].sort());
+  });
+
+  for (const mutation of ["edit", "delete"] as const) {
+    test(`ZYR-DRAFT-REV-01 a reviewer cannot ${mutation} without a valid reviewed revision`, async () => {
+      const taskId = seedTask({ drafts: 3 });
+      const before = draftMutationState(taskId);
+      for (const revision of [undefined, null, "", "not-a-revision", 42, "A".repeat(64)]) {
+        const data = { ...(revision === undefined ? {} : { expectedProposalRevision: revision }),
+          ...(mutation === "edit" ? { title: "Must not replace the reviewed draft" } : {}) };
+        const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/1`);
+        const refused = mutation === "edit"
+          ? await asOwner.patch(endpoint, { data, failOnStatusCode: false })
+          : await asOwner.delete(endpoint, { data, failOnStatusCode: false });
+        expect(refused.status(), `${mutation} with ${String(revision)}: ${await refused.text()}`).toBe(400);
+        expect(draftMutationState(taskId)).toBe(before);
+      }
+    });
+  }
+
+  for (const shape of ["task", "chat"] as const) {
+    for (const mutation of ["edit", "delete"] as const) {
+      test(`ZYR-DRAFT-REV-02 a ${shape} reviewer cannot ${mutation} another item after an index shift`, async () => {
+        const titles = ["E2E reviewed A", "E2E reviewed B", "E2E reviewed C"];
+        const taskId = shape === "task"
+          ? seedTask({ drafts: 3, draftOverrides: titles.map(title => ({ title })) })
+          : seedChatReviewTask({ entries: titles.map(title => ({ opType: "create", draft: {
+              title, priority: "P2", stepsJson: "[]", status: "Draft",
+            } })) }).taskId;
+        const reviewed = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+        const removed = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/0`), {
+          data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false,
+        });
+        expect(removed.status(), await removed.text()).toBe(200);
+        const acknowledged = await removed.json();
+        expect(acknowledged.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(titles.slice(1));
+        expect(acknowledged.proposalRevision).not.toBe(reviewed.proposalRevision);
+        const beforeRefusal = draftMutationState(taskId);
+        // The manager originally selected B at index 1. C has now moved there.
+        const data = { expectedProposalRevision: reviewed.proposalRevision,
+          ...(mutation === "edit" ? { title: "E2E reviewed B, explicitly revised" } : {}) };
+        const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/1`);
+        const refused = mutation === "edit"
+          ? await asManager.patch(endpoint, { data, failOnStatusCode: false })
+          : await asManager.delete(endpoint, { data, failOnStatusCode: false });
+        expect(refused.status(), await refused.text()).toBe(409);
+        expect(draftMutationState(taskId)).toBe(beforeRefusal);
+        const refreshed = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+        expect(refreshed.proposalSnapshot).toEqual(acknowledged.proposalSnapshot);
+        expect(refreshed.proposalRevision).toBe(acknowledged.proposalRevision);
+        const freshIndex = refreshed.proposalSnapshot.operations.findIndex((op: any) => op.draft.title === titles[1]);
+        expect(freshIndex).toBe(0);
+        const freshData = { ...data, expectedProposalRevision: refreshed.proposalRevision };
+        const freshEndpoint = url(`/agents/zyra/tasks/${taskId}/drafts/${freshIndex}`);
+        const accepted = mutation === "edit"
+          ? await asManager.patch(freshEndpoint, { data: freshData, failOnStatusCode: false })
+          : await asManager.delete(freshEndpoint, { data: freshData, failOnStatusCode: false });
+        expect(accepted.status(), await accepted.text()).toBe(200);
+        const result = await accepted.json();
+        expect(result.proposalRevision).not.toBe(refreshed.proposalRevision);
+        const expectedOperations = structuredClone(refreshed.proposalSnapshot.operations);
+        if (mutation === "edit") expectedOperations[freshIndex].draft.title = "E2E reviewed B, explicitly revised";
+        else expectedOperations.splice(freshIndex, 1);
+        expect(result.proposalSnapshot.operations).toEqual(expectedOperations);
+        expect(result.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(
+          mutation === "edit" ? ["E2E reviewed B, explicitly revised", titles[2]] : [titles[2]],
+        );
+        const reopened = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+        expect(reopened.proposalRevision).toBe(result.proposalRevision);
+        expect(reopened.proposalSnapshot).toEqual(result.proposalSnapshot);
+      });
+    }
+  }
+
+  test("ZYR-DRAFT-REV-03 retrying an acknowledged partial deletion cannot discard its shifted neighbor", async () => {
+    const titles = ["A", "B", "C", "D", "E", "F"].map(name => `E2E partial ${name}`);
+    const taskId = seedTask({ drafts: 6, draftOverrides: titles.map(title => ({ title })) });
+    const reviewed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    const first = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/3`), {
+      data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(first.status(), await first.text()).toBe(200);
+    const acknowledged = await first.json();
+    const survivors = titles.filter((_, index) => index !== 3);
+    expect(acknowledged.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(survivors);
+    const afterFirst = draftMutationState(taskId);
+    // Model the original command being submitted again after its outcome was uncertain. This is
+    // an API replay control; the separate browser scenario exercises actual partial-response UI.
+    for (const index of [3, 1]) {
+      const stale = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/${index}`), {
+        data: { expectedProposalRevision: reviewed.proposalRevision }, failOnStatusCode: false,
+      });
+      expect(stale.status(), await stale.text()).toBe(409);
+      expect(draftMutationState(taskId)).toBe(afterFirst);
+    }
+    const refreshed = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    expect(refreshed.proposalRevision).toBe(acknowledged.proposalRevision);
+    expect(refreshed.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(survivors);
+    const next = await asOwner.delete(url(`/agents/zyra/tasks/${taskId}/drafts/1`), {
+      data: { expectedProposalRevision: refreshed.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(next.status(), await next.text()).toBe(200);
+    const finished = await next.json();
+    expect(finished.proposalSnapshot.operations).toEqual([0, 2, 4, 5].map(index => reviewed.proposalSnapshot.operations[index]));
+    expect(finished.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual([
+      titles[0], titles[2], titles[4], titles[5],
+    ]);
+  });
+
+  test("ZYR-DRAFT-REV-04 restoring the original draft text does not revive its earlier revision", async () => {
+    const taskId = seedTask({ drafts: 2 });
+    const original = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+    const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/0`);
+    const edited = await asOwner.patch(endpoint, {
+      data: { expectedProposalRevision: original.proposalRevision, title: "E2E temporary revision" }, failOnStatusCode: false,
+    });
+    expect(edited.status(), await edited.text()).toBe(200);
+    const changed = await edited.json();
+    const restored = await asOwner.patch(endpoint, {
+      data: { expectedProposalRevision: changed.proposalRevision, title: "E2E draft 1" }, failOnStatusCode: false,
+    });
+    expect(restored.status(), await restored.text()).toBe(200);
+    const current = await restored.json();
+    expect(current.proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(["E2E draft 1", "E2E draft 2"]);
+    expect(current.proposalRevision).not.toBe(original.proposalRevision);
+    expect(current.proposalRevision).not.toBe(changed.proposalRevision);
+    const beforeStale = draftMutationState(taskId);
+    const stale = await asManager.delete(endpoint, {
+      data: { expectedProposalRevision: original.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(stale.status(), await stale.text()).toBe(409);
+    expect(draftMutationState(taskId)).toBe(beforeStale);
+  });
+
+  for (const mutation of ["edit", "delete"] as const) {
+    test(`ZYR-DRAFT-REV-05 a closed task refuses ${mutation} without changing its drafts or close history`, async () => {
+      const taskId = seedTask({ drafts: 3 });
+      const beforeClose = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+      const closed = await asOwner.post(url(`/agents/zyra/tasks/${taskId}/close`), { data: {}, failOnStatusCode: false });
+      expect(closed.status(), await closed.text()).toBe(201);
+      const reviewedClosed = await readZyraProposal(asManager, url(`/agents/zyra/tasks/${taskId}`));
+      expect(reviewedClosed.taskStatus).toBe("done");
+      const beforeMutation = draftMutationState(taskId);
+      for (const revision of [beforeClose.proposalRevision, reviewedClosed.proposalRevision]) {
+        const data = { expectedProposalRevision: revision, ...(mutation === "edit" ? { title: "Too late" } : {}) };
+        const endpoint = url(`/agents/zyra/tasks/${taskId}/drafts/1`);
+        const refused = mutation === "edit"
+          ? await asManager.patch(endpoint, { data, failOnStatusCode: false })
+          : await asManager.delete(endpoint, { data, failOnStatusCode: false });
+        expect(refused.status(), await refused.text()).toBe(409);
+        expect(draftMutationState(taskId)).toBe(beforeMutation);
+      }
+      const state = JSON.parse(beforeMutation);
+      expect(state.payload.map((draft: any) => draft.title)).toEqual(["E2E draft 1", "E2E draft 2", "E2E draft 3"]);
+      expect(state.activity.at(-1).title).toBe("Closed task");
+      const reopened = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${taskId}`));
+      expect(reopened.taskStatus).toBe("done");
+      expect(reopened.proposalRevision).toBe(reviewedClosed.proposalRevision);
+    });
+  }
+
+  test("ZYR-DRAFT-REV-06 a revision from an identical sibling batch cannot authorize a draft mutation", async () => {
+    const firstId = seedTask({ drafts: 2 });
+    const secondId = seedTask({ drafts: 2 });
+    const first = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${firstId}`));
+    const second = await readZyraProposal(asOwner, url(`/agents/zyra/tasks/${secondId}`));
+    expect(second.proposalSnapshot.operations).toEqual(first.proposalSnapshot.operations);
+    expect(second.proposalRevision).not.toBe(first.proposalRevision);
+    const beforeFirst = draftMutationState(firstId);
+    const beforeSecond = draftMutationState(secondId);
+    const wrongBatch = await asOwner.delete(url(`/agents/zyra/tasks/${secondId}/drafts/0`), {
+      data: { expectedProposalRevision: first.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(wrongBatch.status(), await wrongBatch.text()).toBe(409);
+    expect(draftMutationState(firstId)).toBe(beforeFirst);
+    expect(draftMutationState(secondId)).toBe(beforeSecond);
+    const currentBatch = await asOwner.delete(url(`/agents/zyra/tasks/${secondId}/drafts/0`), {
+      data: { expectedProposalRevision: second.proposalRevision }, failOnStatusCode: false,
+    });
+    expect(currentBatch.status(), await currentBatch.text()).toBe(200);
+    expect((await currentBatch.json()).proposalSnapshot.operations.map((op: any) => op.draft.title)).toEqual(["E2E draft 2"]);
+    expect(draftMutationState(firstId)).toBe(beforeFirst);
   });
 
   /*
@@ -5247,7 +5591,8 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
    * backend has to go through the ticket table to find the key at all.
    */
   function seedTicketWithMirror(provider: "jira" | "linear", connectionId: string, key: string, projectId = tenant!.mainProjectId): string {
-    const issueId = `id-${key}-${Date.now()}`;
+    // The provider issue ID is a separate bounded identity, not the unrestricted display key.
+    const issueId = randomUUID();
     if (provider === "jira") {
       exec(
         "INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, description, " +
@@ -5357,6 +5702,48 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
         `ORDER BY created_at), '[]') FROM integration_ticket_comments WHERE generation_request_id = ${literal(taskId)};`,
     );
     return JSON.parse(raw || "[]");
+  }
+
+  // A same-command retry returns the committed receipt (including after a lost response).
+  // Capture the revision once: a fresh review is a different command, not a retry.
+  async function verifyTicketSaveReplay(taskId: string, indexes: number[], ticketKeys: string[]) {
+    const saveUrl = url(`/tasks/${taskId}/save`);
+    const reviewed = await readZyraProposal(asOwner, saveUrl);
+    expect(reviewed.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+    const data = { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: indexes };
+    const send = () => asOwner.post(saveUrl, { data, failOnStatusCode: false });
+    const [a, b] = await Promise.all([send(), send()]);
+    expect(a.status(), await a.text()).toBe(201);
+    expect(b.status(), await b.text()).toBe(201);
+    const results = await Promise.all([a.json(), b.json()]);
+    expect(results.map(r => r.replayed).sort()).toEqual([false, true]);
+    const committed = results.find(r => r.replayed === false)!;
+    const replay = results.find(r => r.replayed === true)!;
+    expect(committed.savedCount).toBe(indexes.length);
+    expect(committed.remaining).toBe(0);
+    expect(committed.saveReceipt.id).toBeTruthy();
+    expect(replay.saveReceipt).toEqual(committed.saveReceipt);
+    expect(replay.testcases).toEqual(committed.testcases);
+    const ids = committed.testcases.map((r: { id: string }) => r.id).sort();
+    expect(new Set(ids).size).toBe(indexes.length);
+    const rows = ledger(taskId);
+    expect(rows.map(r => `${r.provider}:${r.issue_key}`).sort()).toEqual([...ticketKeys].sort());
+    expect(rows.flatMap(r => r.testcase_ids).sort()).toEqual(ids);
+    expect(rows.every(r => r.save_event_id === committed.saveReceipt.id)).toBe(true);
+    const later = await send();
+    expect(later.status(), await later.text()).toBe(201);
+    expect(await later.json()).toMatchObject({ replayed: true, saveReceipt: committed.saveReceipt });
+    // Different apply parameters make this a competing decision, not an idempotent replay.
+    const competing = await asOwner.post(saveUrl, { data: { ...data, suiteId: null }, failOnStatusCode: false });
+    expect(competing.status(), await competing.text()).toBe(409);
+    expect((await competing.json()).code).toBe("PROPOSAL_REVIEW_CONFLICT");
+    expect(ledger(taskId)).toEqual(rows);
+    expect(scalar(`SELECT jsonb_array_length(save_events) FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("1");
+    expect(scalar(`SELECT saved_count FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(String(indexes.length));
+    expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id = ${literal(taskId)} AND action = 'testcase_proposals_applied';`)).toBe("1");
+    for (const testcase of committed.testcases) {
+      expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(testcase.title)};`), "one persisted case for each selected fixture").toBe("1");
+    }
   }
 
   /** Waits for a delivery to leave 'pending' — it runs in the background after the save returns. */
@@ -5559,13 +5946,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
     await setAutoComment({ jiraAutoComment: false });
     const taskId = seedReviewTask({ titles: ["Race-case"], jiraIssueKey: "MFLP-14" });
 
-    const [a, b] = await Promise.all([save(taskId), save(taskId)]);
-    expect([a.status(), b.status()].sort(), "one save wins, the other is refused as already saved").toEqual([201, 409]);
-    expect(ledger(taskId)).toHaveLength(1);
-
-    // And a later re-submit is refused the same way — still one comment.
-    expect((await save(taskId)).status()).toBe(409);
-    expect(ledger(taskId)).toHaveLength(1);
+    await verifyTicketSaveReplay(taskId, [0], ["jira:MFLP-14"]);
   });
 
   test("ZYR-AC-10 re-running a ticket updates its linked test cases in place, and that save's comment lists them as Updated", async () => {
@@ -5829,12 +6210,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
       { jira: [j1, j2], linear: [l1] },
     );
 
-    const [a, b] = await Promise.all([save(taskId), save(taskId)]);
-    expect([a.status(), b.status()].sort(), "one save wins, the other is refused as already saved").toEqual([201, 409]);
-    expect(ledger(taskId).map((r) => `${r.provider}:${r.issue_key}`).sort()).toEqual([`jira:${j1}`, `jira:${j2}`, `linear:${l1}`].sort());
-
-    expect((await save(taskId)).status()).toBe(409);
-    expect(ledger(taskId), "a refused re-save adds nothing").toHaveLength(3);
+    await verifyTicketSaveReplay(taskId, [0, 1, 2], [`jira:${j1}`, `jira:${j2}`, `linear:${l1}`]);
   });
 
   test("ZYR-AC-39 regenerating a two-ticket task updates each ticket's own linked case in place, never the other ticket's", async () => {
@@ -6219,21 +6595,34 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
     expect((await save(taskId)).status()).toBe(201);
     const commentId = markFailed(taskId);
 
-    const outsider = await provisionRbacTenant("zyra");
-    test.skip(!outsider, "the second tenant could not be provisioned");
+    const listUrl = url(`/tasks/${taskId}/ticket-comments`);
+    const before = scalar(`SELECT row_to_json(c)::text FROM integration_ticket_comments c WHERE id = ${literal(commentId)};`);
+    const ownerList = await asOwner.get(listUrl, { failOnStatusCode: false });
+    expect(ownerList.status(), await ownerList.text()).toBe(200);
+    expect((await ownerList.json()).list).toEqual(expect.arrayContaining([expect.objectContaining({ id: commentId, status: "failed" })]));
+
     const anon = await anonymousContext();
-    const asOutsider = await loginAs(outsider!.owner);
     try {
-      for (const [who, api] of [["anonymous", anon], ["another workspace", asOutsider]] as const) {
-        const list = await api.get(url(`/tasks/${taskId}/ticket-comments`), { failOnStatusCode: false });
-        expect([401, 403, 404], `${who} listing answered ${list.status()}`).toContain(list.status());
-        const retry = await api.post(retryUrl(taskId, commentId), { failOnStatusCode: false });
-        expect([401, 403, 404], `${who} retrying answered ${retry.status()}`).toContain(retry.status());
-      }
-      // Nothing was re-sent: the record is exactly as the owner left it.
-      expect(scalar(`SELECT status || '|' || reason FROM integration_ticket_comments WHERE id = ${literal(commentId)};`)).toBe("failed|seeded failure");
+      const list = await anon.get(listUrl, { failOnStatusCode: false });
+      const retry = await anon.post(retryUrl(taskId, commentId), { failOnStatusCode: false });
+      expect(list.status(), "anonymous listing must require authentication").toBe(401);
+      expect(retry.status(), "anonymous retry must require authentication").toBe(401);
+      expect(scalar(`SELECT row_to_json(c)::text FROM integration_ticket_comments c WHERE id = ${literal(commentId)};`)).toBe(before);
     } finally {
       await anon.dispose();
+    }
+
+    const outsider = await provisionRbacTenant("zyra");
+    expect(outsider, "the second tenant must be provisioned for cross-workspace refusal").toBeTruthy();
+    const asOutsider = await loginAs(outsider!.owner);
+    try {
+      const list = await asOutsider.get(listUrl, { failOnStatusCode: false });
+      const retry = await asOutsider.post(retryUrl(taskId, commentId), { failOnStatusCode: false });
+      expect([403, 404], `another workspace listing answered ${list.status()}`).toContain(list.status());
+      expect([403, 404], `another workspace retrying answered ${retry.status()}`).toContain(retry.status());
+      // Neither refused request may change the delivery ledger, including its timestamps and attribution.
+      expect(scalar(`SELECT row_to_json(c)::text FROM integration_ticket_comments c WHERE id = ${literal(commentId)};`)).toBe(before);
+    } finally {
       await asOutsider.dispose();
     }
   });
@@ -7462,27 +7851,52 @@ test.describe("zyra chat — request trace and turn lifecycle (fake provider)", 
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E trace heartbeat");
     ai.queueReply({ reply: "", reasoningSummary: "Creating.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: 1, exhaustive: false });
-    ai.queueReply({ drafts: [draft("Seat picker opens (slow)")] });
-
-    const res = await send(sessionId, "Generate 1 test case for the seat picker.");
-    const { userMessageId } = await res.json();
-    await expect.poll(() => ai.requests.length, { timeout: 30_000 }).toBe(1);
-    // Hold the drafting call well past one heartbeat interval (60s), inside the generate timeout.
-    ai.delayNextReplyMs(80_000);
-    // Make the claim look as old as a turn that started before the 5-minute window — what every
-    // generation longer than that looked like before the heartbeat.
-    exec(`UPDATE zyra_chat_sessions SET processing_since = now() - interval '10 minutes' WHERE id = ${literal(sessionId)};`);
-
-    await expect
-      .poll(() => scalar(`SELECT (processing_since > now() - interval '2 minutes')::text FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
-        message: "the running turn never refreshed its claim",
-        timeout: 75_000,
-        intervals: [2_000],
-      })
-      .toBe("true");
-    const second = await send(sessionId, "A second question");
-    expect(second.status(), `a second turn took over a live turn's session — ${await second.text()}`).toBe(409);
-    await waitForTurn(sessionId, userMessageId, 120_000);
+    const held = ai.queueHeldReply({ drafts: [draft("Seat picker opens (slow)")] });
+    let userMessageId: string | undefined;
+    let primaryFailed = false;
+    try {
+      const res = await send(sessionId, "Generate 1 test case for the seat picker.");
+      expect(res.status()).toBe(201);
+      userMessageId = (await res.json()).userMessageId;
+      expect(userMessageId).toBeTruthy();
+      await expect.poll(() => held.pending, { timeout: 30_000, message: "the reserved drafting reply never reached its hold" }).toBe(true);
+      expect(held.request).toBe(ai.requests[1]);
+      // The trace contract distinguishes outcome "running" from step status "active".
+      // Trace persistence is asynchronous; wait for the exact active phase as in ZYR-A-131.
+      await expect.poll(async () => {
+        const running = (await sessionMessages(sessionId)).find(m => m.id === userMessageId);
+        const last = running?.trace?.steps[running.trace.steps.length - 1];
+        return [running?.status, running?.trace?.outcome, last?.stage, last?.status].join("|");
+      }, { timeout: 10_000, message: "the held draft must expose an active generation step" }).toBe("processing|running|generating|active");
+      expect(held.pending, "the identified generation request must still be held").toBe(true);
+      expect(held.request?.messages.some(m => m.role === "user" && m.content.includes("Generate exactly 1 testcase drafts.") && m.content.includes("Story:")), "the held response must belong to the drafting prompt, not an unrelated provider request").toBe(true);
+      // Age the exact session while the drafting call is still held, then observe its real heartbeat.
+      exec(`UPDATE zyra_chat_sessions SET processing_since = now() - interval '10 minutes' WHERE id = ${literal(sessionId)};`);
+      await expect
+        .poll(() => scalar(`SELECT (processing_since > now() - interval '2 minutes')::text FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
+          message: "the running turn never refreshed its claim",
+          timeout: 75_000,
+          intervals: [2_000],
+        })
+        .toBe("true");
+      expect(held.pending, "the drafting request must still be held at the competing send").toBe(true);
+      const second = await send(sessionId, "A second question");
+      expect(second.status(), `a second turn took over a live turn's session — ${await second.text()}`).toBe(409);
+    } catch (error) {
+      primaryFailed = true;
+      throw error;
+    } finally {
+      held.release();
+      if (userMessageId) {
+        try {
+          const settled = await waitForTurn(sessionId, userMessageId, 60_000);
+          expect(settled.find(m => m.id === userMessageId)?.status).toBe("sent");
+        } catch (error) {
+          if (!primaryFailed) throw error;
+          test.info().annotations.push({ type: "fixture-cleanup-failure", description: "released heartbeat fixture but turn settlement was not verified" });
+        }
+      }
+    }
   });
 
   test("ZYR-A-134 a turn whose claim was taken over cannot release the claim of the turn that took it", async () => {
@@ -7796,13 +8210,22 @@ test.describe("zyra — writes in the language the user writes in (fake provider
   test("ZYR-L-01 a Russian message gets Russian drafts and a Russian reply; the cached system prompt does not change", async () => {
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E language basic");
+    // This language fixture has no project grounding; a grounded coverage claim would be false.
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
 
     const english = await createTurn(sessionId, "Create a test case for the login page.");
     expect(english.generation).not.toContain(DRAFTS_IN_RUSSIAN);
     expect(english.router).not.toContain(REPLY_IN_RUSSIAN);
     expect(sessionLanguage(sessionId)).toBe("en");
-    expect(String((await lastAssistant(sessionId)).content)).toMatch(/^I drafted 1 test case\(s\) after reading/);
+    const englishReply = String((await lastAssistant(sessionId)).content);
+    expect(englishReply).toContain("I don't have anything about this in the project's knowledge base");
+    expect(englishReply).toContain("I've still written 1 test case(s) from general practice");
+    expect(englishReply).not.toContain("I drafted 1 test case(s) after reading");
 
+    // The first turn persists the agent scratchpad as a general KB document. A second
+    // turn is no longer a source-empty fixture; the memory alone is not confirmed coverage.
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = 'Zyra AI Memory' AND document_type = 'general' AND is_ai_generated = true AND is_deleted = false;`)).toBe("1");
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)} AND is_deleted = false;`)).toBe("1");
     ai.reset();
     queueCreateTurn("Вход с неверным паролем отклонён");
     const res = await send(sessionId, "Создай тест-кейс для неверного пароля на странице входа.");
@@ -7821,7 +8244,9 @@ test.describe("zyra — writes in the language the user writes in (fake provider
 
     // The backend's own reply text is Russian; the draft suite keeps its real (English) name.
     const reply = await lastAssistant(sessionId);
-    expect(String(reply.content)).toMatch(/^Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/);
+    expect(String(reply.content)).toContain("лишь отдалённо соответствует запросу — этого недостаточно, чтобы считать это реальным покрытием");
+    expect(String(reply.content)).toContain("Я всё равно написал(а) 1 тест-кейс(ов) на основе найденного и общей практики");
+    expect(String(reply.content)).not.toContain("Я подготовил(а) 1 тест-кейс(ов), изучив:");
     expect(String(reply.content)).toContain("**Zyra generated test cases**");
     expect(String(reply.content)).not.toContain("I drafted");
     expect(String(reply.reasoningSummary ?? reply.reasoning_summary ?? "")).toContain("Генерация через");
@@ -7910,11 +8335,11 @@ test.describe("zyra — writes in the language the user writes in (fake provider
       const turn = await send(sessionId, "Сгенерируй все возможные тест-кейсы для входа в систему.");
       expect(turn.status(), await turn.text()).toBeLessThan(300);
       await expect
-        .poll(() => scalar(`SELECT active_plan FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
+        .poll(() => scalar(`SELECT active_plan IS NULL FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
           message: "the plan must run its background batch to completion",
           timeout: 30_000,
         })
-        .toBeNull();
+        .toBe("t");
 
       const generations = generationRequests();
       expect(generations.length, "the inline batch and the background batch").toBe(2);
@@ -7944,8 +8369,8 @@ test.describe("zyra — writes in the language the user writes in (fake provider
     const res = await send(sessionId, "продолжить");
     expect(res.status(), await res.text()).toBeLessThan(300);
     await expect
-      .poll(() => scalar(`SELECT active_plan FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), { timeout: 30_000 })
-      .toBeNull();
+      .poll(() => scalar(`SELECT active_plan IS NULL FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), { timeout: 30_000 })
+      .toBe("t");
 
     const session = await (await asOwner.get(url(`/chat/sessions/${sessionId}`))).json();
     const contents = (session.messages as Array<Record<string, any>>).filter((m) => m.role === "assistant").map((m) => String(m.content));

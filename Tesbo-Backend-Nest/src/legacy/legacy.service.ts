@@ -19476,7 +19476,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       // already produced operations; it only re-asks, once, when the model plainly didn't.
       if (!turn.choice && decision.actionType === "answer" && !decision.operations.length && this.zyraIsConfirmation(message)) {
         const lastAssistantRes = await this.db.query(
-          `SELECT content, action_type, testcases FROM zyra_chat_messages
+          `SELECT role, content, action_type, testcases FROM zyra_chat_messages
            WHERE session_id = $1 AND project_id = $2 AND role = 'assistant'
            ORDER BY created_at DESC LIMIT 1`,
           [sessionId, projectId]
@@ -20041,6 +20041,32 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
    * otherwise list one document twice. Keyed on the citation's real source id when present
    * (title alone is not guaranteed unique — two docs can share a name), falling back to title.
    */
+  private static zyraScopeRetrievedKnowledge(
+    namedTickets: ZyraTurnSources["knowledge"],
+    retrieved: ZyraTurnSources["knowledge"]
+  ): ZyraTurnSources["knowledge"] {
+    // A named, resolved ticket defines the ticket scope. Search may still supply supporting
+    // ordinary knowledge, but matching a shared issue-key prefix is not authority to include
+    // another ticket. Explicit folder selections are merged separately and remain intact.
+    if (!namedTickets.length) return retrieved;
+    const ticketKey = (title: string) => /^\s*([A-Z][A-Z0-9]*-\d+)\s*:/i.exec(title)?.[1].toUpperCase();
+    const allowed = new Set(namedTickets.map(item => ticketKey(item.title)).filter(Boolean));
+    return retrieved.filter(item => {
+      const key = ticketKey(item.title);
+      return !key || allowed.has(key);
+    });
+  }
+
+  private static zyraSelectTurnKnowledge(resolved: ZyraTurnSources["knowledge"], fallback: ZyraTurnSources["knowledge"]): {
+    knowledge: ZyraTurnSources["knowledge"]; usedRecencyFallback: boolean;
+  } {
+    // Recency is a last resort, not an addition to explicit, retrieved, catalogued or carried
+    // sources. The old length comparison admitted the fallback whenever ONLY explicit items
+    // resolved, duplicating the named documents and widening a named ticket to unrelated notes.
+    const usedRecencyFallback = resolved.length === 0 && fallback.length > 0;
+    return { knowledge: usedRecencyFallback ? LegacyService.dedupeZyraKnowledgeItems(fallback) : resolved, usedRecencyFallback };
+  }
+
   private static dedupeZyraKnowledgeItems<T extends { title: string; citation?: { sourceId?: string } }>(items: T[]): T[] {
     const seen = new Set<string>();
     const out: T[] = [];
@@ -20164,7 +20190,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       // What the previous turn resolved, re-fetched by reference — see ZyraTurnContextRefs.
       this.zyraPriorTurnContextRefs(projectId, sessionId).then((refs) => this.zyraResolveContextRefs(projectId, refs, kbEnabled))
     ]);
-    const ragKnowledge = ragDiagnostics.items;
+    const ragKnowledge = LegacyService.zyraScopeRetrievedKnowledge(ticketKnowledge, ragDiagnostics.items);
     // Named outright (a folder, a ticket key), so never scored and never displaced by search ranking.
     const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
     // A broad request is also shown the project's tickets — see knowledgeTicketCatalogue.
@@ -20198,8 +20224,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const mentionedJira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
-    const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
+    const { knowledge, usedRecencyFallback } = LegacyService.zyraSelectTurnKnowledge(turnSources.knowledge, knowledgeFallback);
 
     // Opened once the gathered context exists, so the trace carries what Zyra actually read rather
     // than only what it later claims to have read.
@@ -20231,7 +20256,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       query: message,
       semanticSearchRan: ragDiagnostics.semanticSearchRan,
       reason: ragDiagnostics.reason,
-      retrieved: (ragKnowledge.length ? ragKnowledge : knowledgeFallback).map((item) => ({
+      retrieved: (ragKnowledge.length ? ragKnowledge : usedRecencyFallback ? knowledgeFallback : []).map((item) => ({
         title: String((item as Body).title || ""),
         sourceType: String(((item as Body).citation as Body)?.sourceType || ""),
         sourceId: String(((item as Body).citation as Body)?.sourceId || ""),
@@ -22033,7 +22058,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       kbEnabled ? this.bugsSnapshot(projectId, message) : Promise.resolve([]),
       this.zyraResolveContextRefs(projectId, carriedRefs, kbEnabled)
     ]);
-    const ragKnowledge = ragDiagnostics.items;
+    const ragKnowledge = LegacyService.zyraScopeRetrievedKnowledge(ticketKnowledge, ragDiagnostics.items);
     const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
     // Same broad-request rule as decideZyraChatTurn, so every batch of a broad plan sees the tickets.
     const broadTickets = kbEnabled && LegacyService.zyraIsBroadRequest(explicitKnowledge.length, ragDiagnostics.confidence)
@@ -22056,8 +22081,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const jira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
-    const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
+    const { knowledge } = LegacyService.zyraSelectTurnKnowledge(turnSources.knowledge, knowledgeFallback);
     return {
       knowledge: capabilities.knowledgeBase ? knowledge : [],
       existingTestcases,
@@ -23955,20 +23979,31 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
-  async zyraDeleteDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, principal?: TestcaseProposalPrincipal) {
+  private async lockReviewedZyraDraftBatch(client: PoolClient, projectId: string, taskId: string, revision: string): Promise<Body> {
+    // The index is meaningful only inside the exact snapshot the caller reviewed. Serializing
+    // writers alone would still let a stale index select the next item after a deletion.
+    const result = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
+    const row = result.rows[0];
+    if (!row) throw new NotFoundException({ error: "Zyra task not found" });
+    this.assertGuardedPublicationAvailable(row);
+    this.assertOrdinaryProposalMutation(row);
+    if (row.task_status !== "in_review") {
+      throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This batch is not awaiting review. Reload it before changing drafts." });
+    }
+    const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+    if (reviewed.proposal_review_revision !== revision) {
+      throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The drafts or their dependencies changed since review. Reload and review them before changing a draft." });
+    }
+    return row;
+  }
+
+  async zyraDeleteDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, body: Body = {}, principal?: TestcaseProposalPrincipal) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    await this.db.transaction(async (client) => {
-      // FOR UPDATE serializes this read-modify-write against any concurrent delete/edit/save on the
-      // same row — without it, two concurrent deletes (or a delete racing an edit) each read the same
-      // array, and whichever writes last silently discards the other's change.
-      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
-      if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-      this.assertGuardedPublicationAvailable(existing.rows[0]);
-      // A governed document candidate is the exact artifact the owner reviews. Deleting its only
-      // operation would destroy that artifact and rewrite the review revision.
-      this.assertOrdinaryProposalMutation(existing.rows[0]);
-      const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const committed = await this.db.transaction(async (client) => {
+      const existing = await this.lockReviewedZyraDraftBatch(client, projectId, taskId, revision);
+      const drafts = normalizeJsonArray(existing.generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
       }
@@ -23981,7 +24016,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         detail: String(removed?.title || removed?.draft?.title || `Draft ${draftIndex + 1}`),
         createdAt: now
       }];
-      const res = await client.query(
+      await client.query(
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, generated_count = GREATEST(generated_count,saved_count+$4),
              activity_log = activity_log || $5::jsonb, updated_at = now()
@@ -23989,9 +24024,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), drafts.length, JSON.stringify(activity)]
       );
-      return res.rows[0];
+      // Capture this command's exact result while its lock is held. A later external reread could
+      // adopt another writer's revision and authorize the next queued index against unseen work.
+      return this.readTestcaseProposal(client, projectId, taskId);
     });
-    return await this.zyraTask(projectId,userId,taskId);
+    return this.formatAiTask(committed);
   }
 
   // Inline edit of one pending draft's fields — the review step's "edit" action. Task-board drafts
@@ -24000,20 +24037,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   async zyraEditDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, fields: Body, principal?: TestcaseProposalPrincipal) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
+    const revision = expectedProposalRevision(fields.expectedProposalRevision);
     // Reuses the same field-length limits real testcases enforce, so an edit that would fail at
     // save time (title too long, etc.) is rejected here instead — at the point the user made it.
     this.assertTestcaseFieldLengths(fields);
-    await this.db.transaction(async (client) => {
-      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
-      if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-      this.assertGuardedPublicationAvailable(existing.rows[0]);
-      // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
-      // under the reviewer without changing the exact revision they approved.
-      this.assertOrdinaryProposalMutation(existing.rows[0]);
-      if (existing.rows[0].task_status !== "in_review") {
-        throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
-      }
-      const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
+    const committed = await this.db.transaction(async (client) => {
+      const existing = await this.lockReviewedZyraDraftBatch(client, projectId, taskId, revision);
+      const drafts = normalizeJsonArray(existing.generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
       }
@@ -24035,16 +24065,16 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         detail: String(entry.draft?.title || entry.fields?.title || `Draft ${draftIndex + 1}`),
         createdAt: now
       }];
-      const res = await client.query(
+      await client.query(
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, activity_log = activity_log || $4::jsonb, updated_at = now()
          WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), JSON.stringify(activity)]
       );
-      return res.rows[0];
+      return this.readTestcaseProposal(client, projectId, taskId);
     });
-    return await this.zyraTask(projectId,userId,taskId);
+    return this.formatAiTask(committed);
   }
 
   private proposalActivityPrincipal(principal: TestcaseProposalPrincipal | undefined, userId: string | null | undefined) {

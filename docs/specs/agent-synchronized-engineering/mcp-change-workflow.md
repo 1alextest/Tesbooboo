@@ -93,6 +93,36 @@ The full fourteen-finding crosswalk, including shared PR heads, scanner disposit
 
 ## Acceptance and rollout
 
+### First writer increment and remaining collaboration work — 27 November 2026
+
+The ordinary Task and chat edit/delete repair uses the existing proposal revision and existing
+batch row. Both mutations require the revision actually reviewed, check lifecycle and revision
+under the same row lock, and return their own committed snapshot before releasing the transaction.
+An index is valid only inside that exact snapshot. A client must not combine its queued index
+with a later writer's revision. Selections and open editors retain their reviewed basis; a new
+revision clears unsubmitted selection, an old read cannot replace an acknowledged write, and an
+uncertain partial bulk outcome requires explicit reload and review. Governed requirement and
+managed-document proposals retain their typed owner guards.
+
+This is a bounded compatibility increment, not completion of this collaboration contract. Stable
+operation/step IDs, reconstructible contributor history, three-way reconciliation, delegated MCP
+authoring and delivered Skill-content receipts remain required for the wider writable pilot.
+Server-required revision checks provide enforceable consistency for these mutations; asking an
+agent to read a Skill alone cannot establish that it received or followed the approved method.
+The complete conformance and permitted prose-variation rules remain in the existing Skills owner.
+
+**Lifecycle decision still open:** current Close task / chat Discard all closes the batch as it
+exists when the command executes, retains its stored drafts and stops generation. It does not
+carry an expected proposal revision. Product authority must decide whether this remains a batch
+closure command or becomes a discard of only the exact reviewed snapshot. In the latter case,
+intervening contributions require a conflict. Do not silently reinterpret closure as part of the
+edit/delete repair, or describe every lifecycle action as revision-fenced.
+
+Implementation and real execution status are recorded in the dated addition to the
+[existing application journey review](../../qa-orchestration/reviews/PR264-application-journey-review.md).
+Local service fixtures do not prove PostgreSQL serialization, browser recovery, native approval
+or two-member/two-client authoring. The wider rollout below retains its original acceptance gates.
+
 Each exercise is an extension of the indicated existing owner. Use separately authenticated people and a controlled test project for claims about Tesbo. Read the candidate, official case, decision receipts, run eligibility, and applicable delivery state after the action. Preserve a negative or unknown observation with its actual evidence level.
 
 | Exercise | Input and required observation | Existing proof |

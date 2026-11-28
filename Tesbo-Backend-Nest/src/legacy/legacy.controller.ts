@@ -16,6 +16,7 @@ import {
   Req,
   Res,
   Sse,
+  UnauthorizedException,
   UploadedFiles,
   UseInterceptors
 } from "@nestjs/common";
@@ -1827,9 +1828,10 @@ export class LegacyController {
     @Req() req: AuthenticatedRequest,
     @Param("projectId") projectId: string,
     @Param("taskId") taskId: string,
-    @Param("draftIndex") draftIndex: string
+    @Param("draftIndex") draftIndex: string,
+    @Body() body: Record<string, any>
   ) {
-    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex), {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
+    return this.legacy.zyraDeleteDraft(projectId, req.userId, taskId, Number(draftIndex), body ?? {}, {kind:req.apiToken ? "api_token" : "human_session",tokenId:req.apiToken?.tokenId});
   }
 
   @Patch("/api/projects/:projectId/agents/zyra/tasks/:taskId/drafts/:draftIndex")
@@ -1855,6 +1857,7 @@ export class LegacyController {
 
   @Get("/api/projects/:projectId/agents/zyra/tasks/:taskId/ticket-comments")
   zyraTaskTicketComments(@Req() req: AuthenticatedRequest, @Param("projectId") projectId: string, @Param("taskId") taskId: string) {
+    if (!req.userId) throw new UnauthorizedException({ error: "Authentication required" });
     return this.legacy.zyraTaskTicketComments(projectId, req.userId, taskId);
   }
 
@@ -1865,6 +1868,7 @@ export class LegacyController {
     @Param("taskId") taskId: string,
     @Param("commentId") commentId: string
   ) {
+    if (!req.userId) throw new UnauthorizedException({ error: "Authentication required" });
     return this.legacy.zyraRetryTicketComment(projectId, req.userId, taskId, commentId);
   }
 
