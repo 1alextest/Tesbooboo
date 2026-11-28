@@ -70,6 +70,32 @@ test.describe("fake AI provider request ownership", () => {
     }
   });
 
+  test("ZYR-FIXTURE-03 reserved hold belongs to the intended FIFO request and releases independently", async () => {
+    const server = await startFakeAiServer();
+    let pending: ReturnType<typeof call> | undefined;
+    const first = "first response";
+    try {
+      server.queueReply(first);
+      const hold = server.queueHeldReply("held response");
+      server.queueReply("neighbor response");
+      expect(hold.pending).toBe(false);
+      expect((await call(server, "first request")).body.choices[0].message.content).toBe(first);
+      expect(hold.pending).toBe(false);
+      pending = call(server, "held request");
+      await expect.poll(() => hold.pending).toBe(true);
+      expect(hold.request?.messages[0].content).toBe("held request");
+      expect((await call(server, "neighbor request")).body.choices[0].message.content).toBe("neighbor response");
+      expect(hold.pending).toBe(true);
+      hold.release();
+      hold.release();
+      expect((await pending).body.choices[0].message.content).toBe("held response");
+      expect(hold.pending).toBe(false);
+    } finally {
+      await server.close();
+      if (pending) await pending.catch(() => undefined);
+    }
+  });
+
   test("ZYR-FIXTURE-02 delayed one-shot failure belongs to the arriving request without consuming FIFO", async () => {
     const server = await startFakeAiServer();
     try {
@@ -7781,27 +7807,47 @@ test.describe("zyra chat — request trace and turn lifecycle (fake provider)", 
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E trace heartbeat");
     ai.queueReply({ reply: "", reasoningSummary: "Creating.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: 1, exhaustive: false });
-    ai.queueReply({ drafts: [draft("Seat picker opens (slow)")] });
-
-    const res = await send(sessionId, "Generate 1 test case for the seat picker.");
-    const { userMessageId } = await res.json();
-    await expect.poll(() => ai.requests.length, { timeout: 30_000 }).toBe(1);
-    // Hold the drafting call well past one heartbeat interval (60s), inside the generate timeout.
-    ai.delayNextReplyMs(80_000);
-    // Make the claim look as old as a turn that started before the 5-minute window — what every
-    // generation longer than that looked like before the heartbeat.
-    exec(`UPDATE zyra_chat_sessions SET processing_since = now() - interval '10 minutes' WHERE id = ${literal(sessionId)};`);
-
-    await expect
-      .poll(() => scalar(`SELECT (processing_since > now() - interval '2 minutes')::text FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
-        message: "the running turn never refreshed its claim",
-        timeout: 75_000,
-        intervals: [2_000],
-      })
-      .toBe("true");
-    const second = await send(sessionId, "A second question");
-    expect(second.status(), `a second turn took over a live turn's session — ${await second.text()}`).toBe(409);
-    await waitForTurn(sessionId, userMessageId, 120_000);
+    const held = ai.queueHeldReply({ drafts: [draft("Seat picker opens (slow)")] });
+    let userMessageId: string | undefined;
+    let primaryFailed = false;
+    try {
+      const res = await send(sessionId, "Generate 1 test case for the seat picker.");
+      expect(res.status()).toBe(201);
+      userMessageId = (await res.json()).userMessageId;
+      expect(userMessageId).toBeTruthy();
+      await expect.poll(() => held.pending, { timeout: 30_000, message: "the reserved drafting reply never reached its hold" }).toBe(true);
+      expect(held.request).toBe(ai.requests[1]);
+      const messages = await sessionMessages(sessionId);
+      const running = messages.find(m => m.id === userMessageId);
+      expect(running?.status).toBe("processing");
+      expect(running?.trace?.steps.some(s => s.stage === "generating" && s.status === "running")).toBe(true);
+      // Age the exact session while the drafting call is still held, then observe its real heartbeat.
+      exec(`UPDATE zyra_chat_sessions SET processing_since = now() - interval '10 minutes' WHERE id = ${literal(sessionId)};`);
+      await expect
+        .poll(() => scalar(`SELECT (processing_since > now() - interval '2 minutes')::text FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
+          message: "the running turn never refreshed its claim",
+          timeout: 75_000,
+          intervals: [2_000],
+        })
+        .toBe("true");
+      expect(held.pending, "the drafting request must still be held at the competing send").toBe(true);
+      const second = await send(sessionId, "A second question");
+      expect(second.status(), `a second turn took over a live turn's session — ${await second.text()}`).toBe(409);
+    } catch (error) {
+      primaryFailed = true;
+      throw error;
+    } finally {
+      held.release();
+      if (userMessageId) {
+        try {
+          const settled = await waitForTurn(sessionId, userMessageId, 60_000);
+          expect(settled.find(m => m.id === userMessageId)?.status).toBe("sent");
+        } catch (error) {
+          if (!primaryFailed) throw error;
+          test.info().annotations.push({ type: "fixture-cleanup-failure", description: "released heartbeat fixture but turn settlement was not verified" });
+        }
+      }
+    }
   });
 
   test("ZYR-A-134 a turn whose claim was taken over cannot release the claim of the turn that took it", async () => {
