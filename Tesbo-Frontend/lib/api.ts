@@ -5710,7 +5710,7 @@ export async function linkModelStudioCase(
   projectId: string,
   modelId: string,
   revisionId: string,
-  data: { testcaseId: string; elementIds: string[]; testcaseRevision?: string }
+  data: { testcaseId: string; elementIds: string[]; testcaseRevision?: string; requireCurrentRevision?: true }
 ): Promise<ModelStudioLink> {
   return api(`/api/projects/${projectId}/model-studio/models/${modelId}/revisions/${revisionId}/links`, {
     method: "POST",

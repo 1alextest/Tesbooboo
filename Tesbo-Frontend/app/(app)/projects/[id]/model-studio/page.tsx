@@ -354,7 +354,7 @@ export default function ModelStudioPage() {
     }
   }
 
-  async function linkCase({ testcaseId, elementIds }: { testcaseId: string; elementIds: string[] }) {
+  async function linkCase({ testcaseId, elementIds, reviewedCaseRevision }: { testcaseId: string; elementIds: string[]; reviewedCaseRevision?: string }) {
     if (!currentDetail || !latestRevision) return;
     setLinkBusy(true);
     setLinkError(null);
@@ -362,11 +362,18 @@ export default function ModelStudioPage() {
       // Record the case revision the mapping was accepted against, so a later edit is visible as
       // changed-since-link rather than silently treated as current.
       const testcase = await getTestCase(projectId, testcaseId);
+      if (testcase.id !== testcaseId || (reviewedCaseRevision !== undefined && testcase.projectId !== projectId)) {
+        throw new Error("Case identity could not be verified.");
+      }
       const testcaseRevision = typeof testcase.editRevision === "string" ? testcase.editRevision : undefined;
+      if (reviewedCaseRevision !== undefined && testcaseRevision !== reviewedCaseRevision) {
+        throw new Error("The selected case changed. Inspect its current steps before linking.");
+      }
       await linkModelStudioCase(projectId, currentDetail.id, latestRevision.id, {
         testcaseId,
         elementIds,
-        testcaseRevision
+        testcaseRevision,
+        ...(reviewedCaseRevision !== undefined ? { requireCurrentRevision: true as const } : {})
       });
       setLinkOpen(false);
       setReloadToken((token) => token + 1);
@@ -1266,10 +1273,13 @@ export default function ModelStudioPage() {
         />
       )}
 
-      {linkOpen && latestDefinition && (
+      {linkOpen && latestDefinition && latestRevision && currentDetail && (
         <LinkCaseModal
+          key={`${projectId}:${currentDetail.id}:${latestRevision.id}`}
           projectId={projectId}
           elements={modelElements(latestDefinition)}
+          transitions={latestDefinition.transitions}
+          mappingInventory={currentCoverage?.revisionId === latestRevision.id ? currentCoverage.links : null}
           busy={linkBusy}
           error={linkError}
           onClose={() => {
