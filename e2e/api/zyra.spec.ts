@@ -6953,6 +6953,28 @@ test.describe("zyra — exact KB requirement grounding (fake provider)", () => {
       request: "Write test cases for the failed login lockout" },
   ];
 
+  test("ZYR-A-RAG-PARTIAL chat generation retains exact keyword evidence when the embedding endpoint is unavailable", async () => {
+    // The existing chat key remains selected. Add a workspace embedding-capable key only
+    // after creating the source, so ordinary chat and embedding requests remain distinct.
+    await allocateFakeAiKey();
+    const requirement = "A session expires after exactly 23 minutes of inactivity.";
+    const docId = await createDoc("Portal session rule", longDoc("Session timeout", requirement));
+    const keyRes = await asOwner.post("/api/workspace/ai-keys", {
+      data: { name: "E2E partial retrieval embedding", provider: "openai", apiKey: "synthetic-e2e-key", baseUrl: ai.backendBaseUrl, defaultModel: "gpt-4o-mini" },
+      failOnStatusCode: false,
+    });
+    expect(keyRes.status(), await keyRes.text()).toBe(201);
+    // The fake server returns 503 for every unscripted embedding request; no race
+    // with a one-shot failure being consumed by a background indexing job.
+    const request = "Generate test cases for session timeout";
+    const reply = await generateInChat(request, "Session timeout rule");
+    expect(ai.embeddingRequests.filter((r) => r.input.includes(request)), "the actual query embedding must have been attempted").toHaveLength(1);
+    // The value is beyond the recency fallback's first 1500 characters. A canned
+    // assistant answer alone cannot satisfy this assertion on actual provider input.
+    expectGroundedOn(draftingPrompt(), requirement);
+    expect(citedIds(reply)).toContain(docId);
+  });
+
   for (const row of REQUIREMENTS) {
     test(`${row.id} chat generation grounds on ${row.kind} stated deep in a KB document, from a naturally phrased request`, async () => {
       await allocateFakeAiKey();
