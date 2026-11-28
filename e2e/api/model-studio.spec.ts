@@ -1025,7 +1025,7 @@ test.describe("persisted Model Studio revisions and mappings", () => {
 });
 
 test("reviewed model transition mapping fences both revisions and overlapping relationships", async () => {
-  const tenant = await provisionRbacTenant("model-suggestion");
+  const tenant = await provisionRbacTenant("model-studio");
   test.skip(!tenant, "requires direct SQL control for the disposable tenant");
   const projectId = tenant!.mainProjectId;
   const owner = await loginAs(tenant!.owner);
