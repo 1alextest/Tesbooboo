@@ -173,21 +173,20 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
       const prompt = JSON.stringify(body.messages ?? []);
       const matchIndex = matched.findIndex((entry) => prompt.includes(entry.match));
       const matchedReply = matchIndex >= 0 ? matched.splice(matchIndex, 1)[0].reply : undefined;
+      // Reserve the outcome at request arrival, not response delivery. Otherwise a
+      // later fast request steals the delayed request's FIFO reply or one-shot error.
+      const matchedFailure = matchedReply !== undefined && typeof matchedReply !== "string" ? matchedReply : undefined;
+      const failure = matchedFailure
+        ? { status: matchedFailure.failStatus, message: matchedFailure.message || "stubbed provider failure" }
+        : failStatus !== null ? { status: failStatus, message: failMessage } : undefined;
+      if (!matchedFailure && failStatus !== null) failStatus = null;
+      const next = failure ? undefined : typeof matchedReply === "string" ? matchedReply : queue.shift();
       const respond = () => {
-        if (matchedReply !== undefined && typeof matchedReply !== "string") {
-          res.writeHead(matchedReply.failStatus, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: { message: matchedReply.message || "stubbed provider failure" } }));
+        if (failure) {
+          res.writeHead(failure.status, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: failure.message } }));
           return;
         }
-        if (failStatus !== null) {
-          const status = failStatus;
-          failStatus = null;
-          res.writeHead(status, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: { message: failMessage } }));
-          return;
-        }
-        // The error-reply branch returned above; narrow again inside this delayed callback.
-        const next = typeof matchedReply === "string" ? matchedReply : queue.shift();
         const content = next ?? JSON.stringify({
           reply: "fake-ai-server: no scripted response was queued for this call.",
           reasoningSummary: "fake-ai-server exhausted its queue.",

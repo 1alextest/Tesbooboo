@@ -36,6 +36,69 @@ import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapt
  * a Zyra chat transcript contains whatever the team told the agent about their product.
  */
 
+// Direct fixture controls: use real HTTP, no backend/model/tenant dependencies.
+// The end-to-end ZYR-A-135 failure (slow reply delivered to fast session) exposed
+// this seam. Keep the product session-isolation assertions intact.
+test.describe("fake AI provider request ownership", () => {
+  async function call(server: FakeAiServer, prompt: string) {
+    const endpoint = new URL(server.baseUrl + "/chat/completions");
+    endpoint.hostname = "127.0.0.1";
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fake", messages: [{ role: "user", content: prompt }] }),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  test("ZYR-FIXTURE-01 delayed FIFO reply belongs to the arriving request", async () => {
+    const server = await startFakeAiServer();
+    try {
+      server.queueReply("first");
+      server.queueReply("second");
+      server.delayNextReplyMs(2_000);
+      const first = call(server, "first request");
+      await expect.poll(() => server.requests.length).toBe(1);
+      const second = call(server, "second request");
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.body.choices[0].message.content).toBe("first");
+      expect(b.body.choices[0].message.content).toBe("second");
+      expect(server.requests.map(r => r.messages[0].content)).toEqual(["first request", "second request"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("ZYR-FIXTURE-02 delayed one-shot failure belongs to the arriving request without consuming FIFO", async () => {
+    const server = await startFakeAiServer();
+    try {
+      server.queueReply("surviving FIFO");
+      server.failNextWith(503, "first request failure");
+      server.delayNextReplyMs(2_000);
+      const first = call(server, "first request");
+      await expect.poll(() => server.requests.length).toBe(1);
+      const second = call(server, "second request");
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.status).toBe(503);
+      expect(a.body.error.message).toBe("first request failure");
+      expect(b.status).toBe(200);
+      expect(b.body.choices[0].message.content).toBe("surviving FIFO");
+      server.queueReply("FIFO");
+      server.queueReplyMatching("matched request", { failStatus: 429, message: "matched failure" });
+      server.failNextWith(502, "next generic failure");
+      expect((await call(server, "matched request")).status).toBe(429);
+      expect((await call(server, "generic request")).status).toBe(502);
+      const remaining = await call(server, "remaining request");
+      expect(remaining.status).toBe(200);
+      expect(remaining.body.choices[0].message.content).toBe("FIFO");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 test.describe("zyra — agent, chat, tasks and AI keys", () => {
   let tenant: RbacTenant | null = null;
   let asOwner: APIRequestContext;
