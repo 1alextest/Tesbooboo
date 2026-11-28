@@ -1,0 +1,143 @@
+# Docker invocation follows the Codacy 7.10.4 wrapper:
+# https://github.com/codacy/codacy-analysis-cli/blob/dd61b2eef7c1ca8302f6223ee28bba68e2527a8d/bin/codacy-analysis-cli.sh
+
+name: Codacy Security Scan
+
+on:
+  push:
+    branches: [ "main", "development" ]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches: [ "main", "development" ]
+  schedule:
+    - cron: '25 8 * * 3'
+
+permissions:
+  contents: read
+
+jobs:
+  codacy-security-scan:
+    permissions:
+      contents: read # for actions/checkout to fetch code
+      security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
+      actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+    name: Codacy Security Scan
+    runs-on: ubuntu-latest
+    # Bound an unresponsive scanner; a timeout fails the job and cannot publish SARIF.
+    # This is an operational ceiling, not proof of completed analysis.
+    timeout-minutes: 180
+    steps:
+      # Checkout the repository to the GitHub Actions runner
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Test Codacy diagnostic and output guards
+        run: python3 -B -m unittest discover -s scripts -p 'test_codacy_*.py'
+
+      - name: Inventory Codacy input encoding and aliases
+        run: python3 -B scripts/codacy_input_diagnostics.py
+
+      - name: Run Codacy Analysis CLI
+        id: scan
+        shell: bash
+        env:
+          CODACY_PROJECT_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+        run: |
+          set -euo pipefail
+          # On pull_request, checkout and the SARIF uploader both use the event
+          # merge commit. Do not label that tree with the contributor head SHA.
+          scan_commit=$(git rev-parse HEAD)
+          if [[ "$scan_commit" != "$GITHUB_SHA" ]]; then
+            echo 'Codacy checkout does not match the event commit' >&2
+            exit 1
+          fi
+          python3 -B scripts/codacy_input_diagnostics.py --verify-checkout
+          echo "Codacy source commit: $scan_commit"
+          # Same 7.10.4 image and analyzer defaults as the upstream action. Use its
+          # published digest and Docker's container ID to supervise the formatter.
+          image=codacy/codacy-analysis-cli:7.10.4@sha256:2ae34a48ca2a70b221dd51f470edca878db01d3f7186f34e397595bef287978a
+          # The pinned formatter uses better-files 3.8.0, whose default decoder
+          # derives from Charset.defaultCharset(). Alpine/OpenJDK 8 can differ
+          # from the runner's UTF-8 decoder. Record the actual image default,
+          # then require UTF-8 without altering any analyzed source or rules.
+          docker run --rm --entrypoint java "$image" -XshowSettings:properties -version 2>&1 \
+            | grep -E '^ *file\.encoding = '
+          encoding=$(docker run --rm --env JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 \
+            --entrypoint java "$image" -XshowSettings:properties -version 2>&1 \
+            | grep -E '^ *file\.encoding = ')
+          if [[ "$encoding" != *"file.encoding = UTF-8" ]]; then
+            echo 'Codacy JVM did not accept UTF-8 encoding' >&2
+            exit 1
+          fi
+          echo "Codacy JVM configured encoding: $encoding"
+          cidfile="$RUNNER_TEMP/codacy-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.cid"
+          # Keep output outside the checkout so source integrity can be checked.
+          report_dir=$(mktemp -d "$RUNNER_TEMP/codacy-report.XXXXXXXX")
+          report="$report_dir/results.sarif"
+          cp scripts/codacy_input_diagnostics.py "$report_dir/verify_checkout.py"
+          fingerprint="$report_dir/checkout.fingerprint"
+          python3 -B "$report_dir/verify_checkout.py" --record-checkout "$fingerprint"
+          # Analyzer diagnostics can contain repository text. Keep workflow
+          # command processing disabled while it is streamed to the job log.
+          marker=$(cat /proc/sys/kernel/random/uuid)
+          echo "::stop-commands::$marker"
+          trap 'echo "::$marker::"' EXIT
+          if docker run --rm --cidfile "$cidfile" \
+            --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
+            --env JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
+            --volume "$report_dir:$report_dir" \
+            "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
+            --verbose --format sarif --output "$report" \
+            --gh-code-scanning-compat --fail-if-incomplete --max-allowed-issues 2147483647 \
+            2>&1 | python3 -u scripts/codacy_output_guard.py "$cidfile" "$report_dir/sarif-failure"; then
+            :
+          else
+            python3 -B "$report_dir/verify_checkout.py" --verify-checkout "$fingerprint"
+            # Temporary #240 diagnostic, not a replacement scanner or acceptance gate.
+            # Only the confirmed SARIF decoder stack triggers one differently formatted
+            # analysis. Generic analyzer failures do not trigger an identical retry.
+            # The original failure is preserved regardless of the diagnostic result.
+            if [[ -f "$report_dir/sarif-failure" ]]; then
+              echo 'Codacy SARIF formatter failed; collecting local JSON correlation only'
+              diagnostic_cidfile="$report_dir/diagnostic.cid"
+              diagnostic_report="$report_dir/diagnostic.json"
+              diagnostic_status=0
+              docker run --rm --cidfile "$diagnostic_cidfile" \
+                --env "CODACY_CODE=$GITHUB_WORKSPACE" --env CODACY_PROJECT_TOKEN \
+                --env JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 \
+                --volume /var/run/docker.sock:/var/run/docker.sock \
+                --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --volume /tmp:/tmp \
+                --volume "$report_dir:$report_dir" \
+                "$image" -- analyze --skip-commit-uuid-validation --commit-uuid "$scan_commit" \
+                --verbose --format json --output "$diagnostic_report" \
+                --fail-if-incomplete --max-allowed-issues 2147483647 \
+                2>&1 | python3 -u scripts/codacy_output_guard.py "$diagnostic_cidfile" || diagnostic_status=$?
+              echo "Codacy JSON diagnostic pipeline status: $diagnostic_status (not an acceptance result)"
+              python3 -B "$report_dir/verify_checkout.py" --verify-checkout "$fingerprint"
+              if [[ -f "$diagnostic_report" && ! -L "$diagnostic_report" ]]; then
+                python3 -B "$report_dir/verify_checkout.py" --correlate "$diagnostic_report" \
+                  || echo 'Codacy JSON correlation unavailable; no formatter culprit established'
+              fi
+              # No raw diagnostic report is printed, retained as an artifact or uploaded.
+              rm -f -- "$diagnostic_report"
+            fi
+            exit 1
+          fi
+          # Compare tracked checkout bytes (including legitimate checkout transformations).
+          # This detects persistent changes, not isolation from a scanner with Docker access.
+          python3 -B "$report_dir/verify_checkout.py" --verify-checkout "$fingerprint"
+          if [[ ! -f "$report" || -L "$report" || ! -s "$report" ]]; then
+            echo "Codacy did not produce a regular nonempty SARIF report" >&2
+            exit 1
+          fi
+          printf 'sarif_file=%s\n' "$report" >> "$GITHUB_OUTPUT"
+
+      # Upload the SARIF file generated in the previous step
+      - name: Upload SARIF results file
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif_file }}
