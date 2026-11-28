@@ -85,6 +85,24 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     embedTextsMock.mockResolvedValue([[0.1, 0.2, 0.3]]);
   });
 
+  it("binds ANN joins to their native project and current source text without widening governed context", async () => {
+    const db = makeDb([]);
+    const svc = new RagRetrievalService(db);
+    await svc.retrieveWithDiagnostics("project-1", "synthetic login request");
+    await svc.findSimilarTestcases("project-1", "synthetic login request");
+    const sqls = (db.query as jest.Mock).mock.calls.map(([sql]) => String(sql));
+    const kb = sqls.find(sql => sql.includes("FROM knowledge_document_chunks"))!;
+    expect(kb).toContain("d.project_id = c.project_id AND d.organization_id = c.organization_id");
+    expect(kb).toContain("f.project_id = c.project_id AND f.organization_id = c.organization_id");
+    expect(kb).toContain("NOT IN ('user_manual','policy')");
+    expect(kb).toContain("c.content_hash = encode(sha256(convert_to(btrim(COALESCE(d.content_text");
+    expect(kb).toContain("c.content_hash = encode(sha256(convert_to(btrim(COALESCE(f.extracted_text");
+    expect(sqls.find(sql => sql.includes("FROM testcase_embeddings"))).toContain("t.project_id = e.project_id");
+    const fts = sqls.find(sql => sql.includes("FROM knowledge_documents") && sql.includes("ts_rank"))!;
+    expect(fts).toContain("NOT IN ('user_manual','policy')");
+    expect(fts).not.toContain("c.content_hash");
+  });
+
   it("an actual embedding failure stays private and does not claim a completed semantic search", async () => {
     const privateDetail = "synthetic-private-rag-provider-context";
     const actual = jest.requireActual<typeof import("./rag-ai-allocation")>("./rag-ai-allocation");

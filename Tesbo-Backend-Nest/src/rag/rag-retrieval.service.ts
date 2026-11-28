@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
-import { knowledgeDocumentAiContextSql } from "../legacy/knowledge-document-revision";
+import { knowledgeDocumentAiContextSql, knowledgeEmbeddingTextHashSql } from "../legacy/knowledge-document-revision";
 import { tracedEmbeddingCall } from "../observability/embedding-trace";
 import { EmbeddingKeyAllocation, embedTexts, resolveEmbeddingAllocation } from "./rag-ai-allocation";
 import { RagChunkingService } from "./rag-chunking.service";
@@ -240,7 +240,7 @@ export class RagRetrievalService {
     const res = await this.db.query<TestcaseAnnRow>(
       `SELECT e.testcase_id, 1 - (e.embedding <=> $2::vector) AS cosine_similarity
        FROM testcase_embeddings e
-       JOIN testcases t ON t.id = e.testcase_id AND t.deleted_at IS NULL
+       JOIN testcases t ON t.id = e.testcase_id AND t.project_id = e.project_id AND t.deleted_at IS NULL
        WHERE e.project_id = $1 ${excludeTestcaseId ? "AND e.testcase_id != $3" : ""}
        ORDER BY e.embedding <=> $2::vector
        LIMIT ${RAG_ANN_CANDIDATES}`,
@@ -273,8 +273,11 @@ export class RagRetrievalService {
               1 - (c.embedding <=> $2::vector) AS cosine_similarity
        FROM knowledge_document_chunks c
        LEFT JOIN knowledge_documents d ON c.source_type = 'document' AND d.id = c.source_id
-         AND d.project_id = c.project_id AND d.is_deleted = false AND ${knowledgeDocumentAiContextSql("d", "c.content_hash")}
-       LEFT JOIN knowledge_files f ON c.source_type = 'file' AND f.id = c.source_id AND f.is_deleted = false
+         AND d.project_id = c.project_id AND d.organization_id = c.organization_id
+         AND d.is_deleted = false AND ${knowledgeDocumentAiContextSql("d", "c.content_hash")}
+       LEFT JOIN knowledge_files f ON c.source_type = 'file' AND f.id = c.source_id
+         AND f.project_id = c.project_id AND f.organization_id = c.organization_id AND f.is_deleted = false
+         AND c.content_hash = ${knowledgeEmbeddingTextHashSql("f.extracted_text")}
        WHERE c.project_id = $1 AND (d.id IS NOT NULL OR f.id IS NOT NULL)
        ORDER BY c.embedding <=> $2::vector
        LIMIT ${RAG_ANN_CANDIDATES}`,

@@ -701,6 +701,80 @@ type Hook = (sql: string, values: unknown[], result: QueryResult<Record<string, 
     });
   });
 
+
+  it("admits only current document/file ANN text and refuses mismatched project and organization identities", async () => {
+    // Use the real existing source reader with only the query embedding provider stubbed.
+    const vector = Array.from({ length: RAG_EMBEDDING_DIMENSION }, (_, i) => i === 0 ? 1 : 0);
+    const embed = jest.spyOn(ragAiAllocation, "embedTexts").mockResolvedValue([vector]);
+    const rag = new RagRetrievalService(new DatabaseService(pool)) as unknown as {
+      annSearch(project: string, allocation: ragAiAllocation.EmbeddingKeyAllocation, query: string): Promise<Array<{ source_id: string; content: string }>>;
+      annSearchTestcases(project: string, allocation: ragAiAllocation.EmbeddingKeyAllocation, query: string): Promise<Array<{ testcase_id: string }>>;
+    };
+    const allocation: ragAiAllocation.EmbeddingKeyAllocation = {
+      provider: "openai", api_key: "isolated-stub", base_url: null, auth_header_name: null, auth_scheme: null,
+      model: "text-embedding-3-small", dimension: RAG_EMBEDDING_DIMENSION, sendDimensionParam: true
+    };
+    const hash = (value: string) => createHash("sha256").update(value.trim()).digest("hex");
+    const fileId = await seedFile();
+    const foreignProject = (await setup.query<{ id: string }>(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'RAGFOREIGN','RAG foreign scope') RETURNING id", [orgId]
+    )).rows[0].id;
+    const foreignFolder = (await setup.query<{ id: string }>(
+      "INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) VALUES ($1,$2,'Foreign',true) RETURNING id",
+      [orgId, foreignProject]
+    )).rows[0].id;
+    const foreignFile = (await seedMedia({ status: "pending", project: foreignProject, folder: foreignFolder })).id;
+    const foreignCase = (await setup.query<{ id: string }>(
+      "INSERT INTO testcases(project_id,external_id,title) VALUES ($1,'FOREIGN-RAG-1','Foreign case') RETURNING id",
+      [foreignProject]
+    )).rows[0].id;
+    const chunkIds: string[] = [];
+    async function chunk(sourceType: "document" | "file", sourceId: string, text: string, organizationId = orgId, index = 0) {
+      const id = randomUUID();
+      await setup.query(`INSERT INTO knowledge_document_chunks
+        (id,organization_id,project_id,source_type,source_id,chunk_index,content,token_count,content_hash,embedding_model,embedding)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,3,$8,'isolated-stub',$9::vector)`,
+        [id, organizationId, projectId, sourceType, sourceId, index, text.trim(), hash(text), `[${vector.join(",")}]`]);
+      chunkIds.push(id);
+      return id;
+    }
+    const rows = () => rag.annSearch(projectId, allocation, "initial");
+    const currentText = "\u00a0\nFresh changed content\u2029\ufeff";
+    try {
+      await setup.query("UPDATE knowledge_files SET extracted_text='Initial body' WHERE id=ANY($1::uuid[])", [[fileId, foreignFile]]);
+      const docChunk = await chunk("document", documentId, "Initial body");
+      const fileChunk = await chunk("file", fileId, "Initial body");
+      await chunk("file", foreignFile, "Initial body");
+      await chunk("document", documentId, "Initial body", randomUUID(), 1);
+      const before = await rows();
+      expect(before.filter(row => row.source_id === documentId)).toEqual([
+        expect.objectContaining({ source_id: documentId, content: "Initial body" })
+      ]);
+      expect(before.find(row => row.source_id === fileId)?.content).toBe("Initial body");
+      expect(before.some(row => row.source_id === foreignFile)).toBe(false);
+      await setup.query("UPDATE knowledge_documents SET content_text=$2 WHERE id=$1", [documentId, currentText]);
+      await setup.query("UPDATE knowledge_files SET extracted_text=$2 WHERE id=$1", [fileId, currentText]);
+      // Even stale operational bookkeeping cannot make the earlier chunk current.
+      await setup.query("UPDATE knowledge_documents SET embedding_content_hash=$2, embedding_status='ready' WHERE id=$1",
+        [documentId, hash("Initial body")]);
+      const stale = await rows();
+      expect(stale.some(row => row.source_id === documentId || row.source_id === fileId)).toBe(false);
+      await setup.query("UPDATE knowledge_document_chunks SET content=$3,content_hash=$4 WHERE project_id=$1 AND id=ANY($2::uuid[])",
+        [projectId, [docChunk, fileChunk], currentText.trim(), hash(currentText)]);
+      const refreshed = await rows();
+      expect(refreshed.find(row => row.source_id === documentId)?.content).toBe(currentText.trim());
+      expect(refreshed.find(row => row.source_id === fileId)?.content).toBe(currentText.trim());
+      expect(refreshed.some(row => row.source_id === foreignFile)).toBe(false);
+      await setup.query(`INSERT INTO testcase_embeddings(project_id,testcase_id,content_hash,embedding_model,embedding)
+        VALUES ($1,$2,$3,'isolated-stub',$4::vector)`, [projectId, foreignCase, hash("Foreign case"), `[${vector.join(",")}]`]);
+      expect((await rag.annSearchTestcases(projectId, allocation, "foreign")).some(row => row.testcase_id === foreignCase)).toBe(false);
+    } finally {
+      embed.mockRestore();
+      await setup.query("DELETE FROM knowledge_document_chunks WHERE project_id=$1 AND id=ANY($2::uuid[])", [projectId, chunkIds]);
+      await setup.query("DELETE FROM testcase_embeddings WHERE project_id=$1 AND testcase_id=$2", [projectId, foreignCase]);
+    }
+  });
+
   it("rechecks a folder under a lock so a concurrent delete cannot strand a newly created document", async () => {
     const target = (await setup.query<{ id: string }>(
       "INSERT INTO knowledge_folders (organization_id,project_id,name) VALUES ($1,$2,$3) RETURNING id",
