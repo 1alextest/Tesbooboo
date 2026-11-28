@@ -4259,6 +4259,20 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByRole("button", { name: `${linearKey} x` })).toBeVisible();
       await expect(page.getByRole("button", { name: `${jiraKey} x` })).toBeVisible();
 
+      // This scenario expects actual regeneration, not the fake gateway's empty answer fallback.
+      const regeneratedTitle = `Combined Jira and Linear coverage ${suffix}`;
+      ai.queueReply({
+        drafts: [{
+          title: regeneratedTitle,
+          preconditions: "",
+          stepsJson: JSON.stringify([{ stepNumber: 1, action: "Exercise the combined ticket workflow", expectedResult: "The workflow satisfies both ticket rules" }]),
+          testData: "",
+          expectedSummary: "Both ticket rules are satisfied.",
+          priority: "P1",
+          tags: ["zyra"],
+          sourceRefs: [],
+        }],
+      });
       await page.getByPlaceholder("Ask Zyra to improve coverage, add edge cases, remove duplicates, or focus on a missed rule.").fill("Use both tickets");
       const sent = page.waitForRequest((req) => isFeedbackRequest(req.url(), req.method()));
       await page.getByRole("button", { name: "Send feedback" }).click();
@@ -4266,6 +4280,9 @@ test.describe("zyra / agents (UI)", () => {
       await expect(page.getByText(/Feedback sent\./)).toBeVisible();
 
       expect(await waitForTaskSettled(taskId)).toBe("in_review");
+      expect(ai.requests.length, "the regeneration must reach the allocated fake gateway").toBeGreaterThan(0);
+      const regenerated = scalar(`SELECT generated_payload::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`);
+      expect(regenerated, "the scripted draft must actually be persisted").toContain(regeneratedTitle);
       expect(JSON.parse(scalar(`SELECT jira_issue_keys::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`))).toEqual([jiraKey]);
       expect(JSON.parse(scalar(`SELECT linear_issue_keys::text FROM ai_generation_requests WHERE id = ${literal(taskId)};`))).toEqual([linearKey]);
     } finally {
