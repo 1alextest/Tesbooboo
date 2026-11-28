@@ -1425,11 +1425,18 @@ test.describe("zyra / agents (UI)", () => {
       },
       { opType: "create", draft: { suiteId: null, title: "Sign in with a wrong password", description: "", preconditions: "", stepsJson: "[]", priority: "P2" } },
     ];
+    // Native create proposals store resolved citations inside draft; update/archive proposals
+    // store them beside fields. The message snapshot must not be the sole provenance owner.
+    const persistedEntries = entries.map((entry) => {
+      if (entry.opType !== "create") return entry;
+      const { sourceRefs, ...rest } = entry;
+      return { ...rest, draft: { ...entry.draft, ...(sourceRefs ? { sourceRefs } : {}) } };
+    });
     exec(
       "INSERT INTO ai_generation_requests (project_id, requested_by, provider, model, user_story, requested_count, " +
         "generated_count, generated_payload, agent_name, task_status, chat_session_id) VALUES (" +
         `${literal(t.mainProjectId)}, ${literal(t.owner.userId)}, 'zyra_chat', 'gpt-4o-mini', 'Zyra chat proposal', ` +
-        `${entries.length}, ${entries.length}, ${literal(JSON.stringify(entries))}::jsonb, ${literal(ZYRA_AGENT_NAME)}, ` +
+        `${entries.length}, ${entries.length}, ${literal(JSON.stringify(persistedEntries))}::jsonb, ${literal(ZYRA_AGENT_NAME)}, ` +
         `${literal(options.status ?? "in_review")}, ${literal(sessionId)});`,
     );
     const taskId = scalar(
@@ -5727,6 +5734,14 @@ test.describe("zyra / agents (UI)", () => {
   // both a native Knowledge Base document and a Jira-mirrored one render correctly, since they are
   // the same row shape and the same component.
 
+  async function expectPersistedCitation(taskId: string, document: { id: string; title: string }) {
+    const response = await api.get(`/api/projects/${tenant!.mainProjectId}/agents/zyra/tasks/${taskId}`, { failOnStatusCode: false });
+    expect(response.status(), "read the authoritative staged task before opening the citation drawer").toBe(200);
+    const task = await response.json();
+    expect(task.drafts).toHaveLength(1);
+    expect(task.drafts[0].sourceRefs).toEqual([{ type: "knowledge_document", id: document.id, title: document.title }]);
+  }
+
   test("ZYU-77 the citation drawer renders a cited document's Markdown as formatted HTML, not raw symbols", async ({
     browser,
   }) => {
@@ -5740,7 +5755,7 @@ test.describe("zyra / agents (UI)", () => {
         "See [Open in Jira](https://example.atlassian.net/browse/KAN-9) for the source ticket.",
     });
 
-    seedChatReviewBatch({
+    const { taskId } = seedChatReviewBatch({
       entries: [
         {
           opType: "create",
@@ -5753,8 +5768,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra");
     const titleRe = new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
+    await expectPersistedCitation(taskId, doc);
     await expect(page.getByText("E2E citation drafted case")).toBeVisible();
-    await page.getByRole("button", { name: "Context used (1)" }).click();
+    await expect(page.getByRole("button", { name: "Context used (1)", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Context used (1)", exact: true }).click();
     await page.getByRole("button", { name: titleRe }).click();
 
     const drawer = page.locator('div[role="presentation"]').last();
@@ -5791,7 +5808,7 @@ test.describe("zyra / agents (UI)", () => {
       contentText: `<img src=x onerror="window.__zyraDrawerXss='${marker}'">`,
     });
 
-    seedChatReviewBatch({
+    const { taskId } = seedChatReviewBatch({
       entries: [
         {
           opType: "create",
@@ -5804,8 +5821,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra");
     const titleRe = new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
+    await expectPersistedCitation(taskId, doc);
     await expect(page.getByText("E2E injection drafted case")).toBeVisible();
-    await page.getByRole("button", { name: "Context used (1)" }).click();
+    await expect(page.getByRole("button", { name: "Context used (1)", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Context used (1)", exact: true }).click();
     await page.getByRole("button", { name: titleRe }).click();
 
     const drawer = page.locator('div[role="presentation"]').last();
@@ -5833,7 +5852,7 @@ test.describe("zyra / agents (UI)", () => {
       contentText: 'See [details](https://example.com"onmouseover=alert(1)) for the source ticket.',
     });
 
-    seedChatReviewBatch({
+    const { taskId } = seedChatReviewBatch({
       entries: [
         {
           opType: "create",
@@ -5846,8 +5865,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/zyra");
     const titleRe = new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
+    await expectPersistedCitation(taskId, doc);
     await expect(page.getByText("E2E link injection drafted case")).toBeVisible();
-    await page.getByRole("button", { name: "Context used (1)" }).click();
+    await expect(page.getByRole("button", { name: "Context used (1)", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Context used (1)", exact: true }).click();
     await page.getByRole("button", { name: titleRe }).click();
 
     const drawer = page.locator('div[role="presentation"]').last();
