@@ -179,8 +179,18 @@ async function verifyBrowserConsentRead(db, accountId, projectId) {
       const fields = [...document.matchAll(/<dt>([^<]+)<\/dt>\s*<dd>([\s\S]*?)<\/dd>/g)]
         .filter(match => match[1] === label);
       assert.equal(fields.length, 1, "Exactly one review field: " + label);
-      return fields[0][2].replace(/<[^>]+>/g, "").trim();
+      // Compare literal markup from the trusted synthetic fixture; never strip or render unknown HTML.
+      return fields[0][2];
     }
+    // Discriminating controls: unexpected markup must not be normalized into a pass.
+    assert.equal(reviewField('<dt>Client</dt><dd>Disposable reader</dd>', "Client"), "Disposable reader");
+    assert.throws(() => assert.equal(
+      reviewField('<dt>Client</dt><dd><b>Disposable reader</b></dd>', "Client"), "Disposable reader"),
+      { name: "AssertionError" });
+    assert.throws(() => reviewField('<dt>Client</dt><dd>a</dd><dt>Client</dt><dd>b</dd>', "Client"),
+      { name: "AssertionError" });
+    assert.equal(reviewField('<dt>Workspace</dt><dd>OAuth CI <span class="muted">(id)</span></dd>', "Workspace"),
+      'OAuth CI <span class="muted">(id)</span>');
     async function reviewForm(label, workspaceName) {
       assert.ok(page.pathname.startsWith("/api/oauth/interactions/"), "Expected Tesbo's review page");
       const response = await navigate("get", page);
@@ -189,9 +199,10 @@ async function verifyBrowserConsentRead(db, accountId, projectId) {
       assert.equal(reviewField(response.text, "Client"), "Disposable reader");
       assert.equal(reviewField(response.text, "Client ID"), clientId);
       assert.equal(reviewField(response.text, "Callback origin"), new URL(redirect).origin);
-      assert.equal(reviewField(response.text, "Workspace"), workspaceName + " (" + context.workspace_id + ")");
+      assert.equal(reviewField(response.text, "Workspace"),
+        workspaceName + ' <span class="muted">(' + context.workspace_id + ')</span>');
       assert.equal(reviewField(response.text, "Project"),
-        context.project_name + " (" + context.project_key + " · " + context.project_id + ")");
+        context.project_name + ' <span class="muted">(' + context.project_key + " · " + context.project_id + ')</span>');
       const action = /<form method="post" action="([^"]+)"/.exec(response.text)?.[1];
       const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(response.text)?.[1];
       const review = /name="review" value="([a-f0-9]{64})"/.exec(response.text)?.[1];
