@@ -20041,6 +20041,22 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
    * otherwise list one document twice. Keyed on the citation's real source id when present
    * (title alone is not guaranteed unique — two docs can share a name), falling back to title.
    */
+  private static zyraScopeRetrievedKnowledge(
+    namedTickets: ZyraTurnSources["knowledge"],
+    retrieved: ZyraTurnSources["knowledge"]
+  ): ZyraTurnSources["knowledge"] {
+    // A named, resolved ticket defines the ticket scope. Search may still supply supporting
+    // ordinary knowledge, but matching a shared issue-key prefix is not authority to include
+    // another ticket. Explicit folder selections are merged separately and remain intact.
+    if (!namedTickets.length) return retrieved;
+    const ticketKey = (title: string) => /^\s*([A-Z][A-Z0-9]*-\d+)\s*:/i.exec(title)?.[1].toUpperCase();
+    const allowed = new Set(namedTickets.map(item => ticketKey(item.title)).filter(Boolean));
+    return retrieved.filter(item => {
+      const key = ticketKey(item.title);
+      return !key || allowed.has(key);
+    });
+  }
+
   private static zyraSelectTurnKnowledge(resolved: ZyraTurnSources["knowledge"], fallback: ZyraTurnSources["knowledge"]): {
     knowledge: ZyraTurnSources["knowledge"]; usedRecencyFallback: boolean;
   } {
@@ -20174,7 +20190,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       // What the previous turn resolved, re-fetched by reference — see ZyraTurnContextRefs.
       this.zyraPriorTurnContextRefs(projectId, sessionId).then((refs) => this.zyraResolveContextRefs(projectId, refs, kbEnabled))
     ]);
-    const ragKnowledge = ragDiagnostics.items;
+    const ragKnowledge = LegacyService.zyraScopeRetrievedKnowledge(ticketKnowledge, ragDiagnostics.items);
     // Named outright (a folder, a ticket key), so never scored and never displaced by search ranking.
     const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
     // A broad request is also shown the project's tickets — see knowledgeTicketCatalogue.
@@ -22042,7 +22058,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       kbEnabled ? this.bugsSnapshot(projectId, message) : Promise.resolve([]),
       this.zyraResolveContextRefs(projectId, carriedRefs, kbEnabled)
     ]);
-    const ragKnowledge = ragDiagnostics.items;
+    const ragKnowledge = LegacyService.zyraScopeRetrievedKnowledge(ticketKnowledge, ragDiagnostics.items);
     const explicitKnowledge = LegacyService.dedupeZyraKnowledgeItems([...folderKnowledge, ...ticketKnowledge]);
     // Same broad-request rule as decideZyraChatTurn, so every batch of a broad plan sees the tickets.
     const broadTickets = kbEnabled && LegacyService.zyraIsBroadRequest(explicitKnowledge.length, ragDiagnostics.confidence)

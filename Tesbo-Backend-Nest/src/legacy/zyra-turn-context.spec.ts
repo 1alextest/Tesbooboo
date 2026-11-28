@@ -81,6 +81,7 @@ type Refs = {
 type SourceRef = { type: string; id: string; title: string };
 
 type Statics = {
+  zyraScopeRetrievedKnowledge: (namedTickets: KnowledgeItem[], retrieved: KnowledgeItem[]) => KnowledgeItem[];
   zyraSelectTurnKnowledge: (resolved: KnowledgeItem[], fallback: KnowledgeItem[]) => { knowledge: KnowledgeItem[]; usedRecencyFallback: boolean };
   mergeZyraTurnSources: (own: Sources, carried: Sources) => Sources;
   normalizeZyraContextRefs: (raw: unknown) => Refs | null;
@@ -124,6 +125,22 @@ describe("Zyra turn context carry-over", () => {
       const merged = statics().mergeZyraTurnSources(none(), { ...none(), jira: [hotelTicket] });
       const index = internals(makeLegacy()).zyraSourceRefIndex({ knowledge: merged.knowledge, jira: merged.jira, existingTestcases: [] });
       expect(statics().sanitizeZyraSourceRefs(["HBP-99"], index)).toEqual([]);
+    });
+  });
+
+  describe("zyraScopeRetrievedKnowledge", () => {
+    it("keeps named tickets and ordinary supporting documents but rejects sibling ticket search hits", () => {
+      const named = doc("named", "ABC-1: Leave approval");
+      const sibling = doc("sibling", "ABC-2: Payroll export");
+      const support = doc("support", "General leave policy");
+      const second = doc("second", "OTHER-9: Related named ticket");
+      expect(statics().zyraScopeRetrievedKnowledge([named, second], [sibling, support, named, second]))
+        .toEqual([support, named, second]);
+    });
+
+    it("preserves relevance results when the request resolves no explicit ticket", () => {
+      const retrieved = [doc("one", "ABC-1: Leave"), doc("two", "ABC-2: Payroll")];
+      expect(statics().zyraScopeRetrievedKnowledge([], retrieved)).toEqual(retrieved);
     });
   });
 
