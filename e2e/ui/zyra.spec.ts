@@ -4692,7 +4692,7 @@ test.describe("zyra / agents (UI)", () => {
   async function persistedKnowledgeAccess(): Promise<boolean> {
     const res = await api.get(`/api/projects/${tenant!.mainProjectId}/agents/zyra`, { failOnStatusCode: false });
     expect(res.status(), await res.text()).toBe(200);
-    return (await res.json()).settings.capabilities.knowledgeBaseAccess;
+    return (await res.json()).settings.capabilities.knowledgeBase;
   }
 
   test("ZYU-33 a transport failure before settings delivery is not replayed and explicit retry after refresh persists", async ({ browser }) => {
