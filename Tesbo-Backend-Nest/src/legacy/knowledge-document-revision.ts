@@ -10,15 +10,20 @@ export const KNOWLEDGE_DOCUMENT_REVISION_SQL =
 // exact whitespace set avoids treating a stale chunk as current or excluding valid Unicode text.
 const EMBEDDING_TRIM_CHARACTERS_SQL = "U&'\\0009\\000A\\000B\\000C\\000D\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'";
 
+/** Hash the exact trimmed text used by the existing embedding worker, not an edit revision. */
+export function knowledgeEmbeddingTextHashSql(column: "knowledge_documents.content_text" | "d.content_text" | "f.extracted_text"): string {
+  return `encode(sha256(convert_to(btrim(COALESCE(${column}, ''), ${EMBEDDING_TRIM_CHARACTERS_SQL}), 'UTF8')), 'hex')`;
+}
+
 /**
  * Governing AI context only. Human list/get/history access remains independent of this rule.
- * Existing non-memory documents keep their current retrieval behavior; this is not a Skills
- * resolver. A historical approved flag or a readable candidate cannot substitute for an exact
- * same-document human review. Native content/source comparisons also reject a stale binding.
- * The optional chunk hash fences asynchronous ANN indexes to the same currently reviewed text.
+ * The ordinary context policy is unchanged; this is not a Skills resolver. A historical approved
+ * flag or a readable candidate cannot substitute for an exact same-document human review.
+ * The optional chunk hash fences asynchronous ANN indexes to current text for every eligible
+ * document, not just reviewed memory. Policy/manual exposure remains explicitly closed.
  */
 export function knowledgeDocumentAiContextSql(alias: "knowledge_documents" | "d" = "knowledge_documents", chunkHash?: "c.content_hash"): string {
-  return `((${alias}.document_type != 'ai_memory' AND ${alias}.document_type NOT IN ('user_manual','policy')) OR (
+  return `(((${alias}.document_type != 'ai_memory' AND ${alias}.document_type NOT IN ('user_manual','policy')) OR (
     ${alias}.document_type = 'ai_memory'
     AND ${alias}.status = 'approved' AND ${alias}.reviewed_by IS NOT NULL AND ${alias}.reviewed_at IS NOT NULL
     AND EXISTS (
@@ -36,8 +41,7 @@ export function knowledgeDocumentAiContextSql(alias: "knowledge_documents" | "d"
           'sourceProvider', ${alias}.source_provider, 'sourceExternalId', ${alias}.source_external_id,
           'sourceUrl', ${alias}.source_url, 'sourceRole', ${alias}.source_role, 'isReadOnly', ${alias}.is_read_only)
     )
-    ${chunkHash ? `AND ${chunkHash} = encode(sha256(convert_to(btrim(COALESCE(${alias}.content_text, ''), ${EMBEDDING_TRIM_CHARACTERS_SQL}), 'UTF8')), 'hex')` : ""}
-  ))`;
+  ))${chunkHash ? ` AND ${chunkHash} = ${knowledgeEmbeddingTextHashSql(`${alias}.content_text`)}` : ""})`;
 }
 
 export function expectedKnowledgeDocumentRevision(raw: unknown, required = false): string | null {
