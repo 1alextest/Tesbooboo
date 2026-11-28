@@ -882,3 +882,8 @@ PR #286 merged as `33245701`; PR #288 merged as `6ea0b839a1037032dcfa8104504776f
 merged as `729245181f72fa4d76a00adbd4188c9842d5be38`. Production `/api/health` returned the #288 and
 #296 merge SHAs; the deployed MCP catalog/proposal-preview tool set was verified at #288. Manual
 execution remains **UNRUN**; native execution-evidence writing remains unavailable.
+
+
+## 28 November 2026 — whole-system owner direction (1.4.49 continuation, NOT FROZEN)
+
+**Owner decision clarification for §8.2 (not enabled).** The owner rejects permanent artifact-type exclusion and intends future user-configurable inclusion. Governed manuals and policies must be potentially eligible through the same type-neutral architecture as other artifacts, with inclusion, actual access, processing/distribution entitlement and normative force resolved independently on exact revisions. A permitted draft can inform candidate analysis without becoming an approved norm. Existing exposure holds remain until the corresponding reviewed and verified selection, retrieval, processing/egress, queue/restart, invalidation and UI contract exists. No mass opt-in, provider disclosure or default was authorized; do not remove isolated filters. Native exact-version approval and direct-read authorization remain authoritative. Canonical 00–07 owner-direction continuation contains the cross-domain requirements and acceptance.

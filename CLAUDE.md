@@ -149,6 +149,7 @@ Add specs to the existing suite; never start a parallel test project.
   For a set or cardinality obligation, verify the response's subject and full qualifying group first,
   then its expected members; include a duplicate with a different identity, wrong scope/version and
   legitimate unrelated groups where applicable. Preserve any genuinely supported search behavior.
+  Apply AGENTS.md principle 9: verify material fixture and environment prerequisites through authoritative readback before testing the outcome (e.g. usable provider, exact record identity, or actual rendered size). A failed precondition is a setup/blocked result, not proof of the target defect. For race/heartbeat/retry tests, arm a request-bound gate or scripted delay before triggering work, observe the exact held phase, exercise the competing action, and release and await completion even after failure. Include a legitimate positive control and a missing/incorrect precondition or synchronization control. Do not use post-arrival delay scheduling, arbitrary sleep, or an unbound request count as proof of the intended ordering.
   On a generated or mutated-test negative control, identify the expected failing assertion and
   distinguish fixture/runner/reporting failure from actual defect detection. Keep good and faulty
   runs' identities, outcomes and permitted evidence; use scoped evidence checks that do not

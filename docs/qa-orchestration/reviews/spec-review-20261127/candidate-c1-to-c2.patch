@@ -1,0 +1,172 @@
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -25,15 +25,15 @@
+ 
+ 5. **Sweep the defect mechanism and affected consumers.** For a confirmed defect, search backward for other instances of the same mechanism and forward for side effects the fix introduces. Identify affected routes, workers, UI surfaces, MCP tools and integrations; add discriminating regression coverage; fix at the shared owner where possible. Discovering a sibling does not authorize an unrelated rewrite.
+ 
+-6. **Preserve behavior, identity and user work.** Establish why existing behavior exists and who depends on it. For redesigns, account for every action, information and state as kept / relocated / replaced / deliberately removed with approval. Preserve canonical IDs, relationships, history and unsaved work unless their change is explicitly approved. A wording change must not silently change options, permissions or behavior.
++6. **Preserve behavior, identity and user work.** Establish why existing behavior exists and who depends on it. For redesigns, account for every action, information and state as kept / relocated / replaced / deliberately removed with approval. Preserve canonical IDs, relationships, history and unsaved work unless their change is explicitly approved. Follow an established relationship or resume a selected record by its authoritative identity and scope, not by a mutable title or resemblance; verify the returned identity and material version before attributing information or actions to it. While the new subject is unresolved, isolate prior subject content, feedback and consequential actions; fence delayed responses to the correct request and retain legitimate unsaved work under its own identity. Human-readable labels and search remain useful for recognition and discovery. A wording change must not silently change options, permissions or behavior.
+ 
+-7. **Make failures and uncertain outcomes truthful.** Never turn a failed lookup into "nothing exists," partial data into a complete result, a timed-out write into definite failure, a queued operation into delivery, or an expected refusal into an infrastructure fault. Define transaction boundaries, idempotency, concurrency handling and recovery; never blindly retry a non-idempotent operation after an uncertain response.
++7. **Make failures and uncertain outcomes truthful.** Never turn a failed lookup into "nothing exists," partial data into a complete result, a timed-out write into definite failure, a queued operation into delivery, or an expected refusal into an infrastructure fault. Define transaction boundaries, idempotency, concurrency handling and recovery; never blindly retry a non-idempotent operation after an uncertain response. Match the next action to the evidenced cause and current authority; distinguish an invalid selection, stale basis, lost session, access denial, resource limit, unavailable service and unknown outcome where the contract allows. Give a safe refresh, return or retry when applicable without exposing protected details or promising recovery.
+ 
+-8. **Preserve authorization and action boundaries.** State the target and whether the operation is read-only or mutating before acting. Show proposed changes and the preservation boundary before consequential shared-record, schema, configuration or structural changes, and stop on material scope changes. Enforce actual tenant/project/object permissions at every entrance. A new tool does not grant permission and a project token does not become a workspace-admin token. Use authorized isolated fixtures; never use real customer records as disposable tests or expose credentials in logs, prompts or evidence.
++8. **Preserve authorization and action boundaries.** State the target and whether the operation is read-only or mutating before acting. Show proposed changes and the preservation boundary before consequential shared-record, schema, configuration or structural changes, and stop on material scope changes. Enforce actual tenant/project/object permissions at every entrance. Establish applicable authority before the consequential action begins, not merely before recording, reporting or accepting its outcome. Revalidate the relevant basis after waits and at durable or external effect boundaries, using the actual authority owner and serialization or fencing where required. A later refusal to record an action does not prove it never occurred; an already authorized asynchronous action can legitimately report later. A new tool does not grant permission and a project token does not become a workspace-admin token. Use authorized isolated fixtures; never use real customer records as disposable tests or expose credentials in logs, prompts or evidence.
+ 
+-9. **Test at the boundary where the claim can fail.** Add a regression that distinguishes broken from correct behavior and demonstrate failure before the fix where feasible. Select unit, contract, real-database, integration, API, MCP and browser coverage as applicable. A mock cannot prove real queries, persistence or transaction guarantees; a rendered button cannot prove its action completes. Test both refusals without forbidden effects and legitimate use. Never obtain green CI by skipping assertions, weakening guards or reshaping fixtures around the defect. See [CLAUDE.md](CLAUDE.md) and [docs/e2e-coverage-waves.md](docs/e2e-coverage-waves.md).
++9. **Test at the boundary where the claim can fail.** Add a regression that distinguishes broken from correct behavior and demonstrate failure before the fix where feasible. Select unit, contract, real-database, integration, API, MCP and browser coverage as applicable. A mock cannot prove real queries, persistence or transaction guarantees; a rendered button cannot prove its action completes. Derive the relevant logical population and its cardinality from the obligation before testing individual expected identities or values; selecting just the expected member before counting can conceal an extra conflicting member. Verify response subject/scope/version, a valid baseline, materially distinct violations of the same obligation, and legitimate neighboring/unrelated cases. Establish that a negative control fails at the intended assertion; syntax, fixture, transport or infrastructure failures, skipped paths and timeouts alone are not proof of defect detection. Test both refusals without forbidden effects and legitimate use. Never obtain green CI by skipping assertions, weakening guards or reshaping fixtures around the defect. See [CLAUDE.md](CLAUDE.md) and [docs/e2e-coverage-waves.md](docs/e2e-coverage-waves.md).
+ 
+-10. **Separate implementation, delivery and verification.** Distinguish specified → implemented → merged → deployed → discoverable/reachable → permitted → prepared → verified. Bind evidence to the exact commit, running build, environment and scope. An older passing commit does not certify a newer head; a source declaration is not runtime behavior; a tool count is not a field contract; a linked case or historical pass does not prove a new change was tested. For discovery or cache problems, compare fresh protocol responses with the registered client catalog.
++10. **Separate implementation, delivery and verification.** Distinguish specified → implemented → merged → deployed → discoverable/reachable → permitted → prepared → verified. Bind evidence to the exact commit, running build, environment and scope. An older passing commit does not certify a newer head; a source declaration is not runtime behavior; a tool count is not a field contract; a linked case or historical pass does not prove a new change was tested. Make outstanding prerequisites, their observed basis and the next permissible action recognizable; distinguish available setup from observed prerequisite satisfaction, current eligibility, approval, attempted execution and verified outcome. Preserve original successful, failed, partial and uncertain attempt identities, chronology and available authorized evidence; protect sensitive material and state missing or unavailable evidence explicitly. A later successful attempt does not erase an earlier failure. Do not infer native execution from source checks, fixture outcomes or optional telemetry. For discovery or cache problems, compare fresh protocol responses with the registered client catalog.
+ 
+ 11. **Finish usable outcomes, not disconnected artifacts.** Trace backward from the user's required outcome and forward from the actual starting conditions. Every output must be usable by its next consumer: a created project needs a secure access handoff, a notification needs an authorized recipient and a real destination, an advertised field must persist and be independently retrievable, and a generated path needs concrete prerequisites and executable assertions before it is called runnable. Report verified / partial / blocked / deferred / not run, and name the missing link, owner and next action. Do not declare a feature complete because one layer passes.
+ 
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -142,7 +142,25 @@
+ - Specs must be **idempotent and order-independent**: `fullyParallel: false` serialises tests within
+   a file, but different files still run concurrently across workers.
+ - Assert on **user-visible outcomes and persisted state** — the API response after the UI action,
+-  not merely that a toast appeared.
++  not merely that a toast appeared. Apply AGENTS.md principles 6, 7, 9 and 10 to the actual contract.
++  For an exact-record journey, use distinct records with the same visible label, materially different
++  values, selection/refresh/return, out-of-order or mismatched reads, unavailable/denied reads and
++  recovery; confirm the selected identity, permitted controls, and preservation of the other record.
++  For a set or cardinality obligation, verify the response's subject and full qualifying group first,
++  then its expected members; include a duplicate with a different identity, wrong scope/version and
++  legitimate unrelated groups where applicable. Preserve any genuinely supported search behavior.
++  On a generated or mutated-test negative control, identify the expected failing assertion and
++  distinguish fixture/runner/reporting failure from actual defect detection. Keep good and faulty
++  runs' identities, outcomes and permitted evidence; use scoped evidence checks that do not
++  confuse source-fixture markers with observed sensitive runtime data. When the governing
++  prerequisites change, verify current-state readback and the continued authoritative refusal of
++  ineligible actions. For a consequential action with asynchronous preparation or reporting, test
++  pre-execution admission separately from result ingestion (AGENTS.md principle 8). Use a safe,
++  independently observable target-effect sentinel: denied, revoked, stale or unavailable admission
++  must leave the prohibited target untouched; a legitimate admission reaches the intended action.
++  If an action was independently authorized and actually ran but its reporting failed, preserve
++  that observed action and uncertain reporting outcome rather than claiming it never ran.
++  Do not present source/fixture results as live native acceptance.
+ - Never touch Stripe write APIs. Those are gated behind `E2E_BILLING_ALLOW_STRIPE_WRITES` because
+   the configured key is frequently a **live** key. Drive billing states via locally signed webhooks
+   and the DB helpers in [e2e/utils/](e2e/utils/).
+--- a/docs/specs/agent-synchronized-engineering/skills-governance.md
++++ b/docs/specs/agent-synchronized-engineering/skills-governance.md
+@@ -1,6 +1,6 @@
+ # ASER — Governed Skills Library and Effective Skill Assignments
+ 
+-**Canonical home:** the [eight-file Tesbo specification package](../../qa-orchestration/00_README.md): merged publication **1.4.45 (NOT FROZEN)**; this branch proposes **1.4.46 (NOT FROZEN)**. The historical body below originated in revision 1.4.38, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); the historical 1.4.38 continuation required exact-revision receipts; the 1.4.46 candidate requires its own applicable review.
++**Canonical home:** the [eight-file Tesbo specification package](../../qa-orchestration/00_README.md). The [current source manifest](../../qa-orchestration/source-manifest.json) identifies this branch's proposed **1.4.49 (BACKLOG / NOT FROZEN)** and preserved input lineage. The historical body below originated in revision 1.4.38, the same eight files `00_README.md` through `07_UI_DESIGN_TASKS.md`. This repository file is a subordinate integration view, not a ninth normative specification. The validated eight-file package and its review receipt control requirements, owners, contracts and proof obligations. No implementation, deployment or active-skill claim follows from this text. P-07 human publication, P-14 eight-file ownership and P-18 project MCP consent remain unchanged. Earlier independent reviews retain their original source/revision scope in [the existing assurance record](reviews/2026-11-18-charter-guided-spec-challenge.md); this candidate has its own [applicable review and limits](../../qa-orchestration/reviews/spec-review-20261127/README.md).
+ 
+ **State:** Proposed contract for specification review. A **minimum project-scoped resolver, protected publication path and Skills operator surface** was implemented on 2026-11-22 (KB-backed skill identities/versions, human-only approval/assignment/revocation, exact-version apply/approval, coverage readback and a Settings library/assignment page); it does not claim the full contract below (composition precedence, candidate evaluation, cross-project packs, root meta-skill bootstrap or expanded MCP skill tools). **Scope:** Tesbo project/workspace authoring governance; no change to authoritative product behavior until explicit approval and implementation.
+ **Relationship to existing work:** Extend the logical contracts already reconciled in the same eight canonical files at 1.4.28 through the proposed 1.4.29 amendment, retaining `docs/reviews/governed-asset-evolution-reconciliation.md` (noncanonical v0.5) and earlier evidence at their original scope. Reuse Knowledge Base identity/versioning, case approval, Zyra and MCP where actual source fit is verified. This creates no ninth canonical spec, second AI agent or independent skill database.
+--- a/docs/qa-orchestration/source-manifest.json
++++ b/docs/qa-orchestration/source-manifest.json
+@@ -91,9 +91,9 @@
+     },
+     {
+       "path": "03_TECHNICAL_DESIGN.md",
+-      "bytes": 463608,
+-      "sha256": "a9230d4d7bb64efb4ba2e247e66d0254f069b5e8303ac802ee67927f7d6c60a8",
+-      "git_blob": "112577707928c1c52f4a5bd08ac7e8e7e567b99f"
++      "bytes": 465688,
++      "sha256": "374bf4e7d853c958c9442baf56c8a06e62dcac0a97be10e221a7fd73e41c7499",
++      "git_blob": "f88df47d55bd25171f789bbc62908d77fb5ca7b5"
+     },
+     {
+       "path": "04_MCP_API_CONTRACTS.md",
+@@ -103,9 +103,9 @@
+     },
+     {
+       "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+-      "bytes": 444457,
+-      "sha256": "ae7e1e160d8f10ad7c58fb56fc57fc05460784bc6475c8f65734a1a095481357",
+-      "git_blob": "7ef3fca082d3243a4717b5711c005d14b82e2b7b"
++      "bytes": 444952,
++      "sha256": "1a0c034a4198df51eede6acfbe4f32f519322de4b8073fa4e52a6f67d71677bd",
++      "git_blob": "dbc009148fb54b465fb0612bd987329e8f68aac1"
+     },
+     {
+       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+@@ -120,5 +120,7 @@
+       "git_blob": "d2eae1540e01e218a212e49044dcabd851a0f6c9"
+     }
+   ],
+-  "review_record": "reviews/spec-review-20261127/README.md"
++  "review_record": "reviews/spec-review-20261127/README.md",
++  "integration_parent": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
++  "integration_scope": "Preserve incoming development and merged PR315; source-review findings retain their original pins. This proposal changes documentation and exact document verification bindings only relative to incoming development."
+ }
+--- a/docs/qa-orchestration/03_TECHNICAL_DESIGN.md
++++ b/docs/qa-orchestration/03_TECHNICAL_DESIGN.md
+@@ -2116,11 +2116,13 @@
+ 
+ Check the actual host version, extension-point/interface version, input/output schema version, runtime target and dependency closure independently of the package release. Pin resolved versions/digests; handle required/optional dependencies explicitly, detect cycles/conflicts and expose affected dependents before upgrade/removal. Refuse the affected activation when required compatibility evidence is absent. A valid optional/no-plugin path can continue. Upstream withdrawal or deprecation triggers reassessment under the selected support policy, not an invented automatic destructive action. Recheck current advisories, maintenance and licensing at adoption; these research sources do not select a dependency.
+ 
+-### Source-connection cardinality: conditional migration gate
+-
+-At the inspected repository candidate `f92c3341eadc03f274becbead3b0f45d0a86539e`, `V47_integration_connections.sql` and `integration-sync.client.ts` use one connection per organization/provider; `V72_integration_sync_pipeline.sql` and `integration-sync.processor.ts` identify mirrors by project/provider/external ID/source role. Those keys do not establish multiple same-provider account/vault namespaces. Existing canonical 04 source-namespace and ASER-C02 identity obligations remain authoritative. If a selected connector needs that cardinality, first review a migration in the existing connection/source owner and prove ingestion, links, caches/retrieval, delayed events and tenant isolation. Preserve supported current single-provider behavior. Bind delayed events to the original connection and configuration generation; never resolve them only by the current provider name. This is a conditional future convergence gate, not a claim of a deployed collision or authorization to change the schema now.
++### Source-connection identity and cardinality: conditional convergence gate
++
++At the inspected repository candidate `f92c3341eadc03f274becbead3b0f45d0a86539e`, `V47_integration_connections.sql` and `integration-sync.client.ts` use one connection per organization/provider; `V72_integration_sync_pipeline.sql` and `integration-sync.processor.ts` identify mirrors by project/provider/external ID/source role. Those keys do not establish multiple same-provider account/vault namespaces. V97 and the connection callback writers also retain a connection row while replacing its external account, so a connection UUID alone does not establish an unchanged remote source over time. Existing canonical 04 source-namespace and ASER-C02 identity obligations remain authoritative. Qualify sequential source/account replacement even when only one connection is active; separately qualify simultaneous accounts if that cardinality is selected. Review any needed migration in the existing connection/source owner and prove ingestion, links, caches/retrieval, delayed events and tenant isolation. Preserve supported current single-provider behavior and legitimate same-account credential renewal. Bind delayed events to the original source identity and connection/configuration generation; never resolve them only by the current provider name. This is a conditional future convergence gate, not a claim of a deployed collision or authorization to change the schema now.
+ 
+ ### Lifecycle, changes and recovery
++
++**Existing sync reuse limitation.** At the same source pin, `Tesbo-Backend-Nest/src/integration-sync/integration-sync.service.ts` settles active runs during disconnect, but `markRunning` updates by run ID without a terminal-state predicate. The inspected `integration-sync.processor.ts` ticket path can await provider/analysis work and then update the native mirror without rechecking the original run/connection generation in that write transaction. Disconnect clears credentials and disables mappings; those controls do not by themselves prove a final fence for work that already read its inputs. Retain [Red A's source finding and counterevidence](reviews/spec-review-20261127/teams/red-a.md#tesbo-ra01--native-sync-stopping-is-not-a-proved-effect-fence-even-with-one-provider-connection) under the existing sync owner. Before relying on this path for the proposed guarantee, reproduce the boundary safely, qualify the necessary current-authority/generation protection and prove legitimate same-generation completion. This is an open source-based implementation gate, not an executed production defect, a completed fix or a reason to create another scheduler.
+ 
+ Represent desired configuration, admitted package/scope, effective generation and observed runtime health separately through existing owners. The selected adapter documents supported transitions and whether installation/activation/disable/removal needs drain, restart or a remote acknowledgement. A requested transition is not its completion. Compatibility or migration failure retains a recoverable prior state or a clearly blocked state with a receipt; never mark a partially migrated extension healthy.
+ 
+@@ -2138,7 +2140,7 @@
+ 
+ An upgrade/configuration/dependency change is compared with the exact approved/admitted basis. Permission expansion and material trust-boundary changes need the existing authorized decision before use; narrowing scope still fences stale work. Dispatch and protected effects resolve current tenant/project/object authority and generation. Reject stale queued work and late effects after the relevant fence. Distinguish fencing Tesbo writes from physically stopping an independently operated process; externally committed or unknown effects require attributed reconciliation/compensation, not a claimed transaction rollback. A package downgrade is not a data-migration rollback. Define and verify any recovery path against actual retained data/schema compatibility before offering it.
+ 
+-Disable/remove only resources owned by that installation/contribution; shared credentials, subscriptions and dependent integrations require their owning policy and impact checks. Separate uninstall from deletion/purge, honor retention/holds and revoke access to retained snapshots, caches, embeddings and derived metadata. Preserve permitted native history and a comprehensible source/evidence readback when an optional renderer is gone. Reinstallation does not silently reactivate expired/revoked grants or previously deleted data.
++Disable/remove only resources owned by that installation/contribution; shared credentials, subscriptions and dependent integrations require their owning policy and impact checks. Separate uninstall from deletion/purge and honor retention/holds. Deny snapshots, caches, embeddings and derived metadata only to the extent that their applicable read authority is revoked; disconnecting a provider or uninstalling its code does not itself revoke separately authorized project-owned knowledge or history. Conversely, retained bytes or an available native view do not override a revoked read grant. Resolve each reader's current native authority and preserve permitted history with a comprehensible source/evidence readback when an optional renderer is gone. A selected profile that adds source-specific retained-data permissions beyond current project access must identify the policy owner, migration and every affected reader/index/cache/export path before implementation. Reinstallation does not silently reactivate expired/revoked grants or previously deleted data.
+ 
+ ### Operability and bounded proof
+ 
+--- a/docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
++++ b/docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md
+@@ -2332,11 +2332,11 @@
+ | Integration manager / admission | Missing, incompatible, cyclic or conflicting dependency; unknown required capability; competing singleton | Affected activation refuses before effects, names the actionable conflict and preserves incumbent/core/independent valid use. |
+ | Integration manager / composition | Add two supported providers with declared order and one failing component | Stable documented composition and explicit partial/failure result; no incidental load-order override or false pass. |
+ | Integration manager / upgrade | Change package/configuration/dependency and expand requested authority | Exact difference is reviewable; changed basis cannot reuse stale admission; valid approved update has coherent native readback. |
+-| Manager and executing worker / revoke or disable | Revoke during queue wait, before native commit and during an external effect | New/stale work is fenced at its true boundary; observed external effect or unknown stop is preserved, not described as rolled back. |
+-| Member / conditional multi-source connector | Import identical external IDs from two permitted accounts/vaults, reconfigure one, then deliver an old event | Namespaces/history remain distinct; delayed work cannot update a replacement connection; current single-provider behavior and denied derivative reads remain correct. This case applies only if that cardinality is selected. |
++| Manager and executing worker / revoke or disable | Pause a worker at an awaited provider/analysis boundary, disconnect or replace its source basis, then resume; also cover queue wait, native commit and an external effect | No forbidden native write or stale run reopening after the effective fence; legitimate same-generation completion still works. Observed external effects and unknown stopping outcomes are preserved, not described as rolled back. The existing sync path's source gap remains open until this proof and any needed owner fix. |
++| Member / source connection and identity | Replace account A with B while keeping one active connection, then deliver old A work with a colliding external ID; compare same-account credential renewal | Namespaces/history remain distinct; delayed work cannot update or be attributed to the replacement source; valid renewal of the same evidenced account preserves legitimate continuity. If simultaneous accounts are selected, also prove their separate namespaces and independent updates. |
+ | Member / retry and recovery | Lose the response, reconnect, retry identical versus changed payload | One permitted native effect/receipt; changed payload conflicts; unknown external mutation is reconciled before replay. |
+ | Integration manager / remove and reinstall | Remove a dependency with dependents, then reinstall an approved version | Declared impact policy applies; shared resources survive; revoked grants do not reactivate; uninstall and purge remain separate. |
+-| Authorized reader / historical result | Open evidence after removal, renderer loss or source-access revocation | Permitted native history remains interpretable; revoked snapshots/derivatives cannot leak; unavailable or expired evidence stays explicit. |
++| Authorized reader / historical result | Open evidence after disconnect/removal or renderer loss, then separately revoke the applicable read grant | Separately authorized project-owned knowledge/history remains interpretable after disconnect; the revoked scope cannot retrieve protected snapshots or derivatives; unavailable or expired evidence stays explicit. |
+ | Operator / health and overload | Slow/crashed contribution, unavailable dependency, bounded competing workload | Correlation identifies responsible version and operation; measured budgets/backpressure and safe recovery follow selected thresholds without secret leakage. |
+ | Member / optional extension | Complete the supported core/no-plugin path, including unavailable optional provider | Core result is intact; absent mandatory capability is explained; no fabricated fallback or automatic additional permission. |
+ | QA/reviewer / user understanding | Discover action, inspect impact, recover from refusal and return to the native result | Real accessible UI supports the intended task; prototype/source inspection is not recorded as human acceptance. |
+--- a/docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md
++++ b/docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md
+@@ -9,6 +9,8 @@
+ The product direction is **Tesbo can gain optional capabilities without making one provider, source format, runtime or plugin mandatory for its core QA workflow.** Obsidian is one knowledge-integration example. It does not define the host architecture, supported contribution set, implementation technology or first delivery priority. Compare materially different contribution types against the shared lifecycle and their existing native owners before claiming the abstraction reusable. The first admitted profiles, third-party distribution, executable/UI isolation and any marketplace remain explicit product and architecture decisions.
+ 
+ ## Evidence scope and existing work
++
++**Publication continuation, 27 November 2026.** PR315 was merged externally as `907076b6df572d6b161ce2bd334d083f450413b7` while the connected review was running. This research follow-up is carried by the still-open specification PR295 in the same document identity. The merged research bytes matched the inspected `7539a739243167b2d6709df1d644bd5b955f6ffc` input; no closed branch was recreated. The additional independent source reviews bind their own `f92c3341` source scope, and the review record identifies the later development integration separately. Historical source observations below retain their original pins.
+ 
+ The source audit used Tesbo `development` commit `63648aa2166cb456bae3ac6695d8dc0a4a475cc3`. The default `main` branch is release-only and is not the current development baseline. Reviewed source is evidence of implementation structure; it is not proof of deployed behavior. No upstream package was installed, no vault was connected, and no application or upstream test suite was executed during this review.
+ 
+@@ -221,7 +223,7 @@
+ | Which contribution profiles and user outcome come first? | HUMAN_REQUIRED before implementation priority is fixed; no provider selected | Compare actual value, reuse and proof cost across candidate profiles; Obsidian remains one possible integration |
+ | If an Obsidian integration is selected, does it need sync or selected snapshots? | Conditional future decision; not a platform prerequisite | Compare snapshot intake and synchronization within that adapter's own needs; neither defines the general plugin model |
+ | Who may install an extension, connect an account/vault, and enable it for a project? | Reconcile existing authority first; HUMAN_REQUIRED only for an unresolved power in a selected profile | Reuse existing permissions where adequate; separate these powers instead of assuming one admin flag covers all |
+-| Can a workspace connect several accounts/vaults for one provider? | Source constraints established; live deployment unverified; HUMAN_REQUIRED for expanded product cardinality | Plan namespaced source identity; verify deployment and prove existing-provider migration and cross-account isolation before expanding cardinality |
++| Can a workspace connect several accounts/vaults for one provider? | Source constraints established; live deployment unverified; HUMAN_REQUIRED for expanded product cardinality | Qualify sequential account replacement and delayed work even with one active connection. Separately prove namespaced simultaneous accounts and any existing-provider migration before expanding cardinality |
+ | If an Obsidian connection is selected, which local approach fits it? | Conditional DELEGATED evaluation; adoption remains a product decision | Compare the official plugin route and bounded REST/MCP bridge; do not assume the bridge's broad key is least privilege |
+ | Which distribution and execution profiles are admitted? | HUMAN_REQUIRED before executable/UI scope is implemented | Compare compiled first-party contributions, content packages, remote adapters and isolated third-party code; choose and prove each admitted boundary without treating a manifest as isolation |
+ | May learning change active Skills or approve artifacts? | ALREADY_DECIDED by existing governance | No automatic promotion; reuse candidate evaluation and authorized exact-version activation |
+@@ -239,5 +241,5 @@
+ 
+ Native assessment for this documentation change: Requirements and Test Cases have a proposed future handoff; Manuals and Policies have no implemented behavior to update; Skills and active assignments remain unchanged; this review/PR owns the research task and source evidence. **Tesbo sync not performed:** no callable authorized Tesbo connector was exposed in this session. Native duplicate discovery, record publication, approval and Test Run execution are not claimed. Preserve this review for later reconciliation with the existing native records; do not bypass missing MCP access with direct database or REST writes.
+ 
+-Rollback uses a normally reviewed documentation revert while retaining the original findings and their evidence. The two earlier cross-reference additions are removed from this research PR so the harness and Agentic QE handoff remain with their active owners. No runtime configuration, credentials, schema, installed packages or production data are changed.
+-
++Rollback uses a normally reviewed documentation revert while retaining the original findings and their evidence. PR315 had removed its two earlier cross-reference additions so the harness and Agentic QE handoff remained with their active owners; the present continuation preserves that ownership. This research amendment changes no runtime configuration, credentials, schema, installed packages or production data.
++

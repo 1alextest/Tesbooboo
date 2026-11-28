@@ -1,5 +1,11 @@
 # Tesbo: Shared Human-and-Agent Engineering Platform — Specification Package
 
+**Current package amendment:** 1.4.49 — 27 November 2026; PROPOSED / BACKLOG / NOT FROZEN. Read the final revision 1.4.49 section for this update. Earlier revision headers and receipts below retain their historical scope.
+
+**28 November OAuth review continuation:** canonical 06 refines the existing [handoff-closure and missed-review method](06_IMPLEMENTATION_AGENT_BRIEF.md#closing-actual-handoffs-and-learning-from-a-miss); the [OAuth integration spec](../specs/mcp-oauth-chatgpt-connection.md#28-november-2026--read-only-connection-continuation) owns its contextual acceptance detail. Historical reviews, current proposed method, implemented read-only issuer, actual activation and client/native acceptance remain separate. Same eight canonical owners and 1.4.49 proposed lineage; no matching archive, new active Skill or runtime publication is asserted by this source amendment.
+
+**UX and team review addendum · 26 November 2026.** For interactions with consequential choices, use the [team checks](06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice) and [design examples](07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice). These additions clarify how to review the existing proposed workflows.
+
 **Revision:** 1.4.45 — 22 November 2026. Derive redesign obligations from each target project. NOT FROZEN.
 **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
 **Status:** source-informed proposals plus scoped native preview increments; NOT FROZEN; no package-wide completion or deployment certification.
@@ -821,3 +827,113 @@ Retain 125 unique scoped ASER definitions, eight supplemental GEX-AC obligations
 | 07_UI_DESIGN_TASKS | Refines existing guidance/profile display, field-level correction and version-linked feedback/history surfaces. |
 
 **Source pin:** QA-AI-STD-001 / `QA_Agent_Test_Case_Standard_LIVING.md`, 2.2.0-DRAFT, Library version 8; SHA-256 `5d5226fde7b134142f2e84ed21429a989ef42e4a0ef250c50292f3294ef9a5a4`, 39,502 bytes. Selected guidance is captured self-contained in canonical 06. Overall source-draft adoption remains pending; this scoped integration does not import its Excel controls as universal Tesbo requirements. Source: https://chatgpt.com/library?file_id=libfile_fde3_f-48b61ab4acc48191a970484497e47de2_4ee04b678f8481919580c594fcc15a5b&account_id=personal . The parent is the exact eight-file v1.4.38 archive, Library version 18, SHA-256 `38d29265bf04e3707e6d814850316a40d354748f0e6bf639704b5b680b2ec114` (615,130 bytes). Earlier source inspections, PR states, independent reviews and runtime receipts retain their original dates and scope; none was rerun by this documentation change.
+
+
+## Revision 1.4.46 — evaluated Skills and continuous method improvement
+
+**Current amendment: 26 November 2026; PROPOSED / NOT FROZEN.** The user requested review of the existing specifications and application before updating the Skills evaluation and learning design. This revision preserves the same eight canonical identities, previous requirement/task/acceptance IDs, original historical bodies, prior review scopes, and the newer saved-package decision-basis and Skills-interface source-reconciliation amendments in canonical 02/05. It extends the existing T-422/D-14 method owner, FR-124/T-461 effectiveness comparison, native Tasks/proposals, Cases, Runs, Evidence and protected human review. It creates no ninth normative specification, second agent platform, automatic Skill adoption or new execution authority.
+
+**Input and evidence boundary.** Application source is pinned to `development@b28c17386ecc2e88f550b3c4a641143ede339255`. The initial owner-saved input was version 26 of the existing specification archive. A concurrent version 27 added the Skills interface redesign/source reconciliation to canonical 02 and its proof cross-reference to canonical 05; this revision preserves both updates alongside the earlier decision-basis clarifications. The source manifest records the new exact export and repository/saved-input lineage; earlier dates, source pins and execution receipts remain historical evidence. All eight canonical bodies, the current ASER integration views, the two work-package designs, OAuth/PR reconciliation specifications and relevant Zyra/observability/reporter/harness documentation were assigned full-content review; selected actual application owners were inspected. The read/reuse inventory and source limitations are appended to the [existing harness research record](reviews/zyra-harness-prior-art.md#26-november-2026--specification-and-application-source-reconciliation). This is a source/specification review, not an authenticated deployed-application walkthrough or a new model/client/runtime trial.
+
+| Existing capability at the source pin | Reuse decision and remaining work |
+| --- | --- |
+| Project Skills resolver, approved immutable versions and protected human assignment/approval | Extend T-422/D-14 for evaluation evidence. Resolution metadata alone cannot prove instruction delivery or effective model behavior. |
+| Native Zyra tasks, draft review, version comparison and human selected Save | Reuse the same task/proposal/version and review surfaces. Ordinary task creation starts generation; a general evaluation task must first fit the existing Work Package C owner. |
+| Opt-in OpenTelemetry/Langfuse and bounded persisted stage traces | Extend actual observability modules with exact Skill/trial/configuration correlation and completeness. Current detailed traces can contain prompts and outputs; minimized routine usage events are a proposed additional contract. |
+| Project token ledger, provider usage and optional price seeding | Reuse available observations; distinguish measured usage, estimates, unknown prices and missing correlation. Project totals do not establish per-Skill cost or savings. |
+| Native automation results and reporter evidence | Reuse results/evidence transport. Current effective run/case rows and attachments do not establish a complete immutable per-attempt trial history. |
+| Existing read-only and authoring harness pilots | Retain their actual scope and results. The primary authoring comparison remains 18/20 per arm and supplies no qualifying superiority or active-method change. |
+
+### Same owners, concrete evaluation obligations
+
+| Canonical owner | Amendment |
+| --- | --- |
+| 01 Product requirements | Testable method intent; independent outcome/process/action/evidence dimensions; controlled comparisons; friction learning; telemetry and derived-adapter limits. |
+| 02 Workflow and UX | Exact-version comparison and actionable evidence through existing Skills, Tasks, Runs and review; full denominators, truthful unknowns and recovery. |
+| 03 Technical design | Source-backed owner/maturity map; frozen trial protocol; required evidence versus optional telemetry; attribution, data boundaries and bounded utility adapters. |
+| 04 MCP/API contracts | Logical trial/configuration/evidence/grade bindings within existing owners; incomplete-client observation; capability negotiation, authorization and recovery. No new catalog is implied. |
+| 05 Backlog and proof | Bounded first read-only comparison and separately gated client/feedback/telemetry increments; new falsifier variations extend existing proof identities and remain NOT RUN. |
+| 06 Agent brief | Apply principle distillation then contextual instantiation; test transfer and no-change cases, preserve independent grading and reconcile friction before proposing a successor. |
+| 07 UI design tasks | Make the evaluation's subject, comparison, evidence limits, result and next native decision understandable and accessible using existing components. |
+
+**External design input.** Uber's [23 November article](https://www.uber.com/us/en/blog/optimizing-ubers-agent-skills/) motivates operationalizing capabilities already present in Tesbo's proposals. Its internal tools, reported savings, scale and evaluation proportions are not Tesbo benchmarks, integration proofs or adoption thresholds. Per-model compilation and online canaries remain later optional experiments; portable intent and authority remain stable. No dependency, purchase, model migration, customer experiment, script execution or additional MCP server is selected here.
+
+**Admission and next slice.** Implement one reviewable read-only comparison for an existing Skill version only after its accountable owner selects authorized tasks, supported configurations, an independently grounded rubric, trial inventory, budget and thresholds. Compare active/candidate methods and repeated unchanged controls; omit optional treatment guidance only in explicitly authorized isolation. Keep mandatory project rules and protected writers in every arm. Persist required trial evidence through the native owners; optional trace loss cannot silently certify process compliance. Unknown or ungraded cases remain visible in assigned accounting. A justified result may retain the active method or recommend no change. Publication, formal approval, assignment activation, execution and release retain their separate native decisions.
+
+**Current completion boundary.** This amendment updates specifications only. No current product acceptance, new model trial, live UI verification, native Requirement/Test Case/Run publication or active Skill change is claimed. **Tesbo sync not performed:** no callable authorized Tesbo project connector is exposed in this session; repository and archive updates cannot impersonate native records. Review the proposed acceptance and supported writer before any future implementation. Neither this review nor earlier historical receipts freezes the package.
+
+## Revision 1.4.47 — bounded agent execution, independent evidence and effective stopping
+
+**26 November 2026; proposed / NOT FROZEN.** This user-authorized specification amendment extends the same eight canonical owners. Preserve the complete saved v1.4.46 input, including its later Skills prototype revision 58 and partial live owner-view observations, and the existing PR #295 evaluation work. No runtime, dependency, active Skill, production policy or acceptance result is introduced. The source checkpoint is development `899543a6625fafebb522783550678324e12ec4c4`; the documentation parent is PR #295 at `21d19243ae54a0fb79d280e3c12ad140444363ce`. They are distinct inputs. Their source observations do not identify the deployed build.
+
+**Distilled principle.** Control over authority, sensitive credentials, required evidence and emergency stopping must remain outside the execution being controlled. Apply this at the real trust boundary: model output is still untrusted even when the model loop runs outside the sandbox. A legitimate external client may lack managed-runtime guarantees; disclose its actual enforcement and observation limits rather than assuming equivalent control.
+
+The complete review covers [Katelyn Lesse's multiagent engineering article](https://x.com/katelyn_lesse/article/2114542280535318557) and its [linked security architecture article](https://www.katelynlesse.com/blog/secure-agents-architecture-and-sandboxing). The [coverage and reuse inventory](reviews/zyra-harness-prior-art.md#26-november-2026--multiagent-control-coverage) maps their substantive concerns to existing owners and proposed acceptance. Their scale examples and preferred infrastructure are research inputs, not Tesbo adoption decisions or benchmarks.
+
+| Canonical owner | Amendment responsibility |
+| --- | --- |
+| 01 | Delegation, continuing authority, untrusted-content containment, attributable execution and truthful stopping outcomes |
+| 02 / 07 | Existing task, consent, progress and evidence journeys, including delayed work and unconfirmed external stopping |
+| 03 | Trust boundaries, durable waiting/recovery, brokered credentials, isolation, egress, evidence integrity and monitoring design |
+| 04 | Logical identity/attempt bindings, capability negotiation, reauthorization, replay and stopping readbacks |
+| 05 | Existing task allocations, discriminating integration fixtures, resource measurements and rollout dependencies |
+| 06 | Principle-first implementation, current-source discovery, bounded comparisons and incident/recovery handoff |
+
+**Maturity reconciliation.** Existing MCP source already checks current membership, credential presence, project/client consent, grant expiry, scope and tool allowlist. Existing opt-in Langfuse/OTel and bounded Zyra traces are partial diagnostics. These are foundations, not evidence of complete per-agent identity, tamper-protected fleet tracing, workload suspension or physical stopping. OAuth #246, credential lifecycle #292/#298 and client setup #297/#299 remain separately tracked work at the inspection checkpoint; do not duplicate or declare them delivered through this text. The recent KB recovery implementation supplies local claim/lease/fencing patterns to inspect and reuse where suitable, not proof of a general agent runtime.
+
+**Delivery boundary.** Extend Zyra, native Tasks, proposals, Runs and Files/Evidence; use the existing authorization/audit/observability owners. No ninth normative specification, new workflow state family, identity platform or scheduler is selected. A managed executor is optional. Existing human/manual and user-managed execution paths remain supported within their real capabilities. All additional runtime acceptance in this amendment is **NOT RUN**; implementation decisions and authorized pilots remain explicit backlog work.
+
+
+## Revision 1.4.48 — dependency-aware work and bounded correction
+
+**Proposed / NOT FROZEN; 26 November 2026.** Extend the existing Zyra task/plan, FR-010–015/027–037/101–105/117–119/124, T-422/D-14, T-459 and native review/evidence owners. Preserve the complete v1.4.47 execution-control contracts, the latest consequential-choice UX/team addenda and prior scoped evidence. This amendment introduces no new agent platform, graph database, workflow engine, policy store or active Skill. Package pointers advance; historical bodies and their revision-specific claims remain.
+
+The design input is [Hanako's Loops and Graphs article](https://x.com/hanakoxbt/status/2091515787366306154), read in full. Its examples motivate local verification, dependency-aware work selection and feedback into planning. Its four-node vocabulary, three-attempt example, variable-only dependency rule, automatic permanent lessons and final-only human approval are not adopted as universal rules. Existing [orchestrator/worker and evaluator/optimizer patterns](https://www.anthropic.com/research/building-effective-agents) are supporting architecture references, not efficacy evidence or a dependency decision.
+
+**Current source fit:** application pin `784c2aed8620f91e2d5984adb2c33278f56a3456`; existing documentation parent is PR295 head `f92c3341eadc03f274becbead3b0f45d0a86539e`. Zyra already persists an active scenario plan, processes batches, generates bounded chunks concurrently, joins their results and fences plan progress. The proposal refines coordination and evidence above those owners. Those mechanisms do not by themselves establish a dependency-aware work graph or integration correctness. Canonical 03 records the inspected scope; earlier source pins retain their historical meaning. The saved v1.4.47 package, version 32 (SHA-256 `960740dd635174f73b40329182f842d54fc80be8383560fac08e83a0c5d68652`), is the preserved eight-file input.
+
+| Existing owner | Refinement |
+| --- | --- |
+| 01 requirements / 02 workflow | Meaningful checks before work, dependency and shared-resource scope, targeted corrections, stale-result visibility and appropriately placed human decisions. |
+| 03 technical design | Distinguish assurance/application relationships from work coordination; bind units/checks/dependencies to revisions; invalidate only the relevant reliance and prove integrated obligations. |
+| 04 contracts | Logical plan/unit/attempt/check/return associations through existing owners, compatible capability discovery, current authority and replay-safe recovery. |
+| 05 backlog/proof | Extend existing scenario owners with fault controls, resource conflicts, dependency changes, integrated failures, bounded recovery and governed planning feedback; new runtime outcomes NOT RUN. |
+| 06 agent brief / 07 UI | Plan and review within authority, preserve unaffected work, explain why a result needs reassessment and what a person can do next. |
+
+**Smallest useful next proof:** one authorized read-only investigation with versioned task inputs, independently grounded checks, a bounded pair of independent analyses, deterministic evidence collation and an integrated native review. Seed one failed unit, one changed shared dependency and an unaffected neighbor; preserve earlier evidence and assess whether the correct work is returned. Compare decision quality, needless rework and total cost with today's supported Zyra procedure before adopting another runtime or mandatory gate. A valid result can be no change, a human-owned unresolved decision or insufficient evidence. This document does not execute or authorize that pilot. Native Tesbo synchronization, runtime/client acceptance, human comprehension, signing/review and release remain separately evidenced.
+
+## Revision 1.4.49 — general plugins and evidence-informed engineering
+
+**27 November 2026 · Proposed / Backlog · NOT FROZEN.** The owner requested a general plugin direction and a reusable engineering practice of learning from established implementations, their outcomes and limitations. Obsidian is one possible source integration. No first plugin, marketplace, SDK, distribution channel, runtime or implementation priority is selected. These constraints apply conditionally to a future admitted contribution; merging this specification is not authorization to build or enable it.
+
+Use four distinct planning states: **Research / Exploration**, **Proposed / Backlog**, **Approved for Implementation**, and **Implemented / Verified**. Record the evidence and authority for a transition in the existing work owner. These describe delivery maturity; they do not add runtime status values or replace the more detailed implementation, deployment and verification distinctions already defined. Existing implemented integrations retain their actual evidence and status.
+
+Candidate contributions include sources, external executors, method/content packages, analysis/verification, reporting/export, notification/workflow and product/UI extensions. These illustrative profiles are not a closed enum. Proposed FR-125, T-462 and AC-094 retain the distinct general requirement, bounded design qualification and future acceptance identities introduced by the concurrent PR295 amendment; none is an official native record or implementation authorization. An extension can contribute to more than one admitted point, but its manifest cannot grant authority or replace native record owners. Existing integrations or supported external clients may already solve the need without a new installed package. FR-058/T-408 cover execution integration; they are not retroactively relabeled as a complete general plugin platform.
+
+The [portable method](06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer) extends the existing two-stage practice: distill a conditional principle from evidence, then instantiate it against the target's actual constraints. Use it for meaningful feature additions, extensions, architecture/contract choices and recurring failures across the engineering lifecycle. Reuse adequate current research for routine work. The current [plugin research record](reviews/plugin-ecosystem-obsidian-review.md) retains the original Quality Forge, Agentic QE, Nagual and Obsidian investigations and the expanded extension-system precedents. [PR315](https://github.com/1alextest/Tesbooboo/pull/315) is their historical research origin; the current continuation travels in PR295. Documentation of a mechanism is not measured proof of its success, and a familiar vendor is not evidence that the mechanism transfers.
+
+| Canonical owner | This amendment's responsibility |
+| --- | --- |
+| 01 Requirements | Conditional general-plugin obligations and scope/decision boundaries |
+| 02 Workflow | User intent, distinct state/authority dimensions, impact and recovery |
+| 03 Design | Contribution points, compatibility, lifecycle, native ownership and operational boundaries |
+| 04 Contracts | Proposed logical fields and their authoritative producers; no invented callable API |
+| 05 Backlog and proof | Existing-owner routing, unlike-profile design traces, observable acceptance and deferred choices |
+| 06 Agent brief | One reusable research/transfer method and its application by the existing teams |
+| 07 UI tasks | Design obligations and proof requirements for any selected contribution |
+
+**Source reconciliation:** the current repository candidate was PR295 at `f92c3341eadc03f274becbead3b0f45d0a86539e`; the saved eight-file v1.4.48 input is version 33, 707,628 bytes, SHA-256 `6665ba660aa208bd35db51b90052fc0b69abc01c6922c197544003e3480b1bef`. All eight saved bodies are preserved except the current-package pointer. The research PR already referred to a v1.4.49 review folder that was absent at that repository head; this run creates a new, attributable [review record](reviews/spec-review-20261127/README.md). It does not reconstruct or certify unavailable earlier receipts. The saved v1.4.48 archive remains the historical input; current publication status is stated in the source manifest.
+
+The proposed method does not alter original assurance charters, install an active Skill, certify effectiveness or permit a new product subsystem. New plugin/runtime/client/UI/native-record acceptance remains **NOT RUN**. Document checks and independent source reviews have their own bounded receipts.
+
+**Concurrent publication reconciliation:** PR295 subsequently advanced to `639faffc05e6c66f12a048dccaca4431285b674d` with its own proposed v1.4.49 contracts and analytical receipts. The current continuation preserves both original review streams and integrates their obligations within these same eight owners. The new candidate has its own exact manifest and delta review; neither earlier receipt set silently certifies it. Prior archive identities remain historical publication evidence, while the current repository candidate is bound by the source manifest.
+
+
+## 28 November 2026 — whole-system owner direction (1.4.49 continuation, NOT FROZEN)
+
+**Type-neutral, evidence-bound intelligence (owner direction).** Every artifact kind must be potentially eligible to participate in Tesbo's intelligence architecture. Future authorized user/project inclusion determines participation; separately enforce reader access, processing/provider disclosure entitlement and normative authority. Inclusion does not approve a draft, activate a Skill, waive obligations or grant external processing. Existing exposure holds remain until the reviewed replacement is verified; no automatic disclosure or default was approved. Derive relevant scope from outcome, subject and obligations, not a fixed list. Distinguish semantic identity from representation and assertion (03), qualify negative space by evidenced obligation and bounded authorized search (05/06), and invalidate reliance rather than history (03/04/05). Preserve traceability versus behavioral coverage and single-owner rules. Prior source challenge: https://github.com/1alextest/Tesbooboo/pull/339. This is proposed, not a formal freeze.
+
+
+## 28 November 2026 — semantic inference containment and relationship maintenance (1.4.49 continuation, NOT FROZEN)
+
+**Navigation and scope.** Extend DISC-04/05, FR-118/119, T-426/457/458 and existing FR-124 evaluation. Discover missing, incorrect, incomplete, contradictory, stale or potentially redundant relationships across relevant authorized artifacts; traversal is not proof. Canonical 01 defines obligations, 03 safe composition and reliance, 04 receipt/effect semantics, 02/07 review, 05 discriminating qualification, and 06 the portable principle. Preserve the graph/model distinction and one native owner per relation. PR340 is a bounded literal baseline, PR341 a recorded-capture basis increment, PR320 the comparative evaluation owner; none proves general semantic reasoning. No new FR, AC, service, graph store or active Skill.

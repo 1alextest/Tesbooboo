@@ -1,0 +1,48 @@
+# Concurrent proposal reconciliation — C3 and C4
+
+This is the coordinator's informed integration record. It supplements the [C1/C2 findings reconciliation](reconciliation.md), preserves both original review streams and does not pre-issue Graph or White's disposition.
+
+## Inputs and merge boundary
+
+During the pre-publication lease check, existing PR295 had advanced from `f92c3341eadc03f274becbead3b0f45d0a86539e` to `639faffc05e6c66f12a048dccaca4431285b674d`. That incoming publication contains an independently authored v1.4.49 proposal, three grouped-lens specialist invocations and an independent analytical White invocation with original and informed receipts. Those are preserved as their actual analytical stream; they are not renamed as the charter-guided ten-role run in `teams/`.
+
+The reviewed C2 proposal was retained as the semantic base and the incoming obligations were reconciled at the same eight canonical owners. Local merge `affa89fd6a053847ab9ad9e8872fadb4abdb5f4e` preserves incoming `639faffc` and the local C2/development history. Its 21 core files equal frozen C3. Incoming application development remains `d440c48ede32ca38783b178ea6d957ded8bca9e4`; this integration adds no product-source, schema, active-Skill, E2E or workflow changes relative to that input. This local merge identity is not claimed to be the subsequently published GitHub commit; final branch/tree readback belongs to publication evidence.
+
+| Candidate | Exact manifest | Scope |
+| --- | --- | --- |
+| C2 | `c722c8e75521a495a1560f562324bfc27ad2b2e8e318f0d4986b80a18b1a760c` | Fifteen core inputs, original corrections and source limitations |
+| C3 | `eff568abb43bbf758e8beeec83463179c83aca46a3fe13371ed72300a587466a` | Twenty-one core inputs; incoming obligations and six existing handoff/navigation views |
+| C4 | `5060d011e67a57092f3a4ad2ff1e1b050dcc775e43cc26e62e0cad6333a95bbf` | Same twenty-one inputs; only canonical 00/06 current-research navigation and corresponding manifest identities change |
+
+`candidate-c2-to-c3.patch` covers the fifteen common C2 inputs. Six newly included existing views are bound by the C3 manifest and their original incoming Git objects; they are not duplicated in that common-input patch. `candidate-c3-to-c4.patch` is the exact three-file successor delta. Frozen C1–C4 and original reports remain separate; no earlier report is silently relabelled as covering a successor.
+
+## Semantic preservation and disposition
+
+| Incoming or retained obligation | Current owner and result | Proof still required |
+| --- | --- | --- |
+| General outcome / design / acceptance identity | FR-125 in 01; T-462 and AC-094 in 05, referenced by 00/04 and subordinate views. These preserve incoming proposed specification identities, not official native records. FR-058/T-408 remain executor-specific. | Selected profile, native record reconciliation, implementation admission and actual acceptance |
+| Whole contribution/dependency-set admission | 01/03/04 require atomic refusal or inert candidate; 05 distinguishes collision refusal from allowed multi-provider use. | Actual packaged admission and no partial trusted activation |
+| Selected provider and scoped defaults | 02/03/04/05/07 retain chosen contribution/account/version, future-only defaults and explicit authorized fallback. | Queued/in-flight/history behavior and actual target authority |
+| Historical meaning after sole renderer removal | 01/02/03/05/07 require admitted native representation/export/migration or a disclosed pre-admission limitation. Preserved opaque bytes alone do not satisfy usable history. | Meaningful readback without unsafe obsolete code, under current native read authority |
+| Departed grant owner / shared consumers | 02 actor mapping, 04 authority, 05 scenario and 07 recovery preserve authorized reassignment/reconnection and unrelated legitimate use. | Actual role mapping, scope and user recovery |
+| Planned change versus urgent containment | 01/02/03/05/07 preserve independently authorized existing stop/grant semantics without requiring complete inventory, telemetry or a healthy catalog first. Original operator authority, scope, acknowledgement and unknown-effect limits remain. | Qualify the actual selected control/channel; an unavailable control is not a confirmed stop. Proposed inherited control wording is not evidence of deployed availability. |
+| Hostile metadata / rendered content / proxy credentials | 03/04/05/07 use existing sanitization, path, outbound-access and credential owners, with actual outbound/rendered-effect oracles. | Valid and hostile controls at the admitted runtime/browser/native boundary |
+| C2 source identity and effective fencing | Sequential A→B source replacement and current-generation checks remain explicit. TESBO-RA01 remains an open source-based sync reuse gate. | Safe reproducer, owner fix if needed, positive controls and actual current-source acceptance |
+| C2 retained-data read authority | Ordinary disconnect does not revoke independently authorized project-owned history; actual read revocation constrains protected derivatives and affected readers. | Profile-specific policy/migration and complete current-authority readback |
+| C2 UI findings and dissent | GB-C2-01 unknown-status limitation remains. Grey/Purple unlink source restriction remains a product question; QA's withheld Major adoption is retained. | Actual UI failure/recovery proof; establish intended unlink task before adopting a current UI defect |
+| One engineering-method owner | Canonical 06 retains shared distillation/transfer gates and the procedure. Existing scope/template views link to it. The incoming option comparison, benefit/failure signal, stopping/revisit and reversal requirements extend that same procedure. | Actual current-rule conceptual transfer and later independently grounded effectiveness evaluation; no active Skill or method superiority is claimed |
+| Current research navigation | Merge readback found CRB-01 in C3: 00 still described historical PR315 as the expanded comparison's home and 06 lacked a direct current link. C4 points both to the same current research document and retains PR315 as historical origin. | Both Green members independently verified the exact three-file delta and unchanged destination. CRB-01 is closed only on C4. |
+
+The [independent merge preparation](preparation/concurrent-integration-preparation.md) and [preservation/readback report](preparation/concurrent-integration-readback.md) retain the original C3 navigation miss and its actual C4 closure. They establish that all six priority obligations, the C2 corrections and one-method ownership survive. The complete incoming 9,989-byte research continuation is retained in the same research document; its producer incident accounts remain reported evidence, not reproduced Tesbo failures or causal effectiveness measurements.
+
+## Original evidence and verification
+
+All 22 incoming review artifacts, including 11 original/informed analyst receipts, were compared byte-for-byte with `639faffc`; the incoming canonical source manifest is separately preserved exactly. Duplicate-path historical index/link/manifest snapshots live in `concurrent-639faffc/`, whose navigation note directs historical links to the immutable incoming commit. Incoming candidate manifests/patches and `receipts/` retain their original names and bytes. C1/C2 `teams/` reports and subsequent delta reports remain unchanged.
+
+Both Green members independently executed the unchanged document verifier on C3 and C4: each result is **51 passed, 0 failed, exit 0**. These are repeated executions of the same 51 checks, not 102 different product tests. C2's separate 45/0 receipts remain historical. Green A's isolated controls rejected a changed preserved body line at C2 and a changed newly included scope-document identity at C3 at the intended assertions. No frozen target was changed by these controls.
+
+The coordinator verified **63/63 newly introduced authoritative relative references** in the frozen core, recorded in `relative-links-c4.json`. Full and core `git diff --check` return 2: one inherited subordinate README blank line contains a space; the other classified diagnostics are unchanged original reviewer Markdown and literal historical/context spaces in evidence patches. `whitespace-c4.json` records these actual results. No blanket whitespace pass or rule suppression is claimed. The exact scanner prose matches and denied-neighbor controls remain unchanged; two exact document digests are refreshed, not broadened. Local full scanner execution is unavailable; current-head CI is separate publication evidence.
+
+Canonical 05 now contains 17 conditional future scenario rows under proposed AC-094, all **NOT RUN**. Grey's original 16-family simulated coverage is a separate inventory and remains unchanged. The integration does not turn source-derived expectations into runtime, native, visual/accessibility, human or deployed evidence.
+
+Graph's original C2 manual reconciliation and its actual later delta remain distinct from a computed Graph verifier or CLEAN receipt. The subsequently completed [White report](teams/white.md) owns the final **NOT FROZEN** disposition and supports bounded proposed-document publication, preserving implementation and acceptance gates. Its direct historical-readback check also retains exact source-version proof as an open native knowledge/evidence obligation. No independent worker authentication, protected human approval, implementation admission, native synchronization or release authority is supplied by coordinator records or role labels.

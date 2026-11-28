@@ -1,58 +1,155 @@
 {
-  "package": "Tesbo_Specifications_v1.4.45.zip",
-  "package_revision": "1.4.45",
-  "status": "NOT FROZEN",
-  "archive_bytes": 632297,
-  "archive_sha256": "bb06fb5b4080b81fd521f77ea4cc26a39b823a873d2cf221a182d984a6a088aa",
-  "scope": "Exact publication of the eight owner-supplied canonical Markdown originals. Historical headers and review scopes are preserved. Publication is not implementation, acceptance, deployment or a package freeze.",
+  "package": "Tesbo canonical specifications",
+  "package_revision": "1.4.49",
+  "status": "PROPOSED / BACKLOG / NOT FROZEN",
+  "publication": "Integrated PR295 1.4.49 semantic inference containment continuation; previous archive and independent review receipts remain historical. OAuth continuation refines existing review methods; no new archive or runtime publication.",
+  "scope": "Retain all prior canonical bodies; add relationship maintenance, typed inference composition, uncertainty and provenance, invalidation, review and qualification; refresh only exact scanner document digest bindings. OAuth handoff-closure refinement and contextual acceptance; linked finding-quota contradictions corrected.",
+  "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "research_source_commit": "7539a739243167b2d6709df1d644bd5b955f6ffc",
+  "source_archive": {
+    "package": "Tesbo_Specifications_v1.4.48.zip",
+    "version": 33,
+    "archive_bytes": 707628,
+    "archive_sha256": "6665ba660aa208bd35db51b90052fc0b69abc01c6922c197544003e3480b1bef"
+  },
+  "parents": [
+    {
+      "kind": "repository_publication",
+      "commit": "b28c17386ecc2e88f550b3c4a641143ede339255",
+      "package_revision": "1.4.45",
+      "archive_bytes": 632297,
+      "archive_sha256": "bb06fb5b4080b81fd521f77ea4cc26a39b823a873d2cf221a182d984a6a088aa"
+    },
+    {
+      "kind": "owner_saved_canonical",
+      "package_revision": "1.4.45",
+      "version": 26,
+      "archive_bytes": 635694,
+      "archive_sha256": "d4db29b98d4b7daa881770795287a2e920873b3875cce50a3353cf341f785a8f",
+      "preserved_deltas": [
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+      ]
+    },
+    {
+      "kind": "concurrent_owner_saved_canonical",
+      "package": "Tesbo_Specifications_Skills_Interface_Update.zip",
+      "version": 27,
+      "archive_bytes": 643396,
+      "archive_sha256": "479b1e1623c67af961329f54033f5670cf13215c5d78299e6a7759fa5430a44e",
+      "preserved_deltas": [
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+      ]
+    },
+    {
+      "package": "Tesbo_Specifications_v1.4.46.zip",
+      "package_revision": "1.4.46",
+      "archive_bytes": 673860,
+      "archive_sha256": "d1beb55379e2582eb2c2e2db2bbde21d1e849cd9e4b31e546b097398da3cc8ea",
+      "kind": "prior_repository_candidate",
+      "commit": "21d19243ae54a0fb79d280e3c12ad140444363ce"
+    },
+    {
+      "kind": "current_owner_saved_canonical",
+      "library_file_id": "libfile_fde3_f-ab7b146b72588191b8a51735ae46d0b4_4ee04b678f8481919580c594fcc15a5b",
+      "version": 30,
+      "package_revision": "1.4.46",
+      "archive_bytes": 677144,
+      "archive_sha256": "1b84a0f0840d04b097007d3cdfa460157e9c2c91796b7b1ec78d4b3539e8018c",
+      "preserved_deltas": [
+        "02_WORKFLOW_AND_UX_SPEC.md",
+        "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md"
+      ]
+    },
+    {
+      "kind": "prior_repository_manifest",
+      "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+      "package_revision": "1.4.47",
+      "archive_bytes": 691903,
+      "archive_sha256": "51cab10edd1bcf480ee68083aa11b8cd2a9f4f958e5ebd3dca63c35a65193011"
+    },
+    {
+      "kind": "concurrent_repository_publication",
+      "commit": "639faffc05e6c66f12a048dccaca4431285b674d",
+      "package_revision": "1.4.49",
+      "source_manifest_git_blob": "8e64120d0c1aa97c35755a0378a4c007f6e8b6ca",
+      "archive_bytes": 723552,
+      "archive_sha256": "be4a09be89f3431646569afbb85353db5a9c05b7fc965f73ab0304e4883cd829",
+      "scope": "Historical incoming publication; its exact manifest and original review receipts remain preserved. These archive bytes do not identify the integrated repository candidate."
+    },
+    {
+      "kind": "prior_integrated_repository_candidate",
+      "commit": "d7449ee3942fa45e03ccc9ce98bcca63cca68070",
+      "package_revision": "1.4.49",
+      "source_manifest_git_blob": "af0b8a3dde44b0a2a2f8b5aa4419d5e29cc8255b",
+      "scope": "C4 independent review evidence remains historical; owner-direction continuation is not independently reviewed."
+    },
+    {
+      "kind": "prior_semantic_continuation_base",
+      "commit": "07469c1d8ccd721fc7c2dcb96b7fbd6c5699a490",
+      "package_revision": "1.4.49",
+      "source_manifest_git_blob": "963a7a37472d0ab4f4615639c503c50043fdd87c",
+      "scope": "Whole-system owner-direction original preserved; new inference amendment is not independently reviewed."
+    }
+  ],
   "files": [
     {
       "path": "00_README.md",
-      "bytes": 168706,
-      "sha256": "c912ba92de2ac04cb0e7906627ab5baf2d7e8a9973770830cc2de92727071372",
-      "git_blob": "4b142f9332fa7a1f651a223be99f2493153c0fc5"
+      "bytes": 191723,
+      "sha256": "520464ab84faba56717827c3e93052930116fd895d8e40b1c3ade52088fa4693",
+      "git_blob": "6f17105d6baffa10dda57d90eb83c44fa3e8c1bd"
     },
     {
       "path": "01_PRODUCT_REQUIREMENTS.md",
-      "bytes": 228764,
-      "sha256": "25063479d835c0f0945c38cb3b2c5a34357f61e68dd4bfcce89f08f4cb6ea40b",
-      "git_blob": "3ded987c73fd59d1ba34ca5e55dfb7fc623ea67f"
+      "bytes": 258381,
+      "sha256": "3f5967d85488d2ebd02d63e5cfe6fe03cd1bfae0fc8569a0b4e5743936f10938",
+      "git_blob": "72fa38908cc470b3bfad359f1f247f560cb47088"
     },
     {
       "path": "02_WORKFLOW_AND_UX_SPEC.md",
-      "bytes": 143881,
-      "sha256": "0fa13560dde06ca331061f27a65307b6c55f9766cd666c35c6d4e4b24fbe7fbf",
-      "git_blob": "f1da967acaf81ea52fac13c08661bb7702012405"
+      "bytes": 201032,
+      "sha256": "cdbe9da7041e71a07a552ee0152af0a5123d8b3e8b768f2043a9d6a36b327630",
+      "git_blob": "3a4ebd83d3ffed1fc96f938bb0aceaeceaaab90f"
     },
     {
       "path": "03_TECHNICAL_DESIGN.md",
-      "bytes": 410261,
-      "sha256": "277c8b115ca23904df521ee56df211766217e2b8f09ff488773450978a6ccf9e",
-      "git_blob": "a89b385c1241ff72217420a24849377cdba70a81"
+      "bytes": 474580,
+      "sha256": "bb1697bda0b2465b72465308559d3d3dd65a614277b7e26377ff045e22286df6",
+      "git_blob": "43370a8e24a0b7a4751393ea02fa5f9ed601c05d"
     },
     {
       "path": "04_MCP_API_CONTRACTS.md",
-      "bytes": 188593,
-      "sha256": "fbe715ec8dc8f21a668d0c8dadfc25b374991a949892d123c17ecbfe218cbfbd",
-      "git_blob": "fcb0f56c1b4fb7c7c6d8388df6bbe6c9f75316f7"
+      "bytes": 216938,
+      "sha256": "22027f411ccbb62ddfa6d8984eb9d6a032f50430603675b2d50d073995105111",
+      "git_blob": "e2f222d2c8030d6356173573d16e7bc76d8faf56"
     },
     {
       "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
-      "bytes": 396832,
-      "sha256": "cfda859a2e5216dce4091e65364878d01a052c046cc4a17de5be327357ad0e8e",
-      "git_blob": "0fe385bc1790eaadc112ec2efb3c42c2d311565f"
+      "bytes": 452328,
+      "sha256": "b5a8f1e0b4b4dc6949bc39d0cebdf9fe8ff4d36d9adee673798099b49c3a1eda",
+      "git_blob": "e8921543ac24cc4ce5445924af2724e90676df16"
     },
     {
       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
-      "bytes": 154591,
-      "sha256": "8f66240db406d8b2fc700aed54f075590f64054059ab07deaa55470b90d063e2",
-      "git_blob": "46a705782dea2549fb513b48f0c75fcd4fa4cc04"
+      "bytes": 191776,
+      "sha256": "4b130380704272dc963988937d2151c388c97c7830bb8b6c909ac114e1328175",
+      "git_blob": "aa0b6bb139354291816fcd3653630f6a1988dae8"
     },
     {
       "path": "07_UI_DESIGN_TASKS.md",
-      "bytes": 149169,
-      "sha256": "11fe6d5d9c5fa9a9e960dd247e0ae9cb735e5f72c6a429ef398549e72ebc76d1",
-      "git_blob": "1bbb188cd9d785819ba9b219623c5dfc628dfaf9"
+      "bytes": 171617,
+      "sha256": "b862fb02b096b4ad80077f277ddbc2b4cbdb661d31d789090bb3319153b142a3",
+      "git_blob": "d53bb4ba8e127d03d7e9aa42e1b4aa65776861ff"
     }
-  ]
+  ],
+  "review_record": "reviews/spec-review-20261127/README.md",
+  "integration_parent": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
+  "integration_scope": "C4 parent retained; documentation only. Independent acceptance, live exposure, native sync, source completeness and signing gates open.",
+  "concurrent_publication_parent": "639faffc05e6c66f12a048dccaca4431285b674d",
+  "whole_system_amendment": "reviews/whole-system-owner-amendment-20261128.md",
+  "semantic_inference_amendment": "reviews/whole-system-owner-amendment-20261128.md",
+  "oauth_review_continuation": "../reviews/oauth-spec-followup-20261128/README.md",
+  "oauth_integration_parent": "b915a26458efe1bcb50f0a88423c2e183a8d8698",
+  "oauth_original_review_candidate": "5a9936efa07e6373487186df10c7c7d1fe1cb3a4"
 }

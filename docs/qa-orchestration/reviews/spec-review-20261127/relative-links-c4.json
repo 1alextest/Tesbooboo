@@ -1,0 +1,452 @@
+{
+  "kind": "new_authoritative_relative_links",
+  "candidate": "C4",
+  "input_manifest_sha256": "5060d011e67a57092f3a4ad2ff1e1b050dcc775e43cc26e62e0cad6333a95bbf",
+  "source_comparison": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "checked": 63,
+  "passed": 63,
+  "links": [
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/agent-scope-discipline.md#research-informed-engineering-and-team-handoff",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "CLAUDE.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/e2e-coverage-waves.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/source-manifest.json",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/agent-scope-discipline.md",
+      "link": "qa-orchestration/reviews/PR264-application-journey-review.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/agent-scope-discipline.md",
+      "link": "qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "reviews/plugin-ecosystem-obsidian-review.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "reviews/spec-review-20261127/README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "link": "reviews/spec-review-20261127/teams/red-a.md#tesbo-ra01--native-sync-stopping-is-not-a-proved-effect-fence-even-with-one-provider-connection",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "link": "#reviewing-a-consequential-user-choice",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "link": "07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "link": "../agent-scope-discipline.md#research-informed-engineering-and-team-handoff",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "link": "reviews/plugin-ecosystem-obsidian-review.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "link": "#designing-and-verifying-a-consequential-choice",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "link": "06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "agentic-qe-candidate-handoff.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "zyra-harness-prior-art.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../ZYRA_QA_HARNESS_OPTIONS.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Frontend/components/settings/IntegrationsTab.tsx",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.types.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.client.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V47_integration_connections.sql",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.service.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V72_integration_sync_pipeline.sql",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V73_knowledge_document_comments.sql",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/rag/rag-retrieval.service.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/legacy/knowledge-document-revision.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V156_knowledge_governed_snapshots.sql",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/skills/skills-governance.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/mcp/mcp.tools.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/mcp/mcp-access.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/automation/automation.service.ts",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../sdk/playwright-reporter",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "directory"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "link": "../../qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "link": "../../qa-orchestration/source-manifest.json",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "link": "#canonical-revision-1449--general-plugins-and-engineering-precedent",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/README.md",
+      "link": "../../qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/design.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/design.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/source-manifest.json",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/reviews/spec-review-20261127/README.md",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#portable-method-for-discovery-and-principle-distillation",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "target_exists": true,
+      "anchor_matches": true,
+      "target_kind": "file"
+    }
+  ],
+  "limits": "New links in changed frozen core Markdown only; historical preserved receipts retain their original source scope and are not rewritten."
+}

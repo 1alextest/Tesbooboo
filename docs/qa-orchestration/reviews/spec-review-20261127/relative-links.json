@@ -1,0 +1,310 @@
+{
+  "kind": "new_authoritative_relative_links",
+  "source_comparison": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "checked": 43,
+  "passed": 43,
+  "links": [
+    {
+      "source": "AGENTS.md",
+      "link": "CLAUDE.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/e2e-coverage-waves.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/00_README.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "AGENTS.md",
+      "link": "docs/qa-orchestration/source-manifest.json",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/00_README.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md#portable-method-for-discovery-and-principle-distillation",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/reviews/spec-review-20261127/README.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "../../qa-orchestration/source-manifest.json",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "link": "reviews/2026-11-18-charter-guided-spec-challenge.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V156_knowledge_governed_snapshots.sql",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V47_integration_connections.sql",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V72_integration_sync_pipeline.sql",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/migrations/V73_knowledge_document_comments.sql",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/automation/automation.service.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.client.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.processor.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.service.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/integration-sync/integration-sync.types.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/legacy/knowledge-document-revision.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/mcp/mcp-access.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/mcp/mcp.tools.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/rag/rag-ingestion.service.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/rag/rag-retrieval.service.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Backend-Nest/src/skills/skills-governance.ts",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../Tesbo-Frontend/components/settings/IntegrationsTab.tsx",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../../../sdk/playwright-reporter",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "directory"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "../ZYRA_QA_HARNESS_OPTIONS.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "agentic-qe-candidate-handoff.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "link": "zyra-harness-prior-art.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/00_README.md",
+      "link": "reviews/spec-review-20261127/README.md",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "link": "reviews/spec-review-20261127/teams/red-a.md#tesbo-ra01--native-sync-stopping-is-not-a-proved-effect-fence-even-with-one-provider-connection",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "link": "#reviewing-a-consequential-user-choice",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "link": "07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "link": "#designing-and-verifying-a-consequential-choice",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    },
+    {
+      "source": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "link": "06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice",
+      "anchor_matches": true,
+      "target_exists": true,
+      "target_kind": "file"
+    }
+  ],
+  "limits": "New Markdown links in authoritative/connected authored views only. HTTP URLs and original frozen reports not treated as locally resolvable links. Heading fragments use the relevant GitHub-style slug form."
+}

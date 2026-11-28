@@ -1,0 +1,21 @@
+{
+  "kind": "exact_document_pin_refresh",
+  "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
+  "changes": [
+    {
+      "path": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "previous_sha256": "6ad966d7c43d538a2b5cfc067c45e49a3074135671956ee369a73598eabb1dbe",
+      "current_sha256": "374bf4e7d853c958c9442baf56c8a06e62dcac0a97be10e221a7fd73e41c7499",
+      "exact_excepted_prose_unchanged": true,
+      "prose_line_sha256": "131b8a9b0452962a1b55ad550c40483773360c0da7eab092201f2f805cd38596"
+    },
+    {
+      "path": "docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "previous_sha256": "ea1da80900225d32cc136d4f79b9b58effcaf161b201684f5431280ec08b2848",
+      "current_sha256": "e87f1e9ddb2ac70c17ad2d06d7538e49c838ec71a8c7df7e314a5c6370d3c6fa",
+      "exact_excepted_prose_unchanged": true,
+      "prose_line_sha256": "515070d2e27cddeae7b2873b80d4ed4fa19749daf0bc1a98438d782ebfc5623d"
+    }
+  ],
+  "limits": "Only canonical document SHA-256 pins updated. Scanner rules, allowed paths/prose and denied-neighbor controls unchanged. Full Docker scanner unavailable locally and NOT RUN; current-head CI remains required."
+}

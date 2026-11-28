@@ -1,0 +1,216 @@
+{
+  "kind": "document_integrity_only",
+  "candidate": "1.4.49 C1",
+  "input_manifest_sha256": "dd8fa57f48ebcfe054dc98c69215539ea669ac932136291a622f5fe123233bfb",
+  "verifier_sha256": "ca3fe5b171ef97e8364e59c77d0ae11f1cc92841abce4c2d5b752d4bb436d46f",
+  "checks": [
+    {
+      "check": "frozen identity: AGENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: CLAUDE.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/source-manifest.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/00_README.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen identity: docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "canonical cardinality",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 00_README.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 00_README.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 00_README.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "manifest identity: 07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "saved v148 body preserved: 07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "single v149 current pointer: 07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "shared gate in canonical owner once",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "subordinate gate refers to canonical owner",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "research removes first-delivery heading",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "passed": 41,
+  "failed": 0,
+  "limits": "No product/runtime/UI/native/semantic/effectiveness checks. Source and semantic review are separate receipts."
+}

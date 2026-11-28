@@ -1,0 +1,328 @@
+{
+  "scope": "Documentation integrity only; no product/native runtime tests",
+  "product_execution": "NOT RUN",
+  "native_execution": "UNRUN",
+  "checks": [
+    {
+      "check": "frozen:AGENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:CLAUDE.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/specs/mcp-oauth-chatgpt-connection.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/agent-scope-discipline.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/agent-skills/living-security-engineering/SKILL.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/agent-skills/evidence-grounded-decisions/SKILL.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/00_README.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/source-manifest.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/deploy-guide.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/reviews/oauth-spec-followup-20261128/review-brief.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:scripts/check-gitleaks-evidence-exceptions.py",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:docs/qa-orchestration/reviews/whole-system-owner-amendment-20261128.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/auth/mcp-oauth-server.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/auth/auth.service.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/auth/otp.service.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/mcp/mcp-oauth-interaction.controller.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/mcp/mcp-access.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/src/main.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Frontend/components/project/ExternalMcpAccessPanel.tsx",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Frontend/lib/api.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Frontend/lib/redirect.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Frontend/next.config.mjs",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:e2e/ui/oauth-login-continuation.spec.ts",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:Tesbo-Backend-Nest/scripts/ci/oauth-interaction-redirect.cjs",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "frozen:scripts/mcp-deploy-check.mjs",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "canonical cardinality",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "canonical identity:00_README.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:00_README.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "canonical identity:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "incoming body preserved:07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "detail": "Only declared quota sentence is replaced in06; other prior lines retained in order"
+    },
+    {
+      "check": "original immutable:archaeology-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:blue-graph-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:green-ops-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:grey-purple-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:method-challenge-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:qa-lifecycle-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:red-eg-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:security-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "original immutable:white-original.md",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "historical assurance bytes preserved",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "linked quota contradiction removed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "git diff --check",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "passed": 63,
+  "failed": 0,
+  "local_links": {
+    "checked": 68,
+    "missing": []
+  }
+}

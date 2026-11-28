@@ -1,0 +1,183 @@
+{
+  "repository": "NesberryEnterprise/Nesberry",
+  "pinned_commit": "d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "recovered_at": "2026-11-27",
+  "archive_source": "tesbo/docs/specs/agent-synchronized-engineering/reviews/full-team-v1.4.38/Tesbo_Assurance_v1.4.38.tar.xz#verification/method-charter-source-manifest.json",
+  "files": [
+    {
+      "path": ".claude/agents/elephant-gold.md",
+      "bytes": 9940,
+      "blob": "90a43db5e3f1b25c478d61ae8dd4eb34760a82b7",
+      "sha256": "a4a8ae4c5182e78f4b4892bc31afff0eb7c5dfa31e867f6e6707f4769792cadd",
+      "verified": true
+    },
+    {
+      "path": ".claude/agents/grey-team.md",
+      "bytes": 24217,
+      "blob": "fca27607e4fb21be7c96a62e71deb62bed0617ab",
+      "sha256": "68030bee6edd6b9de81bfac52b27eaac7bba1a2b155f4a6aff2a2df348b1f9cc",
+      "verified": true
+    },
+    {
+      "path": ".claude/agents/security-team.md",
+      "bytes": 23241,
+      "blob": "300c3683570be35d3f1b6c0b96287e50eab3747c",
+      "sha256": "17e4fa6ea24cca2626badf4875d32e82b66e3bb4a2a2d09e0b13f019a07fbf3a",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/README.md",
+      "bytes": 6595,
+      "blob": "c2a118a103ceff239465b0709606cbe6ee0bab72",
+      "sha256": "4cdfb5e2f78bf760201bb516b308e89b166a611cc22e331d36a991cf56afd4fb",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/blue-team-charter.md",
+      "bytes": 21977,
+      "blob": "6c5427919a159119508d7a2be66e5628f2e67e43",
+      "sha256": "1d6d78da69b3c55533740005a48082b6fc5f27c620ce66f50917fd180523c816",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/elephant-gold-team-charter.md",
+      "bytes": 16611,
+      "blob": "cf41f6f53c571e678f6e90711b2beb762fa96a48",
+      "sha256": "a5353dd943a3cb8cfbe115be7bf14477e9285d35ea7968ef794a6d64ca342f36",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/green-team-charter.md",
+      "bytes": 20510,
+      "blob": "7145362131bd564935a2276d7bf96b2a32ebfe50",
+      "sha256": "69137a78f4a6d4157886fb5e7a30d39f209772071716a866aee21f9c10d9f857",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/qa-team-charter.md",
+      "bytes": 20070,
+      "blob": "40e00ad31c01de1dd4eb9ddf5d99b312feacba73",
+      "sha256": "f15d2853bc50c8f2e9a4833092c34404b3f7711fb802d461980d8d939dcc5717",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/red-team-charter.md",
+      "bytes": 21276,
+      "blob": "5303ef662f36d26628fe668d2efea96eefcd5ecc",
+      "sha256": "4f9893d877d89b31b6e2c0c1d42b89b4136f3da4c8ea079b9fd40024cffb02cd",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/review-orchestration.md",
+      "bytes": 45630,
+      "blob": "86f3489471f30f6cf1b3a7b1e87088979aa8b3ce",
+      "sha256": "8fd41f22e1909afd48d8af95120d03a0f52e30a1bf9976a639fb6cca67bb4729",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/synthetic-user-journey-team-charter.md",
+      "bytes": 34428,
+      "blob": "b8c0919dfab7caae1f50e2679a3648921bfb49ff",
+      "sha256": "f7b7a83ade8fc3befd2af83151c0779917d83af78ed1263fce3b76928c3c1945",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/teams/white-team-charter.md",
+      "bytes": 14327,
+      "blob": "5eca7bd27074cabe1553a9ec61ac7e28ce412fb1",
+      "sha256": "8e7e372e9c0c8d26b9b3fb49b429ce06136af4e79ad26ecb7e7c971df1e57d25",
+      "verified": true
+    },
+    {
+      "path": "docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md",
+      "bytes": 5618,
+      "blob": "4e3468c4ace44fbd9d675c972492dbd446366cc7",
+      "sha256": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524",
+      "verified": true
+    },
+    {
+      "path": "docs/purple-team.md",
+      "bytes": 4864,
+      "blob": "d34e7f1bec6b79412dfdb078a157d7c8e0f5d46f",
+      "sha256": "c3799668153896ff60411f8b021399729cbe98fef14c0df286be4795a389f6b8",
+      "verified": true
+    },
+    {
+      "path": "docs/review-charters.md",
+      "bytes": 5921,
+      "blob": "f3a40a8da078d090cee56c8fe9178e3bbf13bacd",
+      "sha256": "4914bb0608ab0fca506e43de14bbaef772e0c5d08e7dc6507b54c1b9f31b1f4d",
+      "verified": true
+    },
+    {
+      "path": ".claude/agents/purple-team.md",
+      "bytes": 12551,
+      "blob": "94309189eb3b3c58c77fd80d65cdd8c9ff7ca6a5",
+      "sha256": "0d9311c4354879fb3781a1a0124bc746f41b7eebe120fa323755ff21d9d1f234",
+      "verified": true
+    },
+    {
+      "path": ".claude/agents/design-blue-team.md",
+      "bytes": 53007,
+      "blob": "e85e8c411948f7de0575a800221960b0144daeb7",
+      "sha256": "48fa5b110485339bc3f7ee47e55a9e6e65e6e8bc8310d38b3f4774c5c4ba6659",
+      "verified": true
+    },
+    {
+      "path": ".claude/agents/design-red-team.md",
+      "bytes": 31049,
+      "blob": "8328fcf26227fe19f731be0e5a4dc7d4dbc7bdc2",
+      "sha256": "1adbda9d68078b118641fad2fecdffa0d8090145946cfbcab9aa3fcebbcc7721",
+      "verified": true
+    },
+    {
+      "path": "docs/policies/governance/POL-GOVERNANCE-ASSURANCE-EVIDENCE/v001.md",
+      "bytes": 5821,
+      "blob": "f3b9bd8b545b3c477b61c19700e9d46beb5a2f1c",
+      "sha256": "a6176c0c75342dfa6cbf66cf64e00b9a2940a47655f343e255b96f4fa58c5d52",
+      "verified": true
+    },
+    {
+      "path": ".kiro/specs/graph-assurance/design.md",
+      "bytes": 82591,
+      "blob": "2516a8439794e5ad0b9312af5d16320eed0197f7",
+      "sha256": "19518ab48e00f1f293b8e34fbe64167ecfa23e0b03ef8240ce20af14bca83de9",
+      "verified": true
+    },
+    {
+      "path": ".kiro/specs/graph-assurance/requirements.md",
+      "bytes": 85128,
+      "blob": "a44c300f58cf72c1c6e1424baa4c3b9100fcb869",
+      "sha256": "7b713378952749586d63f6af7f2c8c7d435b439799c23f3172695b7b660d9607",
+      "verified": true
+    },
+    {
+      "path": ".kiro/specs/graph-assurance/tasks.md",
+      "bytes": 28125,
+      "blob": "4189c06276cb35a32c66aee9f35333cb711acc20",
+      "sha256": "96277b467ce56fc6f3d8df5c36f1326469664c3cf733c20037ff580927798169",
+      "verified": true
+    },
+    {
+      "path": ".kiro/steering/guard-security-privacy.md",
+      "bytes": 72005,
+      "blob": "885340a951babbd66e2797f9dfde709a08503d5d",
+      "sha256": "a16daa45da7cfe0a6cc5501d988497f2d3bf4bdf4a876966ff390dd30865fc00",
+      "verified": true
+    },
+    {
+      "path": "docs/reviews/NESBERRY-PURPLE-TEAM-DESIGN-ASSURANCE.md",
+      "bytes": 172734,
+      "blob": "34fd4c27e6d87ad939ed8196cd42cbf3c8eeba53",
+      "sha256": "4b5cf3379fe058f0826a360556759ae7a6b7bd9f4051e9d79d519cc383f7bc73",
+      "verified": true
+    },
+    {
+      "path": "docs/reviews/NESBERRY-PURPLE-TEAM-REVIEW-RUNBOOK.md",
+      "bytes": 35041,
+      "blob": "39500adfeb0de0c404342e6f9917507a5e226ec4",
+      "sha256": "b16294368e861d0dd029bf46e2e6a202b8582afaf0a878138df3fa42c2a02325",
+      "verified": true
+    }
+  ]
+}

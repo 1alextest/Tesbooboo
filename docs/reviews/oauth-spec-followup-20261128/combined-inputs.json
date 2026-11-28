@@ -1,0 +1,214 @@
+{
+  "specification_parent": "b915a26458efe1bcb50f0a88423c2e183a8d8698",
+  "original_candidate": "5a9936efa07e6373487186df10c7c7d1fe1cb3a4",
+  "product_reference": "466427f45da8b47b1ae6ea31cd25433de9128fb6",
+  "candidate_root": "/workspace/scratch/49b3f13cfc23/tesbo-oauth-specs-integrated",
+  "product_root": "/workspace/scratch/49b3f13cfc23/tesbo-oauth-product-current",
+  "scope": "Combined documentation candidate with concurrent work preserved and specialist findings reconciled; no runtime acceptance",
+  "files": [
+    {
+      "owner": "candidate",
+      "path": "AGENTS.md",
+      "bytes": 24550,
+      "sha256": "3e346ca748f61eda52cf8a1360ae5492ed65b1942e6ed375f8eafbc570bee185"
+    },
+    {
+      "owner": "candidate",
+      "path": "CLAUDE.md",
+      "bytes": 23108,
+      "sha256": "37bf4f5bc266b5123e0a681d24cfbf80eab36e6f03b6358a24cf8d106d242198"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/specs/mcp-oauth-chatgpt-connection.md",
+      "bytes": 68263,
+      "sha256": "9ad4f2da8e305000fb942e9977e7cef4b1c72290e27b41890337fed7f382d47e"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/reviews/MCP-OAUTH-ASSURANCE-2026-11-23.md",
+      "bytes": 30572,
+      "sha256": "d95d34b61812a0a04e85b32dcd407961aac6a8aa5b1aad80f857c028af2a3132"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/agent-scope-discipline.md",
+      "bytes": 28123,
+      "sha256": "d783825603195f3c2c5a3bec9ca06e9d856d0829e2efd0bcfcce4632a4597981"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/agent-skills/living-security-engineering/SKILL.md",
+      "bytes": 30358,
+      "sha256": "f2fb76df6a2f2edda711e0e0a134641994c5bd00522d455f5df26f438f168777"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/agent-skills/evidence-grounded-decisions/SKILL.md",
+      "bytes": 20670,
+      "sha256": "0a8107b9d2b769fc9278a13effb7d34f75adc7ce7f84cf00a6bb9341f148c2d4"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/00_README.md",
+      "bytes": 191723,
+      "sha256": "520464ab84faba56717827c3e93052930116fd895d8e40b1c3ade52088fa4693"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 191776,
+      "sha256": "4b130380704272dc963988937d2151c388c97c7830bb8b6c909ac114e1328175"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/source-manifest.json",
+      "bytes": 7066,
+      "sha256": "5349f6118265ad2d7f822bbdbee3cec34268e467a48e0a5323a613dedaacd899"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/deploy-guide.md",
+      "bytes": 17731,
+      "sha256": "90284c3d42191812920c5970bc814645e19c5c8db9b92165cdd1b2c69f825a0c"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/reviews/oauth-spec-followup-20261128/review-brief.md",
+      "bytes": 3004,
+      "sha256": "3fa92343b53f589d103bc3ff64f2e04a9ed18db373007a108b200f54faa8f3e7"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 258381,
+      "sha256": "3f5967d85488d2ebd02d63e5cfe6fe03cd1bfae0fc8569a0b4e5743936f10938"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 201032,
+      "sha256": "cdbe9da7041e71a07a552ee0152af0a5123d8b3e8b768f2043a9d6a36b327630"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "bytes": 474580,
+      "sha256": "bb1697bda0b2465b72465308559d3d3dd65a614277b7e26377ff045e22286df6"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "bytes": 216938,
+      "sha256": "22027f411ccbb62ddfa6d8984eb9d6a032f50430603675b2d50d073995105111"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 452328,
+      "sha256": "b5a8f1e0b4b4dc6949bc39d0cebdf9fe8ff4d36d9adee673798099b49c3a1eda"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "bytes": 171617,
+      "sha256": "b862fb02b096b4ad80077f277ddbc2b4cbdb661d31d789090bb3319153b142a3"
+    },
+    {
+      "owner": "candidate",
+      "path": "scripts/check-gitleaks-evidence-exceptions.py",
+      "bytes": 16800,
+      "sha256": "a7afd2ed989726b443101dc548addc48f2c20c492ef9ecc06f3994f01ebef8a0"
+    },
+    {
+      "owner": "candidate",
+      "path": "docs/qa-orchestration/reviews/whole-system-owner-amendment-20261128.md",
+      "bytes": 3958,
+      "sha256": "d08ee64d185506408ccb7de2dd07a6c0ff3337d8a5b4be3792fdfd32aba00ad1"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/auth/mcp-oauth-server.ts",
+      "bytes": 14998,
+      "sha256": "e295af265583f74bd82c374539a1f81ff56cc60eded94c15fa4225389880b1b8"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/auth/auth.service.ts",
+      "bytes": 15417,
+      "sha256": "4b2714e5a7bbb1a780ceed05da9e4e39f468321495c189f7a9827e722e912258"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/auth/otp.service.ts",
+      "bytes": 6705,
+      "sha256": "362185db00e49c871703f0b1a7066d54d98eb9a1e090d9b0928711142d28a117"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp-oauth-interaction.controller.ts",
+      "bytes": 14099,
+      "sha256": "25e3571b13b0b4a5fcca1d299882f44cd2b94fe03ded566ec3b18ef8226a160a"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp.service.ts",
+      "bytes": 34336,
+      "sha256": "2d6193a266ca7901e95aea2a900a894d0d37d9b862084cfb0e8cc6a7011d553b"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/mcp/mcp-access.ts",
+      "bytes": 8151,
+      "sha256": "65c269f4802aa9bf3bbb466095b73c1097a82d8365865d57220f8f613b8540aa"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/src/main.ts",
+      "bytes": 8177,
+      "sha256": "4ad1d442914973b98a868d7f45cd38151cc855fbc25f4efa6578105d0d81198e"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Frontend/components/project/ExternalMcpAccessPanel.tsx",
+      "bytes": 20792,
+      "sha256": "8ef99a869c924ce83cfb37636628c0ac26a61f8ee5230da7f8d5b5e8c965a160"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Frontend/lib/api.ts",
+      "bytes": 216098,
+      "sha256": "72873148eef88b5342d9fe4df1665ea396b31b97c19bf5ad46fddb5e667b7d76"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Frontend/lib/redirect.ts",
+      "bytes": 5824,
+      "sha256": "5680819e34abc92ebb5afc2131e266782beb73ff57ff59aea37bdada020c5b8a"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Frontend/next.config.mjs",
+      "bytes": 1019,
+      "sha256": "41882c72e2f8e12c9327ef21866bd05671708ecd5c65583dd6b401e84f37c115"
+    },
+    {
+      "owner": "product_reference",
+      "path": "e2e/ui/oauth-login-continuation.spec.ts",
+      "bytes": 5014,
+      "sha256": "4080bfd53ce985b479d8861461dccce934d5b029f2e4d410af41d19429e8da99"
+    },
+    {
+      "owner": "product_reference",
+      "path": "Tesbo-Backend-Nest/scripts/ci/oauth-interaction-redirect.cjs",
+      "bytes": 17451,
+      "sha256": "bb98e9ec6f6f2e0aa802e27eb5fe4c067c17a4466ca5dae44517686438db8459"
+    },
+    {
+      "owner": "product_reference",
+      "path": "scripts/mcp-deploy-check.mjs",
+      "bytes": 28623,
+      "sha256": "6a6388995c655146a35f612b384d7e28e77ec3197f66d82c9f9907ec2c2be43f"
+    }
+  ]
+}

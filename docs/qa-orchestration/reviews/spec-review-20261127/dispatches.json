@@ -1,0 +1,232 @@
+{
+  "kind": "coordinator_dispatch_record",
+  "authority": "Record of actual collaboration.spawn_agent calls in this session; not a signed platform or human attestation.",
+  "tool_return_limit": "The tool returned canonical task names, not separate invocation IDs. No invocation ID or dispatch timestamp is reconstructed.",
+  "dispatches": [
+    {
+      "task_name": "/root/blue_a",
+      "role": "Blue A",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C1",
+      "input_manifest": "candidate-c1-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/blue_b",
+      "role": "Blue B",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C1",
+      "input_manifest": "candidate-c1-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/red_a",
+      "role": "Red A",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C1",
+      "input_manifest": "candidate-c1-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/red_b",
+      "role": "Red B",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C1",
+      "input_manifest": "candidate-c1-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/grey",
+      "role": "Grey / SUJT",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C1",
+      "input_manifest": "candidate-c1-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/security",
+      "role": "Security",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C1",
+      "input_manifest": "candidate-c1-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/green_a",
+      "role": "Green A",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C2",
+      "input_manifest": "candidate-c2-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/green_b",
+      "role": "Green B",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C2",
+      "input_manifest": "candidate-c2-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/qa",
+      "role": "QA",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C2",
+      "input_manifest": "candidate-c2-inputs.json",
+      "prior_report_context": "Independent question/oracle derivation saved first; Grey original explicitly consumed and challenged afterward under QA charter."
+    },
+    {
+      "task_name": "/root/purple",
+      "role": "Purple",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C2",
+      "input_manifest": "candidate-c2-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/elephant_gold",
+      "role": "Elephant-Gold",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C2",
+      "input_manifest": "candidate-c2-inputs.json",
+      "prior_report_context": "Withheld before original output; candidate contains authored historical judgments and proposals."
+    },
+    {
+      "task_name": "/root/graph",
+      "role": "Graph Assurance",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C2",
+      "input_manifest": "candidate-c2-inputs.json",
+      "prior_report_context": "Specialist originals, verifier receipts and explicitly informed C2 addenda consumed for closeout; not blind discovery."
+    },
+    {
+      "task_name": "/root/white",
+      "role": "White",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "candidate": "C4",
+      "input_manifest": "candidate-c4-inputs.json",
+      "prior_report_context": "Deliberately informed final evidence/ownership gate after original specialists and current manual Graph; no blind discovery claim."
+    }
+  ],
+  "informed_followups": [
+    {
+      "task_name": "/root/blue_a",
+      "tool": "collaboration.followup_task",
+      "candidate": "C2",
+      "output": "teams/blue-a-c2-delta.md",
+      "purpose": "Focused informed correction/continuity check; original output preserved."
+    },
+    {
+      "task_name": "/root/blue_b",
+      "tool": "collaboration.followup_task",
+      "candidate": "C2",
+      "output": "teams/blue-b-c2-delta.md",
+      "purpose": "Focused informed correction/continuity check; original output preserved."
+    },
+    {
+      "task_name": "/root/red_a",
+      "tool": "collaboration.followup_task",
+      "candidate": "C2",
+      "output": "teams/red-a-c2-delta.md",
+      "purpose": "Focused informed correction/continuity check; original output preserved."
+    },
+    {
+      "task_name": "/root/red_b",
+      "tool": "collaboration.followup_task",
+      "candidate": "C2",
+      "output": "teams/red-b-c2-delta.md",
+      "purpose": "Focused informed correction/continuity check; original output preserved."
+    },
+    {
+      "task_name": "/root/security",
+      "tool": "collaboration.followup_task",
+      "candidate": "C2",
+      "output": "teams/security-c2-delta.md",
+      "purpose": "Focused informed correction/continuity check; original output preserved."
+    },
+    {
+      "task_name": "/root/grey",
+      "tool": "collaboration.followup_task",
+      "candidate": "C2",
+      "output": "teams/grey-c2-delta.md",
+      "purpose": "Focused informed correction/continuity check; original output preserved."
+    },
+    {
+      "task_name": "/root/green_a",
+      "tool": "collaboration.followup_task",
+      "candidate": "C3/C4",
+      "output": "teams/green-a-c3-delta.md; teams/green-a-c4-delta.md",
+      "purpose": "Focused informed concurrent-integration/successor review; original reports preserved. C4 navigation check disclosed by subsequent send_message for Green members."
+    },
+    {
+      "task_name": "/root/green_b",
+      "tool": "collaboration.followup_task",
+      "candidate": "C3/C4",
+      "output": "teams/green-b-c3-delta.md; teams/green-b-c4-delta.md",
+      "purpose": "Focused informed concurrent-integration/successor review; original reports preserved. C4 navigation check disclosed by subsequent send_message for Green members."
+    },
+    {
+      "task_name": "/root/security",
+      "tool": "collaboration.followup_task",
+      "candidate": "C4",
+      "output": "teams/security-c4-delta.md",
+      "purpose": "Focused informed concurrent-integration/successor review; original reports preserved. C4 navigation check disclosed by subsequent send_message for Green members."
+    },
+    {
+      "task_name": "/root/graph",
+      "tool": "collaboration.followup_task",
+      "candidate": "C4",
+      "output": "teams/graph-c4-delta.md",
+      "purpose": "Focused informed concurrent-integration/successor review; original reports preserved. C4 navigation check disclosed by subsequent send_message for Green members."
+    },
+    {
+      "task_name": "/root/red_b",
+      "tool": "collaboration.followup_task",
+      "candidate": "C4",
+      "output": "teams/red-b-c4-method-delta.md",
+      "purpose": "Apply actual revised method to existing unlike conceptual cases; no empirical/runtime efficacy claim."
+    }
+  ],
+  "preparation_dispatches": [
+    {
+      "task_name": "/root/concurrent_integration_review",
+      "tool": "collaboration.spawn_agent",
+      "fork_turns": "none",
+      "model_override": null,
+      "purpose": "Read-only incoming639-versus-C2 semantic preservation analysis; not a formal assurance role.",
+      "output": "preparation/concurrent-integration-preparation.md"
+    },
+    {
+      "task_name": "/root/concurrent_integration_review",
+      "tool": "collaboration.followup_task",
+      "purpose": "Informed C3 preservation readback plus later disclosed C4navigation closure; no role/quorum claim.",
+      "output": "preparation/concurrent-integration-readback.md"
+    }
+  ]
+}

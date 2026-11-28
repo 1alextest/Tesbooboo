@@ -1,0 +1,97 @@
+{
+  "scope": "Pre-White evidence freeze; reviewer reports are analytical, not runtime results or human approval",
+  "original_candidate": "5a9936efa07e6373487186df10c7c7d1fe1cb3a4",
+  "combined_input_sha256": "862511a9fa6a4f422a8fce081f56775e7ac47fd79193584c7551504686403475",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 10746,
+      "sha256": "f64109c42b128accc61c22acd9f570f2ff4ed3cc2788a2cbe5e1f3e352f69085"
+    },
+    {
+      "path": "archaeology-original.md",
+      "bytes": 16756,
+      "sha256": "d1a755d80f87e8662e2b222311994da332436f357ea407bdb04afe8b16c978ac"
+    },
+    {
+      "path": "blue-graph-original.md",
+      "bytes": 21432,
+      "sha256": "7f787175acc36c3e85b44e1fa91cdf9c6d61650c67e384780ff7a8735136611d"
+    },
+    {
+      "path": "blue-graph-reconciliation.md",
+      "bytes": 12786,
+      "sha256": "24f0e40265b67a47484403a875532b4c8fc703f75c40c3e2e691aeba396e9a31"
+    },
+    {
+      "path": "combined-inputs.json",
+      "bytes": 7649,
+      "sha256": "862511a9fa6a4f422a8fce081f56775e7ac47fd79193584c7551504686403475"
+    },
+    {
+      "path": "document-checks.json",
+      "bytes": 8408,
+      "sha256": "5e8159266929532c901209c62c3b4f1a110686f1070354ded8b92035f6c6179b"
+    },
+    {
+      "path": "green-ops-original.md",
+      "bytes": 18449,
+      "sha256": "1fe28712ea90e54002f739335a0f9a86e7490bc7ba93de56938d5b87c123affc"
+    },
+    {
+      "path": "green-ops-reconciliation.md",
+      "bytes": 11671,
+      "sha256": "b008c5a5494f37a4e673bc8c5ff94d91f9ff30e112c976f29f309a0efa35cd4d"
+    },
+    {
+      "path": "grey-purple-original.md",
+      "bytes": 20112,
+      "sha256": "c641028d171d3884148617d7f23bd9004f84aed6786b07d34b1ddb2b21f861ea"
+    },
+    {
+      "path": "inputs.json",
+      "bytes": 5648,
+      "sha256": "0cba2bb837eb439367d59a6d1c9e2318684601dc46c8ddc4cf36475595ff93e4"
+    },
+    {
+      "path": "method-challenge-original.md",
+      "bytes": 19493,
+      "sha256": "97fb6d6ea8cf38a029971e41899da17d4fd73fb1be2d52af218c9bc1f698066c"
+    },
+    {
+      "path": "qa-lifecycle-original.md",
+      "bytes": 26109,
+      "sha256": "54cb09fcaefa59a895a6d28d81598f1c5faef273191ca2c65f15d16c2a118ae9"
+    },
+    {
+      "path": "red-eg-original.md",
+      "bytes": 21582,
+      "sha256": "4d82a50a9947e97361074db6efa4657c2dd46fa967739b40cb08d324b809044e"
+    },
+    {
+      "path": "red-eg-reconciliation.md",
+      "bytes": 11499,
+      "sha256": "b2c26b6b86d71d2e83c643e1b3a5626d3e69acef4d39c301edf8422f115b1ed4"
+    },
+    {
+      "path": "review-brief.md",
+      "bytes": 3004,
+      "sha256": "3fa92343b53f589d103bc3ff64f2e04a9ed18db373007a108b200f54faa8f3e7"
+    },
+    {
+      "path": "security-original.md",
+      "bytes": 20642,
+      "sha256": "ce7115fc619c8643e624c7072bca10354c9b7890412018522109533d4fe1430a"
+    },
+    {
+      "path": "security-reconciliation.md",
+      "bytes": 10717,
+      "sha256": "3abacbb44440526bde6f14cc6185c19be047379e4f499a2c4bcbf26706bb939d"
+    },
+    {
+      "path": "white-original.md",
+      "bytes": 13536,
+      "sha256": "6025abbfaea0ee3f771892b07da57dcf1a4e0902307112b06480ff3e966957ae"
+    }
+  ]
+}

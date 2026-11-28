@@ -1,0 +1,47 @@
+--- a/docs/qa-orchestration/source-manifest.json
++++ b/docs/qa-orchestration/source-manifest.json
+@@ -82,9 +82,9 @@
+   "files": [
+     {
+       "path": "00_README.md",
+-      "bytes": 188956,
+-      "sha256": "424ab26a78e97081420324c45073251629bf0e1eae06a7157122eb9e4df6424c",
+-      "git_blob": "6e56f3526f714a24e0e83c04c83339432081ecc5"
++      "bytes": 189087,
++      "sha256": "8bd77b049d640e6bc4e579d9a686e67dee196fdd2526717316c505d25f28df1c",
++      "git_blob": "59238074785e28aa40f5b0e70cbec3c98d4566d0"
+     },
+     {
+       "path": "01_PRODUCT_REQUIREMENTS.md",
+@@ -118,9 +118,9 @@
+     },
+     {
+       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+-      "bytes": 182583,
+-      "sha256": "1d131d1dffde3c099bedcfdf480379735ac71e8299a5a0fcc5a9569e23a805a1",
+-      "git_blob": "6893fe9e035cbc84303b231105ee8647d30b68d2"
++      "bytes": 182753,
++      "sha256": "5c7503220dcf1bed842cfca5cb9f71781f6dd0241b1b27c5c4727c8dd1835041",
++      "git_blob": "94887aff8dc9af1b5387634e5cda972578f3ac29"
+     },
+     {
+       "path": "07_UI_DESIGN_TASKS.md",
+--- a/docs/qa-orchestration/00_README.md
++++ b/docs/qa-orchestration/00_README.md
+@@ -908,7 +908,7 @@
+ 
+ Candidate contributions include sources, external executors, method/content packages, analysis/verification, reporting/export, notification/workflow and product/UI extensions. These illustrative profiles are not a closed enum. Proposed FR-125, T-462 and AC-094 retain the distinct general requirement, bounded design qualification and future acceptance identities introduced by the concurrent PR295 amendment; none is an official native record or implementation authorization. An extension can contribute to more than one admitted point, but its manifest cannot grant authority or replace native record owners. Existing integrations or supported external clients may already solve the need without a new installed package. FR-058/T-408 cover execution integration; they are not retroactively relabeled as a complete general plugin platform.
+ 
+-The [portable method](06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer) extends the existing two-stage practice: distill a conditional principle from evidence, then instantiate it against the target's actual constraints. Use it for meaningful feature additions, extensions, architecture/contract choices and recurring failures across the engineering lifecycle. Reuse adequate current research for routine work. The supporting [plugin research PR](https://github.com/1alextest/Tesbooboo/pull/315) retains the original Quality Forge, Agentic QE, Nagual and Obsidian investigations and adds comparable extension-system precedents. Documentation of a mechanism is not measured proof of its success, and a familiar vendor is not evidence that the mechanism transfers.
++The [portable method](06_IMPLEMENTATION_AGENT_BRIEF.md#evidence-informed-engineering-and-precedent-transfer) extends the existing two-stage practice: distill a conditional principle from evidence, then instantiate it against the target's actual constraints. Use it for meaningful feature additions, extensions, architecture/contract choices and recurring failures across the engineering lifecycle. Reuse adequate current research for routine work. The current [plugin research record](reviews/plugin-ecosystem-obsidian-review.md) retains the original Quality Forge, Agentic QE, Nagual and Obsidian investigations and the expanded extension-system precedents. [PR315](https://github.com/1alextest/Tesbooboo/pull/315) is their historical research origin; the current continuation travels in PR295. Documentation of a mechanism is not measured proof of its success, and a familiar vendor is not evidence that the mechanism transfers.
+ 
+ | Canonical owner | This amendment's responsibility |
+ | --- | --- |
+--- a/docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md
++++ b/docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md
+@@ -877,4 +877,4 @@
+ 
+ Preserve original independent outputs before informed synthesis. Give reviewers outcome, unchanged charter, exact target artifacts and actual environment, not the author's desired findings or answer key. Disclose unavoidable historical judgments inside existing specifications. Use actual role reports to support a team-run claim; assigning labels to one self-review does not establish independently executed teams. An informed review of this explicit proposal does not test whether the method would have independently discovered the earlier need.
+ 
+-**Plugin contextual application.** Candidate plugin profiles and lifecycle constraints belong to canonical 01–05/07. Compare source/content contributions, external executors, analysis/report and admitted UI behavior against their own effects; Obsidian remains an example. Borrow a narrow versioned interface or lifecycle lesson only with its assumptions. Keep signatures, process placement, containment and current authorization separate. Do not infer that a general plugin registry exists from executor MCP support or that a successful document review selects the first implementation.
++**Plugin contextual application.** The current [plugin research record](reviews/plugin-ecosystem-obsidian-review.md), originally merged through PR315 and continued in PR295, owns the comparative evidence. Candidate plugin profiles and lifecycle constraints belong to canonical 01–05/07. Compare source/content contributions, external executors, analysis/report and admitted UI behavior against their own effects; Obsidian remains an example. Borrow a narrow versioned interface or lifecycle lesson only with its assumptions. Keep signatures, process placement, containment and current authorization separate. Do not infer that a general plugin registry exists from executor MCP support or that a successful document review selects the first implementation.
