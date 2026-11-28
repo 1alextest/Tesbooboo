@@ -265,3 +265,59 @@ test('Skills review evidence distinguishes approval, effective assignment, desig
   assert.equal(cite('unknown','execution','skill-approval-run','run4','Approved v2').inventoryAvailability,'partial');
   assert.throws(()=>cite('unknown','effective_configuration','project-A-case-assignment','assignment-rev7','bound to Skill case-authoring v1'),/exact supplied artifact revision/);
 });
+
+
+// Practice controls for the proposed type-neutral participation contract. These
+// are synthetic labels and data; they neither authorize nor exercise real retrieval.
+function participationBasis(){
+  const scopeRef='practice:source-participation';
+  const domainKinds=['requirement','policy','user_manual','accessibility_review','release_approval','operations_record'];
+  const participation=(selected=true,read='permitted',processing='permitted',basisGeneration='g2',effectiveGeneration='g2')=>
+    ({selected,read,processing,basisGeneration,effectiveGeneration});
+  const record=(id,role,excerpt)=>({id,revision:'v1',scopeRef,role,from:null,to:null,excerpt});
+  const inventory=(availability,reason,records,p)=>({availability,reason,records,participation:p});
+  return {purpose:'SYNTHETIC_PARTICIPATION_CALIBRATION',scopeRef,asOf:'2026-11-28',changeRef:'practice:policy-selection',domainKinds,
+    domains:{
+      requirement:inventory('supplied','Selected current evidence.',[record('r1','approved','Independent review is required.')],participation()),
+      policy:inventory('unavailable','Processing permission for this destination is not established.',[],participation(true,'permitted','denied')),
+      user_manual:inventory('excluded','This source kind is not selected.',[],participation(false)),
+      accessibility_review:inventory('partial','Only part of the selected inventory is available.',[record('a1','candidate','Proposed focus behavior needs verification.')],participation()),
+      release_approval:inventory('complete_empty','The bounded authorized inventory was completely searched.',[],participation()),
+      operations_record:inventory('unavailable','Selection changed before processing.',[],participation(true,'permitted','permitted','g1','g2'))
+    }};
+}
+test('type-neutral practice accepts a fixture-defined vocabulary and binds only supplied evidence',()=>{
+  const basis=participationBasis();
+  const context=prepareCrossArtifactContext(basis);
+  assert.equal(prepareCrossArtifactContext(JSON.parse(context)),context);
+  const parsed=JSON.parse(context);
+  assert.deepEqual(Object.keys(parsed.domains),basis.domainKinds);
+  assert.equal(parsed.domains.policy.participation.read,'permitted');
+  assert.equal(parsed.domains.policy.participation.processing,'denied');
+  assert.equal(parsed.domains.user_manual.availability,'excluded');
+  assert.equal(parsed.domains.release_approval.availability,'complete_empty');
+  const cited=bindCrossArtifactCitation(context,{domain:'accessibility_review',id:'a1',revision:'v1',excerpt:'Proposed focus behavior'});
+  assert.equal(cited.role,'candidate');
+  assert.equal(cited.inventoryAvailability,'partial');
+  assert.equal(cited.semanticVerdict,'not_adjudicated');
+  assert.equal(cited.transferAuthority,'not_established');
+  assert.throws(()=>bindCrossArtifactCitation(context,{domain:'policy',id:'p1',revision:'v1',excerpt:'secret policy'}),/exact supplied artifact revision/);
+  assert.throws(()=>bindCrossArtifactCitation(context,{domain:'user_manual',id:'m1',revision:'v1',excerpt:'unselected manual'}),/exact supplied artifact revision/);
+  assert.throws(()=>bindCrossArtifactCitation(context,{domain:'unlisted',id:'u1',revision:'v1',excerpt:'anything'}),/selected calibration vocabulary/);
+});
+test('practice refuses type inventory gaps, stale generations, and selection or processing mismatches',()=>{
+  const basis=participationBasis();
+  const invalid=(mutate,message)=>{const b=copy(basis);mutate(b);assert.throws(()=>prepareCrossArtifactContext(b),message)};
+  invalid(b=>delete b.domains.accessibility_review,/explicit disposition/);
+  invalid(b=>b.domainKinds.push('accessibility_review'),/calibration identity/);
+  invalid(b=>b.domainKinds.push('__proto__'),/calibration identity/);
+  invalid(b=>b.domainKinds.push('constructor'),/calibration identity/);
+  invalid(b=>{b.domains.policy.availability='supplied';b.domains.policy.records=[copy(b.domains.requirement.records[0])]},/cannot be supplied/);
+  invalid(b=>{b.domains.requirement.participation.read='denied'},/cannot be supplied/);
+  invalid(b=>{b.domains.requirement.participation.processing='unknown'},/cannot be supplied/);
+  invalid(b=>{b.domains.operations_record.availability='complete_empty'},/cannot be supplied/);
+  invalid(b=>{b.domains.user_manual.availability='unavailable'},/Unselected inventory/);
+  invalid(b=>{b.domains.user_manual.participation.selected=true},/Excluded inventory/);
+  invalid(b=>{b.domains.release_approval.records=[copy(b.domains.requirement.records[0])]},/conflicts with record inventory/);
+  invalid(b=>{b.domains.policy.records=[copy(b.domains.requirement.records[0])]},/conflicts with record inventory/);
+});

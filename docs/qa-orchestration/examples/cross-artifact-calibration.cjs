@@ -3,8 +3,15 @@
 // Never use this helper to retrieve or authorize real governed material.
 const ARTIFACT_DOMAINS = ['implementation','requirement','policy','user_manual','test_case','defect','execution','design','decision','skill'];
 const WHOLE_SYSTEM_DOMAINS = [...ARTIFACT_DOMAINS,'stakeholder_outcome','data_contract','interface_contract','effective_configuration','operational_observation'];
-const domainList = purpose => purpose==='SYNTHETIC_CROSS_ARTIFACT_CALIBRATION'?ARTIFACT_DOMAINS:
-  purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'?WHOLE_SYSTEM_DOMAINS:null;
+// New practice vocabulary is supplied by the frozen fixture, not a product taxonomy.
+// Keep the two earlier synthetic protocols and their serialized inputs unchanged.
+const PARTICIPATION_PURPOSE = 'SYNTHETIC_PARTICIPATION_CALIBRATION';
+const validKind = kind => typeof kind==='string' && /^[a-z][a-z0-9_]{0,63}$/.test(kind) &&
+  !['constructor','prototype'].includes(kind);
+const domainList = (purpose, domainKinds) => purpose==='SYNTHETIC_CROSS_ARTIFACT_CALIBRATION'?ARTIFACT_DOMAINS:
+  purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'?WHOLE_SYSTEM_DOMAINS:
+  purpose===PARTICIPATION_PURPOSE && Array.isArray(domainKinds) && domainKinds.length>0 &&
+    domainKinds.length<=32 && domainKinds.every(validKind) && new Set(domainKinds).size===domainKinds.length ? domainKinds:null;
 const roles = ['approved','candidate','rejected','observed','historical'];
 const availability = ['supplied','unavailable','not_applicable'];
 const text = v => typeof v === 'string' && v.trim().length > 0;
@@ -17,20 +24,37 @@ const date = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) &&
   !Number.isNaN(Date.parse(v+'T00:00:00Z')) && new Date(v+'T00:00:00Z').toISOString().slice(0,10) === v;
 
 function prepareCrossArtifactContext(basis) {
-  assert(keys(basis,['purpose','scopeRef','asOf','changeRef','domains']) &&
-    domainList(basis.purpose) !== null && identity(basis.scopeRef) &&
+  const participationMode=basis?.purpose===PARTICIPATION_PURPOSE;
+  const basisKeys=['purpose','scopeRef','asOf','changeRef','domains',...(participationMode?['domainKinds']:[])];
+  assert(keys(basis,basisKeys) &&
+    domainList(basis.purpose,basis.domainKinds) !== null && identity(basis.scopeRef) &&
     identity(basis.changeRef) && date(basis.asOf), 'Invalid calibration identity or date');
-  const selectedDomains=domainList(basis.purpose);
+  const selectedDomains=domainList(basis.purpose,basis.domainKinds);
   assert(keys(basis.domains,selectedDomains),'Every artifact domain needs an explicit disposition');
   const seen = new Set();
   let totalChars=0, count=0;
   const domains = {};
   for (const domain of selectedDomains) {
     const row=basis.domains[domain];
-    const partiallySupplied=basis.purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION' && row?.availability==='partial';
-    assert(keys(row,['availability','reason','records']) && (availability.includes(row.availability)||partiallySupplied) &&
+    const partiallySupplied=(basis.purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'||participationMode) && row?.availability==='partial';
+    const extraAvailability=participationMode&&['excluded','complete_empty'].includes(row?.availability);
+    assert(keys(row,['availability','reason','records',...(participationMode?['participation']:[])]) &&
+      (availability.includes(row.availability)||partiallySupplied||extraAvailability) &&
       text(row.reason) && row.reason.length<=500 && Array.isArray(row.records) && row.records.length<=12,
       'Invalid domain inventory: '+domain);
+    if(participationMode){
+      const p=row.participation;
+      const permissionStates=['permitted','denied','unknown'];
+      assert(keys(p,['selected','read','processing','basisGeneration','effectiveGeneration']) &&
+        typeof p.selected==='boolean' && permissionStates.includes(p.read) && permissionStates.includes(p.processing) &&
+        identity(p.basisGeneration) && identity(p.effectiveGeneration),'Invalid synthetic participation basis');
+      const canSupply=p.selected && p.read==='permitted' && p.processing==='permitted' &&
+        p.basisGeneration===p.effectiveGeneration;
+      if(['supplied','partial','complete_empty'].includes(row.availability))
+        assert(canSupply,'Inventory cannot be supplied under unselected, denied, unknown or stale participation');
+      if(row.availability==='excluded')assert(!p.selected,'Excluded inventory conflicts with selection');
+      if(!p.selected)assert(['excluded','not_applicable'].includes(row.availability),'Unselected inventory must be distinguished');
+    }
     assert((row.availability==='supplied'||partiallySupplied)===(row.records.length>0),'Availability conflicts with record inventory: '+domain);
     const records=row.records.map(record=>{
       assert(keys(record,['id','revision','scopeRef','role','from','to','excerpt']) &&
@@ -45,17 +69,22 @@ function prepareCrossArtifactContext(basis) {
       return {id:record.id,revision:record.revision,scopeRef:record.scopeRef,role:record.role,
         from:record.from,to:record.to,excerpt:record.excerpt};
     }).sort((a,b)=>compare(JSON.stringify([a.id,a.revision]),JSON.stringify([b.id,b.revision])));
-    domains[domain]={availability:row.availability,reason:row.reason,records};
+    domains[domain]={availability:row.availability,reason:row.reason,records,
+      ...(participationMode?{participation:{
+        selected:row.participation.selected,read:row.participation.read,processing:row.participation.processing,
+        basisGeneration:row.participation.basisGeneration,effectiveGeneration:row.participation.effectiveGeneration
+      }}:{})};
   }
   assert(count<=64&&totalChars<=24000,'Artifact context exceeds calibration limits');
   // One JSON line; the existing paired-study owner may append candidate method
   // instructions on subsequent lines. Only exact selected source excerpts go here.
-  return JSON.stringify({purpose:basis.purpose,scopeRef:basis.scopeRef,asOf:basis.asOf,changeRef:basis.changeRef,domains});
+  return JSON.stringify({purpose:basis.purpose,scopeRef:basis.scopeRef,asOf:basis.asOf,changeRef:basis.changeRef,
+    ...(participationMode?{domainKinds:selectedDomains}:{}),domains});
 }
 
 function bindCrossArtifactCitation(context, citation) {
   assert(typeof context==='string' && keys(citation,['domain','id','revision','excerpt']) &&
-    WHOLE_SYSTEM_DOMAINS.includes(citation.domain) && text(citation.id) &&
+    validKind(citation.domain) && text(citation.id) &&
     text(citation.revision) && text(citation.excerpt),'Invalid exact artifact citation');
   // Call only after verifySubjectPacket has independently bound the full input.
   // JSON escapes newlines inside excerpts, so appended method text is not evidence.
@@ -63,7 +92,7 @@ function bindCrossArtifactCitation(context, citation) {
   let basis;
   try {basis=JSON.parse(firstLine)} catch {throw Error('Invalid frozen artifact context')}
   assert(prepareCrossArtifactContext(basis)===firstLine,'Noncanonical artifact context');
-  assert(domainList(basis.purpose).includes(citation.domain),'Citation domain not in the selected calibration vocabulary');
+  assert(domainList(basis.purpose,basis.domainKinds).includes(citation.domain),'Citation domain not in the selected calibration vocabulary');
   const domain=basis.domains[citation.domain];
   const row=domain.records.find(r=>r.id===citation.id&&r.revision===citation.revision);
   assert((domain.availability==='supplied'||domain.availability==='partial')&&row&&row.excerpt.includes(citation.excerpt),
@@ -71,7 +100,7 @@ function bindCrossArtifactCitation(context, citation) {
   const interval=row.from===null&&row.to===null?'not_recorded':
     (row.from!==null&&basis.asOf<row.from)||(row.to!==null&&basis.asOf>row.to)?'outside_recorded_interval':'within_recorded_interval';
   return {domain:citation.domain,id:row.id,revision:row.revision,role:row.role,
-    interval,scopeRef:basis.scopeRef,...(basis.purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'?{inventoryAvailability:domain.availability}:{}),
+    interval,scopeRef:basis.scopeRef,...(basis.purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'||basis.purpose===PARTICIPATION_PURPOSE?{inventoryAvailability:domain.availability}:{}),
     semanticVerdict:'not_adjudicated',transferAuthority:'not_established'};
 }
 
