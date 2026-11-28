@@ -5352,6 +5352,8 @@ export async function listZyraGraphChanges(
 export type GraphQaConsequencePreview = {
   receiptId: string;
   projectId: string;
+  /** Relative to persisted history at read time; absent on older API builds. */
+  captureBasis?: "latest_recorded" | "historical_later_same_scope" | "historical_later_other_scope" | "unknown";
   source: { contractId: string; scopeFingerprint: string; fromRevision: string; toRevision: string };
   status: "needs_qa_triage";
   basis: "cached_source_reference_only" | "source_declaration_unattested" | "verified_source_bytes_unverified_semantics";

@@ -17,8 +17,13 @@ const receipt: QaChangeReviewReceipt = {
     coverageAssertion: 'none', executionAssertion: 'none', verification: 'not_performed' }
 };
 
-function context(authorized: boolean, value: QaChangeReviewReceipt | null = receipt) {
-  const query = jest.fn(async (_sql: string, _params: unknown[]) => ({ rows: [{ authorized, receipt: value }] }));
+const metadata = { id: '42', contractId: 'cache', scopeFingerprint: 's', revision: 'new' };
+
+function context(authorized: boolean, value: QaChangeReviewReceipt | null = receipt,
+  selected: unknown = metadata, latest: unknown = metadata) {
+  const query = jest.fn(async (_sql: string, _params: unknown[]) => ({ rows: [{
+    authorized, receipt: value, selected_metadata: selected, latest_metadata: latest
+  }] }));
   const history = new CurrentCacheGraphHistory({ query } as unknown as DatabaseService, {} as never);
   return { query, history };
 }
@@ -78,5 +83,48 @@ describe('authorized, exact native QA consequence receipt read', () => {
     ]));
     expect(value.coverageAssertion).toBe('none');
     expect(value.executionAssertion).toBe('none');
+    expect(value.captureBasis).toBe('latest_recorded');
+  });
+
+  it('reports a later recorded capture without rewriting the historical receipt or claiming freshness', async () => {
+    const next = context(true, receipt, metadata, { ...metadata, id: '43', revision: 'newer' });
+    const controller = new GraphChangeReviewController(next.history, {} as never, {} as never, {} as never, {} as never);
+    const value = await controller.analyzeReceipt({ userId: USER } as never, PROJECT, '42');
+    expect(value.captureBasis).toBe('historical_later_same_scope');
+    expect(value.source).toEqual(receipt.source);
+    expect(value.sourceFreshness).toBe('unverified');
+    expect(value.coverageAssertion).toBe('none');
+    expect(next.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = next.query.mock.calls[0];
+    expect(sql).toContain('WHERE EXISTS (SELECT 1 FROM selected)');
+    expect(sql).toContain('ORDER BY h.id DESC LIMIT 1');
+    expect(params).toEqual([PROJECT, USER, '42']);
+    const original = await next.history.readReceiptForUser(USER, PROJECT, '42');
+    expect(original).toEqual(receipt);
+    expect(original).not.toHaveProperty('captureBasis');
+  });
+
+  it.each([
+    ['later identical revision', metadata, { ...metadata, id: '43' }, 'historical_later_same_scope'],
+    ['different scope', metadata, { ...metadata, id: '43', scopeFingerprint: 'other' }, 'historical_later_other_scope'],
+    ['different contract', metadata, { ...metadata, id: '43', contractId: 'other' }, 'historical_later_other_scope'],
+    ['missing latest', metadata, null, 'unknown'],
+    ['invalid latest id', metadata, { ...metadata, id: '4e3' }, 'unknown'],
+    ['latest predates selected', metadata, { ...metadata, id: '41' }, 'unknown'],
+    ['inconsistent selected revision', { ...metadata, revision: 'other' }, metadata, 'unknown'],
+    ['inconsistent same row', metadata, { ...metadata, revision: 'other' }, 'unknown'],
+    ['inconsistent selected id', { ...metadata, id: '41' }, metadata, 'unknown']
+  ])('keeps relative capture evidence conservative: %s', async (_label, selected, latest, expected) => {
+    const { history } = context(true, receipt, selected, latest);
+    expect(await history.readReceiptWithCaptureBasisForUser(USER, PROJECT, '42'))
+      .toEqual({ receipt, captureBasis: expected });
+  });
+
+  it('does not return relative capture information after denied access or a missing receipt', async () => {
+    const latest = { ...metadata, id: '43', scopeFingerprint: 'private-scope' };
+    await expect(context(false, receipt, metadata, latest).history
+      .readReceiptWithCaptureBasisForUser(USER, PROJECT, '42')).rejects.toMatchObject({ status: 403 });
+    await expect(context(true, null, null, latest).history
+      .readReceiptWithCaptureBasisForUser(USER, PROJECT, '42')).rejects.toMatchObject({ status: 404 });
   });
 });

@@ -97,6 +97,19 @@ export function GraphConsequencePreview({ projectId, historyId, receiptId }: {
         {loading && <p role="status">Reading the authorized project&apos;s recorded QA change receipt…</p>}
         {error && <p role="alert" className="text-[var(--foreground)]">{error}</p>}
         {analysis && <>
+          <section aria-label="Recorded evidence basis" className="space-y-1 border-b border-[var(--border)] pb-3">
+            <h3 className="font-semibold">Recorded evidence basis</h3>
+            {analysis.captureBasis === "latest_recorded" ? (
+              <p>This receipt describes the latest recorded capture at the time of this read.</p>
+            ) : analysis.captureBasis === "historical_later_same_scope" ? (
+              <p role="status">A later capture exists in the same recorded source scope. Review the newer basis before relying on this historical receipt for current decisions.</p>
+            ) : analysis.captureBasis === "historical_later_other_scope" ? (
+              <p role="status">The latest recorded capture has a different source scope or projection contract. Re-establish the applicable basis before comparing or relying on this historical receipt.</p>
+            ) : (
+              <p role="status">The relationship to the latest recorded capture is unavailable. Do not assume this receipt is current.</p>
+            )}
+            <p className="text-xs text-[var(--muted)]">This does not verify live source freshness, current permissions for a future action, or coverage. Historical evidence remains unchanged. Reopen this explanation to reread the recorded basis.</p>
+          </section>
           {analysis.cachedRequirementReview ? (
             <section aria-label="Changed requirement nomination review" className="space-y-2 border-b border-[var(--border)] pb-3">
               <h3 className="font-semibold">Review changed requirements</h3>
