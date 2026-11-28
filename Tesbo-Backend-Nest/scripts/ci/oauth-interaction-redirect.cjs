@@ -166,19 +166,95 @@ async function verifyBrowserConsentRead(db, accountId, projectId) {
     const session = await app.get(OtpService).createSession(accountId);
     jar.setCookie(app.get(AppConfigService).sessionCookieName + "=" + session + "; Path=/; HttpOnly; Secure", host, "/");
     page = new URL(returnPath, origin);
-    for (const label of ["Continue as this Tesbo user", "Authorize read-only access"]) {
+    // Use the authoritative disposable fixture facts, not a page-wide substring.
+    const context = (await db.query(
+      `SELECT p.id AS project_id,p.key AS project_key,p.name AS project_name,
+              o.id AS workspace_id,o.name AS workspace_name
+         FROM projects p JOIN organizations o ON o.id=p.organization_id
+        WHERE p.id=$1`, [projectId])).rows[0];
+    assert.ok(context && context.project_name === "Disposable OAuth CI" &&
+      context.workspace_name === "OAuth CI" && context.project_key === "OA18",
+      "The review must use the dedicated OAuth fixture");
+    function reviewField(document, label) {
+      const fields = [...document.matchAll(/<dt>([^<]+)<\/dt>\s*<dd>([\s\S]*?)<\/dd>/g)]
+        .filter(match => match[1] === label);
+      assert.equal(fields.length, 1, "Exactly one review field: " + label);
+      // Compare literal markup from the trusted synthetic fixture; never strip or render unknown HTML.
+      return fields[0][2];
+    }
+    // Discriminating controls: unexpected markup must not be normalized into a pass.
+    assert.equal(reviewField('<dt>Client</dt><dd>Disposable reader</dd>', "Client"), "Disposable reader");
+    assert.throws(() => assert.equal(
+      reviewField('<dt>Client</dt><dd><b>Disposable reader</b></dd>', "Client"), "Disposable reader"),
+      { name: "AssertionError" });
+    assert.throws(() => reviewField('<dt>Client</dt><dd>a</dd><dt>Client</dt><dd>b</dd>', "Client"),
+      { name: "AssertionError" });
+    assert.equal(reviewField('<dt>Workspace</dt><dd>OAuth CI <span class="muted">(id)</span></dd>', "Workspace"),
+      'OAuth CI <span class="muted">(id)</span>');
+    async function reviewForm(label, workspaceName) {
       assert.ok(page.pathname.startsWith("/api/oauth/interactions/"), "Expected Tesbo's review page");
       const response = await navigate("get", page);
       assert.equal(response.status, 200, label + " page");
-      assert.ok(response.text.includes(label) && response.text.includes("Disposable OAuth CI") &&
-        response.text.includes("Disposable reader"), "The review must name the project, client and requested action");
+      assert.ok(response.text.includes(label), "The review must name the requested action");
+      assert.equal(reviewField(response.text, "Client"), "Disposable reader");
+      assert.equal(reviewField(response.text, "Client ID"), clientId);
+      assert.equal(reviewField(response.text, "Callback origin"), new URL(redirect).origin);
+      assert.equal(reviewField(response.text, "Workspace"),
+        workspaceName + ' <span class="muted">(' + context.workspace_id + ')</span>');
+      assert.equal(reviewField(response.text, "Project"),
+        context.project_name + ' <span class="muted">(' + context.project_key + " · " + context.project_id + ')</span>');
       const action = /<form method="post" action="([^"]+)"/.exec(response.text)?.[1];
       const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(response.text)?.[1];
       const review = /name="review" value="([a-f0-9]{64})"/.exec(response.text)?.[1];
       assert.ok(action === page.pathname && csrf && review, "Expected the session-bound approval form");
-      const resume = destination(await navigate("post", new URL(action, page), { action: "approve", csrf, review }), label);
+      return { action, csrf, review };
+    }
+    async function approve(form) {
+      return navigate("post", new URL(form.action, page),
+        { action: "approve", csrf: form.csrf, review: form.review });
+    }
+    async function bindingCount() {
+      return (await db.query(
+        "SELECT count(*)::int AS count FROM mcp_oauth_grant_approval_bindings WHERE project_id=$1 AND account_id=$2",
+        [projectId, accountId])).rows[0].count;
+    }
+    for (const label of ["Continue as this Tesbo user", "Authorize read-only access"]) {
+      const form = await reviewForm(label, context.workspace_name);
+      let accepted;
+      if (label === "Authorize read-only access") {
+        // Only the existing disposable CI job may execute this controlled mutation.
+        const dbTarget = new URL(process.env.DATABASE_URL || "");
+        assert.equal(process.env.GITHUB_ACTIONS, "true");
+        assert.ok(["localhost", "127.0.0.1"].includes(dbTarget.hostname) &&
+          dbTarget.pathname === "/tesbo_ci" && !dbTarget.search,
+          "Refuse workspace mutation outside the disposable CI database");
+        const renamed = "OAuth CI renamed " + randomUUID();
+        const before = await bindingCount();
+        const changed = await db.query("UPDATE organizations SET name=$1 WHERE id=$2 AND name=$3",
+          [renamed, context.workspace_id, context.workspace_name]);
+        assert.equal(changed.rowCount, 1, "Rename only the identified disposable workspace");
+        try {
+          const stale = await approve(form);
+          assert.equal(stale.status, 403, "A previously reviewed workspace name cannot authorize after it changes");
+          assert.match(stale.text, /review context changed/i, "Refusal must be caused by stale review, not setup");
+          assert.equal(await bindingCount(), before, "Stale review must not create an OAuth grant binding");
+          const fresh = await reviewForm(label, renamed);
+          assert.notEqual(fresh.review, form.review, "The review fingerprint must reflect the current workspace");
+          accepted = await approve(fresh);
+          assert.ok([302, 303].includes(accepted.status), "A fresh affirmative review must succeed");
+          assert.equal(await bindingCount(), before + 1, "Only the fresh review may create a binding");
+        } finally {
+          const restored = await db.query("UPDATE organizations SET name=$1 WHERE id=$2 AND name=$3",
+            [context.workspace_name, context.workspace_id, renamed]);
+          assert.equal(restored.rowCount, 1, "Restore the disposable workspace name");
+        }
+      } else {
+        accepted = await approve(form);
+      }
+      const resume = destination(accepted, label);
       page = destination(await navigate("get", resume), "Resume after " + label);
     }
+    process.stdout.write("Verified exact consent fields and rejected stale workspace review before fresh approval.\n");
     assert.ok(page.origin + page.pathname === redirect, "Expected registered callback after consent");
     assert.ok(page.searchParams.get("state") === state && page.searchParams.get("code"), "Expected matching state and code");
     const exchange = await localRequest("post", new URL("/oauth/token", origin)).type("form").send({
