@@ -1883,7 +1883,8 @@ test.describe("zyra / agents (UI)", () => {
       `INSERT INTO zyra_chat_messages (session_id, project_id, user_id, role, content, status) VALUES ` +
         `(${literal(sessionId)}, ${literal(tenant!.mainProjectId)}, ${literal(tenant!.owner.userId)}, 'user', 'Write me some test cases', 'sent');`,
     );
-    exec(`UPDATE zyra_chat_sessions SET updated_at = now() WHERE id = ${literal(sessionId)};`);
+    const sessionTitle = stamp("Last-used session");
+    exec(`UPDATE zyra_chat_sessions SET title = ${literal(sessionTitle)}, updated_at = now() WHERE id = ${literal(sessionId)};`);
 
     await cleanPage.reload();
     const usedLabel = agentCard(cleanPage).getByText(/^Last used on \d{2} [A-Za-z]{3} \d{4}$/);
@@ -1905,12 +1906,14 @@ test.describe("zyra / agents (UI)", () => {
 
     // The Conversations sidebar retains time precision under the sitewide date/time contract.
     const chatPage = await open(browser, "/agents/zyra");
-    const sidebarRow = chatPage.locator("aside button").first();
+    // The first native button is New, not a conversation. The session rows are role=button divs.
+    const sidebar = chatPage.locator("aside").filter({ has: chatPage.getByText("Conversations", { exact: true }) });
+    const sidebarRow = sidebar.getByRole("button").filter({ has: chatPage.getByText(sessionTitle, { exact: true }) });
+    await expect(sidebarRow).toHaveCount(1);
     await expect(sidebarRow).toBeVisible();
-    const sidebarTimestamp = (await sidebarRow.locator("span").nth(1).textContent()) ?? "";
-    expect(sidebarTimestamp, "the sidebar must retain the date and absolute time").toMatch(
-      /^\d{2} [A-Za-z]{3} \d{4}, (0[1-9]|1[0-2]):[0-5]\d (AM|PM)$/,
-    );
+    const timestamp = sidebarRow.getByText(/^\d{2} [A-Za-z]{3} \d{4}, (0[1-9]|1[0-2]):[0-5]\d (AM|PM)$/);
+    await expect(timestamp, "the sidebar must retain the date and absolute time").toBeVisible();
+    const sidebarTimestamp = (await timestamp.textContent()) ?? "";
     expect(sidebarTimestamp.split(", ")[0], "both surfaces describe the seeded session's date").toBe(labelText.replace("Last used on ", ""));
   });
 
