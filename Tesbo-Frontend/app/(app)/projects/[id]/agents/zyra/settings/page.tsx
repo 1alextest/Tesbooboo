@@ -68,11 +68,12 @@ function SectionLabel({ children }: { children: ReactNode }) {
   return <div className="mb-2 pl-0.5 text-[10px] font-bold uppercase tracking-[0.09em] text-[var(--muted)]">{children}</div>;
 }
 
-function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
+function Toggle({ label, on, onChange, disabled }: { label: string; on: boolean; onChange: (value: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
+      aria-label={label}
       aria-checked={on}
       disabled={disabled}
       onClick={() => onChange(!on)}
@@ -353,7 +354,7 @@ export default function ZyraSettingsPage() {
                   <div className="text-[13px] font-medium text-[var(--foreground)]">{field.label}</div>
                   <div className="mt-0.5 text-xs text-[var(--muted)]">{field.description}</div>
                 </div>
-                <Toggle on={capabilities[field.key]} onChange={(value) => updateCapability(field.key, value)} />
+                <Toggle label={field.label} on={capabilities[field.key]} onChange={(value) => updateCapability(field.key, value)} />
               </div>
             ))}
           </Card>

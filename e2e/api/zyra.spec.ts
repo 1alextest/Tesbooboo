@@ -5503,7 +5503,8 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
    * backend has to go through the ticket table to find the key at all.
    */
   function seedTicketWithMirror(provider: "jira" | "linear", connectionId: string, key: string, projectId = tenant!.mainProjectId): string {
-    const issueId = `id-${key}-${Date.now()}`;
+    // The provider issue ID is a separate bounded identity, not the unrestricted display key.
+    const issueId = randomUUID();
     if (provider === "jira") {
       exec(
         "INSERT INTO jira_tickets (project_id, jira_connection_id, jira_issue_id, jira_issue_key, summary, description, " +
@@ -8166,11 +8167,11 @@ test.describe("zyra — writes in the language the user writes in (fake provider
       const turn = await send(sessionId, "Сгенерируй все возможные тест-кейсы для входа в систему.");
       expect(turn.status(), await turn.text()).toBeLessThan(300);
       await expect
-        .poll(() => scalar(`SELECT active_plan FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
+        .poll(() => scalar(`SELECT active_plan IS NULL FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), {
           message: "the plan must run its background batch to completion",
           timeout: 30_000,
         })
-        .toBeNull();
+        .toBe("t");
 
       const generations = generationRequests();
       expect(generations.length, "the inline batch and the background batch").toBe(2);
@@ -8200,8 +8201,8 @@ test.describe("zyra — writes in the language the user writes in (fake provider
     const res = await send(sessionId, "продолжить");
     expect(res.status(), await res.text()).toBeLessThan(300);
     await expect
-      .poll(() => scalar(`SELECT active_plan FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), { timeout: 30_000 })
-      .toBeNull();
+      .poll(() => scalar(`SELECT active_plan IS NULL FROM zyra_chat_sessions WHERE id = ${literal(sessionId)};`), { timeout: 30_000 })
+      .toBe("t");
 
     const session = await (await asOwner.get(url(`/chat/sessions/${sessionId}`))).json();
     const contents = (session.messages as Array<Record<string, any>>).filter((m) => m.role === "assistant").map((m) => String(m.content));

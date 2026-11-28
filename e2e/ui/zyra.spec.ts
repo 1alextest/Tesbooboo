@@ -2112,7 +2112,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(dialog.getByPlaceholder("Given ..., when ..., then ...")).toHaveValue("");
     // The modal, and the page under it, are still fully responsive.
     await expect(dialog.getByRole("button", { name: "Create task" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Zyra", exact: false })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Zyra", exact: true, level: 1 })).toBeVisible();
   });
 
   test("ZYU-56 removing a selected document's chip and reselecting it does not duplicate its content", async ({ browser }) => {
@@ -2167,7 +2167,7 @@ test.describe("zyra / agents (UI)", () => {
   test("ZYU-06 a capability toggle persists across a reload", { tag: '@tesbo.testId("TES-TC-1091")' }, async ({ browser }) => {
     const page = await open(browser, "/agents/zyra/settings");
 
-    const knowledgeBase = page.getByRole("switch").nth(1);
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
     await expect(knowledgeBase).toBeChecked();
     await knowledgeBase.click();
     await expect(knowledgeBase).not.toBeChecked();
@@ -2176,7 +2176,7 @@ test.describe("zyra / agents (UI)", () => {
     await page.reload();
 
     await expect(
-      page.getByRole("switch").nth(1),
+      page.getByRole("switch", { name: "Knowledge base access", exact: true }),
       "a capability the user turned off stays off",
     ).not.toBeChecked();
   });
@@ -2263,15 +2263,16 @@ test.describe("zyra / agents (UI)", () => {
   test("ZYU-08 reset to defaults puts every capability back on", { tag: '@tesbo.testId("TES-TC-1093")' }, async ({ browser }) => {
     const page = await open(browser, "/agents/zyra/settings");
 
-    const first = page.getByRole("switch").first();
+    const first = page.getByRole("switch", { name: "Test case generation", exact: true });
+    await expect(first).toBeChecked();
     await first.click();
     await expect(first).not.toBeChecked();
     await page.getByRole("button", { name: "Save settings" }).click();
 
     await page.getByRole("button", { name: "Reset to defaults" }).click();
 
-    for (const index of [0, 1, 2, 3]) {
-      await expect(page.getByRole("switch").nth(index), `capability ${index} is back on`).toBeChecked();
+    for (const name of ["Test case generation", "Knowledge base access", "Test case storage operations", "Suite operations"]) {
+      await expect(page.getByRole("switch", { name, exact: true }), `${name} is back on`).toBeChecked();
     }
   });
 
@@ -2297,7 +2298,8 @@ test.describe("zyra / agents (UI)", () => {
     // Status labels render Title Case ("In Review"), never the raw lowercase enum value ("in_review").
     await expect(card).toContainText("In Review");
     await expect(card).not.toContainText("in review");
-    await expect(card, "the board summarises how much was generated").toContainText("2 testcases");
+    await expect(card, "the board summarises how much was generated").toContainText("2 test cases");
+    await expect(card.getByText("30", { exact: true })).toBeVisible();
   });
 
   test("ZYU-11 the board switches to the Kanban view and keeps the task", { tag: '@tesbo.testId("TES-TC-1096")' }, async ({ browser }) => {
@@ -2349,7 +2351,8 @@ test.describe("zyra / agents (UI)", () => {
     // The description <p> only renders when task.context is truthy — confirm the empty string
     // doesn't leave a blank paragraph behind, by checking the card's text is exactly what the
     // non-description fields produce (status, story, generated/token summary — no extra line).
-    await expect(cardContainer.locator("p")).toHaveCount(1);
+    await expect(cardContainer.getByText("2 test cases", { exact: true })).toBeVisible();
+    await expect(cardContainer.locator("p")).toHaveCount(0);
 
     await cardContainer.click();
     const panel = page.locator(".slide-in-right");
@@ -2571,9 +2574,10 @@ test.describe("zyra / agents (UI)", () => {
     const page = await open(browser, "/agents/tasks");
     await page.getByRole("tab", { name: "Kanban board" }).click();
     const card = page.locator("button", { has: page.getByText(userStory) });
-    // The card's second <p> is its "N testcases generated" summary line; the description is first.
-    await expect(card.locator("p")).toHaveCount(2);
-    const text = (await card.locator("p").first().textContent()) ?? "";
+    // The output summary is now a separate span; only the description is a paragraph.
+    await expect(card.getByText("2 test cases", { exact: true })).toBeVisible();
+    await expect(card.locator("p")).toHaveCount(1);
+    const text = (await card.locator("p").textContent()) ?? "";
     expect(text, "the card preview carries no Markdown syntax").not.toMatch(MARKDOWN_SYNTAX);
     expect(text).toContain("LIN-05: Submit an Expense Claim Module: Claim");
   });
@@ -2636,8 +2640,9 @@ test.describe("zyra / agents (UI)", () => {
 
     await page.getByRole("tab", { name: "Kanban board" }).click();
     const card = page.locator("button", { has: page.getByText(userStory) });
-    // Only the card's own summary line, as in ZYU-25 — no blank description paragraph.
-    await expect(card.locator("p")).toHaveCount(1);
+    // The output summary is rendered separately; there must be no description paragraph.
+    await expect(card.getByText("2 test cases", { exact: true })).toBeVisible();
+    await expect(card.locator("p")).toHaveCount(0);
 
     await card.click();
     const panel = page.locator(".slide-in-right");
@@ -2687,8 +2692,8 @@ test.describe("zyra / agents (UI)", () => {
 
     const card = page.getByRole("button", { name: new RegExp(userStory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) });
     await expect(card).toBeVisible();
-    await expect(card).toContainText("failed");
-    await expect(card, "must not read back as the pre-generation 'todo' status").not.toContainText("todo");
+    await expect(card.getByText("Failed", { exact: true })).toBeVisible();
+    await expect(card.getByText("To Do", { exact: true }), "must not read back as the pre-generation todo status").toHaveCount(0);
     await expect(card, "the failure reason must be visible without opening the Activity tab").toContainText(
       "E2E simulated provider timeout",
     );
@@ -3893,25 +3898,27 @@ test.describe("zyra / agents (UI)", () => {
      * status directly (the real job isn't exercisable here — no AI provider is called, per the
      * file header) and assert the change lands without ever calling page.reload().
      */
-    const taskId = seedTask({ status: "in_progress" });
+    const userStory = stamp("Polling board story");
+    const taskId = seedTask({ userStory, status: "in_progress" });
     const page = await open(browser, "/agents/tasks");
-    await expect(page.getByText("in progress", { exact: true })).toBeVisible();
+    const row = page.getByRole("button").filter({ has: page.getByText(userStory, { exact: true }) });
+    await expect(row.getByText("In Progress", { exact: true })).toBeVisible();
 
     exec(`UPDATE ai_generation_requests SET task_status = 'in_review' WHERE id = ${literal(taskId)};`);
 
-    await expect(page.getByText("in review", { exact: true })).toBeVisible({ timeout: 9000 });
-    await expect(page.getByText("in progress", { exact: true })).toHaveCount(0);
+    await expect(row.getByText("In Review", { exact: true })).toBeVisible({ timeout: 9000 });
+    await expect(row.getByText("In Progress", { exact: true })).toHaveCount(0);
   });
 
   test("ZYU-25 the task detail page reflects Zyra finishing a task without a page reload", async ({ browser }) => {
     const taskId = seedTask({ status: "todo" });
     const page = await open(browser, `/agents/tasks/${taskId}`);
-    await expect(page.getByText("todo", { exact: true })).toBeVisible();
+    await expect(page.getByText("To Do", { exact: true })).toBeVisible();
 
     exec(`UPDATE ai_generation_requests SET task_status = 'failed' WHERE id = ${literal(taskId)};`);
     seedFailureActivity(taskId, "E2E simulated provider timeout while this page was open");
 
-    await expect(page.getByText("failed", { exact: true })).toBeVisible({ timeout: 9000 });
+    await expect(page.getByText("Failed", { exact: true })).toBeVisible({ timeout: 9000 });
     await expect(page.getByText("E2E simulated provider timeout while this page was open")).toBeVisible();
   });
 
@@ -4515,7 +4522,8 @@ test.describe("zyra / agents (UI)", () => {
     await panel.getByRole("button", { name: /^Sources/ }).click();
     await expect(panel.getByText(longToken, { exact: false })).toBeVisible();
 
-    const scrollArea = panel.locator(".overflow-y-auto");
+    const scrollArea = panel.locator(".overflow-y-auto").filter({ has: panel.getByText(longToken, { exact: false }) });
+    await expect(scrollArea).toHaveCount(1);
     const { scrollWidth, clientWidth } = await scrollArea.evaluate((el) => ({
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
@@ -4693,7 +4701,7 @@ test.describe("zyra / agents (UI)", () => {
       },
     );
 
-    const knowledgeBase = page.getByRole("switch").nth(1);
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
     await knowledgeBase.click();
     await page.getByRole("button", { name: "Save settings" }).click();
 
@@ -4703,7 +4711,7 @@ test.describe("zyra / agents (UI)", () => {
 
     await page.reload();
     await expect(
-      page.getByRole("switch").nth(1),
+      page.getByRole("switch", { name: "Knowledge base access", exact: true }),
       "the retried request actually persisted the change, not just the UI's optimism",
     ).not.toBeChecked();
   });
@@ -4727,7 +4735,7 @@ test.describe("zyra / agents (UI)", () => {
       },
     );
 
-    const knowledgeBase = page.getByRole("switch").nth(1);
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
     await knowledgeBase.click();
     await page.getByRole("button", { name: "Save settings" }).click();
 
@@ -5378,7 +5386,7 @@ test.describe("zyra / agents (UI)", () => {
     // The unselected draft is still on screen, still checked, still actionable — the batch did not
     // resolve just because one of its two drafts was saved.
     await expect(page.getByText("Sign in with a wrong password")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Discard" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Discard", exact: true })).toBeVisible();
     await expect
       .poll(() => scalar(`SELECT task_status FROM ai_generation_requests WHERE id = ${literal(taskId)};`))
       .toBe("in_review");
