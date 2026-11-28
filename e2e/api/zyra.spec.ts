@@ -5704,6 +5704,48 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
     return JSON.parse(raw || "[]");
   }
 
+  // A same-command retry returns the committed receipt (including after a lost response).
+  // Capture the revision once: a fresh review is a different command, not a retry.
+  async function verifyTicketSaveReplay(taskId: string, indexes: number[], ticketKeys: string[]) {
+    const saveUrl = url(`/tasks/${taskId}/save`);
+    const reviewed = await readZyraProposal(asOwner, saveUrl);
+    expect(reviewed.proposalRevision).toMatch(/^[a-f0-9]{64}$/);
+    const data = { expectedProposalRevision: reviewed.proposalRevision, selectedDraftIndexes: indexes };
+    const send = () => asOwner.post(saveUrl, { data, failOnStatusCode: false });
+    const [a, b] = await Promise.all([send(), send()]);
+    expect(a.status(), await a.text()).toBe(201);
+    expect(b.status(), await b.text()).toBe(201);
+    const results = await Promise.all([a.json(), b.json()]);
+    expect(results.map(r => r.replayed).sort()).toEqual([false, true]);
+    const committed = results.find(r => r.replayed === false)!;
+    const replay = results.find(r => r.replayed === true)!;
+    expect(committed.savedCount).toBe(indexes.length);
+    expect(committed.remaining).toBe(0);
+    expect(committed.saveReceipt.id).toBeTruthy();
+    expect(replay.saveReceipt).toEqual(committed.saveReceipt);
+    expect(replay.testcases).toEqual(committed.testcases);
+    const ids = committed.testcases.map((r: { id: string }) => r.id).sort();
+    expect(new Set(ids).size).toBe(indexes.length);
+    const rows = ledger(taskId);
+    expect(rows.map(r => `${r.provider}:${r.issue_key}`).sort()).toEqual([...ticketKeys].sort());
+    expect(rows.flatMap(r => r.testcase_ids).sort()).toEqual(ids);
+    expect(rows.every(r => r.save_event_id === committed.saveReceipt.id)).toBe(true);
+    const later = await send();
+    expect(later.status(), await later.text()).toBe(201);
+    expect(await later.json()).toMatchObject({ replayed: true, saveReceipt: committed.saveReceipt });
+    // Different apply parameters make this a competing decision, not an idempotent replay.
+    const competing = await asOwner.post(saveUrl, { data: { ...data, suiteId: null }, failOnStatusCode: false });
+    expect(competing.status(), await competing.text()).toBe(409);
+    expect((await competing.json()).code).toBe("PROPOSAL_REVIEW_CONFLICT");
+    expect(ledger(taskId)).toEqual(rows);
+    expect(scalar(`SELECT jsonb_array_length(save_events) FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe("1");
+    expect(scalar(`SELECT saved_count FROM ai_generation_requests WHERE id = ${literal(taskId)};`)).toBe(String(indexes.length));
+    expect(scalar(`SELECT COUNT(*) FROM audit_logs WHERE entity_id = ${literal(taskId)} AND action = 'testcase_proposals_applied';`)).toBe("1");
+    for (const testcase of committed.testcases) {
+      expect(scalar(`SELECT COUNT(*) FROM testcases WHERE project_id = ${literal(tenant!.mainProjectId)} AND title = ${literal(testcase.title)};`), "one persisted case for each selected fixture").toBe("1");
+    }
+  }
+
   /** Waits for a delivery to leave 'pending' — it runs in the background after the save returns. */
   async function waitForDelivery(taskId: string, maxAttempts = 120): Promise<LedgerRow[]> {
     for (let i = 0; i < maxAttempts; i++) {
@@ -5904,13 +5946,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
     await setAutoComment({ jiraAutoComment: false });
     const taskId = seedReviewTask({ titles: ["Race-case"], jiraIssueKey: "MFLP-14" });
 
-    const [a, b] = await Promise.all([save(taskId), save(taskId)]);
-    expect([a.status(), b.status()].sort(), "one save wins, the other is refused as already saved").toEqual([201, 409]);
-    expect(ledger(taskId)).toHaveLength(1);
-
-    // And a later re-submit is refused the same way — still one comment.
-    expect((await save(taskId)).status()).toBe(409);
-    expect(ledger(taskId)).toHaveLength(1);
+    await verifyTicketSaveReplay(taskId, [0], ["jira:MFLP-14"]);
   });
 
   test("ZYR-AC-10 re-running a ticket updates its linked test cases in place, and that save's comment lists them as Updated", async () => {
@@ -6174,12 +6210,7 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
       { jira: [j1, j2], linear: [l1] },
     );
 
-    const [a, b] = await Promise.all([save(taskId), save(taskId)]);
-    expect([a.status(), b.status()].sort(), "one save wins, the other is refused as already saved").toEqual([201, 409]);
-    expect(ledger(taskId).map((r) => `${r.provider}:${r.issue_key}`).sort()).toEqual([`jira:${j1}`, `jira:${j2}`, `linear:${l1}`].sort());
-
-    expect((await save(taskId)).status()).toBe(409);
-    expect(ledger(taskId), "a refused re-save adds nothing").toHaveLength(3);
+    await verifyTicketSaveReplay(taskId, [0, 1, 2], [`jira:${j1}`, `jira:${j2}`, `linear:${l1}`]);
   });
 
   test("ZYR-AC-39 regenerating a two-ticket task updates each ticket's own linked case in place, never the other ticket's", async () => {
