@@ -177,7 +177,11 @@ function indentLines(text: string, prefix: string): string[] {
 function renderTable(block: Row): string[] {
   const rows = asArray(block.children).filter((child) => child.type === "table_row");
   if (!rows.length) return [];
-  const cells = (row: Row) => asArray(row.table_row?.cells).map((cell) => notionRichTextToMarkdown(cell).replace(/\|/g, "\\|").replace(/\n/g, " "));
+  // Backslashes are escaped before pipes. A cell whose text already contains "\|" would otherwise
+  // become "\\|" or a broken escape depending on order, and the table would render a stray
+  // backslash instead of the character the author wrote.
+  const cells = (row: Row) => asArray(row.table_row?.cells).map((cell) =>
+    notionRichTextToMarkdown(cell).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " "));
   const width = Math.max(...rows.map((row) => cells(row).length), 1);
   const line = (values: string[]) => `| ${Array.from({ length: width }, (_, i) => values[i] ?? "").join(" | ")} |`;
   const out = [line(cells(rows[0])), line(Array.from({ length: width }, () => "---"))];
@@ -308,7 +312,11 @@ function chunkText(text: string, limit: number): string[] {
  */
 export function markdownToNotionRichText(markdown: string, limit = 2000, maxElements = 100): NotionTextSegment[] {
   const segments: NotionTextSegment[] = [];
-  const pattern = /\*\*(.+?)\*\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  // Quantifiers are bounded to the segment limit. The lazy `.+?`/unbounded classes backtrack
+  // quadratically on a comment made of stars or brackets, and every match is chunked to `limit`
+  // anyway, so a token longer than that could never have been represented as a segment.
+  const bound = Math.max(1, Math.floor(limit));
+  const pattern = new RegExp(`\\*\\*([^*]{1,${bound}})\\*\\*|\\[([^\\]]{1,${bound}})\\]\\((https?:\\/\\/[^\\s)]{1,${bound}})\\)`, "g");
   const pushPlain = (content: string, extra: Partial<NotionTextSegment> & { link?: string } = {}) => {
     for (const chunk of chunkText(content, limit)) {
       segments.push({

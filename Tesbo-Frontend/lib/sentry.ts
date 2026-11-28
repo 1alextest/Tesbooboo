@@ -20,8 +20,16 @@ function looksLikeProductionApiUrl(apiUrl: string): boolean {
     const host = new URL(apiUrl).hostname;
     return host === "api-app.tesbo.io";
   } catch {
-    return /(?:^|[/.])api-app\.tesbo\.io(?:$|[/:])/i.test(apiUrl)
-      && !/api-app-stage\.tesbo\.io/i.test(apiUrl);
+    // Not a parseable absolute URL (a bare host, or a value with stray whitespace). Compare the
+    // extracted host for equality rather than searching the raw string: a substring test would also
+    // match "evil.api-app.tesbo.io.example" and, used as a stage/production switch, mislabel it.
+    const host = apiUrl
+      .trim()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+      .split(/[/?#]/)[0]
+      .split(":")[0]
+      .toLowerCase();
+    return host === "api-app.tesbo.io";
   }
 }
 

@@ -1,7 +1,11 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
+import { recordStandaloneGeneration } from "../observability/ai-trace";
+import { parseProviderUsage, type ProviderUsage } from "../observability/provider-usage";
 import { DECISION_PROMPT_CHAR_BUDGET } from "./integration-sync.constants";
 import { RemoteComment, RemoteTicket } from "./integration-sync.types";
+import { buildAiProviderHeaders, describeAiProviderFailure, readAiProviderJson, withAiProviderIo } from "../common/public-ai-provider-failure";
 
 export interface ChatAllocation {
   provider: string;
@@ -12,6 +16,8 @@ export interface ChatAllocation {
   auth_scheme: string | null;
   is_active: boolean;
 }
+
+type ChatCompletionResult = { text: string; usage?: ProviderUsage };
 
 function trimTrailingSlashes(value: string): string {
   let end = value.length;
@@ -77,7 +83,8 @@ export class IntegrationSyncDecisions {
     return key;
   }
 
-  async summarize(allocation: ChatAllocation, ticket: RemoteTicket, comments: RemoteComment[]): Promise<string | null> {
+  async summarize(allocation: ChatAllocation, ticket: RemoteTicket, comments: RemoteComment[],
+    scope: { organizationId: string; projectId: string; runId: string; ticketId: string }): Promise<string | null> {
     if (!comments.length) return null;
 
     const thread = this.buildThread(comments);
@@ -89,16 +96,44 @@ export class IntegrationSyncDecisions {
       .filter(Boolean)
       .join("\n");
 
+    const provider = String(allocation.provider || "").toLowerCase();
+    const model = allocation.default_model || (provider === "anthropic" ? "claude-sonnet-4-6" : "gpt-4o-mini");
+    // Provider IDs and wall-clock milliseconds are not unique across projects or retries.
+    // Reuse the caller's native scope and distinguish each actual completion attempt.
+    const traceSeed = `integration-sync:decision:${scope.projectId}:${scope.runId}:${scope.ticketId}:${randomUUID()}`;
+    const traceMeta = { organizationId: scope.organizationId, projectId: scope.projectId,
+      runId: scope.runId, nativeTicketId: scope.ticketId, ticketKey: String(ticket.issueKey || ""),
+      ticketId: String(ticket.issueId || ""), commentCount: String(comments.length) };
+
     try {
-      const provider = String(allocation.provider || "").toLowerCase();
       const raw = provider === "anthropic" ? await this.callAnthropic(allocation, userPrompt) : await this.callOpenAI(allocation, userPrompt);
-      const text = raw.trim();
+      const text = String(raw.text || "").trim();
+      await recordStandaloneGeneration({
+        traceSeed,
+        name: "integration.sync.decision-summary",
+        provider,
+        model,
+        input: { system: SYSTEM_PROMPT, user: userPrompt },
+        output: text,
+        usage: raw.usage,
+        metadata: traceMeta
+      });
       // The model is instructed to emit exactly NONE when a thread settled nothing — treat that
       // as "no decisions section" rather than writing the literal word into the document.
       if (!text || /^none\.?$/i.test(text)) return null;
       return text;
     } catch (err) {
-      this.logger.warn(`Decision summary failed for ${ticket.issueKey}: ${err instanceof Error ? err.message : err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Decision summary failed for ${ticket.issueKey}: ${message}`);
+      await recordStandaloneGeneration({
+        traceSeed,
+        name: "integration.sync.decision-summary",
+        provider,
+        model,
+        input: { system: SYSTEM_PROMPT, user: userPrompt },
+        errorMessage: message,
+        metadata: traceMeta
+      });
       return null;
     }
   }
@@ -121,14 +156,17 @@ export class IntegrationSyncDecisions {
     return (kept.length ? kept : [rendered[rendered.length - 1].slice(0, DECISION_PROMPT_CHAR_BUDGET)]).join("\n\n");
   }
 
-  private async callOpenAI(allocation: ChatAllocation, userPrompt: string): Promise<string> {
+  private async callOpenAI(allocation: ChatAllocation, userPrompt: string): Promise<ChatCompletionResult> {
     const authHeader = String(allocation.auth_header_name || "Authorization");
     const scheme = String(allocation.auth_scheme ?? "Bearer").trim();
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
     const cleanKey = String(allocation.api_key || "").replace(/^bearer\s+/i, "").trim();
-    headers[authHeader] = scheme ? `${scheme} ${cleanKey}` : cleanKey;
+    const headers = buildAiProviderHeaders(() => {
+      const value = new Headers({ "Content-Type": "application/json" });
+      value.set(authHeader, scheme ? `${scheme} ${cleanKey}` : cleanKey);
+      return value;
+    });
 
-    const res = await fetch(chatCompletionsUrl(allocation.base_url), {
+    const res = await withAiProviderIo(() => fetch(chatCompletionsUrl(allocation.base_url), {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -140,24 +178,31 @@ export class IntegrationSyncDecisions {
           { role: "user", content: userPrompt }
         ]
       })
-    });
-    if (!res.ok) throw new Error(`openai chat failed (${res.status})`);
-    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return String(data.choices?.[0]?.message?.content || "");
+    }));
+    if (!res.ok) throw new Error(describeAiProviderFailure(res.status));
+    const data = await readAiProviderJson<{
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: unknown;
+    }>(res);
+    const text = String(data.choices?.[0]?.message?.content || "");
+    return { text, usage: parseProviderUsage("openai", data.usage) };
   }
 
-  private async callAnthropic(allocation: ChatAllocation, userPrompt: string): Promise<string> {
-    const headers: Record<string, string> = { "Content-Type": "application/json", "anthropic-version": "2023-06-01" };
+  private async callAnthropic(allocation: ChatAllocation, userPrompt: string): Promise<ChatCompletionResult> {
     const cleanKey = String(allocation.api_key || "").replace(/^bearer\s+/i, "").trim();
-    const customHeader = allocation.auth_header_name && allocation.auth_header_name.toLowerCase() !== "authorization";
-    if (customHeader) {
-      const scheme = allocation.auth_scheme ? String(allocation.auth_scheme).trim() : "";
-      headers[String(allocation.auth_header_name)] = scheme ? `${scheme} ${cleanKey}` : cleanKey;
-    } else {
-      headers["x-api-key"] = cleanKey;
-    }
+    const headers = buildAiProviderHeaders(() => {
+      const value = new Headers({ "Content-Type": "application/json", "anthropic-version": "2023-06-01" });
+      const customHeader = allocation.auth_header_name && allocation.auth_header_name.toLowerCase() !== "authorization";
+      if (customHeader) {
+        const scheme = allocation.auth_scheme ? String(allocation.auth_scheme).trim() : "";
+        value.set(String(allocation.auth_header_name), scheme ? `${scheme} ${cleanKey}` : cleanKey);
+      } else {
+        value.set("x-api-key", cleanKey);
+      }
+      return value;
+    });
 
-    const res = await fetch(anthropicMessagesUrl(allocation.base_url), {
+    const res = await withAiProviderIo(() => fetch(anthropicMessagesUrl(allocation.base_url), {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -167,12 +212,13 @@ export class IntegrationSyncDecisions {
         system: SYSTEM_PROMPT,
         messages: [{ role: "user", content: userPrompt }]
       })
-    });
-    if (!res.ok) throw new Error(`anthropic messages failed (${res.status})`);
-    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-    return (data.content || [])
+    }));
+    if (!res.ok) throw new Error(describeAiProviderFailure(res.status));
+    const data = await readAiProviderJson<{ content?: Array<{ type?: string; text?: string }>; usage?: unknown }>(res);
+    const text = (data.content || [])
       .filter((block) => block.type === "text")
       .map((block) => String(block.text || ""))
       .join("\n");
+    return { text, usage: parseProviderUsage("anthropic", data.usage) };
   }
 }

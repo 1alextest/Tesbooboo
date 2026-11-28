@@ -53,6 +53,7 @@ const projectNavSections: Array<{ section: string; items: NavItemConfig[] }> = [
     items: [
       { href: "requirements", label: "Requirements", icon: "list" },
       { href: "testcases", label: "Test cases", icon: "fileText" },
+      { href: "model-studio", label: "Model Studio", icon: "list" },
       { href: "plans", label: "Test plans", icon: "clipboard" },
     ],
   },

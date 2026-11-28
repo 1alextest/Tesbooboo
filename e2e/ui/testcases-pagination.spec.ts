@@ -140,6 +140,7 @@ test.describe("repository paging past 500 rows", () => {
   };
   const footer = (page: Page) => page.getByTestId("testcases-pagination");
   const rowsOf = (page: Page, prefix: string) => page.getByRole("row").filter({ hasText: prefix });
+  const titlesOf = (page: Page, prefix: string) => rowsOf(page, prefix).getByRole("button", { name: new RegExp(`^${prefix} \\d{4}$`) });
   const next = (page: Page) => footer(page).getByRole("button", { name: "Next" });
 
   /** Every list request the page sends for the repository, as a URL (not other /testcases/... calls). */
@@ -153,6 +154,20 @@ test.describe("repository paging past 500 rows", () => {
   }
 
   test("every case past the old 500-row cap is reachable, with no truncation note", async ({ page }) => {
+    // Default order is creation time with a UUID tiebreaker, not the numeric title suffix. Read
+    // each native slice, then prove that the UI reaches every seeded title exactly once.
+    const expectedPages: string[][] = [];
+    for (const offset of [0, 250, 500]) {
+      const response = await api.get(`/api/projects/${ctx.projectId}/testcases`, {
+        params: { suiteId: bigSuiteId, includeDescendants: "true", limit: 250, offset },
+      });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      expect(response.headers()["x-total-count"]).toBe(String(BIG));
+      const titles: string[] = (await response.json()).map((testcase: { title: string }) => testcase.title);
+      expect(titles).toHaveLength(Math.min(250, BIG - offset));
+      expectedPages.push(titles);
+    }
+
     await open(page, bigSuiteId);
     await footer(page).getByTestId("testcases-page-size").selectOption("250");
 
@@ -160,19 +175,27 @@ test.describe("repository paging past 500 rows", () => {
     await expect(footer(page)).toContainText("page 1 of 3");
     await expect(footer(page)).not.toContainText("showing the first");
 
-    await next(page).click();
-    await expect(footer(page)).toContainText("page 2 of 3");
-    await next(page).click();
-    await expect(footer(page)).toContainText("page 3 of 3");
+    const observedTitles: string[] = [];
+    for (let index = 0; index < expectedPages.length; index++) {
+      if (index > 0) await next(page).click();
+      await expect(footer(page)).toContainText(`page ${index + 1} of 3`);
+      await expect(titlesOf(page, bigPrefix)).toHaveText(expectedPages[index]);
+      observedTitles.push(...await titlesOf(page, bigPrefix).allTextContents());
+    }
     await expect(rowsOf(page, bigPrefix)).toHaveCount(BIG - 500); // 20 rows on the last, partial page
     await expect(next(page)).toBeDisabled();
-    await expect(page.getByRole("button", { name: `${bigPrefix} ${pad(BIG - 1)}` })).toBeVisible();
+    await expect(page.getByRole("button", { name: expectedPages[2][0], exact: true })).toBeVisible();
+    expect(observedTitles).toHaveLength(BIG);
+    expect(new Set(observedTitles).size, "no row is repeated across page boundaries").toBe(BIG);
+    expect([...observedTitles].sort()).toEqual(Array.from({ length: BIG }, (_, index) => `${bigPrefix} ${pad(index)}`).sort());
   });
 
   test("the first load asks for one page, and Next asks for exactly the next slice", async ({ page }) => {
     const requests = listRequests(page);
     await open(page, bigSuiteId);
     await expect(footer(page)).toContainText("page 1 of 21");
+    await expect(rowsOf(page, bigPrefix)).toHaveCount(25);
+    const firstPageTitle = await titlesOf(page, bigPrefix).first().innerText();
 
     const first = requests.find((u) => u.searchParams.get("suiteId") === bigSuiteId);
     expect(first?.searchParams.get("limit"), "a page, not the old 500-row batch").toBe("25");
@@ -183,7 +206,7 @@ test.describe("repository paging past 500 rows", () => {
     await expect(footer(page)).toContainText("page 2 of 21");
     await expect.poll(() => requests.some((u) => u.searchParams.get("offset") === "25" && u.searchParams.get("limit") === "25")).toBe(true);
     await expect(rowsOf(page, bigPrefix)).toHaveCount(25);
-    await expect(page.getByRole("button", { name: `${bigPrefix} ${pad(0)}` })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: firstPageTitle, exact: true })).toHaveCount(0);
   });
 
   test("sort is applied by the server across the whole set and sends the user back to page 1", async ({ page }) => {
@@ -242,6 +265,14 @@ test.describe("repository paging past 500 rows", () => {
   });
 
   test("a failed page says so, and Retry reloads that same page", async ({ page }) => {
+    const expectedResponse = await api.get(`/api/projects/${ctx.projectId}/testcases`, {
+      params: { suiteId: bigSuiteId, includeDescendants: "true", limit: 25, offset: 25 },
+    });
+    expect(expectedResponse.ok(), await expectedResponse.text()).toBeTruthy();
+    expect(expectedResponse.headers()["x-total-count"]).toBe(String(BIG));
+    const expectedTitles: string[] = (await expectedResponse.json()).map((testcase: { title: string }) => testcase.title);
+    expect(expectedTitles).toHaveLength(25);
+
     await open(page, bigSuiteId);
     await expect(footer(page)).toContainText("page 1 of 21");
 
@@ -256,7 +287,8 @@ test.describe("repository paging past 500 rows", () => {
     await page.unroute("**/api/projects/*/testcases?*");
     await page.getByTestId("testcases-retry").click();
     await expect(footer(page)).toContainText("page 2 of 21");
-    await expect(page.getByRole("button", { name: `${bigPrefix} ${pad(25)}` })).toBeVisible();
+    await expect(titlesOf(page, bigPrefix)).toHaveText(expectedTitles);
+    await expect(page.getByRole("button", { name: expectedTitles[0], exact: true })).toBeVisible();
   });
 
   test("'Select all N matching' still reaches the cases on every page", async ({ page }) => {
@@ -267,7 +299,7 @@ test.describe("repository paging past 500 rows", () => {
     const selectAll = page.getByTestId("select-all-matching");
     await expect(selectAll).toContainText(String(BIG));
     await selectAll.click();
-    await expect(page.getByText(`${BIG} selected`)).toBeVisible();
+    await expect(page.getByText(`${BIG} selected`, { exact: true })).toBeVisible();
   });
 
   test("deleting the only case on the last page steps back to the page that still exists", async ({ page }) => {

@@ -1,7 +1,12 @@
+import { issueMcpTestToken } from "../utils/mcp-access";
+import { stageAndApplyMcpTestcases, testcaseUpdateProposal } from "../utils/mcp-proposals";
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, request as pwRequest, test, type Locator, type Page } from "@playwright/test";
 import { env } from "../utils/env";
+import { testcaseEditState } from "../utils/testcase-edit-state";
+import { createProject, deleteProjects } from "../utils/screens-tenant";
 
 const ctx = JSON.parse(fs.readFileSync(path.join(__dirname, "../.auth/context.json"), "utf-8"));
 const STATE_PATH = path.join(__dirname, "../.auth/state.json");
@@ -12,6 +17,341 @@ function fieldControl(page: Page, label: string): Locator {
     `xpath=//label[normalize-space(text())="${label}"]/following-sibling::*[self::input or self::select or self::textarea]`,
   );
 }
+
+test("review approval shows the saved snapshot, refuses stale content, and preserves unsaved edits", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const title = `E2E exact UI review ${Date.now()}`;
+  const created = await (await api.post(`/api/projects/${ctx.projectId}/testcases`, {
+    data: { title, attachments: "Original reviewed Notes" },
+  })).json();
+  const endpoint = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+  try {
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByRole("button", { name: title, exact: true }).click();
+    const panel = page.locator("aside");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    await expect(notes).toHaveValue("Original reviewed Notes");
+    await notes.fill("Saved for exact review");
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toBeDisabled();
+    await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    const review = page.getByRole("dialog", { name: "Review saved test case" });
+    await expect(review.getByText("Saved for exact review", { exact: true })).toBeVisible();
+    const initial = await (await api.get(endpoint)).json();
+    expect((await api.put(endpoint, { data: { expectedRevision: initial.editRevision, attachments: "Another reviewer changed these Notes" } })).ok()).toBe(true);
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await expect(review.getByRole("alert")).toBeVisible();
+    await expect(review.getByRole("button", { name: "Approve this version" })).toBeDisabled();
+    expect((await (await api.get(endpoint)).json()).approvalCurrent).toBe(false);
+    expect(await (await api.get(`${endpoint}/approvals`)).json()).toHaveLength(0);
+    await review.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(notes).toHaveValue("Saved for exact review");
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await expect(review.getByText("Another reviewer changed these Notes", { exact: true })).toBeVisible();
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await expect(review).toHaveCount(0);
+    await expect(panel.getByText("The reviewed version was approved.")).toBeVisible();
+    const approved = await (await api.get(endpoint)).json();
+    expect(approved).toMatchObject({ status: "Approved", approvalCurrent: true, attachments: "Another reviewer changed these Notes" });
+    expect(await (await api.get(`${endpoint}/approvals`)).json()).toHaveLength(1);
+    await notes.fill("Unsaved follow-up work");
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toBeDisabled();
+    await expect(notes).toHaveValue("Unsaved follow-up work");
+  } finally {
+    await api.delete(endpoint, { failOnStatusCode: false });
+    await api.dispose();
+  }
+});
+
+test("stale editor save retains unsaved Notes until an explicit reload and review", async ({ page }) => {
+  // UI project's default request context points at the web host; this test
+  // needs the real API and the same authorized session used by the browser.
+  const request = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const title = `E2E conflicting Notes ${Date.now()}`;
+  const createdResponse = await request.post(`/api/projects/${ctx.projectId}/testcases`, {
+    data: { title, attachments: "Original Notes" }
+  });
+  expect(createdResponse.ok()).toBeTruthy();
+  const created = await createdResponse.json();
+  const url = `/api/projects/${ctx.projectId}/testcases/${created.id}`;
+  try {
+    await page.goto(`/projects/${ctx.projectId}/testcases`);
+    await page.getByRole("button", { name: title, exact: true }).click();
+    const panel = page.locator("aside");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    await expect(notes).toHaveValue("Original Notes");
+    await notes.fill("Unsaved local Notes");
+    const external = await request.put(url, { data: { attachments: "Newer reviewer Notes" } });
+    expect(external.ok()).toBeTruthy();
+    const committed = await (await request.get(url)).json();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const refused = page.waitForResponse((response) => response.url().endsWith(url) && response.request().method() === "PUT");
+      await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+      expect((await refused).status()).toBe(409);
+      await expect(panel.getByRole("alert")).toContainText("Your changes were not saved");
+      await expect(notes).toHaveValue("Unsaved local Notes");
+      expect(testcaseEditState(await (await request.get(url)).json())).toEqual(testcaseEditState(committed));
+    }
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(notes).toHaveValue("Unsaved local Notes");
+    page.once("dialog", (dialog) => dialog.accept());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(notes).toHaveValue("Newer reviewer Notes");
+    await notes.fill("Newer reviewer Notes; local addition reviewed");
+    await panel.getByRole("button", { name: "Save changes", exact: true }).click();
+    await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+    const saved = await (await request.get(url)).json();
+    expect(saved.attachments).toBe("Newer reviewer Notes; local addition reviewed");
+    expect(saved.id).toBe(created.id);
+  } finally {
+    await request.delete(url, { failOnStatusCode: false });
+    await request.dispose();
+  }
+});
+
+test("exact linked testcase navigation preserves identity with duplicate titles and withholds unverified case controls", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  let projectId: string | undefined;
+  const title = `E2E exact linked case ${Date.now()}`;
+  try {
+    projectId = (await createProject(api, { name: `Exact link ${Date.now()}` })).id;
+    const base = `/api/projects/${projectId}/testcases`;
+    const create = async (attachments: string) => {
+      const response = await api.post(base, { data: { title, attachments } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    };
+    const first = await create("First case with this title");
+    const selected = await create("Exact linked case with the same title");
+    expect(first.id).not.toBe(selected.id);
+    const firstBefore = testcaseEditState(await (await api.get(`${base}/${first.id}`)).json());
+    const selectedBefore = testcaseEditState(await (await api.get(`${base}/${selected.id}`)).json());
+    const panel = page.getByTestId("testcase-detail-panel");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    const selectedPath = `/projects/${projectId}/testcases?testcaseId=${selected.id}`;
+    // The old detail route redirected to the list, losing tcId. Both entry paths must open
+    // the same native editor by ID, regardless of a same-title case elsewhere in the list.
+    await page.goto(`/projects/${projectId}/testcases/${selected.id}`);
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+    await expect(panel.getByTestId("testcase-detail-identity")).toHaveText(selected.externalId || selected.id);
+    await page.reload();
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+
+    // Exercise a different exact URL while the same repository page remains mounted.
+    // The selected case must not be displayed or made actionable if the response identifies
+    // another record. This controlled read response is not a backend identity/auth claim.
+    const wrongRecord = await (await api.get(`${base}/${selected.id}`)).json();
+    const wrongRoute = `**${base}/${first.id}`;
+    await page.route(wrongRoute, route => route.fulfill({ status: 200, json: wrongRecord }));
+    await page.evaluate(id => {
+      const url = new URL(location.href);
+      url.searchParams.set("testcaseId", id);
+      history.pushState(null, "", url);
+    }, first.id);
+    await expect(panel.getByRole("alert")).toContainText("Failed to load the complete test case details");
+    await expect(panel).not.toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Save changes", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Review for approval" })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+    await page.unroute(wrongRoute);
+    page.once("dialog", dialog => dialog.accept());
+    await panel.getByRole("button", { name: "Reload latest case" }).click();
+    await expect(panel).toHaveAttribute("data-case-id", first.id);
+    await expect(notes).toHaveValue("First case with this title");
+    await panel.getByRole("button", { name: "Close panel", exact: true }).click();
+    await expect(panel).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.get("testcaseId")).toBeNull();
+    await page.reload();
+    await expect(panel).toHaveCount(0);
+    await page.goto(selectedPath);
+    await expect(panel).toHaveAttribute("data-case-id", selected.id);
+    await expect(notes).toHaveValue("Exact linked case with the same title");
+    expect(testcaseEditState(await (await api.get(`${base}/${first.id}`)).json())).toEqual(firstBefore);
+    expect(testcaseEditState(await (await api.get(`${base}/${selected.id}`)).json())).toEqual(selectedBefore);
+  } finally {
+    if (projectId) await deleteProjects(api, [projectId]);
+    await api.dispose();
+  }
+});
+
+
+test("stale approval GET and pending POST never open or repaint a different linked case", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  let projectId: string | undefined;
+  let releaseGet: (() => void) | undefined;
+  let releasePost: (() => void) | undefined;
+  try {
+    projectId = (await createProject(api, { name: `Review race ${Date.now()}` })).id;
+    const base = `/api/projects/${projectId}/testcases`;
+    const create = async (suffix: string) => {
+      const res = await api.post(base, { data: { title: `Review race ${suffix} ${Date.now()}`, attachments: suffix } });
+      expect(res.ok(), await res.text()).toBe(true);
+      return res.json();
+    };
+    const a = await create("A");
+    const b = await create("B");
+    const panel = page.getByTestId("testcase-detail-panel");
+    const review = page.getByRole("dialog", { name: "Review saved test case" });
+    const routeTo = async (caseId: string) => {
+      await page.evaluate(id => {
+        const url = new URL(location.href);
+        url.searchParams.set("testcaseId", id);
+        history.pushState(null, "", url);
+      }, caseId);
+      await expect(panel).toHaveAttribute("data-case-id", caseId);
+    };
+    await page.goto(`/projects/${projectId}/testcases?testcaseId=${a.id}`);
+    await expect(panel).toHaveAttribute("data-case-id", a.id);
+
+    // Freeze A's full approval snapshot AFTER the server replied, then select B in
+    // the same mounted editor. A's response must never open an approval dialog.
+    let getStarted!: () => void;
+    const pendingGet = new Promise<void>(resolve => { getStarted = resolve; });
+    const getGate = new Promise<void>(resolve => { releaseGet = resolve; });
+    await page.route(`**${base}/${a.id}`, async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      getStarted();
+      await getGate;
+      await route.fulfill({ response });
+    });
+    const observedApprovePosts: string[] = [];
+    page.on("request", request => {
+      if (request.method() === "POST" && request.url().includes("/testcases/") && request.url().endsWith("/approve")) {
+        observedApprovePosts.push(request.url());
+      }
+    });
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await pendingGet;
+    await routeTo(b.id);
+    // Wait for the delayed A response itself, not just the release of its gate:
+    // a zero-modal assertion before the response could conceal the original race.
+    const staleReadSettled = page.waitForResponse(response =>
+      new URL(response.url()).pathname === `${base}/${a.id}`
+      && response.request().method() === "GET");
+    if (!releaseGet) throw new Error("The delayed approval snapshot control was not installed.");
+    releaseGet();
+    releaseGet = undefined;
+    await staleReadSettled;
+    await page.evaluate(() => new Promise<void>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(review).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-case-id", b.id);
+    expect(observedApprovePosts).toEqual([]);
+    await page.unroute(`**${base}/${a.id}`);
+
+    // A fresh B approval may be reviewed. An intentionally delayed B approval
+    // response must not restore B or display B's success after selecting A.
+    await panel.getByRole("button", { name: "Review for approval" }).click();
+    await expect(review).toBeVisible();
+    let postStarted!: () => void;
+    const pendingPost = new Promise<void>(resolve => { postStarted = resolve; });
+    const postGate = new Promise<void>(resolve => { releasePost = resolve; });
+    await page.route(`**${base}/${b.id}/approve`, async route => {
+      postStarted();
+      await postGate;
+      // No real native approval is performed in this UI interleaving control.
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+    });
+    await review.getByRole("button", { name: "Approve this version" }).click();
+    await pendingPost;
+    await routeTo(a.id);
+    const finished = page.waitForResponse(response => response.url().includes(`${base}/${b.id}/approve`) && response.status() === 200);
+    if (!releasePost) throw new Error("The delayed approval submit control was not installed.");
+    releasePost();
+    releasePost = undefined;
+    await finished;
+    await expect(review).toHaveCount(0);
+    await expect(panel).toHaveAttribute("data-case-id", a.id);
+    await expect(panel.getByText("The reviewed version was approved.")).toHaveCount(0);
+    // A remains a new unapproved case: no real POST was allowed to write either record.
+    const afterA = await (await api.get(`${base}/${a.id}`)).json();
+    const afterB = await (await api.get(`${base}/${b.id}`)).json();
+    expect(afterA.approvalCurrent).toBe(false);
+    expect(afterB.approvalCurrent).toBe(false);
+  } finally {
+    releaseGet?.();
+    releasePost?.();
+    if (projectId) await deleteProjects(api, [projectId]);
+    await api.dispose();
+  }
+});
+
+/** Exercise Notes through reviewed MCP publication and the native editor on disposable records. */
+test("MCP Notes round-trip through editor, preserve human edit, and explicitly clear", async ({ page }) => {
+  const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+  const mcp = await pwRequest.newContext({
+    baseURL: env.apiBaseUrl, storageState: { cookies: [], origins: [] },
+  });
+  let projectId: string | undefined;
+  let tokenId: string | undefined;
+  let caseId: string | undefined;
+  const title = `E2E MCP to UI Notes ${Date.now()}`;
+  const firstNotes = "MCP technical context: café 🧪";
+  const humanNotes = "Reviewer confirmed fixture and build.";
+  try {
+    // This exact-review round trip owns its project dependencies. The parallel testcase API
+    // suite intentionally creates/deletes suites; sharing its project correctly invalidates a
+    // previously reviewed proposal and makes this positive Notes scenario nondeterministic.
+    projectId = (await createProject(api, { name: `E2E Notes review ${Date.now()}` })).id;
+    const tokenResponse = await issueMcpTestToken(api, `/api/projects/${projectId}/apikeys`, {
+      data: { name: `E2E Notes editor token ${Date.now()}`, scopes: ["write", "read"] },
+    });
+    expect(tokenResponse.ok()).toBeTruthy();
+    const tokenInfo = await tokenResponse.json();
+    tokenId = tokenInfo.id;
+    const token = tokenInfo.token as string;
+    const { published } = await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      { opType: "create", draft: { title, attachments: firstNotes } }
+    ]);
+    const createdId = published.testcases[0].id as string;
+    caseId = createdId;
+    expect(caseId).toBeTruthy();
+
+    await page.goto(`/projects/${projectId}/testcases`);
+    await expect(page.getByRole("button", { name: title })).toBeVisible();
+    await page.getByRole("button", { name: title }).click();
+    const panel = page.locator("aside");
+    const notes = panel.getByPlaceholder("Add notes, links to screenshots, logs, or reference docs");
+    await expect(notes).toHaveValue(firstNotes);
+    await notes.fill(humanNotes);
+    await panel.getByRole("button", { name: "Save changes" }).click();
+    await expect(panel.getByText("Test case updated successfully.")).toBeVisible();
+
+    const persisted = async () => {
+      const response = await api.get(`/api/projects/${projectId}/testcases/${caseId}`);
+      expect(response.ok()).toBeTruthy();
+      return response.json();
+    };
+    expect((await persisted()).attachments).toBe(humanNotes);
+
+    await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      await testcaseUpdateProposal(api, projectId, createdId, { description: "Readable test intent" })
+    ]);
+    expect((await persisted()).attachments).toBe(humanNotes);
+    await stageAndApplyMcpTestcases(api, mcp, token, projectId, [
+      await testcaseUpdateProposal(api, projectId, createdId, { attachments: "" })
+    ]);
+    const cleared = await persisted();
+    expect(cleared.attachments).toBe("");
+    expect(cleared.description).toBe("Readable test intent");
+    expect(cleared.title).toBe(title);
+    await page.reload();
+    await page.getByRole("button", { name: title }).click();
+    await expect(page.locator("aside").getByPlaceholder("Add notes, links to screenshots, logs, or reference docs")).toHaveValue("");
+  } finally {
+    if (caseId) await api.delete(`/api/projects/${projectId}/testcases/${caseId}`, { failOnStatusCode: false });
+    if (tokenId) await api.delete(`/api/projects/${projectId}/apikeys/${tokenId}`, { failOnStatusCode: false });
+    await deleteProjects(api, [projectId]);
+    await mcp.dispose();
+    await api.dispose();
+  }
+});
 
 test.describe("test case creation", () => {
   test("a user can create a test case from the UI and see it in the list", { tag: '@tesbo.testId("TES-TC-836")' }, async ({ page }) => {
@@ -306,10 +646,7 @@ test.describe("test case creation", () => {
     }
   });
 
-  // "[MCP] Test case created by MCP is not adding Severity" — the MCP create_testcase tool stored
-  // whatever severity string it was sent ("Major"), which this dropdown can't select, so the detail
-  // panel showed "Select". See the matching api/mcp.spec.ts block for the refusal side.
-  test("a test case created through MCP with a severity shows that severity in Test Case Detail", async ({ page }) => {
+  test("a test case published from an MCP proposal shows canonical severity in Test Case Detail", async ({ page }) => {
     const title = `UI MCP severity test case ${Date.now()}`;
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     // Cookie-free: AuthMiddleware prefers a session cookie over the bearer token, and a real MCP
@@ -319,23 +656,16 @@ test.describe("test case creation", () => {
     let testcaseId = "";
     try {
       const tokenBody = await (
-        await api.post(`/api/projects/${ctx.projectId}/apikeys`, { data: { name: `E2E UI MCP severity ${Date.now()}`, scopes: ["write"] } })
+        await issueMcpTestToken(api, `/api/projects/${ctx.projectId}/apikeys`, { data: { name: `E2E UI MCP severity ${Date.now()}`, scopes: ["write"] } })
       ).json();
       tokenId = tokenBody.id;
-      const rpc = await mcpApi.post(`/api/projects/${ctx.projectId}/mcp`, {
-        headers: { Authorization: `Bearer ${tokenBody.token}` },
-        data: {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/call",
-          params: { name: "create_testcase", arguments: { title, severity: "high", priority: "P1", component: "Buzz" } },
-        },
-      });
-      const body = await rpc.json();
-      expect(body.error).toBeUndefined();
-      const created = JSON.parse(body.result.content[0].text);
-      testcaseId = created.id;
-      expect(created.severity).toBe("High");
+      const { published } = await stageAndApplyMcpTestcases(api, mcpApi, tokenBody.token, ctx.projectId, [
+        { opType: "create", draft: { title, severity: "high", priority: "P1", component: "Buzz" } }
+      ]);
+      testcaseId = published.testcases[0].id;
+      const response = await api.get(`/api/projects/${ctx.projectId}/testcases/${testcaseId}`);
+      expect(response.ok(), await response.text()).toBeTruthy();
+      expect((await response.json()).severity).toBe("High");
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
       await page.getByRole("button", { name: title }).click();
@@ -442,8 +772,9 @@ test.describe("suite name validation and error display (UI)", () => {
       suiteId = created.id;
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
-      await page.getByRole("button", { name: suiteName, exact: true }).hover();
-      await page.getByTitle("Rename suite").click();
+      const suiteRowButton = page.getByRole("button", { name: suiteName, exact: true });
+      await suiteRowButton.hover();
+      await suiteRowButton.locator("..").getByTitle("Rename suite").click();
 
       const nameInput = page.getByPlaceholder("Enter suite name");
       await expect(nameInput).toHaveValue(suiteName);
@@ -641,6 +972,24 @@ test.describe("test case detail — linked bugs", () => {
 // icon plus HTML5 drag-and-drop) so a user could reorder data columns. That reordering was
 // removed; only the per-column resize handle should remain.
 test.describe("test case repository table — column drag-and-drop removed", () => {
+  // The repository only renders its table once at least one case exists, and the CI project starts
+  // empty, so seed one instead of depending on whatever the shared project happened to contain.
+  let fixtureApi: import("@playwright/test").APIRequestContext;
+  let fixtureCaseId = "";
+
+  test.beforeAll(async ({ playwright }) => {
+    fixtureApi = await playwright.request.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const created = await (
+      await fixtureApi.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI table chrome fixture ${Date.now()}` } })
+    ).json();
+    fixtureCaseId = created.id;
+  });
+
+  test.afterAll(async () => {
+    if (fixtureCaseId) await fixtureApi.delete(`/api/projects/${ctx.projectId}/testcases/${fixtureCaseId}`, { failOnStatusCode: false });
+    if (fixtureApi) await fixtureApi.dispose();
+  });
+
   test("column headers are no longer draggable, and dragging one does not reorder columns", async ({ page }) => {
     await page.goto(`/projects/${ctx.projectId}/testcases`);
 
@@ -698,6 +1047,24 @@ test.describe("test case repository table — column drag-and-drop removed", () 
 // can't: that a click reorders what's on screen, asks the server for the sort, and that the
 // refetch doesn't blank the table while in flight.
 test.describe("test case repository table — column sort", () => {
+  // The filter-refetch test below needs one existing row before it can observe the in-flight state;
+  // CI starts from an empty project, so seed one rather than relying on older tests' leftovers.
+  let fixtureApi: import("@playwright/test").APIRequestContext;
+  let fixtureCaseId = "";
+
+  test.beforeAll(async ({ playwright }) => {
+    fixtureApi = await playwright.request.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const created = await (
+      await fixtureApi.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI filter refetch fixture ${Date.now()}` } })
+    ).json();
+    fixtureCaseId = created.id;
+  });
+
+  test.afterAll(async () => {
+    if (fixtureCaseId) await fixtureApi.delete(`/api/projects/${ctx.projectId}/testcases/${fixtureCaseId}`, { failOnStatusCode: false });
+    if (fixtureApi) await fixtureApi.dispose();
+  });
+
   test("the Test case title header sorts the visible rows ascending, then descending on a second click", async ({ page }) => {
     const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
     const marker = `UI Sort Title ${Date.now()}`;
@@ -952,12 +1319,23 @@ test.describe("test case repository table and detail panel — Context column", 
 
       await page.goto(`/projects/${ctx.projectId}/testcases`);
       await page.getByPlaceholder("Search by ID, title, or type").fill(`${marker} with citation`);
+      // Search is debounced. Waiting for the cited case's row to disappear is load-bearing: if
+      // it is still rendered, the later getByRole("button", { name: cited.title }) resolves to
+      // that row's title button and opens its edit panel instead of the citation's drawer.
+      await expect(page.locator("table.tc-repo-table tbody tr")).toHaveCount(1);
       const columnsButton = page.getByRole("button", { name: "Columns" });
       await columnsButton.click();
       await page.locator("label", { hasText: "Context" }).locator('input[type="checkbox"]').click();
       await columnsButton.click();
 
-      await page.getByRole("button", { name: "Context used (1)" }).click();
+      // Multiple matching badges can exist outside the filtered row. Target
+      // the citation of THIS saved case, not an unrelated row or drawer.
+      const caseRow = page.getByRole("row").filter({
+        has: page.getByRole("button", { name: `${marker} with citation`, exact: true })
+      });
+      // The row exposes both a focusable wrapper with role="button" and the real <button>, so the
+      // accessible name alone is ambiguous under strict mode. Scope to the button element.
+      await caseRow.locator("button", { hasText: "Context used (1)" }).click();
       await page.getByRole("button", { name: cited.title, exact: false }).click();
 
       const drawer = page.locator('div[role="presentation"]').last();
@@ -1099,10 +1477,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
     let cycleId = "";
     try {
       const notSet = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory" } })
+        await createTestcaseFixtureResponse(api, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker NotSet ${stamp}`, priority: "Not set", type: "Exploratory", status: "Approved" } })
       ).json();
       const p1 = await (
-        await api.post(`/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1" } })
+        await createTestcaseFixtureResponse(api, `/api/projects/${ctx.projectId}/testcases`, { data: { title: `UI picker P1 ${stamp}`, priority: "P1", status: "Approved" } })
       ).json();
       caseIds.push(notSet.id, p1.id);
       const cycle = await (
@@ -1120,7 +1498,10 @@ test.describe("Not set priority and the added Type / Automation Type values", ()
       const typeOptions = await type.locator("option").allTextContents();
       for (const t of ["Sanity", "API", "UI", "Acceptance", "Usability", "Compatibility", "Exploratory", "Other"]) expect(typeOptions).toContain(t);
 
-      await page.getByPlaceholder("Search by title or ID…").fill(`UI picker ${stamp}`);
+      // The titles put a label between "UI picker" and the stamp ("UI picker NotSet <stamp>"), so
+      // the old marker was not a contiguous substring of either title and filtered both out. The
+      // stamp itself is unique and present in both.
+      await page.getByPlaceholder("Search by title or ID…").fill(String(stamp));
       await priority.selectOption("Not set");
       await expect(page.getByText(`UI picker NotSet ${stamp}`)).toBeVisible();
       await expect(page.getByText(`UI picker P1 ${stamp}`)).toHaveCount(0);
@@ -1200,7 +1581,8 @@ test.describe("suite description and preconditions in the repository", () => {
       await page.getByTestId(`suite-expand-${parentId}`).click();
       const childRow = page.getByRole("button", { name: new RegExp(childName) }).first();
       await childRow.hover();
-      await page.getByTitle("Rename suite").click();
+      // Parent and child both expose Rename; target the child row's action.
+      await childRow.locator("..").getByTitle("Rename suite").click();
 
       const description = page.getByPlaceholder("What does this suite cover?");
       const preconditions = page.getByPlaceholder("What must be true before running these test cases?");
@@ -1401,6 +1783,66 @@ test.describe("Add suite opens the newly created suite", () => {
     } finally {
       await page.unroute(createRoute);
       if (priorId) await api.delete(`/api/suites/${priorId}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+});
+
+test.describe("saved repository views (UI)", () => {
+  test("a saved view captures the current filters, can be applied again and deleted", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const name = `E2E saved view ${Date.now()}`;
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      const technique = page.getByLabel("Filter by technique");
+      const reviewView = page.getByLabel("Filter by review view");
+      const views = page.getByLabel("Saved views");
+
+      await technique.selectOption("state_testing");
+      await expect(technique).toHaveValue("state_testing");
+
+      page.once("dialog", (dialog) => dialog.accept(name));
+      await page.getByRole("button", { name: "Save view" }).click();
+      await expect(views.locator("option", { hasText: name })).toHaveCount(1);
+
+      // Move the filters away, then apply the saved view and confirm they are restored.
+      await views.selectOption("");
+      await reviewView.selectOption("negative");
+      await views.selectOption({ label: name });
+      await expect(technique).toHaveValue("state_testing");
+      await expect(reviewView).toHaveValue("all");
+
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByRole("button", { name: "Delete view" }).click();
+      await expect(views.locator("option", { hasText: name })).toHaveCount(0);
+    } finally {
+      const remaining = await (await api.get(`/api/projects/${ctx.projectId}/testcase-views`)).json();
+      const leftover = remaining.find((view: { name: string }) => view.name === name);
+      if (leftover) await api.delete(`/api/projects/${ctx.projectId}/testcase-views/${leftover.id}`, { failOnStatusCode: false });
+      await api.dispose();
+    }
+  });
+
+  test("the editor persists technique and review views through the existing save path", async ({ page }) => {
+    const api = await pwRequest.newContext({ baseURL: env.apiBaseUrl, storageState: STATE_PATH });
+    const title = `E2E classification ${Date.now()}`;
+    let createdId = "";
+    try {
+      await page.goto(`/projects/${ctx.projectId}/testcases`);
+      await page.getByRole("button", { name: "Add test case" }).first().click();
+      const panel = page.locator("aside");
+      await panel.getByPlaceholder("Describe what this test case validates").fill(title);
+      await fieldControl(page, "Technique").selectOption("state_testing");
+      await panel.getByRole("checkbox", { name: "Negative" }).check();
+      await panel.getByRole("button", { name: "Create", exact: true }).click();
+      await expect(panel.getByText("Test case created successfully.")).toBeVisible();
+
+      const list = await (await api.get(`/api/projects/${ctx.projectId}/testcases`, { params: { search: title } })).json();
+      const saved = list.find((row: { title: string }) => row.title === title);
+      expect(saved).toMatchObject({ technique: "state_testing", reviewViews: ["negative"] });
+      createdId = saved.id;
+    } finally {
+      if (createdId) await api.delete(`/api/projects/${ctx.projectId}/testcases/${createdId}`, { failOnStatusCode: false });
       await api.dispose();
     }
   });

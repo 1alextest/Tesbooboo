@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import * as XLSX from "xlsx";
 import { setGraceWindow, setProPlan } from "../utils/billing-db";
@@ -123,7 +124,7 @@ test.describe("import / export", () => {
     data: Record<string, unknown>,
     project = projectId,
   ): Promise<SeededCase> => {
-    const res = await asOwner.post(`/api/projects/${project}/testcases`, { data });
+    const res = await createTestcaseFixtureResponse(asOwner, `/api/projects/${project}/testcases`, { data });
     if (!res.ok()) throw new Error(`Could not seed a test case (${res.status()}): ${await res.text()}`);
     const created = await res.json();
     createdCaseIds.push(created.id);
@@ -1532,8 +1533,8 @@ test.describe("import / export", () => {
   test("exports one row per execution with the result that was recorded", { tag: '@tesbo.testId("TES-TC-216")' }, async () => {
     const stamp = Date.now();
     const project = await newProject(`E2E Run Export ${stamp}`);
-    const passed = await seedCase({ title: `E2E Run Export Passed ${stamp}`, priority: "P1", type: "Smoke" }, project);
-    const failed = await seedCase({ title: `E2E Run Export Failed ${stamp}` }, project);
+    const passed = await seedCase({ title: `E2E Run Export Passed ${stamp}`, status: "Approved", priority: "P1", type: "Smoke" }, project);
+    const failed = await seedCase({ title: `E2E Run Export Failed ${stamp}`, status: "Approved" }, project);
     const cycleId = await seedRun(`E2E Run Export ${stamp}`, project);
     await asOwner.post(`/api/cycles/${cycleId}/testcases`, {
       data: { testcaseIds: [passed.id, failed.id] },
@@ -1584,7 +1585,7 @@ test.describe("import / export", () => {
   test("keeps the snapshot title of a case that was deleted after the run was built", { tag: '@tesbo.testId("TES-TC-217")' }, async () => {
     const stamp = Date.now();
     const project = await newProject(`E2E Run Export Snapshot ${stamp}`);
-    const seeded = await seedCase({ title: `E2E Run Export Snapshot Case ${stamp}` }, project);
+    const seeded = await seedCase({ title: `E2E Run Export Snapshot Case ${stamp}`, status: "Approved" }, project);
     const cycleId = await seedRun(`E2E Run Export Snapshot ${stamp}`, project);
     await asOwner.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [seeded.id] } });
     await asOwner.delete(`/api/projects/${project}/testcases/${seeded.id}`);
@@ -1599,8 +1600,8 @@ test.describe("import / export", () => {
   test("excludes soft-deleted executions", { tag: '@tesbo.testId("TES-TC-218")' }, async () => {
     const stamp = Date.now();
     const project = await newProject(`E2E Run Export Deleted ${stamp}`);
-    const kept = await seedCase({ title: `E2E Run Export Kept ${stamp}` }, project);
-    const dropped = await seedCase({ title: `E2E Run Export Dropped ${stamp}` }, project);
+    const kept = await seedCase({ title: `E2E Run Export Kept ${stamp}`, status: "Approved" }, project);
+    const dropped = await seedCase({ title: `E2E Run Export Dropped ${stamp}`, status: "Approved" }, project);
     const cycleId = await seedRun(`E2E Run Export Deleted ${stamp}`, project);
     await asOwner.post(`/api/cycles/${cycleId}/testcases`, {
       data: { testcaseIds: [kept.id, dropped.id] },
@@ -1629,7 +1630,7 @@ test.describe("import / export", () => {
     // id, with no session and from any workspace. This is the same "the controller method never
     // takes @Req()" pattern as the attachment reads.
     const stamp = Date.now();
-    const seeded = await seedCase({ title: `E2E Run Export Authz ${stamp}` });
+    const seeded = await seedCase({ title: `E2E Run Export Authz ${stamp}`, status: "Approved" });
     const cycleId = await seedRun(`E2E Run Export Authz ${stamp}`);
     await asOwner.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [seeded.id] } });
     const path = `/api/cycles/${cycleId}/export/csv`;
@@ -2066,7 +2067,7 @@ test.describe("import / export", () => {
     expect(filtered.map((tc: { id: string }) => tc.id)).toContain(created.id);
   });
 
-  test("the import maps Russian labels case- and ё-insensitively, mixes with English rows, and keeps unknown values", async () => {
+  test("the import recognizes translated approval labels, refuses approval, and retains other English and unknown values", async () => {
     const stamp = Date.now();
     const project = await newProject(`E2E RU Import Values ${stamp}`);
     const rows = [
@@ -2080,8 +2081,11 @@ test.describe("import / export", () => {
     const res = await asOwner.post(`/api/projects/${project}/testcases/import`, { data: { rows } });
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.errors).toEqual([]);
-    expect(body.imported).toBe(4);
+    expect(body.errors).toEqual([
+      { row: 1, message: "Approve the exact reviewed test case through its approval action" },
+      { row: 2, message: "Approve the exact reviewed test case through its approval action" },
+    ]);
+    expect(body.imported).toBe(2);
 
     const list = await (await asOwner.get(`/api/projects/${project}/testcases`, { params: { limit: 50 } })).json();
     const byTitle = new Map<string, any>();
@@ -2089,10 +2093,24 @@ test.describe("import / export", () => {
       createdCaseIds.push(tc.id);
       byTitle.set(tc.title, await (await asOwner.get(`/api/projects/${project}/testcases/${tc.id}`)).json());
     }
-    expect(byTitle.get(rows[0].title)).toMatchObject({ status: "Approved", severity: "Critical", type: "Functional", automationStatus: "Not Automated" });
-    expect(byTitle.get(rows[1].title)).toMatchObject({ status: "Approved", type: "Sanity", automationStatus: "Can't Automate" });
+    expect(byTitle.has(rows[0].title)).toBe(false);
+    expect(byTitle.has(rows[1].title)).toBe(false);
     expect(byTitle.get(rows[2].title)).toMatchObject({ status: "Deprecated", severity: "Medium", type: "API", automationStatus: "Automated" });
     expect(byTitle.get(rows[3].title)).toMatchObject({ status: "Своё значение" });
+
+    // Re-import the refused rows as drafts so their other localized fields remain covered.
+    const drafts = await asOwner.post(`/api/projects/${project}/testcases/import`, {
+      data: { rows: rows.slice(0, 2).map((row) => ({ ...row, status: "Черновик" })) },
+    });
+    expect(drafts.status()).toBe(200);
+    expect(await drafts.json()).toMatchObject({ imported: 2, errors: [] });
+    const reimported = await (await asOwner.get(`/api/projects/${project}/testcases`, { params: { limit: 50 } })).json();
+    for (const tc of reimported.filter((item: { title: string }) => rows.slice(0, 2).some((row) => row.title === item.title))) {
+      createdCaseIds.push(tc.id);
+      byTitle.set(tc.title, await (await asOwner.get(`/api/projects/${project}/testcases/${tc.id}`)).json());
+    }
+    expect(byTitle.get(rows[0].title)).toMatchObject({ status: "Draft", severity: "Critical", type: "Functional", automationStatus: "Not Automated" });
+    expect(byTitle.get(rows[1].title)).toMatchObject({ status: "Draft", type: "Sanity", automationStatus: "Can't Automate" });
   });
 
   test("the Russian template has Russian headers, a Russian worked example, and imports as English vocabulary", async () => {
@@ -2178,9 +2196,9 @@ test.describe("import / export", () => {
   test("a Russian run export translates headers and execution statuses", async () => {
     const stamp = Date.now();
     const project = await newProject(`E2E RU Run Export ${stamp}`);
-    const passed = await seedCase({ title: `E2E RU Run Passed ${stamp}`, priority: "P1", type: "Smoke" }, project);
-    const blocked = await seedCase({ title: `E2E RU Run Blocked ${stamp}`, type: "Integration" }, project);
-    const untested = await seedCase({ title: `E2E RU Run Untested ${stamp}` }, project);
+    const passed = await seedCase({ title: `E2E RU Run Passed ${stamp}`, status: "Approved", priority: "P1", type: "Smoke" }, project);
+    const blocked = await seedCase({ title: `E2E RU Run Blocked ${stamp}`, status: "Approved", type: "Integration" }, project);
+    const untested = await seedCase({ title: `E2E RU Run Untested ${stamp}`, status: "Approved" }, project);
     const cycleId = await seedRun(`E2E RU Run ${stamp}`, project);
     await asOwner.post(`/api/cycles/${cycleId}/testcases`, {
       data: { testcaseIds: [passed.id, blocked.id, untested.id] },

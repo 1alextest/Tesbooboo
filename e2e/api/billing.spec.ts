@@ -241,8 +241,15 @@ test.describe("pricing quotes", () => {
   });
 
   test("GET /api/billing/pricing is stable across calls", { tag: '@tesbo.testId("TES-TC-82")' }, async ({ request }) => {
-    const first = await (await request.get("/api/billing/pricing")).json();
-    const second = await (await request.get("/api/billing/pricing")).json();
+    const firstResponse = await request.get("/api/billing/pricing");
+    const secondResponse = await request.get("/api/billing/pricing");
+    // Two identical error bodies are not stable quotes: require the real pricing contract first.
+    expect(firstResponse.ok(), await firstResponse.text()).toBeTruthy();
+    expect(secondResponse.ok(), await secondResponse.text()).toBeTruthy();
+    const first = await firstResponse.json();
+    const second = await secondResponse.json();
+    expect(CURRENCIES).toContain(first.currency);
+    expect(CURRENCIES).toContain(second.currency);
     // A quote that flips currency between two page loads would show one price and charge another.
     expect(second.currency).toBe(first.currency);
     expect(second.monthlyAmount).toBe(first.monthlyAmount);
@@ -338,22 +345,32 @@ test.describe("checkout session validation", () => {
   test("requesting INR from outside India is refused, not quietly charged in USD", { tag: '@tesbo.testId("TES-TC-90")' }, async ({
     request,
   }) => {
+    // Resolve eligibility with a read before sending a checkout request. A 503 is a missing
+    // prerequisite, not proof of INR eligibility, and must fail rather than trigger a skip.
+    const eligibility = await request.get("/api/billing/pricing?currency=inr", { failOnStatusCode: false });
+    expect([200, 403], await eligibility.text()).toContain(eligibility.status());
+    if (eligibility.status() === 200) {
+      const pricing = await eligibility.json();
+      expect(pricing.currency).toBe("inr");
+      expect(pricing.inrAvailable || pricing.currencyLocked).toBeTruthy();
+      test.skip(
+        !env.allowStripeWrites,
+        "this environment allows INR, so the request would reach Stripe — covered by the gated checkout test",
+      );
+    } else {
+      expect((await eligibility.json()).error).toContain("India");
+    }
+
     const res = await request.post("/api/billing/checkout-session", {
       data: { interval: "monthly", currency: "inr" },
       failOnStatusCode: false,
     });
 
-    if (res.status() === 403) {
+    if (eligibility.status() === 403) {
+      expect(res.status()).toBe(403);
       expect((await res.json()).error).toContain("India");
       return;
     }
-    // This environment does place the caller in India, so INR is legitimately allowed and the
-    // request proceeds past currency resolution into Stripe. Don't let it get that far unless the
-    // operator opted into Stripe writes.
-    test.skip(
-      !env.allowStripeWrites,
-      "this environment allows INR, so the request would reach Stripe — covered by the gated checkout test",
-    );
     expect(res.ok()).toBeTruthy();
   });
 });

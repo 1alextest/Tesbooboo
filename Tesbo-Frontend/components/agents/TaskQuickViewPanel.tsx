@@ -10,6 +10,7 @@ import { toTsv } from "@/lib/tsv";
 import { isMarkdownSource, renderMarkdown } from "@/lib/markdown";
 import { ZyraLanguageContext, zyraLanguage, zyraText } from "@/lib/zyra-i18n";
 import { formatDateTime } from "@/lib/date";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
 import { TechniqueBadges } from "./ZyraChatReviewPanel";
 import { ZyraSeverityBadge } from "./ZyraContextDrawer";
 
@@ -169,13 +170,17 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
 
   const normalizedStatus = normalizeTaskStatus(task.taskStatus);
   const done = normalizedStatus === "done";
+  const output = summarizeZyraTaskOutput(task);
+  const isRequirementBundle = output.isRequirementBundle;
+  const isManagedDocumentProposal = output.isManagedDocumentProposal;
   const failed = normalizedStatus === "failed";
   // Defensive: activity_log is a jsonb array server-side and should always arrive as one, but a
   // malformed or missing value here must render an empty list rather than throw.
   const activities = Array.isArray(task.activities) ? task.activities : [];
   const feedbackActivities = activities.filter(isFeedbackActivity);
   const failureDetail = failed ? latestFailureDetail(activities, t("task.failedDefault")) : null;
-  const approvalRate = task.generatedCount > 0 ? Math.round((task.savedCount / task.generatedCount) * 100) : null;
+  const approvalRate = !isRequirementBundle && !isManagedDocumentProposal && task.generatedCount > 0
+    ? Math.round((task.savedCount / task.generatedCount) * 100) : null;
   // A task's ticket lives in jiraIssueKeys, linearIssueKeys OR notionPageIds depending on its source. Reading only
   // the Jira list left every Linear task showing a bare "—" placeholder beside its status. Same
   // combined list the full task page uses; a task with no ticket gets no key slot at all.
@@ -195,6 +200,7 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
   );
 
   async function handleCloseTask() {
+    if (isRequirementBundle) return;
     setWorking(true);
     setError(null);
     try {
@@ -208,7 +214,8 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
   }
 
   const tabs: Array<{ key: PanelTab; label: string; count?: number }> = [
-    { key: "testcases", label: t("task.tab.testcases"), count: task.drafts.length },
+    { key: "testcases", label: isRequirementBundle ? "Proposed changes" : isManagedDocumentProposal ? "Document proposal" : t("task.tab.testcases"),
+      count: isRequirementBundle || isManagedDocumentProposal ? output.operationCount ?? undefined : task.drafts.length },
     { key: "feedback", label: t("task.tab.feedback"), count: feedbackActivities.length },
     { key: "sources", label: t("task.tab.sources"), count: task.sources.length },
     { key: "activity", label: t("task.tab.activity"), count: activities.length },
@@ -255,8 +262,8 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
         {/* Stats row */}
         <div className="grid shrink-0 grid-cols-3 divide-x divide-[var(--border)] border-b border-[var(--border)]">
           <div className="p-3.5 text-center">
-            <div className="font-mono text-lg font-semibold text-[var(--foreground)]">{task.generatedCount}</div>
-            <div className="mt-0.5 text-[11px] text-[var(--muted-soft)]">{t("task.stat.testcases")}</div>
+            <div className="font-mono text-lg font-semibold text-[var(--foreground)]">{output.statValue}</div>
+            <div className="mt-0.5 text-[11px] text-[var(--muted-soft)]">{isRequirementBundle ? "Proposal operations" : isManagedDocumentProposal ? "Document proposals" : t("task.stat.testcases")}</div>
           </div>
           <div className="p-3.5 text-center">
             <div className="font-mono text-lg font-semibold text-[var(--foreground)]">{task.tokenUsage.total}</div>
@@ -267,9 +274,9 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
               className="font-mono text-lg font-semibold"
               style={{ color: approvalRate === null ? "var(--muted-soft)" : "var(--success)" }}
             >
-              {approvalRate === null ? "—" : `${approvalRate}%`}
+              {isRequirementBundle ? output.createdDraftCases : isManagedDocumentProposal ? (output.nativeDocumentApplyReceipt === null ? "—" : output.nativeDocumentApplyReceipt ? "Recorded" : "None") : approvalRate === null ? "—" : `${approvalRate}%`}
             </div>
-            <div className="mt-0.5 text-[11px] text-[var(--muted-soft)]">{t("task.stat.approval")}</div>
+            <div className="mt-0.5 text-[11px] text-[var(--muted-soft)]">{isRequirementBundle ? "Native Draft cases created" : isManagedDocumentProposal ? "Native apply receipt" : t("task.stat.approval")}</div>
           </div>
         </div>
 
@@ -299,6 +306,42 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
           )}
 
           {activeTab === "testcases" && (
+            isRequirementBundle ? (
+              <div className="flex flex-col gap-3 text-sm">
+                <p className="text-[var(--muted)]">
+                  A requirement revision, case candidate and link are different proposal
+                  operations. No test case exists merely because Zyra staged a proposal.
+                </p>
+                <p className="font-medium text-[var(--foreground)]">{output.primary}</p>
+                <p className="text-xs text-[var(--muted)]">{output.secondary}</p>
+                {Array.isArray(task.requirementBundle) && task.requirementBundle.length > 0 && (
+                  <ul className="space-y-2" aria-label="Proposed operation types">
+                    {task.requirementBundle.map((operation, index) => (
+                      <li key={index} className="rounded-md border border-[var(--border)] p-2.5">
+                        {operation.opType === "requirement_revision" ? "Requirement revision"
+                          : operation.opType === "testcase_create" ? "Draft case candidate"
+                          : operation.opType === "requirement_case_link" ? "Requirement-to-case link"
+                          : "Unrecognized proposal operation"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <Link className="font-medium text-[var(--brand-primary)] underline"
+                  href={`/projects/${projectId}/agents/tasks/${task.id}`}>
+                  Open full proposal review and authoritative outcome
+                </Link>
+              </div>
+            ) : isManagedDocumentProposal ? (
+              <div className="flex flex-col gap-3 text-sm">
+                <p className="font-medium text-[var(--foreground)]">{output.primary}</p>
+                <p className="text-xs text-[var(--muted)]">{output.secondary}</p>
+                <p className="text-[var(--muted)]">A document proposal is not a generated testcase. A committed native receipt establishes whether it was applied.</p>
+                <Link className="font-medium text-[var(--brand-primary)] underline"
+                  href={`/projects/${projectId}/agents/tasks/${task.id}`}>
+                  Open full document proposal and authoritative outcome
+                </Link>
+              </div>
+            ) : (
             <div className="flex flex-col gap-2.5">
               {task.drafts.length > 0 && (
                 <div className="flex justify-end">
@@ -335,6 +378,7 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
               })}
               {task.drafts.length === 0 && <p className="text-sm text-[var(--muted)]">{t("task.noDrafts")}</p>}
             </div>
+            )
           )}
 
           {activeTab === "feedback" && (
@@ -417,7 +461,7 @@ export default function TaskQuickViewPanel({ task, projectId, onClose, onTaskUpd
           >
             {t("task.viewFull")}
           </Link>
-          {!done && (
+          {!done && !isRequirementBundle && (
             <Button variant="secondary" style={{ height: 34 }} onClick={() => void handleCloseTask()} disabled={working}>
               {working ? t("task.closing") : t("task.closeTask")}
             </Button>

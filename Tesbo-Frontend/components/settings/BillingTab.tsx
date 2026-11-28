@@ -251,7 +251,7 @@ export default function BillingTab() {
               {plan === "pro"
                 ? billingInfo?.currentPeriodEnd
                   ? `Renews ${formatDate(billingInfo.currentPeriodEnd)}${
-                      billingInfo.billingInterval ? ` · billed ${billingInfo.billingInterval}` : ""
+                      billingInfo.billingInterval ? ` · billed ${billingInfo.billingInterval === "annual" ? "annually" : "monthly"}` : ""
                     }`
                   : "Unlimited projects, 5GB storage, and the full agent marketplace."
                 : "Free forever — up to 2 projects and 500MB storage, with unlimited team members."}

@@ -1,0 +1,126 @@
+{
+  "review": "Independent Security native transport closeout; read-only actual CI/source evidence",
+  "source": "965a87a13d2669354598f8d4b912f36fdb148867",
+  "tree": "b3c497bdb7a43cd43e8d0535f663c542cba88186",
+  "actualCiCheckout": "e49fab4df4043b621b7007e97d8646743f441b6b",
+  "scannerSource": "62f66ad3c438a27a6407efd73a7836e7768eb5df",
+  "methodPinSuppliedByReviewPackage": "d83549c85a4dcd047fb40dc4fba4ec62737ab0fc",
+  "missingMethodInputs": [
+    ".kiro/steering/NESBERRY_AI_CODING_GUARD.md",
+    ".kiro/steering/shared-vocabulary.md"
+  ],
+  "files": {
+    "assurance-working/security-native-final-delta.md": {
+      "sha256": "441a3a37ef678da8db43670b24e7ed2af97f9bd304df8841125f390d6bba3640",
+      "bytes": 36557
+    },
+    "assurance-method-inputs/.claude/agents/security-team.md": {
+      "sha256": "09d1d25d99e2fa3bd489c6aacabb33648b9e6d99f9b5b52f148fb30ddde1eb64",
+      "bytes": 23242
+    },
+    "assurance-method-inputs/.kiro/steering/teams/review-orchestration.md": {
+      "sha256": "023a64168c5160a761b91e7496b8a35b89246baf7eda0ab62bac17a7fa44771e",
+      "bytes": 45631
+    },
+    "assurance-method-inputs/.kiro/steering/guard-security-privacy.md": {
+      "sha256": "b4bd8cf0e05484f127035e1e3354c9c0d7a7f3d8d4610d94476c6ef0d0cd3f55",
+      "bytes": 72006
+    },
+    "assurance-method-inputs/docs/policies/governance/POL-GOVERNANCE-ASSURANCE-PORTABILITY/v001.md": {
+      "sha256": "33c69cba82f7d98773e85a30fa1afff15cc0dbcec0d88302a0295ce06e2c8524",
+      "bytes": 5618
+    },
+    "tesbo-canonical-inputs/extracted-v1.4.28/00_README.md": {
+      "sha256": "43eb372cc28ce482b037301173e7afd783049db0e5fc1974d6afe75ac66cd0d2",
+      "bytes": 138450
+    },
+    "tesbo-canonical-inputs/extracted-v1.4.28/01_PRODUCT_REQUIREMENTS.md": {
+      "sha256": "515c2230b0c3859156a9532dd8d833a28705f53113f8d84cd00e1db96daa8cae",
+      "bytes": 194683
+    },
+    "tesbo-canonical-inputs/extracted-v1.4.28/04_MCP_API_CONTRACTS.md": {
+      "sha256": "5893a48fe504a8d5c6b47bb552c493685e950fab62d44334702a92edc7c9474d",
+      "bytes": 156290
+    },
+    "tesbo-canonical-inputs/extracted-v1.4.28/06_IMPLEMENTATION_AGENT_BRIEF.md": {
+      "sha256": "823c73b774a5462b6a1ca6b4d2467c4a5b6d4901a02c642e89ad6a2edc981770",
+      "bytes": 99719
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/common/testcase-publication.policy.ts": {
+      "sha256": "90f2accd42b37f5c8476833cd362646728c681ac8a91b73c9c6424ce6d8203c0",
+      "bytes": 3064
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/common/human-review-principal.ts": {
+      "sha256": "ddba247c680a53b4d091908061add30b04c8a2505fe6321bc58d93f20fde50c8",
+      "bytes": 515
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/auth/api-token-rest.guard.ts": {
+      "sha256": "47d47da161c3012c9d764ddca070bdd75d4e76aa539490865c474d918ab102f8",
+      "bytes": 3433
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/legacy/legacy.controller.ts": {
+      "sha256": "c5725581c49f0ab2f07ec663f2935acd425aec711d6f0d0050b96bdf47eda455",
+      "bytes": 111360
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/legacy/legacy.service.ts": {
+      "sha256": "e51f779469455c818bc274cf11be0716445c8a9558e80b0257336881bc8f8104",
+      "bytes": 1548859
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/mcp/mcp.service.ts": {
+      "sha256": "6a171831791944ab3ee1f85b1fe1f60a4210e4baa85791633a0fe4d2602b1533",
+      "bytes": 21691
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/mcp/mcp.tools.ts": {
+      "sha256": "810177d5684fe7498e0068f8ef2ea9d23171add241b4e0d07d0807e3b2aeab85",
+      "bytes": 109070
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/behavior-graph/model-studio-repository.ts": {
+      "sha256": "6eea2fb02f143f669f78c4cd86fd720219054eb1352dd7902e8ae17af5ab313d",
+      "bytes": 61962
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/src/behavior-graph/model-studio-runs.db.spec.ts": {
+      "sha256": "a60eeddd8f6b0b7f99d51f724a83fada572d9bcdce747957d22c8e640979fea8",
+      "bytes": 36262
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/migrations/V148_model_studio_revisions.sql": {
+      "sha256": "5bf57f7cbbd07c5d959da7e4df2c7d4315c8780638f6bcb3b82312537b5690cc",
+      "bytes": 2819
+    },
+    "tesbo-review-965a87a1/Tesbo-Backend-Nest/migrations/V154_model_studio_governed_runs.sql": {
+      "sha256": "6eefa629d7ca973c8abefd508c0a0bd25f42f5ef250ef41d987bc8d9f430c113",
+      "bytes": 2100
+    },
+    "tesbo-review-965a87a1/e2e/api/mcp.spec.ts": {
+      "sha256": "6380cd15ce0186435069c2ed4bdbccd6920967489d2beb52f8127191a08519f5",
+      "bytes": 278776
+    },
+    "tesbo-ci-evidence/965a87a1/smoke.log": {
+      "sha256": "489e65bb72addee8df4b7f864489f3cea9a76086bcba7c6b4a399fe366995081",
+      "bytes": 334330
+    },
+    "tesbo-ci-evidence/965a87a1/database.log": {
+      "sha256": "755f8d2dc9e42e095ab453b3fa0562a9d57d14297232e974fd90871a91996094",
+      "bytes": 76523
+    },
+    "tesbo-ci-evidence/965a87a1/gitleaks.log": {
+      "sha256": "d04ac3521130de0dbc6ddf56680b00e66ad93ba440411e9766e62ddd2df2ae6e",
+      "bytes": 14275
+    },
+    "tesbo-ci-evidence/965a87a1/ci-smoke-evidence.zip": {
+      "sha256": "606d02869014f699136eec46ef830bd630cc15df8527593d60660539b2b2bfd3",
+      "bytes": 36776144
+    }
+  },
+  "scannerGitBlobs": {
+    ".gitleaks.toml": {
+      "sha256": "92df5124b9919e3743b57383eec1d9a9fdc23e5d8242c1b93b793e4e2f8f9935",
+      "bytes": 810
+    },
+    ".github/workflows/free-repository-security.yml": {
+      "sha256": "05002e3e12d3c4ca5313277fa75d1af0924aace35f994e6a552c775584793c2f",
+      "bytes": 1336
+    }
+  },
+  "proposalTomlParseOnly": "passed; not scanner execution",
+  "receiptSha256": "57a88ea77ac3581906d43c103b886eb210501a1c2714dae1af9585ef0b96aa49"
+}

@@ -276,13 +276,21 @@ Recognised by extension only: `png`/`jpg`/`jpeg`/`webp` → screenshot, `mp4`/`w
 
 - **Workers and `fullyParallel`** need no configuration. Each result posts as its test finishes,
   without blocking the next one.
-- **`retries`** works as it is: a retried test re-posts, the last attempt stands, and `retryCount`
-  records how many there were.
+- **Test retries** send an explicit `retryCount`. On an open run the highest accepted
+  attempt wins, not the last network arrival; an exact duplicate is a no-op and a
+  conflicting equal/older attempt is refused. Closed runs reject later results.
 - **Sharding** converges on a single run automatically on GitHub Actions, GitLab CI, Jenkins,
   CircleCI, Azure Pipelines and Bitbucket Pipelines, because the shards derive a shared idempotency
   key from the CI environment. **On any other CI provider each shard opens its own run**, and there is
   currently no option to supply that key yourself — so if you shard on an unsupported provider,
   expect one run per shard.
+
+Transport retries are not a universal exactly-once guarantee. Run creation reuse
+requires a shared external ID (local runs have none); evidence uploads do not have
+command-level deduplication. A lost acknowledgement can leave an outcome uncertain.
+These SDK boundaries are separate from the browser app's GET/HEAD-only automatic
+network retry policy. Multi-process/shard closure coordination is not certified by
+the single-process integration smoke.
 
 ### Nothing is written to disk
 

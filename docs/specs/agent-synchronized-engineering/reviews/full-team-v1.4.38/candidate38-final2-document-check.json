@@ -1,0 +1,781 @@
+{
+  "verifier": "Tesbo specification document binding v6",
+  "scope": "Document structure, declared mirrors, identifier continuity and exact input bytes only",
+  "limits": "No semantic completeness, R-D-T sufficiency, source behavior, runtime, UI, approval, Skill efficacy or freeze verdict",
+  "candidate": "input-v38-candidate2",
+  "baseline": "baseline-v37",
+  "candidate_manifest_sha256": "a5da721acc5c8ce39948c42ec8cc2345ea3778278642b63dc58430fa6575531a",
+  "baseline_manifest_sha256": null,
+  "count_units": {
+    "ASER_unique_definitions": 125,
+    "GEX_AC_unique_ids": 8,
+    "GA_unique_ids": 5,
+    "GA_cumulative_assertion_rows": 15,
+    "SEM_unique_aliases": 8,
+    "SEM_cumulative_assertion_rows": 16,
+    "SK_unique_aliases": 4,
+    "SK_cumulative_assertion_rows": 8,
+    "DISC_unique_aliases": 5,
+    "DISC_cumulative_assertion_rows": 10
+  },
+  "passed": true,
+  "failed_checks": [],
+  "checks": [
+    {
+      "check": "exactly eight canonical files",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "exactly six subordinate root views",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/00_README.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/00_README.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/00_README.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/01_PRODUCT_REQUIREMENTS.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: canonical/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: canonical/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: canonical/07_UI_DESIGN_TASKS.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: views/AGENT_RULE_TEMPLATE.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: views/AGENT_RULE_TEMPLATE.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: views/AGENT_RULE_TEMPLATE.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: views/README.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: views/README.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: views/README.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: views/design.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: views/design.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: views/design.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: views/implementation-plan.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: views/implementation-plan.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: views/implementation-plan.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: views/requirements.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: views/requirements.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: views/requirements.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "preserved identifiers: views/skills-governance.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "current revision header: views/skills-governance.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "unfrozen header: views/skills-governance.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "canonical scenario definitions unique",
+      "passed": true,
+      "details": {}
+    },
+    {
+      "check": "125 planned scoped ASER definitions",
+      "passed": true,
+      "details": {
+        "ASE-E2E": 15,
+        "ASE-FLOW": 54,
+        "SK-E2E": 40,
+        "ASE-INT": 16
+      }
+    },
+    {
+      "check": "four Skill proposal alias identities retained",
+      "passed": true,
+      "details": {
+        "SK-E2E-41": 2,
+        "SK-E2E-42": 2,
+        "SK-E2E-43": 2,
+        "SK-E2E-44": 2
+      }
+    },
+    {
+      "check": "eight cumulative Skill alias assertion rows across both retained generations",
+      "passed": true,
+      "details": {
+        "assertion_rows": 8,
+        "rows_per_alias": {
+          "SK-E2E-41": 2,
+          "SK-E2E-42": 2,
+          "SK-E2E-43": 2,
+          "SK-E2E-44": 2
+        }
+      }
+    },
+    {
+      "check": "all eight Skill alias allocations agree: skills-governance.md",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "aliases not duplicate definitions: skills-governance.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "all eight Skill alias allocations agree: implementation-plan.md",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "aliases not duplicate definitions: implementation-plan.md",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "eight retained supplemental GEX-AC proof obligations",
+      "passed": true,
+      "details": {
+        "assertion_rows": 8,
+        "unique_ids": [
+          "GEX-AC-01",
+          "GEX-AC-02",
+          "GEX-AC-03",
+          "GEX-AC-04",
+          "GEX-AC-05",
+          "GEX-AC-06",
+          "GEX-AC-07",
+          "GEX-AC-08"
+        ]
+      }
+    },
+    {
+      "check": "supplemental GEX-AC obligations mirrored",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "eight semantic proposal alias identities retained",
+      "passed": true,
+      "details": {
+        "unique_aliases": [
+          "GEX-SEM-01",
+          "GEX-SEM-02",
+          "GEX-SEM-03",
+          "GEX-SEM-04",
+          "GEX-SEM-05",
+          "GEX-SEM-06",
+          "GEX-SEM-07",
+          "GEX-SEM-08"
+        ],
+        "cumulative_assertion_rows": 16
+      }
+    },
+    {
+      "check": "semantic cumulative rows are distinct assertions, not duplicate rows",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "all semantic proposal allocation assertions mirrored",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 16,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "five unique Graph Analytics acceptance IDs",
+      "passed": true,
+      "details": {
+        "GA-AC-01": 3,
+        "GA-AC-02": 3,
+        "GA-AC-03": 3,
+        "GA-AC-04": 3,
+        "GA-AC-05": 3
+      }
+    },
+    {
+      "check": "fifteen cumulative GA assertions across revisions33/35/37",
+      "passed": true,
+      "details": {
+        "assertion_rows": 15,
+        "distinct_assertion_rows": 15,
+        "rows_per_id": {
+          "GA-AC-01": 3,
+          "GA-AC-02": 3,
+          "GA-AC-03": 3,
+          "GA-AC-04": 3,
+          "GA-AC-05": 3
+        }
+      }
+    },
+    {
+      "check": "all fifteen cumulative GA acceptance assertions mirrored",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 15,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "five discovery alias identities without new definitions",
+      "passed": true,
+      "details": {
+        "unique_aliases": [
+          "GEX-DISC-01",
+          "GEX-DISC-02",
+          "GEX-DISC-03",
+          "GEX-DISC-04",
+          "GEX-DISC-05"
+        ],
+        "cumulative_assertion_rows": 10
+      }
+    },
+    {
+      "check": "discovery cumulative rows are distinct assertions, not duplicate rows",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "all discovery alias allocation assertions mirrored",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 10,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved incoming saved37 GEX-AC assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved incoming saved37 GA-AC assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 15,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved incoming saved37 GEX-SEM assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved incoming saved37 GEX-DISC assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 5,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved incoming saved37 SK-E2E assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 4,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved historical continuation35 GEX-AC assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved historical continuation35 GA-AC assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 5,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved historical continuation35 GEX-SEM assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 8,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved historical continuation35 GEX-DISC assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 5,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "preserved historical continuation35 SK-E2E assertion rows",
+      "passed": true,
+      "details": {
+        "expected_distinct_assertions": 4,
+        "missing_assertions": []
+      }
+    },
+    {
+      "check": "proposal aliases do not become unquoted definition rows: canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "proposal aliases do not become unquoted definition rows: views/implementation-plan.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "proposal aliases do not become unquoted definition rows: views/skills-governance.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "cumulative assertion table shape: canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "cumulative assertion table shape: views/implementation-plan.md",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "independent GA applicability/evidence/outcome/impact axes retained",
+      "passed": true,
+      "details": {
+        "required_terms": [
+          "applicability",
+          "evidence sufficiency",
+          "observed outcome",
+          "native impact disposition",
+          "mixed",
+          "cannot establish a met obligation",
+          "does not erase the original failure"
+        ],
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "GA golden denominator fixture preserves3-2-1-1 then4-2-1-1 after equivalence withdrawal",
+      "passed": true,
+      "details": {
+        "required_terms": [
+          "A modeled PASS plus equivalent approved policy",
+          "B unmapped policy verified FAIL",
+          "C model obligation with no run",
+          "D unresolved governing conflict",
+          "Before withdrawal: 3 known eligible, 2 verified, 1 met, 1 conflict outside known denominator",
+          "scope incomplete",
+          "Withdrawal produces 4 known eligible",
+          "A model and A policy distinct; policy has no applicable execution",
+          "2 verified, 1 met, 1 conflict; historical snapshot retains prior counts"
+        ],
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "equivalence withdrawal and conflict/evidence denominator boundaries retained",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "GA native human entry and effective visible grant scope retained",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "bounded frontier witness has independent scope and invalidation conditions",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "bounded frontier proof keeps omitted-consumer and unaffected controls",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "Change Packet has no independent approval authority: canonical/03_TECHNICAL_DESIGN.md",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "Change Packet has no independent approval authority: canonical/04_MCP_API_CONTRACTS.md",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "Change Packet has no independent approval authority: views/design.md",
+      "passed": true,
+      "details": {
+        "missing_terms": []
+      }
+    },
+    {
+      "check": "equivalence decision owner qualification mirrors agree",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "operative implementation instruction names current revision",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "historical model exception is retained",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "source result-tool locator uses inspected name",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "subordinate sibling links and anchors resolve",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "portable method mirror matches canonical owner",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "current source convergence mirror matches canonical owner",
+      "passed": true,
+      "details": null
+    },
+    {
+      "check": "canonical relative links and anchors resolve",
+      "passed": true,
+      "details": []
+    },
+    {
+      "check": "input integrity: frozen candidate-1",
+      "passed": true,
+      "details": {
+        "checked_files": 15,
+        "mismatches": []
+      }
+    },
+    {
+      "check": "input integrity: current source cache",
+      "passed": true,
+      "details": {
+        "checked_files": 611,
+        "mismatches": []
+      }
+    },
+    {
+      "check": "input integrity: current frontend source supplement",
+      "passed": true,
+      "details": {
+        "checked_files": 261,
+        "mismatches": []
+      }
+    },
+    {
+      "check": "input integrity: recovered method pack",
+      "passed": true,
+      "details": {
+        "checked_files": 18,
+        "mismatches": []
+      }
+    },
+    {
+      "check": "input integrity: original method artifacts",
+      "passed": true,
+      "details": {
+        "checked_files": 2,
+        "mismatches": []
+      }
+    },
+    {
+      "check": "input integrity: historical continuation35 candidate3",
+      "passed": true,
+      "details": {
+        "checked_files": 15,
+        "mismatches": []
+      }
+    },
+    {
+      "check": "input integrity: current candidate snapshot",
+      "passed": true,
+      "details": {
+        "checked_files": 15,
+        "mismatches": []
+      }
+    }
+  ],
+  "candidate_files": [
+    {
+      "path": "canonical/00_README.md",
+      "bytes": 165131,
+      "sha256": "046740c0d5a2143593947084aab9bad97aeeb6aca2248fc77b890f8d193b1e57"
+    },
+    {
+      "path": "canonical/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 227675,
+      "sha256": "19e5bbff86646719f707db16615127567d3af02f4d6b6d628da0bee175171607"
+    },
+    {
+      "path": "canonical/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 142900,
+      "sha256": "a3248327c291fcfb2d76176cb5723709973bc490bef89f66834a8d84588ba710"
+    },
+    {
+      "path": "canonical/03_TECHNICAL_DESIGN.md",
+      "bytes": 407849,
+      "sha256": "6fa31cab5106cc6c72e0ed1bd52a2e503fd474279833784ab2a72fb5bb5609f8"
+    },
+    {
+      "path": "canonical/04_MCP_API_CONTRACTS.md",
+      "bytes": 186695,
+      "sha256": "a36b996feb928393d67974c373c503e7798cd049b829551a20a15a2c612cecc9"
+    },
+    {
+      "path": "canonical/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 392397,
+      "sha256": "26914139df223ee45f03d5e8a027c411b7241c8c4fac23fb43df34a0a18f4165"
+    },
+    {
+      "path": "canonical/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 131932,
+      "sha256": "fb759b4768c174bf74b0444d8fcc3e1e7a8057af766a813633d597bba31b871d"
+    },
+    {
+      "path": "canonical/07_UI_DESIGN_TASKS.md",
+      "bytes": 134250,
+      "sha256": "4c2b4e8464c810d563b16d18dc754e2b6d8be5a9b5ee4f82580587206caea4bf"
+    },
+    {
+      "path": "views/AGENT_RULE_TEMPLATE.md",
+      "bytes": 43020,
+      "sha256": "4d7a9e45ed6b627602f0670a6ff8f78148fe740280969e93df642ac5037af111"
+    },
+    {
+      "path": "views/README.md",
+      "bytes": 46799,
+      "sha256": "1df7503adc67d95d108d6b0f8b967c3263f3c2ee135b47c551bb8dff24e30cf6"
+    },
+    {
+      "path": "views/design.md",
+      "bytes": 162618,
+      "sha256": "42b044548c028c2ad0fd865e737a0524770a1d3b61fbf5e5ec732cf4b8c0f487"
+    },
+    {
+      "path": "views/implementation-plan.md",
+      "bytes": 143684,
+      "sha256": "e721edc05f48a81a606def4aae9ab75f0e50ceefe2497e2a5f59b68b3ec14d60"
+    },
+    {
+      "path": "views/requirements.md",
+      "bytes": 95674,
+      "sha256": "17715eaca32392557d111a1512985931b73f77f5c930a0cb5e412d7743a06b64"
+    },
+    {
+      "path": "views/skills-governance.md",
+      "bytes": 75748,
+      "sha256": "4cec61661eff9afe398cc146e7766a75c59e28e40d286f16ed3e16ccae5dd475"
+    }
+  ]
+}

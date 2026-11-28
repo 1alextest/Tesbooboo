@@ -1,0 +1,466 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+
+> tesbo-backend-nest@0.1.0 test
+> jest --runInBand --runTestsByPath src/behavior-graph/model-studio-runs.spec.ts --json --outputFile=/workspace/scratch/fb086055b433/assurance-working/native-occurrence-before-results.json
+
+FAIL src/behavior-graph/model-studio-runs.spec.ts (12.645 s)
+  governed model/native writer composition
+    ✓ SEC-NATIVE-02 rechecks current authority after a blocked approval owner resumes (10 ms)
+    ✓ SEC-NATIVE-02 rechecks current authority after a blocked candidate owner resumes (2 ms)
+    ✓ SEC-NATIVE-02 keeps an authorized exact human approval available (4 ms)
+    ✓ propagates manifest failure through the shared transaction without a compensating delete (2 ms)
+    ✕ keeps native ownership and records the refreshed reviewed case in a successful manifest (5 ms)
+    ✕ refuses missing native occurrence identity inside the dispatch transaction (3 ms)
+    ✕ refuses ambiguous native occurrence identity inside the dispatch transaction (1 ms)
+    ✕ refuses missing snapshot native occurrence identity inside the dispatch transaction (2 ms)
+    ✓ refuses a missing active basis before native writes (3 ms)
+    ✓ refuses a missing current basis before native writes (2 ms)
+    ✓ refuses a missing approved basis before native writes (1 ms)
+    ✓ refuses a recorded mapping whose case changed even after the current case was approved again (1 ms)
+    ✓ retains the exact current explicit mapping basis in a native run manifest (2 ms)
+    ✓ rejects a stale case revision at link creation without inserting a mapping (1 ms)
+    ✓ refuses to silently reuse an older mapping when a caller supplies a new case revision (1 ms)
+    ✓ does not publish candidate effects when its mapping fails, then publishes after a successful commit (3 ms)
+    ✓ refuses untrusted model approval and native materialization before any effect: undefined
+    ✓ refuses untrusted model approval and native materialization before any effect: {"kind":"api_token"}
+  governed model results retain their dispatched native occurrence
+    ✕ continues to attribute the original exact occurrence and excludes later native additions (3 ms)
+    ✕ never attributes a re-added case to the original manifest
+    ✕ never attributes a different execution to the original manifest (1 ms)
+    ✕ never attributes a different reviewed snapshot to the original manifest (1 ms)
+    ✕ never attributes a unrelated case to the original manifest (2 ms)
+    ✕ keeps the original dispatch count when its occurrence is removed (2 ms)
+    ✕ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: undefined (1 ms)
+    ✕ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {} (1 ms)
+    ✕ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {"cycleItemId":"00000000-0000-4000-8000-000000000007","executionId":"00000000-0000-4000-8000-000000000008"} (1 ms)
+    ✕ keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {"cycleItemId":"00000000-0000-4000-8000-000000000007","executionId":"not-an-occurrence","snapshotApprovalRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} (1 ms)
+    ✕ does not count an ambiguously duplicated occurrence twice (1 ms)
+
+  ● governed model/native writer composition › keeps native ownership and records the refreshed reviewed case in a successful manifest
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 5
+    + Received  + 0
+
+    @@ -3,15 +3,10 @@
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cycleId": "00000000-0000-4000-8000-000000000006",
+        "manifest": Object {
+          "cases": Array [
+            Object {
+    -         "nativeOccurrence": Object {
+    -           "cycleItemId": "00000000-0000-4000-8000-000000000007",
+    -           "executionId": "00000000-0000-4000-8000-000000000008",
+    -           "snapshotApprovalRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    -         },
+              "testcaseId": "00000000-0000-4000-8000-000000000005",
+              "title": "Current reviewed title",
+            },
+          ],
+        },
+
+      151 |     const f = fixture();
+      152 |     const run = await f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] });
+    > 153 |     expect(run).toMatchObject({ cycleId: cycle, modelRevisionId: revision, contentHash: hash, added: 1,
+          |                 ^
+      154 |       manifest: { cases: [{ testcaseId: testcase, title: "Current reviewed title", nativeOccurrence: occurrence }] } });
+      155 |     expect(f.legacy.createCycleWithTestcasesForUser).toHaveBeenCalledWith(user, project,
+      156 |       expect.objectContaining({ testcaseIds: [testcase] }), f.client);
+
+      at Object.<anonymous> (src/behavior-graph/model-studio-runs.spec.ts:153:17)
+
+  ● governed model/native writer composition › refuses missing native occurrence identity inside the dispatch transaction
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"added": 1, "approvalId": "approval", "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "coverageAssertion": "none", "createdAt": undefined, "cycleId": "00000000-0000-4000-8000-000000000006", "executionAssertion": "governed-run", "id": "manifest", "manifest": {"approvalId": "approval", "cases": [{"elementIds": ["start", "finish"], "mappings": [], "pathDigest": "path", "sources": ["generated"], "testcaseId": "00000000-0000-4000-8000-000000000005", "title": "Current reviewed title"}], "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "revisionNumber": 1}, "modelId": "00000000-0000-4000-8000-000000000003", "modelRevisionId": "00000000-0000-4000-8000-000000000004", "note": "The run is native. Its results are case outcomes, not proof that the modeled behavior is correct.", "projectId": "00000000-0000-4000-8000-000000000002", "requested": 1, "run": {"environment": null, "id": "00000000-0000-4000-8000-000000000006", "name": "Native run", "status": undefined}, "skipped": 0}
+
+      165 |       else if (kind === "ambiguous") f.state.occurrences.push({ ...f.state.occurrences[0], execution_id: replacementExecution });
+      166 |       else f.state.occurrences[0].snapshot_approval_revision = null;
+    > 167 |       await expect(f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] }))
+          |             ^
+      168 |         .rejects.toMatchObject({ status: 409, response: { code: "NATIVE_OCCURRENCE_UNAVAILABLE" } });
+      169 |       expect(f.state.committed).toBe(false);
+      170 |       expect(f.state.runs).toBe(0);
+
+      at expect (node_modules/expect/build/index.js:113:15)
+      at src/behavior-graph/model-studio-runs.spec.ts:167:13
+
+  ● governed model/native writer composition › refuses ambiguous native occurrence identity inside the dispatch transaction
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"added": 1, "approvalId": "approval", "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "coverageAssertion": "none", "createdAt": undefined, "cycleId": "00000000-0000-4000-8000-000000000006", "executionAssertion": "governed-run", "id": "manifest", "manifest": {"approvalId": "approval", "cases": [{"elementIds": ["start", "finish"], "mappings": [], "pathDigest": "path", "sources": ["generated"], "testcaseId": "00000000-0000-4000-8000-000000000005", "title": "Current reviewed title"}], "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "revisionNumber": 1}, "modelId": "00000000-0000-4000-8000-000000000003", "modelRevisionId": "00000000-0000-4000-8000-000000000004", "note": "The run is native. Its results are case outcomes, not proof that the modeled behavior is correct.", "projectId": "00000000-0000-4000-8000-000000000002", "requested": 1, "run": {"environment": null, "id": "00000000-0000-4000-8000-000000000006", "name": "Native run", "status": undefined}, "skipped": 0}
+
+      165 |       else if (kind === "ambiguous") f.state.occurrences.push({ ...f.state.occurrences[0], execution_id: replacementExecution });
+      166 |       else f.state.occurrences[0].snapshot_approval_revision = null;
+    > 167 |       await expect(f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] }))
+          |             ^
+      168 |         .rejects.toMatchObject({ status: 409, response: { code: "NATIVE_OCCURRENCE_UNAVAILABLE" } });
+      169 |       expect(f.state.committed).toBe(false);
+      170 |       expect(f.state.runs).toBe(0);
+
+      at expect (node_modules/expect/build/index.js:113:15)
+      at src/behavior-graph/model-studio-runs.spec.ts:167:13
+
+  ● governed model/native writer composition › refuses missing snapshot native occurrence identity inside the dispatch transaction
+
+    expect(received).rejects.toMatchObject()
+
+    Received promise resolved instead of rejected
+    Resolved to value: {"added": 1, "approvalId": "approval", "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "coverageAssertion": "none", "createdAt": undefined, "cycleId": "00000000-0000-4000-8000-000000000006", "executionAssertion": "governed-run", "id": "manifest", "manifest": {"approvalId": "approval", "cases": [{"elementIds": ["start", "finish"], "mappings": [], "pathDigest": "path", "sources": ["generated"], "testcaseId": "00000000-0000-4000-8000-000000000005", "title": "Current reviewed title"}], "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "revisionNumber": 1}, "modelId": "00000000-0000-4000-8000-000000000003", "modelRevisionId": "00000000-0000-4000-8000-000000000004", "note": "The run is native. Its results are case outcomes, not proof that the modeled behavior is correct.", "projectId": "00000000-0000-4000-8000-000000000002", "requested": 1, "run": {"environment": null, "id": "00000000-0000-4000-8000-000000000006", "name": "Native run", "status": undefined}, "skipped": 0}
+
+      165 |       else if (kind === "ambiguous") f.state.occurrences.push({ ...f.state.occurrences[0], execution_id: replacementExecution });
+      166 |       else f.state.occurrences[0].snapshot_approval_revision = null;
+    > 167 |       await expect(f.repository.dispatchRunForUser(user, project, model, revision, { caseIds: [testcase] }))
+          |             ^
+      168 |         .rejects.toMatchObject({ status: 409, response: { code: "NATIVE_OCCURRENCE_UNAVAILABLE" } });
+      169 |       expect(f.state.committed).toBe(false);
+      170 |       expect(f.state.runs).toBe(0);
+
+      at expect (node_modules/expect/build/index.js:113:15)
+      at src/behavior-graph/model-studio-runs.spec.ts:167:13
+
+  ● governed model results retain their dispatched native occurrence › continues to attribute the original exact occurrence and excludes later native additions
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 2
+
+      Array [
+        Object {
+          "elementId": "finish",
+    -     "results": 1,
+    +     "results": 2,
+          "runs": 1,
+          "statusCounts": Object {
+    +       "Failed": 1,
+            "Passed": 1,
+          },
+        },
+      ]
+
+      287 |       cycle_item_id: replacementItem, execution_id: replacementExecution, status: "Failed"
+      288 |     })]);
+    > 289 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([
+          |                                                                         ^
+      290 |       { elementId: "finish", runs: 1, results: 1, statusCounts: { Passed: 1 } }
+      291 |     ]);
+      292 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+
+      at Object.<anonymous> (src/behavior-graph/model-studio-runs.spec.ts:289:73)
+
+  ● governed model results retain their dispatched native occurrence › never attributes a re-added case to the original manifest
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      303 |   ])("never attributes a %s to the original manifest", async (_label, replacement) => {
+      304 |     const f = projectionFixture([manifestCase()], [nativeResult(replacement as Record<string, unknown>)]);
+    > 305 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                         ^
+      306 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      307 |       caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      308 |       unknownCaseCount: 0, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:305:73
+
+  ● governed model results retain their dispatched native occurrence › never attributes a different execution to the original manifest
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      303 |   ])("never attributes a %s to the original manifest", async (_label, replacement) => {
+      304 |     const f = projectionFixture([manifestCase()], [nativeResult(replacement as Record<string, unknown>)]);
+    > 305 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                         ^
+      306 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      307 |       caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      308 |       unknownCaseCount: 0, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:305:73
+
+  ● governed model results retain their dispatched native occurrence › never attributes a different reviewed snapshot to the original manifest
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      303 |   ])("never attributes a %s to the original manifest", async (_label, replacement) => {
+      304 |     const f = projectionFixture([manifestCase()], [nativeResult(replacement as Record<string, unknown>)]);
+    > 305 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                         ^
+      306 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      307 |       caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      308 |       unknownCaseCount: 0, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:305:73
+
+  ● governed model results retain their dispatched native occurrence › never attributes a unrelated case to the original manifest
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 6
+    + Received  + 9
+
+      Array [
+    -   ObjectContaining {
+    -     "attributedCaseCount": 0,
+    +   Object {
+          "caseCount": 1,
+    -     "occurrenceBasis": "PINNED",
+    -     "statusCounts": Object {},
+    -     "unavailableCaseCount": 1,
+    -     "unknownCaseCount": 0,
+    +     "createdAt": "2026-11-20T00:00:00Z",
+    +     "cycleId": "00000000-0000-4000-8000-000000000006",
+    +     "id": "dispatch",
+    +     "name": "Editable native run",
+    +     "runDeleted": false,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+        },
+      ]
+
+      304 |     const f = projectionFixture([manifestCase()], [nativeResult(replacement as Record<string, unknown>)]);
+      305 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+    > 306 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+          |                                                                    ^
+      307 |       caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      308 |       unknownCaseCount: 0, statusCounts: {}
+      309 |     })]);
+
+      at src/behavior-graph/model-studio-runs.spec.ts:306:68
+
+  ● governed model results retain their dispatched native occurrence › keeps the original dispatch count when its occurrence is removed
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 6
+    + Received  + 7
+
+      Array [
+    -   ObjectContaining {
+    -     "attributedCaseCount": 0,
+    -     "caseCount": 1,
+    -     "occurrenceBasis": "PINNED",
+    +   Object {
+    +     "caseCount": 0,
+    +     "createdAt": "2026-11-20T00:00:00Z",
+    +     "cycleId": "00000000-0000-4000-8000-000000000006",
+    +     "id": "dispatch",
+    +     "name": "Editable native run",
+    +     "runDeleted": false,
+          "statusCounts": Object {},
+    -     "unavailableCaseCount": 1,
+    -     "unknownCaseCount": 0,
+        },
+      ]
+
+      313 |     const f = projectionFixture([manifestCase()], []);
+      314 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+    > 315 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+          |                                                                    ^
+      316 |       caseCount: 1, occurrenceBasis: "PINNED", attributedCaseCount: 0, unavailableCaseCount: 1,
+      317 |       unknownCaseCount: 0, statusCounts: {}
+      318 |     })]);
+
+      at Object.<anonymous> (src/behavior-graph/model-studio-runs.spec.ts:315:68)
+
+  ● governed model results retain their dispatched native occurrence › keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: undefined
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      323 |     "keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: %j", async nativeOccurrence => {
+      324 |       const f = projectionFixture([manifestCase({ nativeOccurrence })], [nativeResult()]);
+    > 325 |       expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                           ^
+      326 |       expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      327 |         caseCount: 1, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      328 |         unknownCaseCount: 1, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:325:75
+
+  ● governed model results retain their dispatched native occurrence › keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {}
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      323 |     "keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: %j", async nativeOccurrence => {
+      324 |       const f = projectionFixture([manifestCase({ nativeOccurrence })], [nativeResult()]);
+    > 325 |       expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                           ^
+      326 |       expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      327 |         caseCount: 1, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      328 |         unknownCaseCount: 1, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:325:75
+
+  ● governed model results retain their dispatched native occurrence › keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {"cycleItemId":"00000000-0000-4000-8000-000000000007","executionId":"00000000-0000-4000-8000-000000000008"}
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      323 |     "keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: %j", async nativeOccurrence => {
+      324 |       const f = projectionFixture([manifestCase({ nativeOccurrence })], [nativeResult()]);
+    > 325 |       expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                           ^
+      326 |       expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      327 |         caseCount: 1, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      328 |         unknownCaseCount: 1, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:325:75
+
+  ● governed model results retain their dispatched native occurrence › keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: {"cycleItemId":"00000000-0000-4000-8000-000000000007","executionId":"not-an-occurrence","snapshotApprovalRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "finish",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      323 |     "keeps legacy or incomplete occurrence pins UNKNOWN without testcaseId reconstruction: %j", async nativeOccurrence => {
+      324 |       const f = projectionFixture([manifestCase({ nativeOccurrence })], [nativeResult()]);
+    > 325 |       expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                           ^
+      326 |       expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      327 |         caseCount: 1, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      328 |         unknownCaseCount: 1, statusCounts: {}
+
+      at src/behavior-graph/model-studio-runs.spec.ts:325:75
+
+  ● governed model results retain their dispatched native occurrence › does not count an ambiguously duplicated occurrence twice
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  -  1
+    + Received  + 10
+
+    - Array []
+    + Array [
+    +   Object {
+    +     "elementId": "done",
+    +     "results": 1,
+    +     "runs": 1,
+    +     "statusCounts": Object {
+    +       "Passed": 1,
+    +     },
+    +   },
+    + ]
+
+      333 |   it("does not count an ambiguously duplicated occurrence twice", async () => {
+      334 |     const f = projectionFixture([manifestCase(), manifestCase({ elementIds: ["done"] })], [nativeResult()]);
+    > 335 |     expect(await f.projections.observedByElementFor(revision, project)).toEqual([]);
+          |                                                                         ^
+      336 |     expect(await f.projections.governedRunsFor(revision, project)).toEqual([expect.objectContaining({
+      337 |       caseCount: 2, occurrenceBasis: "UNKNOWN", attributedCaseCount: 0, unavailableCaseCount: 0,
+      338 |       unknownCaseCount: 2, statusCounts: {}
+
+      at Object.<anonymous> (src/behavior-graph/model-studio-runs.spec.ts:335:73)
+
+Test Suites: 1 failed, 1 total
+Tests:       15 failed, 14 passed, 29 total
+Snapshots:   0 total
+Time:        13.159 s
+Ran all test suites within paths "src/behavior-graph/model-studio-runs.spec.ts".
+Test results written to: ../../assurance-working/native-occurrence-before-results.json

@@ -4,6 +4,7 @@ import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
 import { EntitlementCacheService } from "../cache/entitlement-cache.service";
+import type { PoolClient } from "pg";
 
 export type Plan = "launch" | "pro";
 
@@ -49,6 +50,13 @@ interface Entitlement {
   effectivePlan: Plan;
   inGracePeriod: boolean;
   graceEndsAt: string | null;
+}
+
+interface EntitlementRow {
+  plan: string;
+  plan_grace_ends_at: string | null;
+  plan_source: string | null;
+  plan_override_expires_at: string | null;
 }
 
 @Injectable()
@@ -102,34 +110,44 @@ export class PlanLimitsService {
     return computed;
   }
 
+  /** One evaluator for cached reads and fresh transactional admission. */
+  private entitlementFromRow(row: EntitlementRow | undefined, at: number) {
+    let plan: Plan = row?.plan === "pro" ? "pro" : "launch";
+    let graceEndsAt = row?.plan_grace_ends_at ?? null;
+    const overrideLapsed = row?.plan_source === "admin" && !!row.plan_override_expires_at &&
+      new Date(row.plan_override_expires_at).getTime() <= at;
+    if (overrideLapsed) { plan = "launch"; graceEndsAt = null; }
+    const inGracePeriod = plan === "launch" && !!graceEndsAt && new Date(graceEndsAt).getTime() > at;
+    const entitlement: Entitlement = { plan, effectivePlan: inGracePeriod ? "pro" : plan, inGracePeriod, graceEndsAt };
+    return { entitlement, overrideLapsed };
+  }
+
   private async computeEntitlement(organizationId: string): Promise<Entitlement> {
-    const res = await this.db.query<{
-      plan: string;
-      plan_grace_ends_at: string | null;
-      plan_source: string | null;
-      plan_override_expires_at: string | null;
-    }>(
+    const res = await this.db.query<EntitlementRow>(
       `SELECT plan, plan_grace_ends_at, plan_source, plan_override_expires_at
          FROM organizations WHERE id = $1`,
       [organizationId]
     );
     const row = res.rows[0];
-    let plan: Plan = row?.plan === "pro" ? "pro" : "launch";
-    let graceEndsAt = row?.plan_grace_ends_at ?? null;
+    const { entitlement, overrideLapsed } = this.entitlementFromRow(row, Date.now());
+    if (overrideLapsed) await this.expireAdminOverride(organizationId, row?.plan === "pro" ? "pro" : "launch");
+    return entitlement;
+  }
 
-    const overrideLapsed =
-      row?.plan_source === "admin" &&
-      !!row.plan_override_expires_at &&
-      new Date(row.plan_override_expires_at).getTime() <= Date.now();
-
-    if (overrideLapsed) {
-      await this.expireAdminOverride(organizationId, plan);
-      plan = "launch";
-      graceEndsAt = null;
-    }
-
-    const inGracePeriod = plan === "launch" && !!graceEndsAt && new Date(graceEndsAt).getTime() > Date.now();
-    return { plan, effectivePlan: inGracePeriod ? "pro" : plan, inGracePeriod, graceEndsAt };
+  /**
+   * Commands that wait on domain locks cannot treat the transport guard's earlier cached
+   * entitlement as current admission. Read the same policy inputs after that wait and hold
+   * the organization through the caller's commit. A concurrent plan update then has a clear
+   * serialized order. No lazy cleanup/notification is run through another connection while
+   * this transaction holds the organization; ordinary checks retain those existing effects.
+   */
+  private async transactionalEntitlement(organizationId: string, client: PoolClient): Promise<Entitlement> {
+    const result = await client.query<EntitlementRow>(
+      `SELECT plan, plan_grace_ends_at, plan_source, plan_override_expires_at
+         FROM organizations WHERE id = $1 FOR SHARE`, [organizationId]
+    );
+    if (!result.rows[0]) throw new ForbiddenException({ error: "The workspace is no longer available" });
+    return this.entitlementFromRow(result.rows[0], Date.now()).entitlement;
   }
 
   /**
@@ -266,22 +284,25 @@ export class PlanLimitsService {
    * Read access is untouched, and no data is deleted or archived — the workspace can still export or
    * copy anything out, and resubscribing lifts the lock immediately.
    */
-  async assertProjectWritable(organizationId: string, projectId: string): Promise<void> {
+  async assertProjectWritable(organizationId: string, projectId: string, client?: PoolClient): Promise<void> {
     if (!this.config.isStripeBillingEnabled) return;
-    const { effectivePlan } = await this.getEntitlement(organizationId);
+    const { effectivePlan } = client
+      ? await this.transactionalEntitlement(organizationId, client)
+      : await this.getEntitlement(organizationId);
     const limit = PROJECT_LIMITS[effectivePlan];
     if (limit == null) return;
 
-    const res = await this.db.query<{ locked: boolean }>(
-      `SELECT rank > $2 AS locked FROM (
+    const rankSql = `SELECT rank > $2 AS locked FROM (
          SELECT id, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rank
            FROM projects WHERE organization_id = $1 AND archived_at IS NULL
-       ) ranked WHERE id = $3`,
-      [organizationId, limit, projectId]
-    );
+       ) ranked WHERE id = $3`;
+    const rankValues = [organizationId, limit, projectId];
+    const res = client
+      ? await client.query<{ locked: boolean }>(rankSql, rankValues)
+      : await this.db.query<{ locked: boolean }>(rankSql, rankValues);
     if (!res.rows[0]?.locked) return;
 
-    await this.notifyGraceEndedOnce(organizationId);
+    if (!client) await this.notifyGraceEndedOnce(organizationId);
     throw new ForbiddenException({
       error: `This project is read-only because the workspace is over the Launch plan's ${limit}-project limit. Your data is safe — upgrade to Pro to unlock it, or archive another project.`
     });

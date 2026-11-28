@@ -18,7 +18,10 @@ import { Button, Field, FieldLabel, Modal, PageLoader, Select, StatusChip, Texta
 import { PageHeader, StandardPageLayout, Breadcrumbs } from "@/components/workflows";
 import TaskQuickViewPanel, { JIRA_BADGE_CLASS, latestFailureDetail, normalizeTaskStatus as normalizeStatus, taskStatusLabel, taskStatusTone as tone } from "@/components/agents/TaskQuickViewPanel";
 import ReviewBoard from "@/components/agents/ReviewBoard";
+import ManagedDocumentProposalList from "@/components/agents/ManagedDocumentProposalList";
 import { markdownToPlainText, renderMarkdown } from "@/lib/markdown";
+import { summarizeZyraTaskOutput } from "@/lib/zyra-task-output-summary";
+import { isKnowledgeOwnerOrManager } from "@/lib/knowledge-permissions";
 import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 import { getPageCache, setPageCache } from "@/lib/pageDataCache";
@@ -36,23 +39,40 @@ const columns = [
   { key: "done", label: "Done", dot: "var(--success)" },
 ] as const;
 
-type TaskView = "tasks" | "kanban" | "review";
+type TaskView = "tasks" | "kanban" | "review" | "documents";
+
+const PLAIN_TEXT_BLOCK_TAGS = new Set([
+  "P", "DIV", "LI", "UL", "OL", "H1", "H2", "H3", "H4", "H5", "H6",
+  "BLOCKQUOTE", "PRE", "TABLE", "TR",
+]);
 
 function htmlToPlainText(html: string): string {
-  // The knowledge-base editor only ever produces rich-text markup (paragraphs, lists, headings,
-  // inline marks) — never <script>/<style> — so a generic tag strip is all this needs.
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  // Parsed with DOMParser instead of a chain of tag-stripping regular expressions: a tag strip runs
+  // once and can leave a tag behind when the input is crafted (or when `&lt;script&gt;` is decoded
+  // after stripping), and the entity decoding was hand-rolled. The parser produces real text nodes,
+  // decodes entities correctly, and script/style contents are dropped rather than copied.
+  if (typeof DOMParser === "undefined") return html;
+  const body = new DOMParser().parseFromString(html, "text/html").body;
+  let out = "";
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.textContent ?? "";
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as HTMLElement;
+    if (element.tagName === "SCRIPT" || element.tagName === "STYLE") return;
+    if (element.tagName === "BR") {
+      out += "\n";
+      return;
+    }
+    const block = PLAIN_TEXT_BLOCK_TAGS.has(element.tagName);
+    if (block && out && !out.endsWith("\n")) out += "\n";
+    element.childNodes.forEach(walk);
+    if (block && out && !out.endsWith("\n")) out += "\n";
+  };
+  walk(body);
+  return out.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
@@ -96,13 +116,25 @@ function splitAcceptanceCriteria(text: string): { body: string; acceptanceCriter
   return { body, acceptanceCriteria };
 }
 
+/** Display typed proposal operations and actual Draft receipts distinctly from generated test cases. */
+function TaskOutputCount({ task }: { task: ZyraTask }) {
+  const summary = summarizeZyraTaskOutput(task);
+  return <span className="block text-sm text-[var(--foreground)]">
+    <span className="block">{summary.primary}</span>
+    {summary.secondary && <span className="block text-xs text-[var(--muted)]">{summary.secondary}</span>}
+  </span>;
+}
+
 export default function ZyraTasksPage() {
   const params = useParams();
   const router = useRouter();
   const projectId = params.id as string;
   const { currentUser } = useAppData();
-  const { project } = useProjectData();
+  const { project, projectMembers } = useProjectData();
   const projectName = String(project.name || "");
+  const canApproveDocuments = projectMembers.length === 0
+    ? null
+    : isKnowledgeOwnerOrManager(projectMembers.find((member) => member.userId === currentUser?.userId)?.role);
   const cacheKey = `agents-tasks:${projectId}`;
   const cached = getPageCache<AgentsTasksPageData>(cacheKey);
   const [state, setState] = useState<ZyraAgentState | null>(cached?.state ?? null);
@@ -139,7 +171,11 @@ export default function ZyraTasksPage() {
       const agentState = await getZyraAgent(projectId);
       setState(agentState);
       const kb = await listKnowledgeDocuments(projectId).catch(() => ({ list: [], total: 0 }));
-      const items = kb.list || [];
+      // Governed manuals/policies are under an exposure hold. Selecting one here copies its full
+      // text into the task context sent to the model, so do not offer them until an owner accepts
+      // an exposure policy.
+      const items = (kb.list || []).filter((item: { documentType?: string }) =>
+        item.documentType !== "user_manual" && item.documentType !== "policy");
       setKnowledgeItems(items);
       setError(null);
       setPageCache(`agents-tasks:${projectId}`, { state: agentState, knowledgeItems: items });
@@ -320,6 +356,7 @@ export default function ZyraTasksPage() {
             { key: "tasks" as const, label: "Task window" },
             { key: "kanban" as const, label: "Kanban board" },
             { key: "review" as const, label: "Review Board" },
+            { key: "documents" as const, label: "Document proposals" },
           ].map((tab) => (
             <button
               key={tab.key}
@@ -357,7 +394,7 @@ export default function ZyraTasksPage() {
             <span>Task</span>
             <span>Status</span>
             <span>Jira</span>
-            <span>Generated</span>
+            <span>Output</span>
             <span>Tokens</span>
           </div>
           <div className="divide-y divide-[var(--border)]">
@@ -384,7 +421,7 @@ export default function ZyraTasksPage() {
                   {zyraTaskTicketKeys(task).length === 0 && <span className="text-xs text-[var(--muted)]">No tickets</span>}
                   {zyraTaskTicketKeys(task).length > 2 && <span className="text-xs text-[var(--muted)]">+{zyraTaskTicketKeys(task).length - 2}</span>}
                 </div>
-                <span className="text-sm text-[var(--foreground)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"}</span>
+                <TaskOutputCount task={task} />
                 <span className="font-mono text-sm text-[var(--muted)]">{task.tokenUsage.total}</span>
               </button>
             ))}
@@ -393,6 +430,8 @@ export default function ZyraTasksPage() {
         </section>
       ) : activeView === "review" ? (
         <ReviewBoard projectId={projectId} />
+      ) : activeView === "documents" ? (
+        <ManagedDocumentProposalList key={projectId} projectId={projectId} canApprove={canApproveDocuments} members={projectMembers} />
       ) : (
         <div className="grid gap-4 xl:grid-cols-5">
           {columns.map((column) => {
@@ -433,7 +472,7 @@ export default function ZyraTasksPage() {
                           )}
                         </div>
                       )}
-                      <p className="mt-2 text-xs text-[var(--muted)]">{task.generatedCount} testcase{task.generatedCount === 1 ? "" : "s"} generated - {task.tokenUsage.total} tokens</p>
+                      <div className="mt-2 text-xs text-[var(--muted)]"><TaskOutputCount task={task} /><span className="block mt-1">{task.tokenUsage.total} tokens</span></div>
                     </button>
                   ))}
                   {columnTasks.length === 0 && <div className="rounded-lg border border-dashed border-[var(--border)] p-4 text-center text-xs text-[var(--muted)]">No tasks</div>}

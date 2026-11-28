@@ -19,6 +19,9 @@ import {
 } from "@tabler/icons-react";
 import {
   getKnowledgeDocument,
+  submitKnowledgeDocument,
+  approveGovernedKnowledgeDocument,
+  rejectGovernedKnowledgeDocument,
   updateKnowledgeDocument,
   duplicateKnowledgeDocument,
   deleteKnowledgeDocument,
@@ -31,11 +34,13 @@ import {
   integrationProviderLabel,
 } from "@/lib/api";
 import { canModifyKnowledgeItem } from "@/lib/knowledge-permissions";
+import { DocumentWriteCancelledError, DocumentWriteQueue } from "@/lib/documentWriteQueue";
 import { Button, Input, Modal, PageLoader, StatusChip } from "@/components/ui";
 import RichTextEditor from "@/components/knowledge-base/RichTextEditor";
 import { DocumentComments } from "@/components/knowledge-base/DocumentComments";
 import { ZyraMemoryEntries } from "@/components/knowledge-base/ZyraMemoryEntries";
 import { ChangeHistoryList } from "@/components/knowledge-base/ChangeHistory";
+import { GovernedDocumentPanel } from "@/components/knowledge-base/GovernedDocumentPanel";
 import { blankDocumentFlagKey } from "@/lib/validation";
 import { formatDateTime } from "@/lib/date";
 import { Breadcrumbs, type BreadcrumbItem } from "@/components/workflows";
@@ -43,6 +48,7 @@ import { useAppData } from "@/components/app/AppDataProvider";
 import { useProjectData } from "@/components/project/ProjectDataProvider";
 
 type SaveStatus = "saved" | "saving" | "unsaved";
+type DocumentPayload = { contentJson: JSONContent; contentHtml: string; contentText: string };
 
 // Keep in sync with MAX_REQUEST_BODY_SIZE / maxRequestBodySize in Tesbo-Backend-Nest/src/config/app-config.service.ts
 const MAX_DOCUMENT_PAYLOAD_BYTES = 20 * 1024 * 1024;
@@ -50,6 +56,13 @@ const MAX_DOCUMENT_PAYLOAD_BYTES = 20 * 1024 * 1024;
 function formatFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** PostgreSQL jsonb can return object keys in a different order from the editor. */
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  const ordered = (_key: string, value: unknown) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
+  return JSON.stringify(left, ordered) === JSON.stringify(right, ordered);
 }
 
 function documentPayloadSize(payload: { contentJson: JSONContent; contentHtml: string; contentText: string } | null): number {
@@ -63,6 +76,8 @@ const DOC_TYPE_LABELS: Record<string, string> = {
   release_note: "Release Note",
   requirement_note: "Requirement",
   test_data_note: "Test Data",
+  user_manual: "User Manual",
+  policy: "Policy",
 };
 
 function normalizeRole(role: string): "owner" | "manager" | "qa_engineer" {
@@ -196,6 +211,8 @@ export default function KnowledgeDocumentPage() {
   const [confirmTarget, setConfirmTarget] = useState<KnowledgeDocumentHistoryEntry | null>(null);
   const [restorePhase, setRestorePhase] = useState<"idle" | "restoring" | "error">("idle");
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [reviewPending, setReviewPending] = useState(false);
+  const [reviewContextText, setReviewContextText] = useState("");
   // Bumped only when the editor's content must be force-replaced (a restore) — not on every
   // ordinary save, which would otherwise reset the caret/scroll position on every autosave tick.
   const [contentResetKey, setContentResetKey] = useState(0);
@@ -214,7 +231,18 @@ export default function KnowledgeDocumentPage() {
   const [requireContentAndTitle, setRequireContentAndTitle] = useState(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestContent = useRef<{ contentJson: JSONContent; contentHtml: string; contentText: string } | null>(null);
+  const latestContent = useRef<DocumentPayload | null>(null);
+  const pendingAutosave = useRef<((visible?: boolean) => void) | null>(null);
+  const latestTitle = useRef("");
+  const lastValidTitle = useRef("");
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const editRevision = useRef(0);
+  const writerRef = useRef<DocumentWriteQueue<KnowledgeDocument> | null>(null);
+  // Save and Submit are separate HTTP commits. Retain the exact saved revision after a
+  // failed/ambiguous Submit so the same-key retry cannot accidentally save again.
+  const pendingGovernedSubmission = useRef<{
+    key: string; editRevision: string; editorSnapshot: string;
+  } | null>(null);
   // Synchronous double-submit guard for restore: state alone can't stop a second click that fires
   // before React re-renders the disabled button, so this is checked and set before any await.
   const restoreInFlightRef = useRef(false);
@@ -228,17 +256,190 @@ export default function KnowledgeDocumentPage() {
   }, []);
 
   useEffect(() => {
+    const writer = new DocumentWriteQueue<KnowledgeDocument>();
+    writerRef.current = writer;
+    pendingGovernedSubmission.current = null;
+    editRevision.current = 0;
+    restoreInFlightRef.current = false;
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      const pending = pendingAutosave.current;
+      pendingAutosave.current = null;
+      // This closure owns the original document, payload and failure generation. Drain it before
+      // closing the old writer, without allowing its response to update the destination page.
+      pending?.(false);
+      writer.close();
+      if (writerRef.current === writer) writerRef.current = null;
+    };
+  }, [projectId, documentId]);
+
+  const refreshDocument = useCallback(async () => {
+    const data = await getKnowledgeDocument(projectId, documentId);
+    setDoc(data);
+    setBreadcrumb(data.breadcrumb);
+    if (latestTitle.current === data.title) {
+      setTitle(data.title);
+      lastValidTitle.current = data.title;
+    } else {
+      // A title edit happened after the server snapshot this read returned; keep the visible
+      // draft rather than replacing it with the older persisted title.
+      setSaveStatus("unsaved");
+    }
+  }, [projectId, documentId]);
+
+  /**
+   * Runs a governed write through the same queue as editor saves. Any debounced editor save is
+   * cancelled first and its current title/body is written in the same operation, so Submit binds
+   * exactly what the author sees rather than an older persisted revision.
+   */
+  async function commitGovernedDocument(metadata: Record<string, unknown>, submissionKey: string | null) {
+    const writer = writerRef.current;
+    if (!writer) throw new Error("Reload this document before saving its governance.");
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+      pendingAutosave.current = null;
+    }
+    let versionNumber: number | null = null;
+    let submittedLocalRevision = editRevision.current;
+    const saved = await writer.restore(async () => {
+      // Capture the local revision at the same time as the editor payload. Edits made
+      // during this asynchronous write must remain visibly unsaved on completion.
+      submittedLocalRevision = editRevision.current;
+      const payload = latestContent.current;
+      // Capture editor state when this queued operation begins, after previous writes drain.
+      const editorSnapshot = JSON.stringify({
+        title: latestTitle.current, contentJson: payload?.contentJson,
+        contentHtml: payload?.contentHtml, contentText: payload?.contentText, metadata,
+      });
+      const pending = pendingGovernedSubmission.current;
+      if (submissionKey && pending?.key === submissionKey) {
+        // The prior UPDATE committed. On an ambiguous SUBMIT response, the server's
+        // submissionKey receipt is the authority; never issue another UPDATE first.
+        if (pending.editorSnapshot !== editorSnapshot) {
+          throw new Error("The draft changed after submission failed. Review or reload before retrying; the prior submission may already exist.");
+        }
+        const current = await getKnowledgeDocument(projectId, documentId);
+        const version = await submitKnowledgeDocument(projectId, documentId, {
+          expectedRevision: pending.editRevision,
+          submissionKey: pending.key,
+        });
+        versionNumber = version.versionNumber;
+        pendingGovernedSubmission.current = null;
+        return current;
+      }
+      if (pending) {
+        throw new Error("Resolve the previous uncertain submission before saving or submitting new changes.");
+      }
+      const acknowledged = writer.acknowledged;
+      if (acknowledged?.id !== documentId || !acknowledged.editRevision) {
+        throw new Error("Reload this document before saving its governance.");
+      }
+      const updated = await updateKnowledgeDocument(projectId, documentId, {
+        title: latestTitle.current,
+        contentJson: payload?.contentJson,
+        contentHtml: payload?.contentHtml,
+        contentText: payload?.contentText,
+        governedMetadata: metadata,
+        expectedRevision: acknowledged.editRevision,
+      });
+      if (submissionKey) {
+        if (!updated.editRevision) throw new Error("Reload this document before submitting this revision.");
+        pendingGovernedSubmission.current = {
+          key: submissionKey, editRevision: updated.editRevision, editorSnapshot,
+        };
+        // This call can fail after the server has already created its immutable snapshot.
+        // Preserve the checkpoint above until the exact-key receipt is confirmed.
+        const version = await submitKnowledgeDocument(projectId, documentId, {
+          expectedRevision: updated.editRevision,
+          submissionKey,
+        });
+        versionNumber = version.versionNumber;
+        pendingGovernedSubmission.current = null;
+      }
+      return updated;
+    });
+    if (isMountedRef.current && writerRef.current === writer) {
+      setDoc(saved);
+      if (submittedLocalRevision !== editRevision.current) {
+        // Do not replace a title/body edited after our snapshot or claim it was saved.
+        // The existing editor debounce/manual Save owns that newer local revision.
+        setSaveStatus("unsaved");
+      } else {
+        setTitle(saved.title);
+        latestTitle.current = saved.title;
+        lastValidTitle.current = saved.title;
+        setSaveStatus("saved");
+        setError(null);
+      }
+    }
+    return { saved, versionNumber };
+  }
+
+  /** A decision is made against the exact submitted snapshot; it deliberately does not write a draft. */
+  async function commitGovernedDecision(decision: "approved" | "rejected", versionId: string, reason?: string) {
+    const writer = writerRef.current;
+    if (!writer) throw new Error("Reload this document before reviewing it.");
+    // A decision binds the exact submitted revision. Do not silently drop an unsaved editor draft:
+    // make the reviewer save/discard it (which re-drafts and requires a refreshed submission) first.
+    // saveStatus covers a debounce that already failed, where the timer/refs are null. Do not
+    // include writer.needsReadback: a failed decision also sets it, and retrying the decision must
+    // remain possible without an unrelated document save.
+    if (saveTimer.current || pendingAutosave.current || saveStatus !== "saved") {
+      throw new Error("Save or discard the current editor draft before approving or rejecting this submitted version.");
+    }
+    const decisionRevision = editRevision.current;
+    const updated = await writer.restore(() => decision === "approved"
+      ? approveGovernedKnowledgeDocument(projectId, documentId, versionId)
+      : rejectGovernedKnowledgeDocument(projectId, documentId, versionId, reason));
+    if (isMountedRef.current && writerRef.current === writer) {
+      setDoc(updated);
+      if (editRevision.current !== decisionRevision) {
+        // A title/body edit landed during the decision; keep the visible draft and do not claim it
+        // was saved as part of the decided revision.
+        setSaveStatus("unsaved");
+      } else {
+        setTitle(updated.title);
+        setSaveStatus("saved");
+        setError(null);
+      }
+    }
+    return updated;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       if (!currentUser) {
         router.replace("/login");
         return;
       }
+      setLoading(true);
       setCurrentUserId(currentUser.userId);
       try {
         const data = await getKnowledgeDocument(projectId, documentId);
+        if (cancelled) return;
+        // Keep the saved body available for explicit saves and title-only edits without relying
+        // on the editor to emit a fake content update while its interaction mode is initialized.
+        latestContent.current = {
+          contentJson: (data.contentJson ?? null) as JSONContent,
+          contentHtml: data.contentHtml ?? "",
+          contentText: data.contentText ?? "",
+        };
+        latestTitle.current = data.title;
+        lastValidTitle.current = data.title;
+        writerRef.current?.initialize(data);
+        setReviewContextText(data.contentText ?? "");
         setDoc(data);
         setBreadcrumb(data.breadcrumb);
         setTitle(data.title);
+        setSaveStatus("saved");
+        setError(null);
+        setHistoryOpen(false);
+        setConfirmTarget(null);
+        setRestorePhase("idle");
+        setRestoreError(null);
         try {
           setRequireContentAndTitle(window.localStorage.getItem(blankDocumentFlagKey(documentId)) === "1");
         } catch {
@@ -247,11 +448,13 @@ export default function KnowledgeDocumentPage() {
         const role = normalizeRole(projectMembers.find((m) => m.userId === currentUser.userId)?.role ?? "qa_engineer");
         setCanApprove(role === "owner" || role === "manager");
       } catch (err) {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load document.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, documentId, currentUser]);
 
@@ -318,100 +521,134 @@ export default function KnowledgeDocumentPage() {
     if (found) setAnchorMissMessage(null);
   }
 
-  const scheduleSave = useCallback(
-    (nextTitle: string) => {
-      setSaveStatus("unsaved");
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(async () => {
-        const payload = latestContent.current;
-        const size = documentPayloadSize(payload);
-        if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
-          setError(
-            `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
-          );
-          setSaveStatus("unsaved");
-          return;
-        }
-        // Blank (no title, no content) is left "unsaved" rather than errored here — the user
-        // may just be mid-edit (e.g. selected all and deleted before pasting something new).
-        // handleManualSave surfaces a real error if they explicitly try to save while blank.
-        const missingTitle = !nextTitle.trim();
-        const missingContent = !(payload?.contentText ?? "").trim();
-        const incomplete = requireContentAndTitle ? missingTitle || missingContent : missingTitle && missingContent;
-        if (incomplete) {
-          setSaveStatus("unsaved");
-          return;
-        }
-        setSaveStatus("saving");
-        try {
-          const updated = await updateKnowledgeDocument(projectId, documentId, {
-            title: nextTitle,
-            contentJson: payload?.contentJson,
-            contentHtml: payload?.contentHtml,
-            contentText: payload?.contentText,
-          });
-          setDoc(updated);
-          setSaveStatus("saved");
-          setError(null);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to save document.");
-          setSaveStatus("unsaved");
-        }
-      }, 1200);
-    },
-    [projectId, documentId, requireContentAndTitle]
-  );
+  function scheduleSave(nextTitle: string) {
+    const writer = writerRef.current;
+    if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
+    // A blank title must never be persisted. The editor keeps showing what the person typed so they
+    // can fix it, but body edits continue to carry the last valid title.
+    if (!nextTitle.trim()) {
+      setTitleError("A document title is required");
+      return;
+    }
+    setTitleError(null);
+    setSaveStatus("unsaved");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    const revision = editRevision.current;
+    const generation = writer.capture();
+    const payload = latestContent.current;
+    const pending = (visible = true) => { void saveSnapshot(writer, nextTitle, payload, revision, generation, false, visible); };
+    pendingAutosave.current = pending;
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      if (pendingAutosave.current === pending) pendingAutosave.current = null;
+      pending();
+    }, 1200);
+  }
 
   function handleEditorUpdate(payload: { json: JSONContent; html: string; text: string }) {
+    if (restoreInFlightRef.current || doc?.id !== documentId) return;
     latestContent.current = { contentJson: payload.json, contentHtml: payload.html, contentText: payload.text };
-    scheduleSave(title);
+    setReviewContextText(payload.text);
+    editRevision.current++;
+    scheduleSave(latestTitle.current);
   }
 
   function handleTitleChange(value: string) {
+    if (restoreInFlightRef.current || doc?.id !== documentId) return;
+    if (!value.trim()) {
+      setTitle(value);
+      setTitleError("A document title is required");
+      return;
+    }
+    setTitleError(null);
+    lastValidTitle.current = value;
+    latestTitle.current = value;
+    editRevision.current++;
     setTitle(value);
     scheduleSave(value);
   }
 
+  /** Restore the last valid title when a blank edit is abandoned, rather than persisting or losing it. */
+  function handleTitleBlur() {
+    if (title.trim()) return;
+    setTitle(lastValidTitle.current);
+    setTitleError(null);
+  }
+
   async function handleManualSave() {
+    const writer = writerRef.current;
+    if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    const payload = latestContent.current;
-    const size = documentPayloadSize(payload);
-    if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
-      setError(
-        `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
-      );
-      setSaveStatus("unsaved");
+    saveTimer.current = null;
+    pendingAutosave.current = null;
+    await saveSnapshot(writer, latestTitle.current, latestContent.current, editRevision.current, writer.capture(), true);
+  }
+
+  async function saveSnapshot(writer: DocumentWriteQueue<KnowledgeDocument>, nextTitle: string, payload: DocumentPayload | null, revision: number, generation: number, explicit: boolean, visible = true) {
+    // Applies to every save path (autosave, manual save and retries), not only the title handler.
+    if (!nextTitle.trim()) {
+      setTitleError("A document title is required");
       return;
     }
-    const missingTitle = !title.trim();
+    const size = documentPayloadSize(payload);
+    if (size > MAX_DOCUMENT_PAYLOAD_BYTES) {
+      if (visible) setError(
+        `This document is ${formatFileSize(size)}, which is over the ${formatFileSize(MAX_DOCUMENT_PAYLOAD_BYTES)} limit we currently support. Split it into smaller documents to save.`
+      );
+      if (visible) setSaveStatus("unsaved");
+      return;
+    }
+    const missingTitle = !nextTitle.trim();
     const missingContent = !(payload?.contentText ?? "").trim();
     if (requireContentAndTitle ? missingTitle || missingContent : missingTitle && missingContent) {
-      setError(
+      if (visible && explicit) setError(
         requireContentAndTitle
           ? "This document needs both a title and content before it can be saved."
           : "A document needs a title or some content — it can't be saved blank."
       );
-      setSaveStatus("unsaved");
+      if (visible) setSaveStatus("unsaved");
       return;
     }
-    setSaveStatus("saving");
+    if (visible) setSaveStatus("saving");
     try {
-      const updated = await updateKnowledgeDocument(projectId, documentId, {
-        title,
-        contentJson: payload?.contentJson,
-        contentHtml: payload?.contentHtml,
-        contentText: payload?.contentText,
-      });
+      const updated = await writer.save(revision, async () => {
+        const acknowledged = writer.acknowledged;
+        if (writer.needsReadback) {
+          // A lost ACK may already have committed. Only a NEW explicit Save may reconcile it;
+          // debounced/queued edits never replay an uncertain mutation or adopt another edit.
+          if (!explicit) throw new Error("Check the saved document with Save before retrying your retained changes.");
+          const current = await getKnowledgeDocument(projectId, documentId);
+          if (current.title === nextTitle.trim() &&
+              sameJsonValue(current.contentJson, payload?.contentJson ?? null) &&
+              (current.contentHtml ?? "") === (payload?.contentHtml ?? "") &&
+              (current.contentText ?? "") === (payload?.contentText ?? "")) {
+            return current; // Exact desired content independently read back; no duplicate write.
+          }
+          if (!acknowledged?.editRevision || current.editRevision !== acknowledged.editRevision) {
+            throw new Error("This document changed while the save was unconfirmed. Your draft is still here. Copy your draft before reloading to compare with the saved document.");
+          }
+        }
+        return updateKnowledgeDocument(projectId, documentId, {
+          title: nextTitle,
+          contentJson: payload?.contentJson,
+          contentHtml: payload?.contentHtml,
+          contentText: payload?.contentText,
+          expectedRevision: acknowledged?.editRevision,
+        });
+      }, generation);
+      if (!visible || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setDoc(updated);
       setSaveStatus("saved");
       setError(null);
     } catch (err) {
+      if (!visible || err instanceof DocumentWriteCancelledError || !isMountedRef.current || writerRef.current !== writer || revision !== editRevision.current || restoreInFlightRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to save document.");
       setSaveStatus("unsaved");
     }
   }
 
   async function handleDuplicate() {
+    if (restoreInFlightRef.current) return;
     try {
       const dup = await duplicateKnowledgeDocument(projectId, documentId);
       router.push(`/projects/${projectId}/knowledge-base/documents/${dup.id}`);
@@ -421,6 +658,7 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function handleDelete() {
+    if (restoreInFlightRef.current) return;
     if (!window.confirm(`Delete "${title}"? It will be moved to trash.`)) return;
     try {
       await deleteKnowledgeDocument(projectId, documentId);
@@ -443,7 +681,7 @@ export default function KnowledgeDocumentPage() {
   // manual document's version-diff entries ever carry a versionId (see ChangeHistoryList), so this
   // is only ever reachable for those.
   function requestRestoreVersion(entry: KnowledgeDocumentHistoryEntry) {
-    if (restorePhase === "restoring" || !entry.versionId) return; // one confirmation/restore in flight at a time
+    if (restoreInFlightRef.current || !entry.versionId) return; // one confirmation/restore/review in flight at a time
     setConfirmTarget(entry);
     setRestorePhase("idle");
     setRestoreError(null);
@@ -466,27 +704,32 @@ export default function KnowledgeDocumentPage() {
   }
 
   async function confirmRestoreVersion() {
-    if (!confirmTarget || restoreInFlightRef.current) return;
+    const writer = writerRef.current;
+    if (!confirmTarget || !writer || restoreInFlightRef.current || doc?.id !== documentId) return;
     restoreInFlightRef.current = true;
     setRestorePhase("restoring");
     setRestoreError(null);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    pendingAutosave.current = null; // Only a confirmed restore replaces the unsent debounce draft.
     try {
-      const updated = await restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!);
-      if (!isMountedRef.current) return;
-      // A pending autosave still carries the pre-restore editor content in `latestContent` — left
-      // alone, it fires a few hundred ms later and silently overwrites the restore we just applied.
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
+      // Drain earlier in-flight/queued writes before sending the restore. If one fails after this
+      // confirmation, the queue rejects the barrier instead of blindly sending another mutation.
+      const updated = await writer.restore(() => restoreKnowledgeDocumentVersion(projectId, documentId, confirmTarget.versionId!, writer.acknowledged?.editRevision));
+      if (!isMountedRef.current || writerRef.current !== writer) return;
       latestContent.current = {
         contentJson: (updated.contentJson ?? null) as JSONContent,
         contentHtml: updated.contentHtml ?? "",
         contentText: updated.contentText ?? "",
       };
+      latestTitle.current = updated.title;
+      lastValidTitle.current = updated.title;
+      setReviewContextText(updated.contentText ?? "");
+      editRevision.current++;
       setDoc(updated);
       setTitle(updated.title);
       setSaveStatus("saved");
+      setError(null);
       // Forces the TipTap instance to actually re-render the restored body — see RichTextEditor,
       // which otherwise only consumes `contentJson`/`contentHtml` once, at mount.
       setContentResetKey((k) => k + 1);
@@ -494,29 +737,65 @@ export default function KnowledgeDocumentPage() {
       setRestorePhase("idle");
       setHistoryOpen(false);
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || writerRef.current !== writer) return;
+      setSaveStatus("unsaved");
       setRestorePhase("error");
       setRestoreError(err instanceof Error ? err.message : "Failed to restore version.");
     } finally {
-      restoreInFlightRef.current = false;
+      if (writerRef.current === writer) restoreInFlightRef.current = false;
     }
   }
 
   async function handleApprove() {
-    try {
-      const updated = await approveAiMemory(projectId, documentId);
-      setDoc(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to approve AI memory.");
-    }
+    await handleReview("approved");
   }
 
   async function handleReject() {
+    await handleReview("rejected");
+  }
+
+  async function handleReview(decision: "approved" | "rejected") {
+    const writer = writerRef.current;
+    if (!writer || restoreInFlightRef.current || doc?.id !== documentId) return;
+    if (!title.trim() || titleError || documentPayloadSize(latestContent.current) > MAX_DOCUMENT_PAYLOAD_BYTES ||
+        (requireContentAndTitle && !latestContent.current?.contentText.trim())) {
+      setError("Finish saving a valid document before reviewing it.");
+      return;
+    }
+    if (saveStatus === "unsaved" && !pendingAutosave.current) {
+      setError("Save your changes successfully before reviewing this document.");
+      return;
+    }
+    restoreInFlightRef.current = true; // The same queue barrier also fences edits during review.
+    setReviewPending(true);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const pending = pendingAutosave.current;
+    pendingAutosave.current = null;
+    pending?.();
     try {
-      const updated = await rejectAiMemory(projectId, documentId);
+      const updated = await writer.restore(() => {
+        const saved = writer.acknowledged;
+        if (saved?.id !== documentId || !saved.editRevision) throw new Error("Reload this document before reviewing it.");
+        return decision === "approved"
+          ? approveAiMemory(projectId, documentId, saved.editRevision)
+          : rejectAiMemory(projectId, documentId, saved.editRevision);
+      });
+      if (!isMountedRef.current || writerRef.current !== writer) return;
       setDoc(updated);
+      setSaveStatus("saved");
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to reject AI memory.");
+      if (!isMountedRef.current || writerRef.current !== writer) return;
+      // A failed queued save leaves the visible draft uncommitted. A second review click
+      // must not approve the older persisted copy after the queue barrier is released.
+      setSaveStatus("unsaved");
+      setError(err instanceof Error ? err.message : "Could not record this review. Reload and check its current state.");
+    } finally {
+      if (writerRef.current === writer) {
+        restoreInFlightRef.current = false;
+        setReviewPending(false);
+      }
     }
   }
 
@@ -527,11 +806,13 @@ export default function KnowledgeDocumentPage() {
     });
   }
 
-  if (loading || !doc) {
+  if (loading || !doc || doc.id !== documentId) {
     return <PageLoader variant="screen" />;
   }
 
   const isAiMemory = doc.documentType === "ai_memory";
+  const hasExactMemoryReview = doc.reviewBinding === "exact_snapshot";
+  const memoryNeedsReview = isAiMemory && (!hasExactMemoryReview || (doc.status !== "approved" && doc.status !== "rejected"));
   // Provider mirrors are rewritten wholesale by each sync, so the editor is locked and the API
   // rejects updates. Comments are the writable channel — they're stored apart from the body.
   const isSyncedMirror = doc.isReadOnly && doc.sourceRole === "mirror";
@@ -612,15 +893,23 @@ export default function KnowledgeDocumentPage() {
       )}
 
       <div className="mb-4 flex items-start justify-between gap-4">
-        <Input
-          value={title}
-          onChange={(e) => handleTitleChange(e.target.value)}
-          readOnly={bodyLocked}
-          className={`!h-auto flex-1 border-0 !bg-transparent px-0 text-[26px] font-semibold shadow-none focus:ring-0 ${
-            bodyLocked ? "cursor-default" : ""
-          }`}
-          placeholder="Untitled document"
-        />
+        <div className="min-w-0 flex-1">
+          <Input
+            value={title}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            onBlur={handleTitleBlur}
+            readOnly={bodyLocked || restorePhase === "restoring" || reviewPending}
+            className={`!h-auto w-full border-0 !bg-transparent px-0 text-[26px] font-semibold shadow-none focus:ring-0 ${
+              bodyLocked ? "cursor-default" : ""
+            }`}
+            placeholder="Untitled document"
+          />
+          {titleError && (
+            <p role="alert" className="mt-1 text-[12px] text-[var(--error-foreground)]">
+              {titleError}
+            </p>
+          )}
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           {isSyncedMirror && (
             <StatusChip tone="info" dot>
@@ -628,8 +917,8 @@ export default function KnowledgeDocumentPage() {
             </StatusChip>
           )}
           {isAiMemory && (
-            <StatusChip tone={doc.status === "approved" ? "success" : doc.status === "rejected" ? "error" : "draft"} dot>
-              {doc.status === "approved" ? "Approved memory" : doc.status === "rejected" ? "Rejected" : "AI Generated"}
+            <StatusChip tone={hasExactMemoryReview && doc.status === "approved" ? "success" : hasExactMemoryReview && doc.status === "rejected" ? "error" : "draft"} dot>
+              {memoryNeedsReview ? "Review required" : doc.status === "approved" ? "Approved memory" : "Rejected"}
             </StatusChip>
           )}
           {!isAiMemory && (
@@ -652,7 +941,7 @@ export default function KnowledgeDocumentPage() {
             </button>
             {menuOpen && (
               <div className="absolute right-0 z-20 mt-1 min-w-[180px] rounded-[8px] border border-[var(--border)] bg-[var(--surface-overlay)] py-1 shadow-[var(--shadow-elevated)]">
-                <button onClick={handleDuplicate} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
+                <button onClick={handleDuplicate} disabled={restorePhase === "restoring" || reviewPending} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
                   <IconCopy size={14} /> Duplicate
                 </button>
                 <button onClick={openHistory} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-[var(--surface-secondary)]">
@@ -662,7 +951,7 @@ export default function KnowledgeDocumentPage() {
                   <IconLink size={14} /> {linkCopied ? "Copied!" : "Copy link"}
                 </button>
                 {!isZyraMemory && canModifyDoc && (
-                  <button onClick={handleDelete} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-[var(--error-foreground)] hover:bg-[var(--error-soft)]">
+                  <button onClick={handleDelete} disabled={restorePhase === "restoring" || reviewPending} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-[var(--error-foreground)] hover:bg-[var(--error-soft)]">
                     <IconTrash size={14} /> Delete
                   </button>
                 )}
@@ -670,7 +959,7 @@ export default function KnowledgeDocumentPage() {
             )}
           </div>
           {!bodyLocked && (
-            <Button variant="secondary" size="sm" onClick={handleManualSave}>Save</Button>
+            <Button variant="secondary" size="sm" onClick={handleManualSave} disabled={restorePhase === "restoring" || reviewPending}>Save</Button>
           )}
         </div>
       </div>
@@ -722,13 +1011,18 @@ export default function KnowledgeDocumentPage() {
         </div>
       )}
 
-      {isAiMemory && canApprove && doc.status !== "approved" && doc.status !== "rejected" && (
-        <div className="mb-4 flex items-center justify-between rounded-[10px] border border-[var(--ai-border)] bg-[var(--ai-soft)] px-4 py-3">
-          <p className="text-[13px] text-[var(--ai-primary)]">This is AI-generated memory. Review before it&apos;s trusted as context.</p>
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={handleReject}><IconX size={14} /> Reject</Button>
-            <Button size="sm" onClick={handleApprove}><IconCheck size={14} /> Approve</Button>
+      {memoryNeedsReview && (
+        <div className="mb-4 rounded-[10px] border border-[var(--ai-border)] bg-[var(--ai-soft)] px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[13px] text-[var(--ai-primary)]">{doc.reviewBinding === "legacy_unverified" ? "This document has a legacy approval without an exact review receipt. It is excluded from AI context until an owner or manager reviews it again." : "This is AI-generated memory. Review before it's trusted as context."}</p>
+            {canApprove && <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={handleReject} disabled={reviewPending}><IconX size={14} /> Reject</Button>
+              <Button size="sm" onClick={handleApprove} disabled={reviewPending}><IconCheck size={14} /> {reviewPending ? "Recording review…" : "Approve"}</Button>
+            </div>}
           </div>
+          <p className="mt-3 text-[12px] font-medium">Text supplied as AI context</p>
+          <pre tabIndex={0} aria-label="Text supplied as AI context" className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-[var(--border)] bg-[var(--surface)] p-3 text-[12px]">{reviewContextText || "No context text."}</pre>
+          {saveStatus !== "saved" && <p className="mt-1 text-[12px] text-[var(--muted)]">Includes your pending edits. They must save successfully before this review is recorded.</p>}
         </div>
       )}
 
@@ -736,6 +1030,24 @@ export default function KnowledgeDocumentPage() {
         <div className="mb-3 flex items-center justify-between rounded-lg border border-[var(--warning)]/30 bg-[var(--warning-soft)] px-4 py-2.5 text-[13px] text-[var(--warning-foreground)]">
           <span>{anchorMissMessage}</span>
           <button onClick={() => setAnchorMissMessage(null)}><IconX size={15} /></button>
+        </div>
+      )}
+
+      {!isSyncedMirror && !isZyraMemory && (doc.documentType === "user_manual" || doc.documentType === "policy") && (
+        <div className="mb-4">
+          <GovernedDocumentPanel
+            projectId={projectId}
+            doc={doc}
+            canManage={canApprove}
+            onChanged={refreshDocument}
+            onSaveMetadata={async (metadata) => (await commitGovernedDocument(metadata, null)).saved}
+            onSubmitForReview={async (metadata, submissionKey) => {
+              const { versionNumber } = await commitGovernedDocument(metadata, submissionKey);
+              if (versionNumber === null) throw new Error("The submission was not created. Reload and retry.");
+              return { versionNumber };
+            }}
+            onDecide={commitGovernedDecision}
+          />
         </div>
       )}
 
@@ -763,7 +1075,7 @@ export default function KnowledgeDocumentPage() {
           <RichTextEditor
             contentJson={doc.contentJson as JSONContent | null}
             contentHtml={doc.contentHtml}
-            editable={!isSyncedMirror}
+            editable={!isSyncedMirror && restorePhase !== "restoring" && !reviewPending}
             onUpdate={handleEditorUpdate}
             resetKey={contentResetKey}
           />

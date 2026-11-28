@@ -1,0 +1,8 @@
+{
+  "snapshot_file": "model-studio-preview.core.mts",
+  "bytes": 7329,
+  "sha256": "00486d575998b02c6fc6c808f0211325aaa16ea4ac1693a811793e595976556d",
+  "application_commit": "6897f989b055a955280f810c7daace86f74057fa",
+  "source_path": "Tesbo-Backend-Nest/src/behavior-graph/model-studio-preview.core.ts",
+  "note": "The probe copied these byte-identical sources to .mts for the isolated Node check. Retrieve the pinned original; this is not application/runtime evidence."
+}

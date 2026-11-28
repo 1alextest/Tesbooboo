@@ -1,5 +1,6 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { createHash, randomBytes } from "crypto";
+import type { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
 
 /**
@@ -22,11 +23,41 @@ export interface ApiTokenSummary {
   tokenPrefix: string;
   lastUsedAt: string | null;
   createdAt: string;
+  /** Advisory, caller-specific management capability; revoke still rechecks authority. */
+  canRevoke?: boolean;
+}
+
+export type ApiTokenManager = { userId: string; canManage: boolean };
+
+/** One policy for the management projection and the actual revoke decision. */
+export function canRevokeApiToken(caller: ApiTokenManager, issuerId: string | null | undefined): boolean {
+  return caller.canManage || (!!caller.userId && issuerId === caller.userId);
 }
 
 const TOKEN_PREFIX = "tsbo_";
 const RAW_TOKEN_BYTES = 24;
 const VALID_SCOPES = new Set(["read", "write"]);
+
+/**
+ * One parser for API-token scopes, shared by issuance and the project role gate.
+ *
+ * Existing UI sends explicit selections. Missing input is read-only; invalid or empty selections
+ * must never silently grant write access, and an unknown value must be rejected rather than
+ * dropped into a token with broader scope than the caller asked for.
+ */
+export function normalizeApiTokenScopes(input: unknown): string[] {
+  if (input === undefined || input === null) return ["read"];
+  if (!Array.isArray(input) && typeof input !== "string") {
+    throw new BadRequestException({ error: "scopes must be an array or comma-separated string" });
+  }
+  const requested = Array.isArray(input)
+    ? input.map((s) => (typeof s === "string" ? s.trim().toLowerCase() : ""))
+    : input.split(",").map((s) => s.trim().toLowerCase());
+  if (!requested.length || requested.some((s) => !VALID_SCOPES.has(s))) {
+    throw new BadRequestException({ error: "scopes must contain only read and/or write" });
+  }
+  return Array.from(new Set(requested));
+}
 
 /**
  * Issues, lists, revokes and validates project-scoped API tokens.
@@ -55,15 +86,19 @@ export class ApiTokenService {
     return TOKEN_PREFIX + randomBytes(RAW_TOKEN_BYTES).toString("hex");
   }
 
-  private normalizeScopes(input: unknown): string[] {
-    const requested = Array.isArray(input)
-      ? input.map((s) => String(s).trim().toLowerCase())
-      : String(input ?? "")
-          .split(",")
-          .map((s) => s.trim().toLowerCase());
-    const filtered = requested.filter((s) => VALID_SCOPES.has(s));
-    // Default to read+write when nothing valid was supplied.
-    return filtered.length ? Array.from(new Set(filtered)) : ["read", "write"];
+  /**
+   * Whether the token exists in this project and who issued it. `userId` is nullable: a legacy
+   * token can outlive its issuer (user_id REFERENCES users ON DELETE CASCADE, but older rows were
+   * created before the issuer was always recorded). Existence and issuer are separate answers so a
+   * null issuer is not mistaken for "token not found".
+   */
+  async issuerOf(projectId: string, tokenId: string, client?: PoolClient): Promise<{ exists: boolean; userId: string | null }> {
+    // With a transaction client, retain the issuer/target lock through the authorized delete.
+    const sql = `SELECT user_id FROM api_tokens WHERE id = $1 AND project_id = $2${client ? " FOR UPDATE" : ""}`;
+    const params = [tokenId, projectId];
+    const res = client ? await client.query(sql, params) : await this.db.query(sql, params);
+    const row = res.rows[0] as { user_id: string | null } | undefined;
+    return { exists: Boolean(row), userId: row?.user_id ?? null };
   }
 
   private toSummary(row: {
@@ -85,13 +120,16 @@ export class ApiTokenService {
     };
   }
 
-  async listTokens(projectId: string): Promise<ApiTokenSummary[]> {
+  async listTokens(projectId: string, caller?: ApiTokenManager): Promise<ApiTokenSummary[]> {
     const res = await this.db.query(
-      `SELECT id, name, scopes, token_hash, last_used_at, created_at
+      `SELECT id, name, scopes, token_hash, last_used_at, created_at, user_id
        FROM api_tokens WHERE project_id = $1 ORDER BY created_at DESC`,
       [projectId]
     );
-    return res.rows.map((row) => this.toSummary(row as never));
+    return res.rows.map((row) => ({
+      ...this.toSummary(row as never),
+      ...(caller ? { canRevoke: canRevokeApiToken(caller, row.user_id) } : {})
+    }));
   }
 
   /**
@@ -104,9 +142,9 @@ export class ApiTokenService {
     name: string,
     scopesInput?: unknown
   ): Promise<ApiTokenSummary & { token: string }> {
+    const scopes = normalizeApiTokenScopes(scopesInput).join(",");
     const rawToken = this.generateRawToken();
     const tokenHash = this.hashToken(rawToken);
-    const scopes = this.normalizeScopes(scopesInput).join(",");
     const res = await this.db.query(
       `INSERT INTO api_tokens (user_id, project_id, name, token_hash, scopes)
        VALUES ($1, $2, $3, $4, $5)
@@ -117,11 +155,10 @@ export class ApiTokenService {
   }
 
   /** Deletes a token belonging to the given project. Returns whether a row was removed. */
-  async revokeToken(projectId: string, tokenId: string): Promise<boolean> {
-    const res = await this.db.query(
-      `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`,
-      [tokenId, projectId]
-    );
+  async revokeToken(projectId: string, tokenId: string, client?: PoolClient): Promise<boolean> {
+    const sql = `DELETE FROM api_tokens WHERE id = $1 AND project_id = $2`;
+    const params = [tokenId, projectId];
+    const res = client ? await client.query(sql, params) : await this.db.query(sql, params);
     return (res.rowCount ?? 0) > 0;
   }
 

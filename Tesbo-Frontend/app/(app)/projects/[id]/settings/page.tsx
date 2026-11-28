@@ -5,7 +5,7 @@ import { useParams } from "@/lib/routeParams";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import { IconKey, IconSettings, IconStack2, IconTag, IconTrash } from "@tabler/icons-react";
+import { IconKey, IconSettings, IconShieldCheck, IconStack2, IconTag, IconTrash } from "@tabler/icons-react";
 import {
   updateProject,
   deleteProject as deleteProjectRequest,
@@ -41,6 +41,7 @@ import {
   FieldError,
   FieldLabel,
 } from "@/components/ui";
+import { ExternalMcpAccessPanel } from "@/components/project/ExternalMcpAccessPanel";
 import { ProjectIconPicker, type ProjectIconValue } from "@/components/ProjectIconPicker";
 import { avatarColor } from "@/lib/avatarColors";
 import {
@@ -79,7 +80,7 @@ type ProjectSettingsPayload = {
   [key: string]: unknown;
 };
 
-type SettingsTab = "general" | "testRuns" | "members" | "apiTokens" | "customFields" | "integrations" | "customTags";
+type SettingsTab = "general" | "testRuns" | "members" | "apiTokens" | "customFields" | "integrations" | "customTags" | "skills";
 type ProjectMember = { userId: string; email: string; name: string; role: string; joinedAt: string };
 type WorkspaceMember = { userId: string; email: string; name: string; role: string; joinedAt: string };
 
@@ -192,6 +193,7 @@ export default function ProjectSettingsPage() {
       { key: "apiTokens", label: "API & MCP" },
       ...(canManageCustomFields ? [{ key: "customFields" as const, label: "Custom Fields" }] : []),
       { key: "integrations", label: "Integrations" },
+      { key: "skills", label: "Skills & Governance" },
       ...(canManageCustomFields ? [{ key: "customTags" as const, label: "Custom Tags" }] : []),
     ],
     [canManageCustomFields]
@@ -911,10 +913,11 @@ export default function ProjectSettingsPage() {
       )}
       {activeTab === "apiTokens" && (
         <Card className="p-4 space-y-4">
+          <ExternalMcpAccessPanel projectId={projectId} canManage={canEditProjectSettings} />
           <div>
             <h2 className="text-base font-semibold text-[var(--foreground)]">API & MCP access</h2>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Generate API tokens so AI agents like Claude Code or Claude Desktop can read and write this project&apos;s test data.
+              Manage API credentials and explicitly approve which external AI clients can use this project through MCP.
             </p>
           </div>
           <div className="rounded-lg border border-[var(--border)] p-4 flex items-start gap-4">
@@ -1201,6 +1204,38 @@ export default function ProjectSettingsPage() {
                 className="inline-flex h-9 items-center justify-center rounded-[10px] border border-transparent bg-[var(--brand-primary)] px-3.5 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-[var(--brand-hover)]"
               >
                 Manage custom tags
+              </Link>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {activeTab === "skills" && (
+        <Card className="p-4 space-y-4" data-testid="settings-skills-tab">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--foreground)]">Skills &amp; Authoring Governance</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Review exact skill versions, approve them, and assign or revoke the version that governs each project context.
+              Publication remains blocked when a required context is unassigned or conflicting.
+            </p>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] p-4 flex items-start gap-4">
+            <div className="shrink-0 w-10 h-10 rounded-lg bg-[var(--brand-primary)] flex items-center justify-center">
+              <IconShieldCheck className="w-5 h-5 text-white" stroke={1.75} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-[var(--foreground)]">Governed Skills library</h3>
+              <p className="text-xs text-[var(--muted)] mt-0.5">
+                Approval, assignment and revocation are human-only; agents may submit inert candidates.
+              </p>
+            </div>
+            <div className="shrink-0">
+              <Link
+                href={`/projects/${projectId}/settings/skills`}
+                data-testid="manage-skills"
+                className="inline-flex h-9 items-center justify-center rounded-[10px] border border-transparent bg-[var(--brand-primary)] px-3.5 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-[var(--brand-hover)]"
+              >
+                Manage skills
               </Link>
             </div>
           </div>

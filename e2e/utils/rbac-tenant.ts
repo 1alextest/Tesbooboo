@@ -43,6 +43,8 @@ export type RbacTenantKind =
   | "project-settings-ui"
   | "custom-tags"
   | "custom-tags-ui"
+  // Governed Skills library and project assignment management (ui/skills.spec.ts).
+  | "skills-ui"
   | "reports"
   | "reports-ui"
   | "import-export"
@@ -58,6 +60,14 @@ export type RbacTenantKind =
   | "kb-embeddings"
   // Wave 7 — execution bulk ops, schedules, share links
   | "exec-ops"
+  // Shared test-run approval invariant: native REST, MCP and automation
+  // entry points write only to this disposable project's cycles/cases.
+  | "run-approval"
+  // Isolated human+MCP machine token lifecycle; never use a real customer project.
+  | "mcp-lifecycle"
+  // Persisted Model Studio revisions/mappings. Own tenant so model drafts and links never touch
+  // an existing project's graph history or canonical cases.
+  | "model-studio"
   // Wave 8 — integrations (Jira / Linear), authorization and validation layer
   | "integrations"
   // Wave 9 — Zyra, AI keys, MCP
@@ -129,6 +139,10 @@ export type RbacTenantKind =
   // (api/zyra.spec.ts). Its own tenant because it toggles capabilities, removes the AI key, seeds
   // stale claims and running plans — each of which would change what other Zyra suites' turns see.
   | "zyra-trace"
+  // Tracing acceptance uses two isolated workspaces to prove concurrent export identities and
+  // cross-tenant refusals; it never shares another suite's provider allocations or transcripts.
+  | "zyra-observability-a"
+  | "zyra-observability-b"
   // Zyra's exact-value KB grounding (api/zyra.spec.ts). Its own, genuinely-empty tenant: each test
   // asserts which document is "KB 1", which any other suite's leftover docs would change.
   | "zyra-exact-values"
@@ -159,7 +173,8 @@ export interface RbacTenant {
   guest: RbacUser;
 }
 
-const PASSWORD = "E2E-Rbac-Pass-9f3!";
+// Positive seed credentials must also satisfy native change/reset policy for API cleanup.
+const PASSWORD = "E2e-Rbac-9!x";
 const MAIN_PROJECT = "RBAC Main Project";
 const SECOND_PROJECT = "RBAC Second Project";
 

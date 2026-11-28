@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { dbControlAvailable, exec, literal, scalar } from "../utils/psql";
+import { dbControlAvailable, exec, execMany, literal, scalar } from "../utils/psql";
 import {
   addProjectMember,
   createBug,
@@ -905,7 +905,9 @@ test.describe("top bar — notifications", () => {
     let attempt = 0;
     await page.route((url) => url.pathname === "/api/notifications", (route) => {
       attempt += 1;
-      if (attempt === 1) return route.abort("failed");
+      // The transport retries a failed GET once automatically; failing only attempt 1 lets that
+      // retry succeed, so no error UI ever appears. Fail both until the explicit Try again.
+      if (attempt <= 2) return route.abort("failed");
       return route.continue();
     });
 
@@ -1022,7 +1024,10 @@ test.describe("top bar — notifications", () => {
 
       await bell(page).click();
       await panel(page).getByRole("menuitem", { name: /Unread one/ }).click();
-      await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.projectId}$`));
+      // Route resolution may land on the project's readable key or its UUID, and the project
+      // notification opens the project home, which canonicalizes to /dashboard.
+      const projectKey = scalar(`SELECT key FROM projects WHERE id = ${literal(tenant!.projectId)};`);
+      await expect(page).toHaveURL(new RegExp(`/projects/(?:${tenant!.projectId}|${projectKey})(?:/dashboard)?$`));
 
       // Read state is server-side, so the badge on the next page load is one lower.
       await page.goto("/projects");
@@ -1076,6 +1081,40 @@ test.describe("top bar — notifications", () => {
       expect(flush.coveredByHeader, "the top edge of the panel must be the header, not scrolled content").toBe(true);
     } finally {
       ids.forEach(deleteNotification);
+    }
+  });
+
+  test("NOTIF-UI-16 the panel pages older rows in instead of losing everything past the first 50", async ({ page }) => {
+    test.skip(!dbControlAvailable(), "needs psql access to seed real notification rows");
+    const stamp = Date.now();
+    const userId = scalar(`SELECT id FROM users WHERE email = ${literal(tenant!.email)};`);
+    const ids = Array.from({ length: 51 }, () => crypto.randomUUID());
+    execMany(
+      ids.map(
+        (id, index) =>
+          `INSERT INTO notifications (id, user_id, type, title, body, link_entity_type, link_entity_id) VALUES (` +
+          `${literal(id)}, ${literal(userId)}, 'zyra_archive_sweep', ` +
+          `${literal(`Page ${String(index + 1).padStart(2, "0")} ${stamp}`)}, 'Paged fixture.', ` +
+          `'project', ${literal(tenant!.projectId)});`
+      )
+    );
+    const seeded = panel(page).getByRole("menuitem", { name: new RegExp(`Page \\d{2} ${stamp}`) });
+    try {
+      await page.reload();
+      await bell(page).click();
+      await expect(seeded).toHaveCount(50);
+      const loadMore = panel(page).getByRole("button", { name: "Load more" });
+      await expect(loadMore).toBeVisible();
+      await loadMore.click();
+      await expect(seeded).toHaveCount(51);
+      await expect(loadMore).toBeHidden();
+      // A second open re-reads the first page only; the extra row is reachable again, never lost.
+      await bell(page).click();
+      await bell(page).click();
+      await expect(seeded).toHaveCount(50);
+      await expect(loadMore).toBeVisible();
+    } finally {
+      exec(`DELETE FROM notifications WHERE id IN (${ids.map(literal).join(", ")});`);
     }
   });
 
@@ -1158,24 +1197,29 @@ test.describe("top bar — notifications", () => {
   test("NOTIF-UI-11 each Phase 1 link type resolves to its detail page", async ({ page }) => {
     test.skip(!dbControlAvailable(), "needs psql access to seed a real notification row");
     const pid = tenant!.projectId;
+    // Project-scoped routes canonicalise the project segment to the project key, so asserting the
+    // UUID used in the notification pins a redirect target rather than the destination. Each
+    // expectation accepts either segment and still checks the exact resource id.
     const cases: Array<{ title: string; type: string; id: string; url: RegExp }> = [
-      { title: "Link members", type: "workspace_members", id: pid, url: /\/settings\/members$/ },
+      { title: "Link members", type: "workspace_members", id: pid, url: /\/settings\?tab=members$/ },
       { title: "Link projects", type: "projects_list", id: pid, url: /\/projects$/ },
       // The invite page itself shows "invalid" for a made-up token but stays on its URL.
       { title: "Link invitation", type: "invitation", id: "a".repeat(64), url: new RegExp(`/invite/${"a".repeat(64)}$`) },
-      { title: "Link project members", type: "project_members", id: pid, url: new RegExp(`/projects/${pid}/members$`) },
-      { title: "Link run", type: "test_run", id: `${pid}:00000000-0000-4000-8000-000000000001`, url: new RegExp(`/projects/${pid}/cycles/00000000-0000-4000-8000-000000000001$`) },
-      { title: "Link jira sync", type: "project_integration", id: `${pid}:jira`, url: new RegExp(`/projects/${pid}/settings/integrations/jira$`) },
-      { title: "Link linear sync", type: "project_integration", id: `${pid}:linear`, url: new RegExp(`/projects/${pid}/settings/integrations/linear$`) },
-      { title: "Link notion sync", type: "project_integration", id: `${pid}:notion`, url: new RegExp(`/projects/${pid}/settings/integrations/notion$`) },
-      { title: "Link requirements", type: "requirements", id: pid, url: new RegExp(`/projects/${pid}/requirements$`) },
-      { title: "Link zyra chat", type: "zyra_chat", id: pid, url: new RegExp(`/projects/${pid}/agents/zyra$`) },
-      { title: "Link kb list", type: "knowledge_base", id: pid, url: new RegExp(`/projects/${pid}/knowledge-base$`) },
-      { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\/integrations$/ },
-      { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/${pid}/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
-      { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/${pid}/testcases/00000000-0000-4000-8000-000000000005$`) },
-      { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: new RegExp(`/projects/${pid}/knowledge-base/documents/00000000-0000-4000-8000-000000000003$`) },
-      { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, url: new RegExp(`/projects/${pid}/bugs/00000000-0000-4000-8000-000000000002$`) },
+      { title: "Link project members", type: "project_members", id: pid, url: new RegExp(`/projects/[^/]+/members$`) },
+      { title: "Link run", type: "test_run", id: `${pid}:00000000-0000-4000-8000-000000000001`, url: new RegExp(`/projects/[^/]+/cycles/00000000-0000-4000-8000-000000000001$`) },
+      { title: "Link jira sync", type: "project_integration", id: `${pid}:jira`, url: new RegExp(`/projects/[^/]+/settings/integrations/jira$`) },
+      { title: "Link linear sync", type: "project_integration", id: `${pid}:linear`, url: new RegExp(`/projects/[^/]+/settings/integrations/linear$`) },
+      { title: "Link notion sync", type: "project_integration", id: `${pid}:notion`, url: new RegExp(`/projects/[^/]+/settings/integrations/notion$`) },
+      { title: "Link requirements", type: "requirements", id: pid, url: new RegExp(`/projects/[^/]+/requirements$`) },
+      { title: "Link zyra chat", type: "zyra_chat", id: pid, url: new RegExp(`/projects/[^/]+/agents/zyra$`) },
+      { title: "Link kb list", type: "knowledge_base", id: pid, url: new RegExp(`/projects/[^/]+/knowledge-base$`) },
+      { title: "Link integrations", type: "integrations_settings", id: pid, url: /\/settings\?tab=integrations$/ },
+      { title: "Link zyra task", type: "zyra_task", id: `${pid}:00000000-0000-4000-8000-000000000004`, url: new RegExp(`/projects/[^/]+/agents/tasks/00000000-0000-4000-8000-000000000004$`) },
+      { title: "Link test case", type: "testcase", id: `${pid}:00000000-0000-4000-8000-000000000005`, url: new RegExp(`/projects/[^/]+/testcases/00000000-0000-4000-8000-000000000005$`) },
+      // The document route canonicalises the project segment to the project key; accept either the
+      // id used in the notification or that resolved key rather than pinning a redirect target.
+      { title: "Link kb doc", type: "knowledge_document", id: `${pid}:00000000-0000-4000-8000-000000000003`, url: /\/projects\/[^/]+\/knowledge-base\/documents\/00000000-0000-4000-8000-000000000003$/ },
+      { title: "Link bug", type: "bug", id: `${pid}:00000000-0000-4000-8000-000000000002`, url: new RegExp(`/projects/[^/]+/bugs/00000000-0000-4000-8000-000000000002$`) },
     ];
     const stamp = Date.now();
     const ids = cases.map((c) => seedNotification({ title: `${c.title} ${stamp}`, linkEntityType: c.type, linkEntityId: c.id }));

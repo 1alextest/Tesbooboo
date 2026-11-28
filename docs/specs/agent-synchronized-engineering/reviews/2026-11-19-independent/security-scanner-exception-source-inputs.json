@@ -1,0 +1,42 @@
+{
+  "review": "SEC-NATIVE-04 independent source addendum; actual scanner runtime pending",
+  "headAtStart": "be0240f413780770c427c4b589a29348d900ec65",
+  "headAtFinalRead": "0e52c23367246a15f47c99d80288dafe55ed8151",
+  "reviewedFilesAreWorkingChanges": true,
+  "files": {
+    ".gitleaks.toml": {
+      "sha256": "5d49ca03d4745a30ce27e2f70eaf5219c95b8d07259dbe37d66d4715817c5b61",
+      "bytes": 1743
+    },
+    "scripts/check-gitleaks-evidence-exceptions.py": {
+      "sha256": "4b4d1cbf7ad761126b3c0f2cf49b892a4a7ccb57cc49f4ce0417300871010557",
+      "bytes": 6946
+    },
+    ".github/workflows/free-repository-security.yml": {
+      "sha256": "fba63f971e7ef65e73df97a6c66c10e16ab3856583d5d3d5e895117d732d18f1",
+      "bytes": 1683
+    },
+    "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-9519.json": {
+      "sha256": "0607a5a5835e8828fb30deed0de7546f50c187f4de11a876051472545314fb2e",
+      "bytes": 22258
+    },
+    "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-9519-v2.json": {
+      "sha256": "cfdaa6f32ec9e22ad7210c9baa1c645689953fca8ce2eeb178bd3f451613f39a",
+      "bytes": 22767
+    },
+    "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-occurrence-repair-evidence.json": {
+      "sha256": "8f5b504d63d7155aa66b1fdc9ee97ab758086f5a8ca392706acc87109d0a8480",
+      "bytes": 1849
+    },
+    "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-independent/native-green-profile-965a87a1-v3.json": {
+      "sha256": "09c507633a46ecd38eaf86d41665d1c8dc0c61d3d9ecb37e22a9a521d85d3875",
+      "bytes": 23886
+    }
+  },
+  "initialHarnessSha256": "d4a7ac40dff1336e580d1e35a10440ade135fd1b58dbda2fd039ca894f3fd3d2",
+  "renameOnlyReconstructionVerified": true,
+  "scannerExecuted": false,
+  "priorFrozenReceiptSha256": "57a88ea77ac3581906d43c103b886eb210501a1c2714dae1af9585ef0b96aa49",
+  "priorFrozenInputsSha256": "14315fddd22f8192b103824e04d817b07e280888a66af81bcc471c9d2bc6a1bf",
+  "addendumSha256": "3d6655c0963f2cc15570b55952aa78ea4ffb785ddb04b0dfca918f8b34700ebb"
+}

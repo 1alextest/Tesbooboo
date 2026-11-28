@@ -3,6 +3,14 @@
 Implementation plan for Basecamp card
 [10189985971](https://app.basecamp.com/5705339/buckets/46336431/card_tables/cards/10189985971).
 
+> **2026-11-12 reconciliation:** Sections 1–6 are historical pre-implementation
+> scoping, not the current missing-feature list. Section 7 records the original
+> delivery; current owners are `src/automation/`, `sdk/playwright-reporter/` and
+> `docs/playwright-integration.md`. Phase 1 repairs and bounded evidence/remaining
+> decisions are tracked in `FEATURE_DOCUMENTATION.md`, section F. Run reuse is
+> conditional on a project/external ID; it is not universal command idempotency.
+> This plan does not authorize retention jobs, new SDKs or the next roadmap phase.
+
 **Card verdict: suggestion / unbuilt feature.** Not a bug. The card is a v0.1 product spec asking for
 dev scoping, so this document is the scoping answer: what the codebase already provides, what is
 genuinely missing, the three traps that will waste a week if nobody names them first, and the
@@ -77,6 +85,14 @@ Leaving it in place means the next person to open this card builds the wrong thi
 decision 1 below.
 
 ### Trap 3: `POST /cycles/from-cases` silently discards `testcaseIds`
+
+> **Resolved 2026-11-18.** `from-cases` now creates the run and attaches the given cases in one
+> transaction, through the same Approved-only writer as the MCP `create_cycle_from_testcases` tool.
+> The response carries `requested`/`added`/`skipped`; a Draft/Demoted case refuses the whole request
+> (409) so no orphan run is left behind; ids that do not resolve inside the project are counted as
+> skipped rather than dropped silently. `from-plan` deliberately still only records `plan_id` —
+> cloning a plan's items is a separate semantic decision no caller has asked for. The original
+> finding is kept below as history.
 
 All three of `/cycles`, `/cycles/from-plan` and `/cycles/from-cases` are wired to the *same*
 `createCycle()`, which reads neither `planId`'s items nor `testcaseIds` — it inserts one `cycles` row
@@ -317,6 +333,12 @@ scope = slices 1 + 2 + 3.
   (trigger · branch · commit · build link · Incomplete badge) and per-result duration/retries/error.
   Both render nothing on a manual run.
 - Wired into the run detail drawer, the full-page execute screen, and the runs list.
+- **Run-screen recovery (27 November 2026):** an automation-origin run whose reporter died before
+  closing now offers **Close as incomplete** on the existing run screen, calling the existing
+  automation close owner. The generic **Mark Completed** and **Reopen** controls are not offered for
+  automation runs because the generic writer refuses them; **Add Test Cases** remains available
+  while the run is open, as its owner permits. The UI e2e verifies a confirmation, the visible
+  `Incomplete` badge, the `Completed`/`incomplete` API readback and the closure timestamp.
 
 ### Playwright SDK
 
@@ -331,3 +353,12 @@ scheduler that does not exist yet), Project Settings storage/retention UI, rate 
 testing, and the pytest and JUnit/TestNG SDKs. The six `tesbo-reports/*` backend stubs are left
 standing with a comment marking them superseded — removing a route is a riskier change than deleting
 an uncalled client, and was not part of what was approved.
+
+**Decision (2026-11-18): keep the stubs standing.** They are now authenticated project reads that
+return empty/zero payloads, nothing in the frontend or SDK consumes them, and the e2e contract in
+`api/tail.spec.ts` pins their shape. Removing them is a reporter-version compatibility decision for
+the automation owner, not cleanup an agent should perform unilaterally.
+
+## Governed native retest compatibility (27 November 2026)
+
+The native reviewed retest owner is [the existing Run receipt contract](specs/agent-synchronized-engineering/reviews/2026-11-20-native-qa/README.md#governed-automated-retest--proposed-extension-27-november-2026). Generic SDK create/reuse, result ingestion, evidence and close must not implicitly acquire a native retest by ID or external ID. The current correction checks the persisted source relationship before effects and again under the Run lock; scoped GET remains available. Existing ordinary automation Runs and native manual retest operations retain their contracts. A later explicit automated mode must bind the exact reviewed occurrence and authorized runner in that native owner, not create a parallel Run or approval system. Candidate tests and independent acceptance are pending.

@@ -1,0 +1,11 @@
+{
+  "contract": "tesbo-coordinator-attested-ai-assurance/v1",
+  "provenance": "owner-authorized-coordinator-observation",
+  "delegatedImporterIds": [],
+  "integrationBranch": "development",
+  "releaseBranch": "main",
+  "maxOpenPullRequests": 50,
+  "maxPages": 5,
+  "maxReviewBodyBytes": 60000,
+  "maxCheckAgeMinutes": 30
+}

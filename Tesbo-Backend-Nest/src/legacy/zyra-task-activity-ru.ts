@@ -25,6 +25,8 @@ const TITLES: Record<string, string> = {
   "Generated testcase drafts": "Сгенерированы черновики тест-кейсов",
   "Generated drafts discarded": "Сгенерированные черновики отброшены",
   "Accepted and saved testcases": "Тест-кейсы приняты и сохранены",
+  "Submitted testcase proposals": "Предложения тест-кейсов отправлены",
+  "Applied selected testcase proposals": "Выбранные предложения тест-кейсов применены",
   "Review feedback submitted": "Отправлен отзыв ревьюера",
   "Moved task back to Todo": "Задача возвращена в «К выполнению»",
   "Re-read sources with feedback": "Источники перечитаны с учётом отзыва",
@@ -104,6 +106,8 @@ const DETAIL_PATTERNS: Array<[RegExp, (...groups: string[]) => string]> = [
     (count, cached) => `Задача обновлена, перегенерировано черновиков: ${count}. Кэшированных входных токенов: ${cached}.`
   ],
   [/^Saved (\d+) testcase\(s\)\.$/, (count) => `Сохранено тест-кейсов: ${count}.`],
+  [/^(\d+) unpublished proposal\(s\) await human review\.$/, (count) => `Неопубликованные предложения ожидают проверки человеком: ${count}.`],
+  [/^Applied (\d+) proposal\(s\); (\d+) remain unpublished\.$/, (applied, remaining) => `Применено предложений: ${applied}; остаются неопубликованными: ${remaining}.`],
   [
     /^Zyra finished generating (\d+) testcase draft\(s\), but the task had already been updated in the meantime, so these drafts were not applied\.$/,
     (count) => `Zyra сгенерировала черновиков: ${count}, но задача за это время уже изменилась, поэтому они не применены.`

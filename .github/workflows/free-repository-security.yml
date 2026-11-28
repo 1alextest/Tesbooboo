@@ -1,0 +1,42 @@
+name: Free repository security
+on:
+  pull_request:
+  push:
+    branches: [development, main]
+  schedule:
+    - cron: "29 2 * * 4"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  workflow-security:
+    name: workflow-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install zizmor (open source) from PyPI
+        run: pipx install zizmor
+      - name: Report GitHub Actions security findings
+        run: zizmor --format github --min-severity high .github/workflows
+
+  current-tree-secrets:
+    name: current-tree-secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Scan current repository contents for secrets
+        # Exact reviewed hash exceptions require both their root path and complete match,
+        # only for generic-api-key. Prove denied neighbors with the same resolved scanner.
+        run: |
+          docker pull ghcr.io/gitleaks/gitleaks:latest
+          scanner_image=$(docker image inspect --format '{{.Id}}' ghcr.io/gitleaks/gitleaks:latest)
+          docker image inspect --format 'Scanner image: {{.Id}}; digests: {{json .RepoDigests}}' "$scanner_image"
+          docker run --rm "$scanner_image" version
+          python3 scripts/check-gitleaks-evidence-exceptions.py --image "$scanner_image"
+          docker run --rm -v "$PWD:/repo:ro" "$scanner_image" dir /repo --config /repo/.gitleaks.toml --redact --verbose --exit-code 1

@@ -188,8 +188,10 @@ export class IntegrationSyncProcessor extends WorkerHost {
       );
 
       // Created before any ticket lands, so the folder exists by the time the first document
-      // needs a home — and only ever for projects that actually ran a sync.
-      const folderId = await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy);
+      // needs a home — and only ever for projects that actually ran a sync. The id is deliberately
+      // not carried in the job payload: the worker re-resolves it under the project lock at write
+      // time instead of trusting a value that may have been deleted since fan-out.
+      await this.runs.ensureProviderFolder(organizationId, projectId, provider, triggeredBy);
 
       await this.runs.setStage(runId, "fetching_tickets");
       const queued: SyncTicketJobPayload[] = [];
@@ -213,7 +215,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
           }
           try {
             const ticketId = await this.upsertTicket(projectId, String(connection.id), provider, ticket, remote.remote_id);
-            queued.push({ runId, organizationId, projectId, provider, ticketId, issueId: ticket.issueId, issueKey: ticket.issueKey, folderId, triggeredBy });
+            queued.push({ runId, organizationId, projectId, provider, ticketId, issueId: ticket.issueId, issueKey: ticket.issueKey, triggeredBy });
           } catch (err) {
             // One ticket's data (an oversized field, or anything else unexpected) must never abort
             // the rest of the page or the run — an incremental run cursors off the last
@@ -449,7 +451,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
   // ── Per-ticket: comments -> decisions -> Knowledge Base document ──
 
   private async processTicket(payload: SyncTicketJobPayload): Promise<void> {
-    const { runId, organizationId, projectId, provider, ticketId, issueId, folderId, triggeredBy } = payload;
+    const { runId, organizationId, projectId, provider, ticketId, issueId, triggeredBy } = payload;
     const c = TICKET_TABLES[provider];
 
     const ticketRes = await this.db.query<Row>(`SELECT * FROM ${c.table} WHERE id = $1 AND project_id = $2`, [ticketId, projectId]);
@@ -514,7 +516,7 @@ export class IntegrationSyncProcessor extends WorkerHost {
     } else if (commentsHash !== String(row.decision_summary_hash || "")) {
       const allocation = await this.decisions.resolveAllocation(projectId);
       if (allocation) {
-        decisionSummary = await this.decisions.summarize(allocation, ticket, comments);
+        decisionSummary = await this.decisions.summarize(allocation, ticket, comments, { organizationId, projectId, runId, ticketId });
         summarized = true;
         await this.db.query(`UPDATE ${c.table} SET decision_summary = $2, decision_summary_hash = $3 WHERE id = $1`, [
           ticketId,
@@ -560,31 +562,42 @@ export class IntegrationSyncProcessor extends WorkerHost {
       await this.db
         .query("UPDATE integration_sync_runs SET error = COALESCE(error, $2), updated_at = now() WHERE id = $1", [runId, storageCheck.reason])
         .catch(() => undefined);
-      await this.runs.recordTicketResult(runId, { processed: 1, failed: 1 });
+      await this.runs.recordTicketResult(runId, { failed: 1 });
       return;
     }
 
-    const upserted = await this.db.query<{ id: string; inserted: boolean }>(
-      `INSERT INTO knowledge_documents (
-         organization_id, project_id, folder_id, title, content_text, content_html, document_type, status,
-         source_provider, source_external_id, source_role, source_url, source_synced_by, source_synced_at, is_read_only
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'requirement_note', 'published', $7, $8, 'mirror', $9, $10, now(), true)
-       ON CONFLICT (project_id, source_provider, source_external_id, source_role) WHERE source_provider IS NOT NULL AND is_deleted = false
-       DO UPDATE SET
-         title = EXCLUDED.title,
-         content_text = EXCLUDED.content_text,
-         content_html = EXCLUDED.content_html,
-         source_url = EXCLUDED.source_url,
-         source_synced_by = EXCLUDED.source_synced_by,
-         source_synced_at = now(),
-         is_read_only = true,
-         -- Re-parents documents mirrored into "Requirements" before V72 into the provider folder.
-         folder_id = EXCLUDED.folder_id,
-         updated_at = now()
-       RETURNING id, (xmax = 0) AS inserted`,
-      [organizationId, projectId, folderId, mirror.title, mirror.markdown, mirror.html, provider, ticket.issueId, ticket.url, triggeredBy]
-    );
+    const upserted = await this.db.transaction(async client => {
+      // The coordinator's folder id may be stale by the time this job runs. Take the same project
+      // mutation lock as the KB folder deletion/move paths, resolve the provider folder (tagged or
+      // adopted by name) under it, and write the mirror in the same transaction. A deleted folder
+      // is not recreated here: that ticket fails and the next sync resolves/recreates it.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
+      const destinationFolderId = await this.runs.findProviderFolderForWrite(projectId, provider, client);
+      if (!destinationFolderId) {
+        throw new Error(`The ${PROVIDER_FOLDER_NAMES[provider]} folder was deleted or moved during the run; the next sync will resolve it.`);
+      }
+      return client.query<{ id: string; inserted: boolean }>(
+        `INSERT INTO knowledge_documents (
+           organization_id, project_id, folder_id, title, content_text, content_html, document_type, status,
+           source_provider, source_external_id, source_role, source_url, source_synced_by, source_synced_at, is_read_only
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, 'requirement_note', 'published', $7, $8, 'mirror', $9, $10, now(), true)
+         ON CONFLICT (project_id, source_provider, source_external_id, source_role) WHERE source_provider IS NOT NULL AND is_deleted = false
+         DO UPDATE SET
+           title = EXCLUDED.title,
+           content_text = EXCLUDED.content_text,
+           content_html = EXCLUDED.content_html,
+           source_url = EXCLUDED.source_url,
+           source_synced_by = EXCLUDED.source_synced_by,
+           source_synced_at = now(),
+           is_read_only = true,
+           -- Re-parents documents mirrored into "Requirements" before V72 into the provider folder.
+           folder_id = EXCLUDED.folder_id,
+           updated_at = now()
+         RETURNING id, (xmax = 0) AS inserted`,
+        [organizationId, projectId, destinationFolderId, mirror.title, mirror.markdown, mirror.html, provider, ticket.issueId, ticket.url, triggeredBy]
+      );
+    });
     // Human input on a synced ticket goes to the document's comment thread
     // (knowledge_document_comments, V73), not to a sibling document — comments live on the
     // document being discussed and survive the body being rewritten here.

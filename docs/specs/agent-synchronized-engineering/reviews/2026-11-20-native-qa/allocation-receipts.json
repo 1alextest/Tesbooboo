@@ -1,0 +1,40 @@
+{
+  "scope": "Frozen architecture/source allocation receipts; not runtime acceptance",
+  "baselineCommit": "1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea",
+  "canonicalReference": "published eight-file v1.4.34; NOT FROZEN",
+  "files": [
+    {
+      "path": "author-allocation-20261120.md",
+      "sha256": "73c8cc188d042c846784d5f99d87943a9909103c2d04ae62ce2e20d979479643"
+    },
+    {
+      "path": "blue-independent.md",
+      "sha256": "c22c05756a4cdcb4994fd1e047b60612137e45cdd89320ae936c194cdac60804"
+    },
+    {
+      "path": "blue-allocation-delta.md",
+      "sha256": "f38e1e61de55c9c93de20ad1f45d6c5f7dca5249dc604021b7c194d98f81de05"
+    },
+    {
+      "path": "red-independent.md",
+      "sha256": "4e29051834b93c35309ae1139bd414060f788cc297cc9682a0d9ca55022526b4"
+    },
+    {
+      "path": "red-allocation-delta.md",
+      "sha256": "0ee4634ed38b8189b3c11bbc62f29b1755524357d743eb1166b86e0304b2abae"
+    },
+    {
+      "path": "white-allocation-decision.md",
+      "sha256": "d9471685b6853d086e12c0e4a3e22c974e64eb44e9cebfa63bb4f5c00164df11"
+    },
+    {
+      "path": "allocation-source-freshness.json",
+      "sha256": "5ffab7bd5437d480a9b18251da971b81cb2e13a5b5167e79ce117d6835f775c0"
+    },
+    {
+      "path": "freshness-Tesbo-Frontend_lib_api.ts.patch.json",
+      "sha256": "27e5e9501908ce109849cdf0fabd80e8d158bbd6ac14b3000066c80ad34c53fa",
+      "originalPatchSha256": "5e724f185af1570e5baace9aa2f3abe15e5f7ddfa8efa3632c5a54628eceefb3"
+    }
+  ]
+}

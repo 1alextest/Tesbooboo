@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { ApiTokenService } from "./api-token.service";
+import { ApiTokenService, canRevokeApiToken } from "./api-token.service";
 import { DatabaseService } from "../database/database.service";
 
 function makeDb(rows: Record<string, unknown>[] = [], rowCount?: number) {
@@ -50,13 +50,44 @@ describe("ApiTokenService", () => {
       expect(result.scopes).toEqual(["read", "write"]);
     });
 
-    it("defaults to read+write when no valid scopes supplied", async () => {
-      const { db, query } = makeDb([
-        { id: "t", name: "n", scopes: "read,write", token_hash: "a".repeat(64), last_used_at: null, created_at: "now" }
-      ]);
-      const svc = new ApiTokenService(db);
-      await svc.issueToken("u", "p", "n", "bogus,delete");
-      expect(query.mock.calls[0][1][4]).toBe("read,write");
+    it("defaults omitted scopes to read only", async () => {
+      const { db, query } = makeDb([{ id: "t", name: "n", scopes: "read", token_hash: "a".repeat(64), last_used_at: null, created_at: "now" }]);
+      await new ApiTokenService(db).issueToken("u", "p", "n");
+      expect(query.mock.calls[0][1][4]).toBe("read");
+    });
+
+    it.each([[], "", "bogus,delete", "read,admin", ["read", "superuser"], [10], {}, "read,"])(
+      "rejects invalid scope selection %p before writing",
+      async (scopesInput) => {
+        const { db, query } = makeDb();
+        await expect(new ApiTokenService(db).issueToken("u", "p", "n", scopesInput)).rejects.toMatchObject({ status: 400 });
+        expect(query).not.toHaveBeenCalled();
+      }
+    );
+
+    it("deduplicates normalized valid scopes", async () => {
+      const { db, query } = makeDb([{ id: "t", name: "n", scopes: "write,read", token_hash: "b".repeat(64), last_used_at: null, created_at: "now" }]);
+      await new ApiTokenService(db).issueToken("u", "p", "n", [" Write ", "READ", "read"]);
+      expect(query.mock.calls[0][1][4]).toBe("write,read");
+    });
+  });
+
+  describe("caller-specific token management", () => {
+    const own = { id: "own", name: "same label", scopes: "read", token_hash: "a".repeat(64), last_used_at: null, created_at: "now", user_id: "qa" };
+    const other = { ...own, id: "other", user_id: "manager" };
+    const unknown = { ...own, id: "legacy", user_id: null };
+    it.each([false, true])("projects the same revoke policy without exposing the issuer or hash (manager=%s)", async (canManage) => {
+      const caller = { userId: "qa", canManage };
+      const { db, query } = makeDb([own, other, unknown]);
+      const list = await new ApiTokenService(db).listTokens("p", caller);
+      expect(query.mock.calls[0][1]).toEqual(["p"]);
+      expect(list.map(t => [t.id, t.canRevoke])).toEqual([["own", true], ["other", canManage], ["legacy", canManage]]);
+      for (const [index, row] of [own, other, unknown].entries()) {
+        expect(list[index].canRevoke).toBe(canRevokeApiToken(caller, row.user_id));
+        expect(list[index]).not.toHaveProperty("user_id");
+        expect(list[index]).not.toHaveProperty("token_hash");
+        expect(list[index]).not.toHaveProperty("token");
+      }
     });
   });
 

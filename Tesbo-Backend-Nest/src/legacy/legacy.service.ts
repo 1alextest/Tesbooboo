@@ -1,4 +1,7 @@
-import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
+import { buildAiProviderHeaders, describeAiProviderFailure, isAiProviderTimeout, readAiProviderJson as readProviderJson, withAiProviderIo } from "../common/public-ai-provider-failure";
+import { BadRequestException, ConflictException, ForbiddenException, forwardRef, HttpException, Inject, Injectable, Logger, NotFoundException, NotImplementedException, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { assertApprovedNewRunCases } from "./approved-run-cases.policy";
+import { retestCreateInput, retestDigest, retestExecutionIds, retestRequestKey } from "./native-retest";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -9,8 +12,11 @@ import { EmailService } from "../auth/email.service";
 import { PasswordService } from "../auth/password.service";
 import { AppConfigService } from "../config/app-config.service";
 import { DatabaseService } from "../database/database.service";
-import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { endZyraTurn, recordExistingCoverage, recordGeneration, recordJiraContext, recordKnowledgeContext, recordReconciliation, recordStandaloneGeneration, recordStandaloneTool, startZyraTurn, type TurnHandle } from "../observability/ai-trace";
+import { parseProviderUsage, type ProviderUsage } from "../observability/provider-usage";
+import { storageKeyExtension } from "../storage/storage-key";
 import { StorageService } from "../storage/storage.service";
+import { isDeepStrictEqual } from "node:util";
 import { encryptSecret, decryptSecret } from "../common/crypto.util";
 import { externallyReachableBaseUrl } from "../common/external-url.util";
 import { escapeHtml, jiraDescriptionToText } from "../common/integration-text.util";
@@ -19,6 +25,13 @@ import { validatePersonName } from "../common/person-name.util";
 import { canonicalizeImportValue, EXPORT_LOCALES, ExportLocale } from "../common/export-i18n";
 import { detectScriptLanguage } from "../common/script-language";
 import { writeNotifications } from "./notification-writer";
+import { assertNotGenericApproval, expectedApprovalRevision, expectedTestcaseRevision, TESTCASE_APPROVAL_CURRENT_SQL, TESTCASE_APPROVAL_REVISION_SQL, TESTCASE_EDIT_REVISION_SQL } from "./testcase-edit-revision";
+import { requireHumanReviewPrincipal, type ReviewPrincipal } from "../common/human-review-principal";
+import { readMcpAccess } from "../mcp/mcp-access";
+import { expectedProposalRevision, MAX_TESTCASE_PROPOSAL_OPERATIONS, proposalDigest, selectedProposalIndexes, TESTCASE_PROPOSAL_FIELDS, nativeProposalProducerIdentity, type TestcaseProposalPrincipal } from "./testcase-proposal-review";
+import { expectedKnowledgeDocumentRevision, knowledgeDocumentAiContextSql, knowledgeDocumentContentDigest, KNOWLEDGE_DOCUMENT_REVISION_SQL } from "./knowledge-document-revision";
+import { governedMetadataSnapshot, isGovernedDocumentType, normalizeGovernedMetadata } from "./governed-document-metadata";
+import { classifySkillResolution, findSkillAssignmentConflicts, requirementBundleTargets, resolveEffectiveSkills, REQUIREMENT_SKILL_TARGETS, reviewedSkillTarget, type SkillResolution } from "../skills/skills-governance";
 import { isCoverageAnalysisRequest, notificationLinks, notificationMessages, runLabel, type NotificationLink, type NotificationType } from "./notification-events";
 import { runInZyraLanguage, zyraReplyLanguage } from "./zyra-language-context";
 import { localizeZyraTaskEntry } from "./zyra-task-activity-ru";
@@ -30,9 +43,10 @@ import {
   ZYRA_RU_COMPLETION_CLAIM,
   ZYRA_RU_OFFER,
   ZYRA_RU_RESUME,
-  ZYRA_RU_STAGED_AWAITING
+  ZYRA_RU_STAGED_AWAITING,
+  ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM
 } from "./zyra-replies-ru";
-import { ApiTokenService } from "../auth/api-token.service";
+import { ApiTokenService, canRevokeApiToken, normalizeApiTokenScopes } from "../auth/api-token.service";
 import { RagIngestionService } from "../rag/rag-ingestion.service";
 import { RagRetrievalService } from "../rag/rag-retrieval.service";
 import { RAG_GENERATION_CHAR_BUDGET, TESTCASE_UPDATE_THRESHOLD } from "../rag/rag.constants";
@@ -44,8 +58,7 @@ import {
   markdownToNotionRichText,
   notionPageTitle,
   notionPropertiesMarkdown,
-  notionTicketFields,
-  renderNotionProperties
+  notionTicketFields
 } from "../integration-sync/notion-render";
 import { PlanLimitsService } from "../plan-limits/plan-limits.service";
 import { RequestCacheService } from "../request-cache/request-cache.service";
@@ -62,11 +75,33 @@ import { runWithZyraDraftSink, runWithoutZyraDraftSink, runWithZyraLiveBatch, zy
 import { Subject } from "rxjs";
 
 type Body = Record<string, any>;
+type SkillAssignmentBatchTarget = {
+  module: string; subtype: string; operation: string; expectedAssignmentId: string | null; precedence: number;
+};
+const SKILL_MODULES = new Set(["requirements", "test_cases", "user_manuals", "policies", "tasks_issues", "files_evidence", "skills"]);
+const MANAGED_DOCUMENT_OP_TYPE = "managed_document_revision";
+export type PlanRunWriteTarget = "plan" | "planItem" | "cycle" | "execution" | "historyImport" | "sharing" | "retest" | "retestRecovery";
 
 /** Everything processZyraSaveEntriesSequential/Batched need that isn't `selected` or `client` itself. */
 type TicketProvider = "jira" | "linear" | "notion";
 
 const TICKET_PROVIDER_LABELS: Record<TicketProvider, string> = { jira: "Jira", linear: "Linear", notion: "Notion" };
+
+/*
+ * Work Package A Slice 1: a requirement-revision candidate, a case candidate and a link intent are
+ * three typed entries of the SAME `generated_payload` array the existing review snapshot and
+ * proposal revision already cover. There is no parallel staged table, so no second representation
+ * can disagree with what the human reviewed.
+ */
+const REQUIREMENT_BUNDLE_OPERATION_KINDS = new Set(["requirement_revision", "testcase_create", "requirement_case_link"]);
+const REQUIREMENT_CRITERION_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
+const REQUIREMENT_MAX_CRITERIA = 50;
+/** Legacy bundles staged before the resolver carry no basis and remain publication-blocked. */
+const REQUIREMENT_SKILL_CONTEXT = Object.freeze({
+  status: "unassigned" as const,
+  authority: "governed-effective-skills",
+  reason: "This bundle was staged before effective skills were resolved; stage a refreshed proposal"
+});
 
 // See getIntegrationConnection: the access token the caller just had refused (401), to force one renewal.
 interface IntegrationConnectionLoadOptions {
@@ -260,6 +295,50 @@ const ZYRA_TECHNIQUES = [
 ] as const;
 type ZyraTechnique = typeof ZYRA_TECHNIQUES[number];
 
+/** The authoring techniques a canonical test case can be classified with — the same vocabulary. */
+export const TESTCASE_TECHNIQUES = ZYRA_TECHNIQUES;
+
+/**
+ * Cross-cutting review lenses a case can belong to. These are filters, not a hierarchy and not an
+ * execution result: a link or view never proves the case ran or passed.
+ */
+export const TESTCASE_REVIEW_VIEWS = [
+  "positive",
+  "negative",
+  "end_to_end",
+  "state",
+  "upstream_downstream",
+  "ux_ui_functionality"
+] as const;
+export type TestcaseReviewView = typeof TESTCASE_REVIEW_VIEWS[number];
+
+/** A technique is optional; null/"" clears it. Unknown values fail instead of silently widening. */
+function normalizeTestcaseTechnique(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  const value = String(raw).trim().toLowerCase();
+  if (!value) return null;
+  if (!(TESTCASE_TECHNIQUES as readonly string[]).includes(value)) {
+    throw new BadRequestException({ error: `technique must be one of ${TESTCASE_TECHNIQUES.join(", ")}` });
+  }
+  return value;
+}
+
+/** An absent array means "not provided"; null is invalid; [] is the explicit clear. */
+function normalizeTestcaseReviewViews(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new BadRequestException({ error: "reviewViews must be an array of view names" });
+  }
+  const views = [...new Set(raw.map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean))];
+  const unknown = views.filter((value) => !(TESTCASE_REVIEW_VIEWS as readonly string[]).includes(value));
+  if (unknown.length) {
+    throw new BadRequestException({
+      error: `reviewViews must be one of ${TESTCASE_REVIEW_VIEWS.join(", ")}; unknown: ${unknown.join(", ")}`
+    });
+  }
+  return views;
+}
+
 /** Frontend treats this path as "no custom logo" and renders the theme-aware lockup. */
 const DEFAULT_BRAND_LOGO_URL = "/brand/tesbo-logo-horizontal.svg";
 
@@ -316,6 +395,8 @@ type ZyraAiUsage = {
   total: number;
   cached: number;
 };
+
+type ZyraProviderAttempt = { model?: string };
 
 type ZyraAiResult = {
   drafts: Body[];
@@ -470,14 +551,16 @@ type ZyraResumeCheckpoint = {
 type ZyraAppliedOperations = {
   testcases: Body[];
   activity: Body[];
+  /** Persisted operations, independent of the bounded preview-card list. */
+  proposedCount?: number;
   moveBreakdown?: Array<{ suiteId: string; suiteName: string; created: boolean; count: number }>;
   reviewRequestId: string | null;
   // Named move_to_suite targets (external id / internal id) that never resolved to a real row —
   // see applyZyraChatOperations' own comment. 0 when every move fully resolved, or when the turn
   // had no move_to_suite operations naming explicit ids at all.
   unresolvedMoveTargetCount?: number;
-  // Archives a confirming message applied immediately (see applyZyraChatOperations' archiveConfirmed),
-  // so reconcileZyraReply can state what actually happened instead of the model's "staged" wording.
+  // Kept for historical transcript reconciliation. New conversational archive operations remain
+  // proposals until an exact human Save, so new turns always report zero here.
   archivedNowCount?: number;
   // Drafts of a live-staged batch the user saved while it was still being generated: they are no
   // longer in the batch, but they were drafted this turn — counted so the reply doesn't call it partial.
@@ -1308,6 +1391,24 @@ function normalizeAnthropicMessagesUrl(baseUrl?: string | null): string {
   return `${trimmed}/v1/messages`;
 }
 
+/**
+ * Returns a provider URL only when it is absolute http(s) with no embedded credentials.
+ *
+ * A workspace may point a provider at a self-hosted gateway, so the host cannot be allow-listed
+ * without breaking a supported setup. What can be refused is everything that is not an HTTP call at
+ * all: another scheme, or a URL whose credentials would be silently attached to the request.
+ */
+function requireHttpProviderUrl(value: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Unsupported AI provider URL scheme: ${parsed.protocol}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("AI provider URL must not embed credentials");
+  }
+  return value;
+}
+
 function normalizeModelsListUrl(provider: string, baseUrl?: string | null): string {
   const resolved = resolveProviderBaseUrl(provider, baseUrl);
   if (providerWire(provider) === "azure") {
@@ -1373,8 +1474,9 @@ function isChatCapableModelId(provider: string, id: string): boolean {
 }
 
 @Injectable()
-export class LegacyService implements OnModuleInit {
+export class LegacyService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(LegacyService.name);
+  private kbTranscriptionSweepTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly db: DatabaseService,
@@ -1490,7 +1592,7 @@ export class LegacyService implements OnModuleInit {
   /** A batch's staged drafts, as the review panel and a chat message show them. */
   private async zyraReviewRows(reviewRequestId: string): Promise<{ rows: Body[]; savedCount: number }> {
     const res = await this.db.query<{ generated_payload: unknown; saved_count: number | null }>(
-      "SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1",
+      "SELECT generated_payload, saved_count FROM ai_generation_requests WHERE id = $1 AND task_kind = 'legacy_generation_review'",
       [reviewRequestId]
     );
     const payload = normalizeJsonArray(res.rows[0]?.generated_payload);
@@ -1505,9 +1607,10 @@ export class LegacyService implements OnModuleInit {
    */
   private async appendZyraReviewProposals(projectId: string, sessionId: string, reviewRequestId: string, proposals: Body[]): Promise<{ closed: boolean; base: number }> {
     const result = await this.db.transaction(async (client) => {
-      const res = await client.query("SELECT task_status, generated_payload, activity_log FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [reviewRequestId, projectId]);
+      const res = await client.query("SELECT task_status, generated_payload, activity_log, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [reviewRequestId, projectId]);
       const row = res.rows[0];
       if (!row) return { closed: true, base: 0, reopened: false };
+      this.assertOrdinaryProposalMutation(row);
       const log = normalizeJsonArray(row.activity_log) as Body[];
       if (row.task_status === "done" && log[log.length - 1]?.title === "Closed task") return { closed: true, base: 0, reopened: false };
       const existing = normalizeJsonArray(row.generated_payload);
@@ -1516,9 +1619,9 @@ export class LegacyService implements OnModuleInit {
         const merged = [...existing, ...proposals];
         await client.query(
           `UPDATE ai_generation_requests
-           SET generated_payload = $3::jsonb, generated_count = $4, requested_count = GREATEST(requested_count, $4),
+           SET generated_payload = $3::jsonb, generated_count = GREATEST(generated_count,saved_count+$4), requested_count = GREATEST(requested_count,saved_count+$4),
                task_status = 'in_review', updated_at = now()
-           WHERE id = $1 AND project_id = $2`,
+           WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))`,
           [reviewRequestId, projectId, JSON.stringify(merged), merged.length]
         );
       }
@@ -1615,24 +1718,272 @@ export class LegacyService implements OnModuleInit {
   // same project-membership check used across the rest of the API.
 
   async listApiKeys(userId: string | null | undefined, projectId: string) {
-    await this.requireProjectAccess(userId, projectId);
-    return this.apiTokens.listTokens(projectId);
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    return this.apiTokens.listTokens(projectId, { userId: uid, canManage: role === "owner" || role === "manager" });
   }
 
   async createApiKey(userId: string | null | undefined, projectId: string, body: Body) {
     const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
+    const project = await this.requireProjectAccess(uid, projectId);
     const name = String(body?.name || "").trim();
     if (!name) throw new BadRequestException({ error: "name is required" });
-    return this.apiTokens.issueToken(uid, projectId, name, body?.scopes);
+    const scopes = normalizeApiTokenScopes(body?.scopes);
+    // A write token is a project-wide machine credential, not a per-resource grant. The UI's
+    // authoring role and this token's scope are different decisions: a member who can edit their
+    // own cases must not mint a credential that can write every project resource. Read-only tokens
+    // remain available to any project member.
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    if (scopes.includes("write") && role !== "owner" && role !== "manager") {
+      throw new ForbiddenException({
+        error: "Only project owners and managers can issue write-scoped API tokens. Ask an owner, or create a read-only token."
+      });
+    }
+    const issued = await this.apiTokens.issueToken(uid, projectId, name, scopes);
+    // Make the target explicit for the handoff: the caller must not have to guess which project,
+    // workspace or MCP path the one-time secret belongs to.
+    return {
+      ...issued,
+      canRevoke: true,
+      projectId,
+      projectName: String(project.name || ""),
+      organizationId: String(project.organization_id || ""),
+      mcpPath: `/api/projects/${projectId}/mcp`
+    };
   }
 
   async revokeApiKey(userId: string | null | undefined, projectId: string, keyId: string) {
-    await this.requireProjectAccess(userId, projectId);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
     if (!isUuid(keyId)) throw new NotFoundException({ error: "API key not found" });
-    const removed = await this.apiTokens.revokeToken(projectId, keyId);
-    if (!removed) throw new NotFoundException({ error: "API key not found" });
+    return this.db.transaction(async (client) => {
+      // Lock current project/workspace authority before the credential, as on native proposal
+      // writes. A cached preflight cannot authorize a delete after a concurrent role change.
+      const project = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const token = await this.apiTokens.issuerOf(projectId, keyId, client);
+      if (!token.exists) throw new NotFoundException({ error: "API key not found" });
+      const role = this.normalizeRole(String(project.caller_role || ""));
+      if (!canRevokeApiToken({ userId: uid, canManage: role === "owner" || role === "manager" }, token.userId)) {
+        throw new ForbiddenException({ error: "Only project owners, managers or the token's issuer can revoke this token" });
+      }
+      const removed = await this.apiTokens.revokeToken(projectId, keyId, client);
+      if (!removed) throw new NotFoundException({ error: "API key not found" });
+      return { ok: true };
+    });
+  }
+
+  // --- Saved repository views ----------------------------------------------
+  // A view stores the repository's existing filter query, not a copy of any case, so applying one
+  // cannot diverge from the rows it names. A link or view is never execution or coverage evidence.
+  private static readonly SAVED_VIEW_FILTER_KEYS = new Set([
+    "search", "suiteId", "includeDescendants", "status", "priority", "type", "automationStatus",
+    "technique", "view", "jiraIssueKey", "linearIssueKey", "notionPageId", "customTagIds", "sortBy", "sortDir"
+  ]);
+
+  private static normalizeSavedViewFilters(raw: unknown): Body {
+    if (raw === undefined || raw === null) return {};
+    if (typeof raw !== "object" || Array.isArray(raw)) {
+      throw new BadRequestException({ error: "filters must be an object" });
+    }
+    const filters: Body = {};
+    for (const [key, value] of Object.entries(raw as Body)) {
+      if (!LegacyService.SAVED_VIEW_FILTER_KEYS.has(key)) {
+        throw new BadRequestException({ error: `filters.${key} is not a supported repository filter` });
+      }
+      if (value === undefined || value === null) continue;
+      if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+        filters[key] = value;
+        continue;
+      }
+      if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+        filters[key] = value;
+        continue;
+      }
+      throw new BadRequestException({ error: `filters.${key} must be a string, number, boolean or string array` });
+    }
+    if (JSON.stringify(filters).length > 8192) {
+      throw new BadRequestException({ error: "filters are too large" });
+    }
+    return filters;
+  }
+
+  private static savedViewName(raw: unknown, fallback?: string): string {
+    if (raw === undefined && fallback !== undefined) return fallback;
+    const name = String(raw ?? "").trim();
+    if (!name) throw new BadRequestException({ error: "name is required" });
+    if (name.length > 80) throw new BadRequestException({ error: "name must be 80 characters or fewer" });
+    return name;
+  }
+
+  async listSavedViews(userId: string | null | undefined, projectId: string) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const res = await this.db.query(
+      `SELECT * FROM saved_testcase_views
+       WHERE project_id = $1 AND (is_shared = true OR created_by = $2)
+       ORDER BY lower(name), id`,
+      [projectId, uid]
+    );
+    return res.rows.map(toCamel);
+  }
+
+  async createSavedView(userId: string | null | undefined, projectId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const name = LegacyService.savedViewName(body?.name);
+    const filters = LegacyService.normalizeSavedViewFilters(body?.filters);
+    const res = await this.db.query(
+      `INSERT INTO saved_testcase_views (project_id, created_by, name, filters, is_shared)
+       VALUES ($1,$2,$3,$4::jsonb,$5) RETURNING *`,
+      [projectId, uid, name, JSON.stringify(filters), body?.isShared === true]
+    );
+    return toCamel(res.rows[0]);
+  }
+
+  private async savedViewForWrite(uid: string, projectId: string, viewId: string) {
+    if (!isUuid(viewId)) throw new NotFoundException({ error: "Saved view not found" });
+    const res = await this.db.query("SELECT * FROM saved_testcase_views WHERE id = $1 AND project_id = $2", [viewId, projectId]);
+    const row = res.rows[0];
+    if (!row) throw new NotFoundException({ error: "Saved view not found" });
+    const project = await this.requireProjectAccess(uid, projectId);
+    const role = this.normalizeRole(String(project.caller_role || ""));
+    if (row.created_by !== uid && role !== "owner" && role !== "manager") {
+      throw new ForbiddenException({ error: "Only the view's creator, a project owner or a manager can change this view" });
+    }
+    return row;
+  }
+
+  async updateSavedView(userId: string | null | undefined, projectId: string, viewId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const current = await this.savedViewForWrite(uid, projectId, viewId);
+    const name = LegacyService.savedViewName(body?.name, current.name);
+    const filters = body?.filters === undefined ? current.filters : LegacyService.normalizeSavedViewFilters(body.filters);
+    const isShared = body?.isShared === undefined ? current.is_shared : body.isShared === true;
+    const res = await this.db.query(
+      `UPDATE saved_testcase_views SET name = $3, filters = $4::jsonb, is_shared = $5, updated_at = now()
+       WHERE id = $1 AND project_id = $2 RETURNING *`,
+      [viewId, projectId, name, JSON.stringify(filters), isShared]
+    );
+    return toCamel(res.rows[0]);
+  }
+
+  async deleteSavedView(userId: string | null | undefined, projectId: string, viewId: string) {
+    const uid = this.requireUser(userId);
+    await this.savedViewForWrite(uid, projectId, viewId);
+    await this.db.query("DELETE FROM saved_testcase_views WHERE id = $1 AND project_id = $2", [viewId, projectId]);
     return { ok: true };
+  }
+
+  // --- Exact-revision test-case approval ------------------------------------
+  // The receipt records the revision the reviewer actually saw. The status transition rechecks
+  // the same CAS hash inside its transaction, so content changed between review and approval is a
+  // 409 that writes nothing — not a silent approval of the newer payload.
+  async approveTestCaseForUser(userId: string | null | undefined, projectId: string, testcaseId: string, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
+    const revision = expectedTestcaseRevision(body?.expectedRevision);
+    if (!revision) throw new BadRequestException({ error: "expectedRevision is required to approve a test case" });
+    const semanticRevision = expectedApprovalRevision(body?.expectedApprovalRevision);
+    const result = await this.db.transaction(async (client) => {
+      // Recheck and lock the actual membership/project before the case. Revocation or
+      // archiving that wins first prevents approval; neither a cached access row nor a
+      // token's issuer identity is authority to commit a new decision.
+      const access = await client.query(
+        `SELECT p.id FROM projects p JOIN project_members pm ON pm.project_id=p.id
+         WHERE p.id=$1 AND pm.user_id=$2 AND p.archived_at IS NULL FOR SHARE OF p,pm`,
+        [projectId, uid]
+      );
+      if (!access.rows[0]) throw new ForbiddenException({ error: "Current project membership is required to approve" });
+      const locked = await client.query(
+        "SELECT id FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE",
+        [testcaseId, projectId]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+      // A fresh statement after acquiring the row lock observes a dependency writer that
+      // committed while we waited. V155 serializes every native dependency writer here.
+      const reviewed = await client.query(
+        `SELECT testcases.*, testcase_approval_snapshot(id) AS snapshot, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
+                ${TESTCASE_APPROVAL_REVISION_SQL} AS semantic_revision
+           FROM testcases WHERE id=$1`, [testcaseId]
+      );
+      if (reviewed.rows[0]?.status === "Approved" && reviewed.rows[0]?.semantic_revision === semanticRevision) {
+        const prior = await client.query(
+          `SELECT * FROM testcase_approval_receipts WHERE testcase_id=$1 AND project_id=$2
+             AND actor_id=$3 AND approved_revision=$4 AND semantic_revision=$5
+             AND principal_kind='human_session' AND reviewed_snapshot IS NOT NULL`,
+          [testcaseId, projectId, uid, revision, semanticRevision]
+        );
+        if (prior.rows[0]) {
+          const testcase = { ...reviewed.rows[0] };
+          delete testcase.snapshot;
+          delete testcase.edit_revision;
+          delete testcase.semantic_revision;
+          return { testcase, receipt: prior.rows[0] }; // Exact duplicate reads its original decision.
+        }
+      }
+      if (reviewed.rows[0]?.edit_revision !== revision || reviewed.rows[0]?.semantic_revision !== semanticRevision) {
+        throw new ConflictException({
+          code: "TESTCASE_APPROVAL_CONFLICT",
+          error: "The test case or its dependencies changed since review; reload before approving"
+        });
+      }
+      const updated = await client.query(
+        `UPDATE testcases SET status = 'Approved', updated_by = $2, updated_at = now()
+         WHERE id = $1 AND project_id = $4 AND deleted_at IS NULL
+           AND ${TESTCASE_EDIT_REVISION_SQL} = $3
+         RETURNING *`,
+        [testcaseId, uid, revision, projectId]
+      );
+      if (!updated.rows[0]) {
+        const exists = await client.query(
+          "SELECT id FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL",
+          [testcaseId, projectId]
+        );
+        if (!exists.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+        throw new ConflictException({
+          code: "TESTCASE_APPROVAL_CONFLICT",
+          error: "The test case changed since this revision was reviewed; reload before approving"
+        });
+      }
+      const receipt = await client.query(
+        `INSERT INTO testcase_approval_receipts
+           (project_id, testcase_id, approved_revision, actor_id, semantic_revision, reviewed_snapshot, principal_kind)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,'human_session')
+         ON CONFLICT (testcase_id, approved_revision) DO NOTHING
+         RETURNING *`,
+        [projectId, testcaseId, revision, uid, semanticRevision, JSON.stringify(reviewed.rows[0].snapshot)]
+      );
+      const persistedReceipt = receipt.rows[0] ?? (await client.query(
+        `SELECT * FROM testcase_approval_receipts WHERE testcase_id=$1 AND approved_revision=$2
+           AND semantic_revision=$3 AND principal_kind='human_session' AND reviewed_snapshot IS NOT NULL`,
+        [testcaseId, revision, semanticRevision]
+      )).rows[0];
+      if (!persistedReceipt) throw new ConflictException({ error: "The exact approval receipt could not be recorded" });
+      // Mandatory audit participates in the same native transaction as status and receipt.
+      if (receipt.rows[0]) await this.logProjectActivity(projectId, uid, "testcase_approved", "testcase", testcaseId,
+          `${updated.rows[0].external_id} - ${updated.rows[0].title}`,
+          { approvedRevision: revision, semanticRevision, principalKind: "human_session" }, client);
+      return { testcase: updated.rows[0], receipt: persistedReceipt };
+    });
+    await this.testcasesListCache.invalidate(projectId);
+    this.enqueueTestcaseEmbedding(projectId, testcaseId, "updated");
+    return { testcase: toCamel(result.testcase), receipt: toCamel(result.receipt) };
+  }
+
+  async listTestCaseApprovalsForUser(userId: string | null | undefined, projectId: string, testcaseId: string) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
+    const exists = await this.db.query("SELECT id FROM testcases WHERE id = $1 AND project_id = $2", [testcaseId, projectId]);
+    if (!exists.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+    const res = await this.db.query(
+      "SELECT * FROM testcase_approval_receipts WHERE testcase_id = $1 AND project_id = $2 ORDER BY created_at DESC",
+      [testcaseId, projectId]
+    );
+    return res.rows.map(toCamel);
   }
 
   private enqueueEmbedding(organizationId: string, projectId: string, sourceType: "document" | "file", sourceId: string, reason: "created" | "updated" | "transcribed"): void {
@@ -1694,7 +2045,8 @@ export class LegacyService implements OnModuleInit {
           const claim = await this.db.query<{ id: string }>(
             `INSERT INTO integration_ticket_comments
                (project_id, generation_request_id, save_event_id, provider, issue_key, testcase_ids, status, comment_text, posted_by)
-             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
+             SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9
+             WHERE EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=$2 AND r.project_id=$1 AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
              ON CONFLICT (generation_request_id, save_event_id, provider, issue_key) DO NOTHING
              RETURNING id`,
             [
@@ -1943,6 +2295,16 @@ export class LegacyService implements OnModuleInit {
   ): Promise<void> {
     const label = TICKET_PROVIDER_LABELS[provider];
     try {
+      // A queued delivery must still belong to an admitted testcase-review
+      // task. A claim identifier alone is not permission to post externally.
+      const admitted = await this.db.query(
+        `SELECT 1 FROM integration_ticket_comments c
+          JOIN ai_generation_requests r ON r.id=c.generation_request_id AND r.project_id=c.project_id
+          WHERE c.id=$1 AND c.project_id=$2 AND c.generation_request_id=$3
+            AND c.provider=$4 AND c.issue_key=$5 AND c.status='pending' AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal'))`,
+        [claimId, projectId, taskId, provider, issueKey]
+      );
+      if (!admitted.rows[0]) return;
       const remoteId = provider === "jira"
         ? await this.jiraPostComment(projectId, issueKey, content.adf)
         : provider === "notion"
@@ -1985,6 +2347,7 @@ export class LegacyService implements OnModuleInit {
     const res = await this.db.query(
       `SELECT id, provider, issue_key, status, reason, testcase_ids, posted_at, created_at, updated_at
        FROM integration_ticket_comments WHERE project_id = $1 AND generation_request_id = $2
+         AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
        ORDER BY created_at ASC`,
       [projectId, taskId]
     );
@@ -2005,13 +2368,14 @@ export class LegacyService implements OnModuleInit {
     const claimed = await this.db.query(
       `UPDATE integration_ticket_comments SET status = 'pending', reason = NULL, posted_by = $4, updated_at = now()
        WHERE id = $1 AND project_id = $2 AND generation_request_id = $3 AND status = 'failed'
+         AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))
        RETURNING *`,
       [commentId, projectId, taskId, uid]
     );
     const row = claimed.rows[0];
     if (!row) {
       const existing = await this.db.query(
-        "SELECT status FROM integration_ticket_comments WHERE id = $1 AND project_id = $2 AND generation_request_id = $3",
+        "SELECT status FROM integration_ticket_comments WHERE id = $1 AND project_id = $2 AND generation_request_id = $3 AND EXISTS (SELECT 1 FROM ai_generation_requests r WHERE r.id=integration_ticket_comments.generation_request_id AND r.project_id=integration_ticket_comments.project_id AND (r.task_kind = 'legacy_generation_review' OR (r.task_kind = 'governed_proposal' AND r.provider = 'external_proposal')))",
         [commentId, projectId, taskId]
       );
       if (!existing.rows[0]) throw new NotFoundException({ error: "Ticket comment not found" });
@@ -2095,7 +2459,7 @@ export class LegacyService implements OnModuleInit {
   private async appendZyraTaskActivity(projectId: string, taskId: string, title: string, detail: string): Promise<void> {
     const entry = [{ actor: "system", stage: "info", title, detail, createdAt: new Date().toISOString() }];
     await this.db.query(
-      "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb WHERE id = $1 AND project_id = $2",
+      "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
       [taskId, projectId, JSON.stringify(entry)]
     ).catch(() => undefined);
   }
@@ -2189,6 +2553,59 @@ export class LegacyService implements OnModuleInit {
     this.resumeInterruptedZyraChatPlans().catch((err) => {
       this.logger.warn(`Failed to resume Zyra chat plans on startup: ${err instanceof Error ? err.message : err}`);
     });
+    this.startKnowledgeTranscriptionRecovery();
+  }
+
+  onModuleDestroy(): void {
+    if (this.kbTranscriptionSweepTimer) {
+      clearInterval(this.kbTranscriptionSweepTimer);
+      this.kbTranscriptionSweepTimer = null;
+    }
+  }
+
+  /**
+   * Background recovery is a separate concern from request-triggered upload transcription: an upload
+   * always dispatches its own transcription, while this method only decides whether the restart sweep
+   * runs and over which project. Unset mode preserves the historical automatic global sweep.
+   */
+  private startKnowledgeTranscriptionRecovery(): void {
+    if (this.kbTranscriptionSweepTimer) return;
+    if (this.config.kbTranscriptionRecoveryModeInvalid) {
+      this.logger.warn("KB transcription recovery mode is not off, project or global; background recovery is disabled");
+      return;
+    }
+    const mode = this.config.kbTranscriptionRecoveryMode;
+    if (mode === "off") return;
+    if (mode !== "project" && mode !== "global") {
+      this.logger.warn("KB transcription recovery mode is unavailable; background recovery is disabled");
+      return;
+    }
+    let projectId: string | undefined;
+    if (mode === "project") {
+      const configured = this.config.kbTranscriptionRecoveryProjectId;
+      if (!isUuid(configured)) {
+        // Fail closed: a missing/invalid project must not widen into the global sweep.
+        this.logger.warn(
+          "KB transcription recovery is configured as project-scoped but TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID is not a UUID; background recovery is disabled"
+        );
+        return;
+      }
+      projectId = configured ?? undefined;
+    } else if (this.config.kbTranscriptionRecoveryProjectId) {
+      // A project id without project mode is almost certainly a mistaken attempt to narrow scope.
+      this.logger.warn("TESBO_KB_TRANSCRIPTION_RECOVERY_PROJECT_ID is ignored because recovery mode is global");
+    }
+    const run = () => {
+      void this.resumeInterruptedKnowledgeTranscriptions(projectId).catch((err) => {
+        this.logger.warn(`Failed to resume knowledge transcripts: ${err instanceof Error ? err.message : err}`);
+      });
+    };
+    run();
+    // A claim abandoned after boot (worker death, deploy) has no boot event to notice it. Re-running
+    // the same claim-guarded sweep periodically makes the lease meaningful without a second restart.
+    this.kbTranscriptionSweepTimer = setInterval(run, 5 * 60 * 1000);
+    this.kbTranscriptionSweepTimer.unref?.();
+    this.logger.log(`KB transcription recovery enabled every 5 minutes (${mode === "project" ? "project" : "global"} scope)`);
   }
 
   // A backend restart kills any in-flight continueZyraChatPlan loop instantly — it's an
@@ -2233,12 +2650,30 @@ export class LegacyService implements OnModuleInit {
     return uid;
   }
 
-  async logProjectActivity(projectId: string, actorId: string | null, action: string, entityType: string, entityId: string | null, entityName: string | null, diff: Body) {
-    await this.db.query(
-      `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff, organization_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb, (SELECT organization_id FROM projects WHERE id = $1))`,
-      [projectId, actorId, action, entityType, entityId, entityName, JSON.stringify(diff)]
-    ).catch(() => undefined);
+  /**
+   * Managing other platform admins is owner-only. requirePlatformAdmin is the read/administration
+   * baseline (any platform admin can view the surface); grant/revoke is narrower, matching the UI
+   * and the documented contract. Without this an ordinary admin could add credentials or remove the
+   * owner's access.
+   */
+  private async requirePlatformAdminOwner(userId?: string | null): Promise<string> {
+    const uid = this.requireUser(userId);
+    const result = await this.db.query<{ role: string }>("SELECT role FROM platform_admins WHERE user_id = $1 LIMIT 1", [uid]);
+    const role = result.rows[0]?.role;
+    if (!role) throw new ForbiddenException({ error: "Platform admin access required" });
+    if (role !== "owner") throw new ForbiddenException({ error: "Only a platform owner can manage platform admins" });
+    return uid;
+  }
+
+  async logProjectActivity(projectId: string, actorId: string | null, action: string, entityType: string, entityId: string | null, entityName: string | null, diff: Body, transactionClient?: PoolClient) {
+    const sql = `INSERT INTO audit_logs (project_id, actor_id, action, entity_type, entity_id, entity_name, diff, organization_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb, (SELECT organization_id FROM projects WHERE id = $1))`;
+    const values = [projectId, actorId, action, entityType, entityId, entityName, JSON.stringify(diff)];
+    const write = transactionClient ? transactionClient.query(sql, values) : this.db.query(sql, values);
+    // Governed publication supplies its native transaction client: mandatory audit failure
+    // rolls back publication. Unrelated historical best-effort callers keep their contract.
+    if (transactionClient) await write;
+    else await write.catch(() => undefined);
   }
 
   // Sibling to logProjectActivity for pure workspace-level events with no project
@@ -2300,11 +2735,18 @@ export class LegacyService implements OnModuleInit {
     return { key: null, reason: "No active workspace AI key is available for this project." };
   }
 
-  private buildAnthropicAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Record<string, string> {
-    const headers: Record<string, string> = {
+  /*
+   * Provider auth headers are built with `Headers`, not a plain object. `authHeaderName` comes from
+   * a workspace's provider configuration, and assigning an arbitrary string as an object key is a
+   * prototype-pollution shape (`__proto__`, `constructor`) as well as a way to smuggle a malformed
+   * header name past fetch. Headers.set validates the name and stores it as an entry, so the
+   * configured name can only ever be a header.
+   */
+  private buildAnthropicAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
+    const headers = new Headers({
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01"
-    };
+    });
     // Strip any accidental "Bearer " prefix that may have been stored with the key
     const cleanKey = String(apiKey || "").replace(/^bearer\s+/i, "").trim();
     // "Authorization" is the legacy DB default for known providers — treat it the same as null.
@@ -2312,23 +2754,27 @@ export class LegacyService implements OnModuleInit {
     const hasCustomHeader = authHeaderName && authHeaderName.toLowerCase() !== "authorization";
     if (hasCustomHeader) {
       const scheme = authScheme ? String(authScheme).trim() : "";
-      headers[String(authHeaderName)] = scheme ? `${scheme} ${cleanKey}` : cleanKey;
+      headers.set(String(authHeaderName), scheme ? `${scheme} ${cleanKey}` : cleanKey);
     } else {
-      headers["x-api-key"] = cleanKey;
+      headers.set("x-api-key", cleanKey);
     }
     return headers;
   }
 
   // Single place that knows how each wire authenticates. Custom providers keep their
   // explicit header/scheme overrides; catalog providers get their wire's convention.
-  private providerAuthHeaders(provider: string, apiKey: string, authHeaderName: string | null, authScheme: string | null): Record<string, string> {
-    const wire = providerWire(provider);
-    if (wire === "anthropic") return this.buildAnthropicAuthHeaders(apiKey, authHeaderName, authScheme);
-    if (wire === "azure") {
-      // Azure authenticates with a bare api-key header — not Bearer.
-      return { "Content-Type": "application/json", [authHeaderName || "api-key"]: apiKey };
-    }
-    return this.buildBearerAuthHeaders(apiKey, authHeaderName, authScheme);
+  private providerAuthHeaders(provider: string, apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
+    return buildAiProviderHeaders(() => {
+      const wire = providerWire(provider);
+      if (wire === "anthropic") return this.buildAnthropicAuthHeaders(apiKey, authHeaderName, authScheme);
+      if (wire === "azure") {
+        // Azure authenticates with a bare api-key header — not Bearer.
+        const headers = new Headers({ "Content-Type": "application/json" });
+        headers.set(authHeaderName || "api-key", apiKey);
+        return headers;
+      }
+      return this.buildBearerAuthHeaders(apiKey, authHeaderName, authScheme);
+    });
   }
 
   private isProviderAuthError(status: number, message?: string): boolean {
@@ -2336,21 +2782,37 @@ export class LegacyService implements OnModuleInit {
     return /invalid x-api-key|authentication_error|invalid[_ ]api[_ ]key|incorrect api key|unauthorized|permission_error|forbidden/i.test(String(message || ""));
   }
 
-  // Turn a raw provider HTTP failure into a clear, actionable message for the user.
-  // Returns "" when the failure isn't a recognized auth/permission/rate-limit case.
-  private describeProviderError(provider: string, status: number, rawMessage?: string): string {
-    const label = providerDefinition(provider)?.label || provider || "AI provider";
-    const message = String(rawMessage || "");
-    if (status === 401 || /invalid x-api-key|authentication_error|invalid[_ ]api[_ ]key|incorrect api key|unauthorized/i.test(message)) {
-      return `The ${label} API key is invalid or has been revoked. Update it in Workspace → Integrations, then use "Test connection" to verify.`;
+  // Provider diagnostics are untrusted: they can echo credentials, URLs, or submitted
+  // context. Use them only to classify the failure, never as presentation fallback.
+  // Every downstream chat/progress/audit/HTTP consumer receives this safe description.
+  private static describeProviderError(provider: string, status: number, rawMessage?: string): string {
+    return describeAiProviderFailure(status, rawMessage, providerDefinition(provider)?.label || "AI provider");
+  }
+
+  private static providerIo<T>(provider: string, operation: () => Promise<T>): Promise<T> {
+    return withAiProviderIo(operation, providerDefinition(provider)?.label || "AI provider");
+  }
+
+  private fetchAiProvider(provider: string, url: string, init: RequestInit): Promise<Response> {
+    return LegacyService.providerIo(provider, () => fetch(url, init));
+  }
+
+  private readAiProviderJson(provider: string, response: Response): Promise<Body> {
+    return readProviderJson<Body>(response, providerDefinition(provider)?.label || "AI provider");
+  }
+
+  private static async *providerStreamChunks(provider: string, response: Response): AsyncGenerator<Uint8Array> {
+    if (!response.body) throw new Error(LegacyService.describeProviderError(provider, 0));
+    const iterator = (response.body as unknown as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        const chunk = await LegacyService.providerIo(provider, () => iterator.next());
+        if (chunk.done) return;
+        yield chunk.value;
+      }
+    } finally {
+      if (iterator.return) await LegacyService.providerIo(provider, () => iterator.return!());
     }
-    if (status === 403 || /permission_error|forbidden|does not have access|not allowed/i.test(message)) {
-      return `The ${label} API key was rejected for permissions — check the account's plan, billing, or model access, then update the key in Workspace → Integrations.`;
-    }
-    if (status === 429 || /rate.?limit|overloaded|quota|insufficient_quota/i.test(message)) {
-      return `${label} is rate-limited or out of quota right now. Wait a moment and retry, or check the account's usage limits.`;
-    }
-    return "";
   }
 
   // Pull a clean, user-facing message out of any thrown error (incl. Nest HttpException payloads).
@@ -2695,7 +3157,9 @@ export class LegacyService implements OnModuleInit {
     const projectIds: string[] = Array.isArray(body.projectIds) ? body.projectIds.filter(Boolean) : [];
 
     if (!email) throw new BadRequestException({ error: "email is required" });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    // Bounded quantifiers: the unbounded form backtracks polynomially on a long address, and this
+    // is straight from the invitation request body.
+    if (email.length > 320 || !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(email))
       throw new BadRequestException({ error: "invalid email address" });
 
     // Permission checks
@@ -3226,7 +3690,12 @@ export class LegacyService implements OnModuleInit {
     if (!provider) throw new BadRequestException({ error: "provider is required" });
 
     let apiKey = String(body.apiKey || "").trim();
-    let baseUrl = String(body.baseUrl || "").trim() || null;
+    // The base URL is never taken from the request. It is a server-side fetch target, and an
+    // endpoint that forwards a caller-supplied URL turns a workspace-owner form field into SSRF
+    // against the host's own network. A custom gateway is supported by saving the key first and
+    // reading its stored base_url below; an unsaved form falls back to the provider's catalog
+    // default (or the fallback model list).
+    let baseUrl: string | null = null;
     let authHeaderName = String(body.authHeaderName || "").trim() || null;
     let authScheme = String(body.authScheme || "").trim() || null;
 
@@ -3248,6 +3717,11 @@ export class LegacyService implements OnModuleInit {
     }
 
     const fallback = providerFallbackModels(provider).map((id) => ({ id, displayName: id }));
+    // A custom gateway has no catalog default to query until its key (and base URL) is saved.
+    // Say that, rather than silently querying a public catalog endpoint with the caller's key.
+    if (!baseUrl && !providerDefinition(provider)?.defaultBaseUrl) {
+      return { models: fallback, source: "fallback", reason: "Save the key to load models from its custom base URL." };
+    }
     // Self-hosted runtimes serve /v1/models unauthenticated, so an absent key is not a
     // reason to skip discovery for them — it is for everyone else.
     if (!apiKey && !providerDefinition(provider)?.optionalApiKey) {
@@ -3266,11 +3740,11 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  private buildBearerAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Record<string, string> {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+  private buildBearerAuthHeaders(apiKey: string, authHeaderName: string | null, authScheme: string | null): Headers {
+    const headers = new Headers({ "Content-Type": "application/json" });
     const name = authHeaderName || "Authorization";
     const scheme = authScheme == null ? "Bearer" : String(authScheme).trim();
-    headers[name] = scheme ? `${scheme} ${apiKey}` : apiKey;
+    headers.set(name, scheme ? `${scheme} ${apiKey}` : apiKey);
     return headers;
   }
 
@@ -3281,7 +3755,10 @@ export class LegacyService implements OnModuleInit {
     authHeaderName: string | null,
     authScheme: string | null
   ): Promise<Array<{ id: string; displayName: string }>> {
-    const url = normalizeModelsListUrl(provider, baseUrl);
+    // The base URL is workspace-configurable (self-hosted gateways are a supported setup), so it is
+    // checked before use: only absolute http(s), never a scheme fetch would treat as local file
+    // access, and never with credentials embedded in the URL.
+    const url = requireHttpProviderUrl(normalizeModelsListUrl(provider, baseUrl));
     const headers = this.providerAuthHeaders(provider, apiKey, authHeaderName, authScheme);
 
     const rows: Body[] = [];
@@ -3296,13 +3773,13 @@ export class LegacyService implements OnModuleInit {
       const query = new URLSearchParams(existingQuery);
       query.set("limit", "100");
       if (cursor) query.set("after_id", cursor);
-      const res = await fetch(`${root}?${query.toString()}`, { method: "GET", headers });
+      const res = await this.fetchAiProvider(provider, `${root}?${query.toString()}`, { method: "GET", headers });
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Body)) as Body;
+        const errBody = await this.readAiProviderJson(provider, res);
         const raw = String(errBody.error?.message || errBody.error || res.status);
-        throw new Error(this.describeProviderError(provider, res.status, raw) || raw);
+        throw new Error(LegacyService.describeProviderError(provider, res.status, raw));
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson(provider, res);
       const batch = normalizeJsonArray(data.data);
       rows.push(...batch);
       if (providerWire(provider) !== "anthropic" || !data.has_more || !batch.length) break;
@@ -3675,9 +4152,56 @@ export class LegacyService implements OnModuleInit {
     return row;
   }
 
+  /** Current native human authority, held through the caller's transaction commit.
+   * Call after any domain serialization wait; this deliberately bypasses request-cache access.
+   * Feature-specific capabilities remain with their owner rather than entering this shared check.
+   *
+   * `lock: false` is only for a fail-fast preflight that runs before a domain wait; the caller must
+   * still call this again with the default lock after the wait. A locking preflight would hold the
+   * membership rows for the whole wait, so a demotion could never commit between the two checks.
+   */
+  async requireCurrentProjectAuthority(client: PoolClient, projectId: string, userId: string | null | undefined, lock = true) {
+    const uid = this.requireUser(userId);
+    const access = await client.query(`SELECT p.*,pm.role AS caller_role,om.role AS workspace_role FROM projects p JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2
+      JOIN organization_members om ON om.organization_id=p.organization_id AND om.user_id=$2
+      JOIN users u ON u.id=$2 AND u.active_organization_id=p.organization_id
+      WHERE p.id=$1 AND p.archived_at IS NULL ${lock ? "FOR SHARE OF p,pm,om,u" : ""}`, [projectId,uid]);
+    if (!access.rows[0]) throw new ForbiddenException({ error: "Current project and workspace membership are required" });
+    return access.rows[0];
+  }
+
   /** Drops every memoized requireProjectAccess result for this project within the current request. */
   private invalidateProjectAccessCache(projectId: string): void {
     this.requestCache.invalidatePrefix(`access:${projectId}:`);
+  }
+
+  /** Serialize effective Skills from final resolution through commit. Acquire before domain or
+   * authority row locks, including on KB paths that can change assignment eligibility. */
+  private async lockSkillAssignments(client: PoolClient, projectId: string) {
+    // PostgreSQL UUID equality is case-insensitive; every spelling must share this boundary.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-assignments:${projectId.toLowerCase()}`]);
+  }
+
+  private async assertSkillsInactive(client: PoolClient, projectId: string, documentIds: string[]) {
+    if (!documentIds.length) return;
+    const active = await client.query(
+      "SELECT id FROM skill_assignments WHERE project_id=$1 AND skill_document_id=ANY($2::uuid[]) AND status='active' LIMIT 1",
+      [projectId, documentIds]
+    );
+    if (active.rows.length) {
+      throw new ConflictException({ code: "SKILL_ASSIGNMENT_ACTIVE", error: "Deactivate this Skill's assignments before changing its type or moving it to or from Trash." });
+    }
+  }
+
+  private assertCurrentSkillContext(pinned: unknown, current: SkillResolution) {
+    const state = classifySkillResolution(pinned, current);
+    if (state === "current") return;
+    const code = state === "conflict" ? "SKILL_ASSIGNMENT_CONFLICT"
+      : state === "stale" ? "SKILL_CONTEXT_STALE" : "SKILL_CONTEXT_UNAVAILABLE";
+    const error = state === "conflict" ? "The required effective skills are ambiguous; resolve the assignment conflict before proceeding."
+      : state === "stale" ? "The effective skills changed after review; refresh the proposal and review the exact revision again."
+      : "A required approved effective skill is not assigned; the candidate stays staged.";
+    throw new ConflictException({ code, error, pinned, current, missing: current.missing, conflicts: current.conflicts });
   }
 
   /**
@@ -3745,9 +4269,12 @@ export class LegacyService implements OnModuleInit {
     if (cycle) {
       const seq = isUuid(cycle) ? null : seqOf(cycle, "RUN");
       if (!isUuid(cycle) && seq === null) throw new NotFoundException({ error: "Test run not found" });
+      // A retained retest receipt may outlive its source Run. Resolve only its authorized identity
+      // so a lost-response recovery page can mount; ordinary Run/result reads remain active-only.
+      const retainedIdentity = LegacyService.NATIVE_RETEST_SOURCE_IDENTITY_SQL;
       const res = isUuid(cycle)
-        ? await this.db.query("SELECT id, seq FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [cycle, projectId])
-        : await this.db.query("SELECT id, seq FROM cycles WHERE seq = $1 AND project_id = $2 AND deleted_at IS NULL", [seq, projectId]);
+        ? await this.db.query(`SELECT c.id, c.seq FROM cycles c WHERE c.id = $1 AND c.project_id = $2 AND ${retainedIdentity}`, [cycle, projectId])
+        : await this.db.query(`SELECT c.id, c.seq FROM cycles c WHERE c.seq = $1 AND c.project_id = $2 AND ${retainedIdentity}`, [seq, projectId]);
       if (!res.rows[0]) throw new NotFoundException({ error: "Test run not found" });
       out.cycleId = res.rows[0].id;
       out.cycleRef = `${prefix}-RUN-${res.rows[0].seq}`;
@@ -3758,8 +4285,8 @@ export class LegacyService implements OnModuleInit {
       const seq = isUuid(task) ? null : seqOf(task, "TASK");
       if (!isUuid(task) && seq === null) throw new NotFoundException({ error: "Zyra task not found" });
       const res = isUuid(task)
-        ? await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])", [task, projectId, ZYRA_AGENT_NAMES])
-        : await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[])", [seq, projectId, ZYRA_AGENT_NAMES]);
+        ? await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[]) AND task_kind IN ('legacy_generation_review','governed_proposal')", [task, projectId, ZYRA_AGENT_NAMES])
+        : await this.db.query("SELECT id, seq FROM ai_generation_requests WHERE seq = $1 AND project_id = $2 AND agent_name = ANY($3::text[]) AND task_kind IN ('legacy_generation_review','governed_proposal')", [seq, projectId, ZYRA_AGENT_NAMES]);
       if (!res.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       out.taskId = res.rows[0].id;
       out.taskRef = `${prefix}-TASK-${res.rows[0].seq}`;
@@ -3787,13 +4314,19 @@ export class LegacyService implements OnModuleInit {
       `UPDATE projects SET
        name = COALESCE($2, name),
        description = COALESCE($3, description),
-       settings = CASE WHEN $5::jsonb IS NULL THEN COALESCE($4::jsonb, settings)
+       settings = (CASE WHEN $5::jsonb IS NULL THEN COALESCE($4::jsonb, CASE jsonb_typeof(settings)
+           WHEN 'object' THEN settings WHEN 'string' THEN (settings #>> '{}')::jsonb ELSE '{}'::jsonb END)
          ELSE jsonb_set(
            COALESCE($4::jsonb, CASE jsonb_typeof(settings)
              WHEN 'object' THEN settings
              WHEN 'string' THEN (settings #>> '{}')::jsonb
              ELSE '{}'::jsonb END),
-           '{icon}', $5::jsonb, true) END,
+           '{icon}', $5::jsonb, true) END - 'externalMcpAccess') ||
+         CASE WHEN jsonb_typeof(settings) = 'object' AND settings ? 'externalMcpAccess'
+           THEN jsonb_build_object('externalMcpAccess', settings->'externalMcpAccess')
+           WHEN jsonb_typeof(settings) = 'string' AND (settings #>> '{}')::jsonb ? 'externalMcpAccess'
+           THEN jsonb_build_object('externalMcpAccess', (settings #>> '{}')::jsonb->'externalMcpAccess')
+           ELSE '{}'::jsonb END,
        updated_at = now()
        WHERE id = $1`,
       [
@@ -4030,7 +4563,7 @@ export class LegacyService implements OnModuleInit {
        recursive_counts AS (
          SELECT d.root_id, COUNT(t.id)::int AS recursive_test_case_count
          FROM descendants d
-         LEFT JOIN testcases t ON t.suite_id = d.node_id AND t.deleted_at IS NULL
+         LEFT JOIN testcases t ON t.suite_id = d.node_id AND t.project_id = $1 AND t.deleted_at IS NULL
          GROUP BY d.root_id
        )
        SELECT s.id, s.parent_id, s.name, s.description, s.preconditions, s.position, s.created_at,
@@ -4040,7 +4573,7 @@ export class LegacyService implements OnModuleInit {
                 0
               )::int AS recursive_test_case_count
        FROM suites s
-       LEFT JOIN testcases t ON t.suite_id = s.id AND t.deleted_at IS NULL
+       LEFT JOIN testcases t ON t.suite_id = s.id AND t.project_id = s.project_id AND t.deleted_at IS NULL
        WHERE s.project_id = $1 AND s.deleted_at IS NULL
        GROUP BY s.id
        ORDER BY s.position, s.name`,
@@ -4049,17 +4582,13 @@ export class LegacyService implements OnModuleInit {
     return res.rows.map(toCamel);
   }
 
-  async createSuiteForUser(userId: string | null | undefined, projectId: string, body: Body) {
-    await this.requireProjectAccess(this.requireUser(userId), projectId);
-    return this.createSuite(projectId, body);
+  async createSuiteForUser(userId: string | null | undefined, projectId: string, body: Body, principal?: ReviewPrincipal) {
+    return this.createSuite(projectId, body, userId, principal);
   }
 
   /**
-   * The insert itself, without a caller check.
-   *
-   * Kept unguarded for the three callers that have already decided access: the MCP tool (whose API
-   * token is bound to one project, see McpService), the Zyra chat flow, and CSV import — all of which
-   * authorized before they got here. Route traffic goes through createSuiteForUser.
+   * Suite parents must resolve to a live same-project row. Public suite publication below
+   * requires a trusted human session; machine draft staging cannot supply that authority.
    */
   // Once suites were soft-deleted (V110) this stopped being enforced by the database: a parentId
   // pointing at a soft-deleted (or another project's) suite used to raise a loud FK violation on
@@ -4091,24 +4620,36 @@ export class LegacyService implements OnModuleInit {
     return text;
   }
 
-  async createSuite(projectId: string, body: Body) {
+  async createSuite(projectId: string, body: Body, userId?: string | null, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    return this.insertSuite(projectId, body);
+  }
+
+  /** Only native human publication and the exact-reviewed atomic Save call this insertion seam. */
+  private async insertSuite(projectId: string, body: Body, transactionClient?: PoolClient) {
     const name = String(body.name || "").trim();
     if (!name) throw new BadRequestException({ error: "name is required" });
     validateBoundedField(name, "Suite name", SUITE_NAME_MAX_LENGTH);
     const description = this.normalizeSuiteText(body.description, "Suite description") ?? "";
     const preconditions = this.normalizeSuiteText(body.preconditions, "Suite preconditions") ?? "";
     const parentId = body.parentId || null;
-    if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
-    const res = await this.db.query(
-      "INSERT INTO suites (project_id, parent_id, name, description, preconditions, position) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, parent_id, name, description, preconditions, position, created_at",
-      [projectId, parentId, name, description, preconditions, Number(body.position || 0)]
-    );
-    await this.suitesCache.invalidate(projectId);
-    await this.testcasesListCache.invalidate(projectId);
+    if (parentId) {
+      if (transactionClient) await this.assertTestcaseSuites(transactionClient, projectId, [parentId]);
+      else await this.requireLiveSuiteInProject(projectId, parentId);
+    }
+    const sql = "INSERT INTO suites (project_id, parent_id, name, description, preconditions, position) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, parent_id, name, description, preconditions, position, created_at";
+    const values = [projectId, parentId, name, description, preconditions, Number(body.position || 0)];
+    const res = transactionClient ? await transactionClient.query(sql, values) : await this.db.query(sql, values);
+    if (!transactionClient) {
+      await this.suitesCache.invalidate(projectId);
+      await this.testcasesListCache.invalidate(projectId);
+    }
     return { ...toCamel(res.rows[0]), testCaseCount: 0, recursiveTestCaseCount: 0 };
   }
 
-  async updateSuite(userId: string | null | undefined, suiteId: string, body: Body) {
+  async updateSuite(userId: string | null | undefined, suiteId: string, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
     const projectId = await this.requireSuiteAccess(userId, suiteId);
     validateBoundedField(body.name, "Suite name", SUITE_NAME_MAX_LENGTH);
     const description = this.normalizeSuiteText(body.description, "Suite description");
@@ -4116,8 +4657,8 @@ export class LegacyService implements OnModuleInit {
     const parentId = body.parentId ?? null;
     if (parentId) await this.requireLiveSuiteInProject(projectId, parentId);
     await this.db.query(
-      "UPDATE suites SET name = COALESCE($2, name), parent_id = $3, position = COALESCE($4, position), description = COALESCE($5, description), preconditions = COALESCE($6, preconditions), updated_at = now() WHERE id = $1",
-      [suiteId, body.name ?? null, parentId, body.position ?? null, description, preconditions]
+      "UPDATE suites SET name = COALESCE($2, name), parent_id = CASE WHEN $7::boolean THEN $3 ELSE parent_id END, position = COALESCE($4, position), description = COALESCE($5, description), preconditions = COALESCE($6, preconditions), updated_at = now() WHERE id = $1",
+      [suiteId, body.name ?? null, parentId, body.position ?? null, description, preconditions, body.parentId !== undefined]
     );
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
@@ -4190,17 +4731,19 @@ export class LegacyService implements OnModuleInit {
       // rather than proceeding to update zero rows and reporting success.
       if (!subtreeIds.length) throw new NotFoundException({ error: "Suite not found" });
 
+      // Suite ownership does not establish ownership of every testcase pointing at it.
+      // Preserve foreign historical/inconsistent references without mutating those rows.
       if (mode === "deleteTestcases") {
         await client.query(
           `UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now()
-           WHERE suite_id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-          [subtreeIds, uid]
+           WHERE suite_id = ANY($1::uuid[]) AND project_id = $3 AND deleted_at IS NULL`,
+          [subtreeIds, uid, projectId]
         );
       } else {
         await client.query(
           `UPDATE testcases SET suite_id = NULL, updated_at = now()
-           WHERE suite_id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-          [subtreeIds]
+           WHERE suite_id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL`,
+          [subtreeIds, projectId]
         );
       }
       await client.query(
@@ -4247,12 +4790,14 @@ export class LegacyService implements OnModuleInit {
     // a guessed subset — see Phase Set C's C2 for why includeArchived in particular had to be added
     // here (it's a separate field from `status` that also widens the result set).
     const cacheable = LegacyService.isNoFilterTestcasesQuery(query);
-    if (cacheable) {
-      const cached = await this.testcasesListCache.get<{ rows: Body[]; total: number }>(projectId, limit, offset);
-      if (cached !== undefined) return cached;
-    }
+    // Capture the population token before the query. A later invalidation must fence this read out,
+    // even if another worker has already populated a newer page by the time this query finishes.
+    const cached = cacheable
+      ? await this.testcasesListCache.read<{ rows: Body[]; total: number }>(projectId, limit, offset)
+      : undefined;
+    if (cached?.value !== undefined) return cached.value;
     const result = await this.listTestCasesUncached(projectId, query, limit, offset);
-    if (cacheable) await this.testcasesListCache.set(projectId, limit, offset, result);
+    if (cacheable) await this.testcasesListCache.set(projectId, limit, offset, result, cached?.generation);
     return result;
   }
 
@@ -4267,6 +4812,8 @@ export class LegacyService implements OnModuleInit {
       !query.jiraIssueKey &&
       !query.linearIssueKey &&
       !query.notionPageId &&
+      !query.technique &&
+      !query.view &&
       !query.search &&
       !query.customFieldFilters &&
       // The cache key is (project, limit, offset) with no sort in it: a sorted page would be answered
@@ -4402,6 +4949,19 @@ export class LegacyService implements OnModuleInit {
         );
       }
     }
+    if (query.technique) {
+      const technique = normalizeTestcaseTechnique(query.technique);
+      values.push(technique);
+      filters.push(`testcases.technique = $${values.length}`);
+    }
+    if (query.view) {
+      const view = String(query.view).trim().toLowerCase();
+      if (!(TESTCASE_REVIEW_VIEWS as readonly string[]).includes(view)) {
+        throw new BadRequestException({ error: `view must be one of ${TESTCASE_REVIEW_VIEWS.join(", ")}` });
+      }
+      values.push(view);
+      filters.push(`$${values.length} = ANY(testcases.review_views)`);
+    }
     if (query.search) {
       values.push(`%${String(query.search).toLowerCase()}%`);
       const p = values.length;
@@ -4524,10 +5084,12 @@ export class LegacyService implements OnModuleInit {
     const res = await this.db.query(
       `${suiteSubtreeCteSql}SELECT testcases.id, testcases.external_id, testcases.title, testcases.priority, testcases.type,
               testcases.automation_status, testcases.automation_tags, testcases.status,
+              ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
               testcases.suite_id, testcases.owner_id, testcases.updated_at, testcases.jira_issue_key,
               testcases.jira_url, testcases.linear_issue_key, testcases.linear_url,
               testcases.notion_page_id, testcases.notion_url,
               testcases.severity, testcases.component, testcases.source_refs,
+              testcases.technique, testcases.review_views,
               COALESCE(
                 (SELECT jsonb_object_agg(v.definition_id, v.value) FROM custom_field_values v WHERE v.testcase_id = testcases.id),
                 '{}'::jsonb
@@ -4544,7 +5106,9 @@ export class LegacyService implements OnModuleInit {
       values
     );
     let total = Number(res.rows[0]?.total_count || 0);
-    if (res.rows.length === 0 && offset > 0) {
+    if (res.rows.length === 0 && (offset > 0 || limit === 0)) {
+      // The window COUNT rides on returned rows. Empty offset pages and LIMIT 0
+      // must still report the real filtered total, not silently rewrite it to zero.
       // total_count rides on the returned rows, so a page past the end reports 0 — which a client
       // paging through (or one whose last page was just emptied by a delete) would read as "no
       // matches at all". Ask for the real count so it can step back to the last page that exists.
@@ -4555,7 +5119,7 @@ export class LegacyService implements OnModuleInit {
       total = Number(counted.rows[0]?.n || 0);
     }
     // total_count is transport for the header, not part of a test case.
-    return { rows: res.rows.map(({ total_count, ...row }) => toCamel(row)), total };
+    return { rows: res.rows.map(({ total_count: _totalCount, ...row }) => toCamel(row)), total };
   }
 
   /**
@@ -4676,8 +5240,8 @@ export class LegacyService implements OnModuleInit {
   async getTestCaseForUser(userId: string | null | undefined, projectId: string, testcaseId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const res = isUuid(testcaseId)
-      ? await this.db.query("SELECT * FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId])
-      : await this.db.query("SELECT * FROM testcases WHERE external_id = $1 AND project_id = $2 AND deleted_at IS NULL", [testcaseId, projectId]);
+      ? await this.db.query(`SELECT *, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, testcase_approval_snapshot(id) AS approval_snapshot, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL`, [testcaseId, projectId])
+      : await this.db.query(`SELECT *, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, testcase_approval_snapshot(id) AS approval_snapshot, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE external_id = $1 AND project_id = $2 AND deleted_at IS NULL`, [testcaseId, projectId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     return toCamel(res.rows[0]);
   }
@@ -4689,7 +5253,7 @@ export class LegacyService implements OnModuleInit {
    * already-authorized path. Route traffic goes through getTestCaseForUser.
    */
   async getTestCase(id: string) {
-    const res = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
+    const res = await this.db.query(`SELECT *, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, testcase_approval_snapshot(id) AS approval_snapshot, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id = $1 AND deleted_at IS NULL`, [id]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     return toCamel(res.rows[0]);
   }
@@ -4822,6 +5386,7 @@ export class LegacyService implements OnModuleInit {
    * nothing about which of fourteen inputs to shorten.
    */
   private assertTestcaseFieldLengths(body: Body): void {
+    assertNotGenericApproval(body.status);
     for (const { field, label, max } of LegacyService.TESTCASE_FIELD_LIMITS) {
       const raw = body[field];
       if (raw === undefined || raw === null) continue;
@@ -4848,9 +5413,58 @@ export class LegacyService implements OnModuleInit {
     throw error as Error;
   }
 
-  async createTestCase(projectId: string, actorId: string | null | undefined, body: Body) {
+  /**
+   * Same per-project mutex as deleteSuite. Assignment transactions take it BEFORE any
+   * testcase row, review row or external-id lock and hold it through commit/rollback.
+   * A check outside that boundary races soft deletion (the ordinary FK still succeeds).
+   * Do not replace this with a Suite row lock acquired after a testcase row: deletion
+   * updates cases before suites, which would invert the lock order.
+   */
+  async lockTestcaseSuiteWrites(client: PoolClient, projectId: string): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`suite-tree:${projectId}`]);
+  }
+
+  /** Caller holds lockTestcaseSuiteWrites; null/undefined never assign a Suite. */
+  private async assertTestcaseSuites(client: PoolClient, projectId: string, candidates: unknown[]): Promise<void> {
+    const supplied = candidates.filter((id) => id !== undefined && id !== null);
+    if (!supplied.length) return;
+    const error = () => new BadRequestException({ error: "suiteId must reference an active suite in this project" });
+    if (supplied.some((id) => typeof id !== "string" || !isUuid(id))) throw error();
+    const ids = Array.from(new Set((supplied as string[]).map((id) => id.toLowerCase())));
+    const found = await client.query<{ id: string }>(
+      "SELECT id FROM suites WHERE project_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL",
+      [projectId, ids]
+    );
+    if (found.rows.length !== ids.length) throw error();
+  }
+
+  async createTestCase(
+    projectId: string, actorId: string | null | undefined, body: Body,
+    transaction?: { client: PoolClient; afterCommit: Array<() => Promise<void>> }
+  ) {
     const uid = this.requireUser(actorId);
     this.assertTestcaseFieldLengths(body);
+    if (transaction) {
+      // Internal composition only: model provenance and its native Draft must commit together.
+      // The shared writer still owns suite locking, id allocation, fields and tags. Publish
+      // external cache/index effects only after the caller's outer transaction commits.
+      try {
+        const created = await this.insertTestCaseWithClient(transaction.client, projectId, uid, body);
+        await this.logProjectActivity(projectId, uid, "testcase_created", "testcase", created.id,
+          `${created.external_id} - ${created.title}`, { after: toCamel(created) }, transaction.client);
+        transaction.afterCommit.push(async () => {
+          await this.suitesCache.invalidate(projectId);
+          await this.testcasesListCache.invalidate(projectId);
+          this.enqueueTestcaseEmbedding(projectId, created.id, "created");
+        });
+        return toCamel(created);
+      } catch (error) {
+        // Retrying a failed statement inside the same PostgreSQL transaction cannot recover it.
+        // The allocation lock prevents generated-id collisions; the outer caller owns rollback.
+        if ((error as { code?: string })?.code === "22001") this.rethrowTruncationAs400(error);
+        throw error;
+      }
+    }
     // nextExternalId reads MAX(trailing number) + 1 in a separate statement from the INSERT below,
     // so two creates racing in the same project both read the same MAX and both try to write
     // "<KEY>-TC-<n>". idx_testcases_project_external then rejects the loser, and the caller got a
@@ -4879,6 +5493,9 @@ export class LegacyService implements OnModuleInit {
   // save, below) can run them all against one shared client/transaction instead of each opening its
   // own — insertTestCase itself just wraps this in a single-statement transaction as before.
   private async insertTestCaseWithClient(client: PoolClient, projectId: string, uid: string, body: Body) {
+    assertNotGenericApproval(body.status);
+    await this.lockTestcaseSuiteWrites(client, projectId);
+    await this.assertTestcaseSuites(client, projectId, [body.suiteId || null]);
     // Serialize id allocation per project. Reading MAX(n)+1 and inserting are two statements, so
     // without this every concurrent create in a project reads the same MAX and all but one lose to
     // idx_testcases_project_external. Retrying alone does not converge: the losers re-read the same
@@ -4899,8 +5516,8 @@ export class LegacyService implements OnModuleInit {
         priority, severity, type, automation_status, automation_repo, automation_path, automation_test_name,
         automation_framework, automation_tags, owner_id, component, status, jira_issue_key, jira_url,
         linear_issue_key, linear_url, attachments, created_by, updated_by, estimated_duration, source_refs,
-        notion_page_id, notion_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31)
+        notion_page_id, notion_url, technique, review_views)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31,$32,$33)
        RETURNING *`,
       [
         projectId,
@@ -4942,7 +5559,9 @@ export class LegacyService implements OnModuleInit {
         this.normalizeEstimatedDuration(body.estimatedDuration),
         JSON.stringify(LegacyService.sanitizeSourceRefsInput(body.sourceRefs)),
         body.notionPageId || null,
-        body.notionUrl || null
+        body.notionUrl || null,
+        normalizeTestcaseTechnique(body.technique),
+        normalizeTestcaseReviewViews(body.reviewViews)
       ]
     );
     const row = res.rows[0];
@@ -4981,6 +5600,7 @@ export class LegacyService implements OnModuleInit {
 
   async bulkCreateTestCases(projectId: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
+    await this.requireProjectAccess(uid, projectId);
     const incoming: Body[] = Array.isArray(body.testcases)
       ? body.testcases.filter((row: unknown): row is Body => !!row && typeof row === "object")
       : [];
@@ -5010,6 +5630,8 @@ export class LegacyService implements OnModuleInit {
     }
 
     const created = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      await this.assertTestcaseSuites(client, projectId, incoming.map((row) => row.suiteId || null));
       // Serialize external-id allocation per project: MAX()+1 alone lets two concurrent
       // imports claim the same block and lose one to the (project_id, external_id) unique
       // index. Advisory lock is transaction-scoped, so it releases on commit or rollback.
@@ -5216,6 +5838,14 @@ export class LegacyService implements OnModuleInit {
       if (!prepared.length) continue;
 
       await this.db.transaction(async (client) => {
+        await this.lockTestcaseSuiteWrites(client, projectId);
+        // The initial name cache can predate a deletion, including between chunks.
+        // Resolve against active suites while deletion is excluded, not that old cache.
+        const liveSuites = await client.query<{ id: string; parent_id: string | null; name: string }>(
+          "SELECT id, parent_id, name FROM suites WHERE project_id = $1 AND deleted_at IS NULL", [projectId]
+        );
+        ctx.suiteIdByKey.clear();
+        for (const row of liveSuites.rows) ctx.suiteIdByKey.set(importSuiteKey(row.name, row.parent_id), row.id);
         // The same lock createTestCase takes, held once for the chunk instead of once per row. It is
         // what actually serialises id allocation for a project.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${projectId}`]);
@@ -5412,6 +6042,8 @@ export class LegacyService implements OnModuleInit {
    * such lock, and already tolerates duplicate sibling names today; unchanged here.)
    */
   private async resolveImportSuites(client: PoolClient, ctx: ImportContext, prepared: PreparedImportRow[]): Promise<void> {
+    // Inside the existing savepoint: stale defaults retain per-row error reporting.
+    await this.assertTestcaseSuites(client, ctx.projectId, [ctx.defaultSuiteId]);
     const missingTop = new Map<string, string>();
     for (const row of prepared) {
       if (!row.suiteName) continue;
@@ -5500,6 +6132,7 @@ export class LegacyService implements OnModuleInit {
     prepared: PreparedImportRow[],
     startNumber: number
   ): Promise<number> {
+    for (const row of prepared) assertNotGenericApproval(row.status);
     const payload = prepared.map((row, index) => ({
       external_id: `${ctx.idPrefix}-TC-${startNumber + index}`,
       suite_id: row.suiteId,
@@ -5665,6 +6298,9 @@ export class LegacyService implements OnModuleInit {
   // review-batch save run several updates atomically with each other (and with any creates in the
   // same batch) against one shared client, instead of one transaction per row.
   private async updateTestCaseWithClient(client: PoolClient, projectId: string, id: string, uid: string, body: Body, newExternalId: string | null = null) {
+    assertNotGenericApproval(body.status);
+    const expectedRevision = expectedTestcaseRevision(body.expectedRevision);
+    await this.assertTestcaseSuites(client, projectId, [body.suiteId]);
     /*
      * jiraIssueKey/jiraUrl and linearIssueKey/linearUrl were COALESCE-only, like every other field
      * here — but unlike the rest, there was genuinely no way to ever clear them: `body.jiraIssueKey
@@ -5679,15 +6315,18 @@ export class LegacyService implements OnModuleInit {
     const clearsJira = body.jiraIssueKey === null || body.jiraIssueKey === "";
     const clearsLinear = body.linearIssueKey === null || body.linearIssueKey === "";
     const clearsNotion = body.notionPageId === null || body.notionPageId === "";
+    // Partial edits (drawer Archive/Restore, REST, MCP and Zyra) must preserve omitted
+    // relationships at the actual row write, not by copying a possibly stale prior read.
+    // Explicit null still means unassign; explicit IDs still mean move/reassign.
     const res = await client.query(
       `UPDATE testcases SET
-       suite_id=$2, title=COALESCE($3,title), description=COALESCE($4,description),
+       suite_id=CASE WHEN $35::boolean THEN $2 ELSE suite_id END, title=COALESCE($3,title), description=COALESCE($4,description),
        preconditions=COALESCE($5,preconditions), postconditions=COALESCE($6,postconditions),
        steps=COALESCE($7::jsonb,steps), test_data=COALESCE($8,test_data), priority=COALESCE($9,priority),
        severity=COALESCE($10,severity), type=COALESCE($11,type), automation_status=COALESCE($12,automation_status),
        automation_repo=COALESCE($13,automation_repo), automation_path=COALESCE($14,automation_path),
        automation_test_name=COALESCE($15,automation_test_name), automation_framework=COALESCE($16,automation_framework),
-       automation_tags=COALESCE($17,automation_tags), owner_id=$18, component=COALESCE($19,component),
+       automation_tags=COALESCE($17,automation_tags), owner_id=CASE WHEN $36::boolean THEN $18 ELSE owner_id END, component=COALESCE($19,component),
        status=COALESCE($20,status),
        jira_issue_key=CASE WHEN $29::boolean THEN NULL ELSE COALESCE($21,jira_issue_key) END,
        jira_url=CASE WHEN $29::boolean THEN NULL ELSE COALESCE($22,jira_url) END,
@@ -5697,8 +6336,12 @@ export class LegacyService implements OnModuleInit {
        notion_url=CASE WHEN $33::boolean THEN NULL ELSE COALESCE($32,notion_url) END,
        attachments=COALESCE($25,attachments), updated_by=$26,
        estimated_duration=COALESCE($27,estimated_duration),
-       source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id), updated_at=now()
+       source_refs=COALESCE($28::jsonb,source_refs), external_id=COALESCE($34,external_id),
+       technique=CASE WHEN $38::boolean THEN $39 ELSE technique END,
+       review_views=CASE WHEN $40::boolean THEN $41::text[] ELSE review_views END,
+       updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
+         AND ($37::text IS NULL OR ${TESTCASE_EDIT_REVISION_SQL} = $37::text)
        RETURNING *`,
       [
         id,
@@ -5738,10 +6381,26 @@ export class LegacyService implements OnModuleInit {
         body.notionPageId ?? null,
         body.notionUrl ?? null,
         clearsNotion,
-        newExternalId
+        newExternalId,
+        body.suiteId !== undefined,
+        body.ownerId !== undefined,
+        expectedRevision,
+        body.technique !== undefined,
+        body.technique === undefined ? null : normalizeTestcaseTechnique(body.technique),
+        body.reviewViews !== undefined,
+        body.reviewViews === undefined ? null : normalizeTestcaseReviewViews(body.reviewViews)
       ]
     );
     const row = res.rows[0];
+    if (!row) {
+      if (expectedRevision !== null) {
+        throw new ConflictException({
+          code: "TESTCASE_EDIT_CONFLICT",
+          error: "Test case changed since it was loaded. Your changes were not saved. Reload the latest case and review your edits before saving again."
+        });
+      }
+      throw new NotFoundException({ error: "Test case not found" });
+    }
     // Always called (even with an empty body.customFieldValues) so required-field
     // enforcement re-checks against currently-active-required fields using existing
     // stored values — correct for "field made required after the fact".
@@ -5751,6 +6410,13 @@ export class LegacyService implements OnModuleInit {
     }
     // NOT enqueued here — same reasoning as insertTestCaseWithClient's comment (this method is
     // also called nested inside zyraSave's shared transaction). Callers enqueue post-commit.
+    if (body.customFieldValues !== undefined || body.customTagIds !== undefined) {
+      // Dependency triggers can invalidate approval after the initial UPDATE RETURNING.
+      // Report the committed case state, not that earlier, apparently-approved row.
+      const current = await client.query("SELECT * FROM testcases WHERE id=$1 AND project_id=$2", [id, projectId]);
+      if (!current.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+      return current.rows[0];
+    }
     return row;
   }
 
@@ -5764,7 +6430,8 @@ export class LegacyService implements OnModuleInit {
    * which is what lets a bulk renumber park cases on a scratch id first, since the index is not
    * deferrable. Only checks and returns the new id: updateTestCaseWithClient writes it in the same
    * UPDATE as the rest of the edit, so the version trigger records one snapshot, attributed to the
-   * editor. The caller updates the run snapshots, which carry a copy of the id.
+   * editor. Existing run snapshots retain the identifier accepted when their case was selected;
+   * a later run captures the renamed current case through the normal reviewed admission owner.
    */
   private async checkTestCaseExternalIdChange(client: PoolClient, projectId: string, id: string, current: string, raw: unknown): Promise<string | null> {
     if (raw === undefined) return null;
@@ -5783,15 +6450,16 @@ export class LegacyService implements OnModuleInit {
 
   async updateTestCase(id: string, actorId: string | null | undefined, body: Body) {
     const uid = this.requireUser(actorId);
+    expectedTestcaseRevision(body.expectedRevision);
     // Same guard as create: an over-long value here hit the bounded column and answered 500.
     this.assertTestcaseFieldLengths(body);
     const before = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
     if (!before.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const projectId = before.rows[0].project_id;
     const after = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
       const newExternalId = await this.checkTestCaseExternalIdChange(client, projectId, id, before.rows[0].external_id, body.externalId);
       const row = await this.updateTestCaseWithClient(client, projectId, id, uid, body, newExternalId);
-      if (newExternalId) await client.query("UPDATE cycle_items SET snapshot_external_id = $2 WHERE testcase_id = $1", [id, newExternalId]);
       return row;
     });
     await this.logProjectActivity(projectId, uid, "testcase_updated", "testcase", id, `${after?.external_id} - ${after?.title}`, {
@@ -5848,9 +6516,16 @@ export class LegacyService implements OnModuleInit {
     const source = await this.db.query("SELECT * FROM testcases WHERE id = $1 AND deleted_at IS NULL", [id]);
     if (!source.rows[0]) throw new NotFoundException({ error: "Test case not found" });
     const src = source.rows[0];
-    const externalId = await this.nextExternalId(src.project_id);
 
     const duplicated = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, src.project_id);
+      // The source may have been moved, unassigned or deleted since the access read.
+      const fresh = await client.query("SELECT * FROM testcases WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL", [id, src.project_id]);
+      if (!fresh.rows[0]) throw new NotFoundException({ error: "Test case not found" });
+      const current = fresh.rows[0];
+      await this.assertTestcaseSuites(client, src.project_id, [current.suite_id]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`testcase-external-id:${src.project_id}`]);
+      const externalId = await this.nextExternalId(src.project_id, undefined, client);
       const res = await client.query(
         `INSERT INTO testcases
          (project_id, suite_id, external_id, title, description, preconditions, postconditions, steps, test_data,
@@ -5861,34 +6536,34 @@ export class LegacyService implements OnModuleInit {
          RETURNING *`,
         [
           src.project_id,
-          src.suite_id,
+          current.suite_id,
           externalId,
-          `${src.title} (copy)`,
-          src.description,
-          src.preconditions,
-          src.postconditions,
-          JSON.stringify(src.steps || []),
-          src.test_data,
-          src.priority,
-          src.severity,
-          src.type,
-          src.automation_status,
-          src.automation_repo,
-          src.automation_path,
-          src.automation_test_name,
-          src.automation_framework,
-          src.automation_tags,
-          src.owner_id,
-          src.component,
-          src.status,
-          src.jira_issue_key,
-          src.jira_url,
-          src.linear_issue_key,
-          src.linear_url,
-          src.attachments,
+          `${current.title} (copy)`,
+          current.description,
+          current.preconditions,
+          current.postconditions,
+          JSON.stringify(current.steps || []),
+          current.test_data,
+          current.priority,
+          current.severity,
+          current.type,
+          current.automation_status,
+          current.automation_repo,
+          current.automation_path,
+          current.automation_test_name,
+          current.automation_framework,
+          current.automation_tags,
+          current.owner_id,
+          current.component,
+          "Draft", // A duplicate is new content, never a copy of another case's approval.
+          current.jira_issue_key,
+          current.jira_url,
+          current.linear_issue_key,
+          current.linear_url,
+          current.attachments,
           uid,
-          src.notion_page_id,
-          src.notion_url
+          current.notion_page_id,
+          current.notion_url
         ]
       );
       const row = res.rows[0];
@@ -5941,27 +6616,36 @@ export class LegacyService implements OnModuleInit {
      * to unfiled cases is also the value that makes a case unfiled.
      */
     const clearSuite = String(body.suiteId ?? "").toLowerCase() === "none";
-    await this.db.query(
-      `UPDATE testcases SET priority=COALESCE($2,priority),
-       suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
-       status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
-       severity=COALESCE($9,severity),
-       updated_by=$7, updated_at=now()
-       WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-      [
-        ids,
-        body.priority || null,
-        clearSuite ? null : body.suiteId || null,
-        body.status || null,
-        body.ownerId || null,
-        body.automationStatus || null,
-        uid,
-        clearSuite,
-        body.severity || null
-      ]
-    );
+    // Authorizing the URL project does not authorize arbitrary IDs in the body. Scope the
+    // actual write too; foreign IDs behave like missing IDs, without changing the bulk API.
+    const updated = await this.db.transaction(async (client) => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      await this.assertTestcaseSuites(client, projectId, [clearSuite ? null : body.suiteId || null]);
+      return client.query<{ id: string }>(
+        `UPDATE testcases SET priority=COALESCE($2,priority),
+         suite_id = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($3::uuid, suite_id) END,
+         status=COALESCE($4,status), owner_id=COALESCE($5,owner_id), automation_status=COALESCE($6,automation_status),
+         severity=COALESCE($9,severity),
+         updated_by=$7, updated_at=now()
+         WHERE id = ANY($1::uuid[]) AND project_id = $10 AND deleted_at IS NULL
+         RETURNING id`,
+        [
+          ids,
+          body.priority || null,
+          clearSuite ? null : body.suiteId || null,
+          body.status || null,
+          body.ownerId || null,
+          body.automationStatus || null,
+          uid,
+          clearSuite,
+          body.severity || null,
+          projectId
+        ]
+      );
+    });
     await this.logProjectActivity(projectId, uid, "testcase_bulk_updated", "testcase", null, null, {
-      testcaseIds: ids,
+      testcaseIds: updated.rows.map((row) => row.id),
+      requestedCount: ids.length,
       fields: { priority: body.priority || null, suiteId: body.suiteId || null, status: body.status || null, ownerId: body.ownerId || null, automationStatus: body.automationStatus || null, severity: body.severity || null }
     });
     await this.suitesCache.invalidate(projectId);
@@ -5972,11 +6656,13 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(actorId);
     await this.requireProjectAccess(uid, projectId);
     if (!ids.length) return;
-    await this.db.query(
-      "UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL",
-      [ids, uid]
+    const deleted = await this.db.query<{ id: string }>(
+      "UPDATE testcases SET deleted_at = now(), deleted_by = $2, updated_by = $2, updated_at = now() WHERE id = ANY($1::uuid[]) AND project_id = $3 AND deleted_at IS NULL RETURNING id",
+      [ids, uid, projectId]
     );
-    await this.logProjectActivity(projectId, uid, "testcase_bulk_deleted", "testcase", null, null, { testcaseIds: ids });
+    await this.logProjectActivity(projectId, uid, "testcase_bulk_deleted", "testcase", null, null, {
+      testcaseIds: deleted.rows.map((row) => row.id), requestedCount: ids.length
+    });
     await this.suitesCache.invalidate(projectId);
     await this.testcasesListCache.invalidate(projectId);
   }
@@ -5997,7 +6683,7 @@ export class LegacyService implements OnModuleInit {
          FROM (
            SELECT id, task_status, updated_at, jsonb_array_elements_text(${column}) AS key
            FROM ai_generation_requests
-           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL
+           WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL AND task_kind IN ('legacy_generation_review','governed_proposal')
          ) t
          ORDER BY key, updated_at DESC`,
       [projectId, ZYRA_AGENT_NAMES]
@@ -6069,10 +6755,70 @@ export class LegacyService implements OnModuleInit {
    * authorized for their own plan could delete an item out of someone else's.
    */
   private async requirePlanItemAccess(userId: string | null | undefined, planId: string, itemId: string) {
-    await this.requirePlanAccess(userId, planId);
+    const projectId = await this.requirePlanAccess(userId, planId);
     if (!isUuid(itemId)) throw new NotFoundException({ error: "Plan item not found" });
     const res = await this.db.query("SELECT id FROM plan_items WHERE id = $1 AND plan_id = $2 AND deleted_at IS NULL", [itemId, planId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Plan item not found" });
+    return projectId;
+  }
+
+  /**
+   * The selected REST aliases have no project in their URL. Resolve their actual authorized
+   * owner before consulting the existing billing policy; do not put a write lock in the access
+   * helpers (also used by reads), or in shared MCP writers (whose dispatcher already owns it).
+   * The route guard calls this before validators, transactions and multipart file processing.
+   */
+  async assertPlanRunRestWritable(
+    userId: string | null | undefined, target: PlanRunWriteTarget,
+    params: { planId?: string; itemId?: string; cycleId?: string; executionId?: string }, body: Body = {}
+  ): Promise<void> {
+    const uid = this.requireUser(userId);
+    let projectId: string;
+    switch (target) {
+      case "plan": projectId = await this.requirePlanAccess(uid, params.planId ?? ""); break;
+      case "planItem": projectId = await this.requirePlanItemAccess(uid, params.planId ?? "", params.itemId ?? ""); break;
+      case "historyImport": projectId = await this.requireRunHistoryAccess(uid, params.cycleId ?? ""); break;
+      case "retestRecovery":
+        await this.requireNativeRetestSourceAccess(uid, params.cycleId ?? "", true);
+        return; // Explicit terminal cancellation/reconciliation cannot create or clear a Run.
+      case "retest": {
+        const source = await this.requireNativeRetestSourceAccess(uid, params.cycleId ?? "");
+        projectId = source.projectId;
+        // A deleted source can only recover a previously committed receipt. The native owner
+        // checks that exact key/digest under lock and refuses every fresh creation with 404.
+        if (source.deleted) return;
+        if (typeof body?.requestKey === "string" && isUuid(body.requestKey)) {
+          const terminal = await this.db.query("SELECT 1 FROM cycle_retest_requests WHERE project_id=$1 AND request_key=$2", [projectId,body.requestKey]);
+          if (terminal.rows.length) return; // The owner verifies binding and only returns/refuses this immutable outcome.
+        }
+        break;
+      }
+      case "execution":
+        projectId = await this.requireCycleAccess(uid, params.cycleId ?? "");
+        await this.executionOwner(params.cycleId ?? "", params.executionId ?? "", true);
+        break;
+      case "cycle":
+      case "sharing": projectId = await this.requireCycleAccess(uid, params.cycleId ?? ""); break;
+      default: throw new Error("Missing Plan/Run REST write target");
+    }
+    // Disabling an existing publication must remain possible while locked. Deliberately exact:
+    // shareCycle enables for every other value. Preserve its existing token mint/reuse behavior.
+    if (target === "sharing" && body?.enabled === false) return;
+    const project = await this.requireProjectAccess(uid, projectId);
+    await this.planLimits.assertProjectWritable(String(project.organization_id), projectId);
+  }
+
+  /** Plan/Run references must belong to the parent project, even when the caller can access both.
+   * SHARE holds eligibility through the write (a concurrent soft-delete must not slip between reads).
+   * The table is a closed internal union; all caller-supplied values remain bound parameters.
+   */
+  private async lockPlanProjectReference(client: PoolClient, table: "plans" | "suites" | "testcases", projectId: string, id: unknown, label: string) {
+    if (!isUuid(id)) throw new NotFoundException({ error: `${label} not found` });
+    const res = await client.query(
+      `SELECT id FROM ${table} WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR SHARE`,
+      [id, projectId]
+    );
+    if (!res.rows[0]) throw new NotFoundException({ error: `${label} not found` });
   }
 
   /**
@@ -6173,7 +6919,7 @@ export class LegacyService implements OnModuleInit {
          FROM cycles c
          LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
          LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-         WHERE c.plan_id IS NOT NULL AND c.deleted_at IS NULL
+          WHERE c.project_id = $1 AND c.plan_id IS NOT NULL AND c.deleted_at IS NULL
          GROUP BY c.plan_id
        ) runs ON runs.plan_id = p.id
        WHERE p.project_id = $1 AND p.deleted_at IS NULL
@@ -6239,17 +6985,18 @@ export class LegacyService implements OnModuleInit {
               (CASE WHEN s.id IS NOT NULL AND s.deleted_at IS NOT NULL THEN s.name || ' (deleted)' ELSE s.name END) AS suite_name,
               lastex.status AS last_status
        FROM plan_items pi
-       LEFT JOIN testcases t ON t.id = pi.testcase_id
-       LEFT JOIN suites s ON s.id = pi.suite_id
+        JOIN plans p ON p.id = pi.plan_id
+        LEFT JOIN testcases t ON t.id = pi.testcase_id AND t.project_id = p.project_id
+        LEFT JOIN suites s ON s.id = pi.suite_id AND s.project_id = p.project_id
        LEFT JOIN LATERAL (
          SELECT e.status
          FROM cycles c
          JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.testcase_id = pi.testcase_id
          JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-         WHERE c.plan_id = pi.plan_id
+          WHERE c.plan_id = pi.plan_id AND c.project_id = p.project_id
          ORDER BY e.executed_at DESC NULLS LAST, e.created_at DESC
          LIMIT 1
-       ) lastex ON pi.testcase_id IS NOT NULL
+        ) lastex ON t.id IS NOT NULL
        WHERE pi.plan_id = $1 AND pi.deleted_at IS NULL
        ORDER BY pi.position, pi.created_at`,
       [planId]
@@ -6258,12 +7005,19 @@ export class LegacyService implements OnModuleInit {
   }
 
   async addPlanItem(userId: string | null | undefined, planId: string, body: Body) {
-    await this.requirePlanAccess(userId, planId);
-    const res = await this.db.query(
-      "INSERT INTO plan_items (plan_id, suite_id, testcase_id, position) VALUES ($1,$2,$3,$4) RETURNING *",
-      [planId, body.suiteId || null, body.testcaseId || null, body.position || 0]
-    );
-    return toCamel(res.rows[0]);
+    const projectId = await this.requirePlanAccess(userId, planId);
+    const suiteId = body.suiteId || null, testcaseId = body.testcaseId || null;
+    if (!suiteId && !testcaseId) throw new BadRequestException({ error: "Select a suite or test case" });
+    return this.db.transaction(async (client) => {
+      await this.lockPlanProjectReference(client, "plans", projectId, planId, "Plan");
+      if (suiteId) await this.lockPlanProjectReference(client, "suites", projectId, suiteId, "Suite");
+      if (testcaseId) await this.lockPlanProjectReference(client, "testcases", projectId, testcaseId, "Test case");
+      const res = await client.query(
+        "INSERT INTO plan_items (plan_id, suite_id, testcase_id, position) VALUES ($1,$2,$3,$4) RETURNING *",
+        [planId, suiteId, testcaseId, body.position || 0]
+      );
+      return toCamel(res.rows[0]);
+    });
   }
 
   async deletePlanItem(userId: string | null | undefined, planId: string, itemId: string) {
@@ -6284,7 +7038,8 @@ export class LegacyService implements OnModuleInit {
       `SELECT c.*,
               ${LegacyService.EXECUTION_BUCKET_COUNTS}
        FROM cycles c
-       LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
+        JOIN plans p ON p.id = c.plan_id AND p.project_id = c.project_id
+        LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
        LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
        WHERE c.plan_id = $1 AND c.deleted_at IS NULL
        GROUP BY c.id
@@ -6314,7 +7069,8 @@ export class LegacyService implements OnModuleInit {
       `SELECT COUNT(DISTINCT c.id)::int AS run_count,
               ${LegacyService.EXECUTION_BUCKET_COUNTS}
        FROM cycles c
-       LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
+        JOIN plans p ON p.id = c.plan_id AND p.project_id = c.project_id
+        LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
        LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
        WHERE c.plan_id = $1 AND c.deleted_at IS NULL`,
       [planId]
@@ -6390,12 +7146,12 @@ export class LegacyService implements OnModuleInit {
    * Kept unguarded for the MCP tool, whose API token is already bound to one project. Route traffic
    * goes through createCycleForUser.
    */
-  async createCycle(projectId: string, body: Body) {
+  async createCycle(projectId: string, body: Body, runner?: PoolClient) {
     validateBoundedField(body.name, "Test run name", CYCLE_NAME_MAX_LENGTH);
     validateBoundedField(body.environment, "Environment", CYCLE_LABEL_MAX_LENGTH);
     validateBoundedField(body.buildVersion, "Build version", CYCLE_LABEL_MAX_LENGTH);
     validateBoundedField(body.releaseName, "Release name", CYCLE_LABEL_MAX_LENGTH);
-    const res = await this.db.query(
+    const insert = async (client: { query: (sql: string, values: unknown[]) => Promise<{ rows: QueryResultRow[] }> }) => client.query(
       `INSERT INTO cycles (project_id, plan_id, name, description, environment, build_version, release_name, owner_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
@@ -6409,7 +7165,380 @@ export class LegacyService implements OnModuleInit {
         body.ownerId || null
       ]
     );
+    // All REST aliases and both MCP creation tools reach this writer. Do not depend on
+    // a particular adapter checking the Plan or copy a stale pre-transaction eligibility read.
+    const res = runner
+      ? await (async () => {
+          if (body.planId) {
+            await this.lockPlanProjectReference(runner, "plans", projectId, body.planId, "Plan");
+          }
+          return insert(runner);
+        })()
+      : body.planId ? await this.db.transaction(async (client) => {
+          await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+          return insert(client);
+        }) : await insert(this.db);
     return toCamel(res.rows[0]);
+  }
+
+  /**
+   * Native atomic path for MCP "create_cycle_from_testcases". Creating a run
+   * and attaching cases as separate public requests can leave an orphan run
+   * when an existing case is demoted to Draft between the two. Share the
+   * same Approved-only writer, plan lineage and run locking as REST instead.
+   */
+  async createCycleWithTestcasesForUser(
+    userId: string | null | undefined, projectId: string, body: Body, runner?: PoolClient
+  ): Promise<{ cycle: ReturnType<typeof toCamel>; requested: number; added: number; skipped: number }> {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const raw = body.testcaseIds || (body.testcaseId ? [body.testcaseId] : []);
+    const requested = normalizeJsonArray(raw).length;
+    const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
+    const create = async (client: PoolClient) => {
+      const cycle = await this.createCycle(projectId, body, client);
+      const results = ids.length
+        ? await this.insertApprovedCycleItems(client, projectId, cycle.id, ids)
+        : { rows: [] };
+      return { cycle, requested, added: results.rows.length, skipped: requested - results.rows.length };
+    };
+    // An internal owner may append provenance to the same transaction. Public REST/MCP callers
+    // still receive this method's ordinary self-contained atomic run-creation boundary.
+    return runner ? create(runner) : this.db.transaction(create);
+  }
+
+  /**
+   * `POST /api/projects/:projectId/cycles/from-cases` — a run plus the cases it was given.
+   *
+   * The route was wired to plain `createCycleForUser`, which reads no case ids, so a caller that
+   * supplied `testcaseIds` got an empty run and no error. docs/automation-integration-plan.md
+   * files this as trap 3, and e2e/api/cycles.spec.ts pinned the alias behaviour so that changing
+   * it would be a deliberate, visible edit rather than an accidental contract shift.
+   *
+   * It reuses the writer the MCP `create_cycle_from_testcases` tool already uses, so the run and
+   * its cases commit together: a Draft/Demoted case refuses the whole request (409, no orphan
+   * run), ids that do not resolve inside this project are reported in `skipped` instead of being
+   * silently dropped, and a duplicate id attaches once (`requested` counts the list as sent). The
+   * response keeps the cycle row at the top level for existing callers and appends the counts.
+   */
+  async createCycleFromCasesForUser(userId: string | null | undefined, projectId: string, body: Body) {
+    const { cycle, requested, added, skipped } = await this.createCycleWithTestcasesForUser(userId, projectId, body);
+    return { ...(cycle as Body), requested, added, skipped };
+  }
+
+  /** Native retest review: old observations and current approved definitions have different owners. */
+  private async nativeRetestBasis(client: PoolClient, projectId: string, cycle: Body, ids: string[], lockCases = false) {
+    const sourceQuery = `SELECT e.id::text AS execution_id, ci.id::text AS cycle_item_id, ci.testcase_id::text AS testcase_id,
+              ci.snapshot_title, ci.snapshot_external_id, ci.snapshot_approval_revision,
+              ci.snapshot_reviewed_content,
+              to_jsonb(e) AS result,
+              jsonb_build_object('title',ci.snapshot_title,'description',ci.snapshot_description,
+                'preconditions',ci.snapshot_preconditions,'postconditions',ci.snapshot_postconditions,
+                'steps',ci.snapshot_steps,'testData',ci.snapshot_test_data) AS legacy_definition
+         FROM executions e JOIN cycle_items ci ON ci.id=e.cycle_item_id
+        WHERE ci.cycle_id=$1 AND e.id=ANY($2::uuid[]) AND ci.deleted_at IS NULL AND e.deleted_at IS NULL
+        ORDER BY e.id`;
+    let sourceRows = await client.query(sourceQuery, [cycle.id, ids]);
+    if (sourceRows.rows.length !== ids.length) {
+      throw new NotFoundException({ error: "One or more selected executions are unavailable in this source run" });
+    }
+    const caseIds = sourceRows.rows.map((row) => String(row.testcase_id));
+    if (lockCases) {
+      await client.query(
+        "SELECT id FROM testcases WHERE project_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE",
+        [projectId, caseIds]
+      );
+      // Match native Bug/run lock order: parent Run, cases, memberships, executions, then Bugs.
+      // Parent locking serializes supported result/import/upload writers; explicit child locks
+      // also fence a direct occurrence edit. A fresh read after waiting cannot preserve old data.
+      await client.query(`SELECT ci.id FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+        WHERE ci.cycle_id=$1 AND e.id=ANY($2::uuid[]) ORDER BY ci.id FOR SHARE OF ci`,[cycle.id,ids]);
+      await client.query("SELECT id FROM executions WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE",[ids]);
+      sourceRows = await client.query(sourceQuery,[cycle.id,ids]);
+      if (sourceRows.rows.length !== ids.length || sourceRows.rows.some((row,index)=>row.testcase_id !== caseIds[index])) {
+        throw new ConflictException({ code:"RETEST_PREVIEW_CHANGED", error:"A selected source occurrence changed; review a fresh retest preview" });
+      }
+    }
+    // Fresh statement after locks: dependency edits use the same testcase serialization point.
+    const current = await client.query(
+      `SELECT testcases.id::text AS id, title, external_id, status,
+              ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision,
+              ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
+              testcase_approval_snapshot(id) AS reviewed_content
+         FROM testcases WHERE project_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL`, [projectId, caseIds]
+    );
+    const byCase = new Map(current.rows.map((row) => [String(row.id), row]));
+    const evidence = await client.query(
+      `SELECT id::text, entity_id::text AS execution_id, file_name, content_type, file_size, uploaded_by, created_at
+         FROM attachments WHERE project_id=$1 AND entity_type='execution' AND entity_id=ANY($2::uuid[])
+          AND deleted_at IS NULL ORDER BY id FOR SHARE`, [projectId, ids]
+    );
+    // Unlink and Bug deletion use the Bug-owner lock even when no Run is changed. Acquire those
+    // owners before the fresh active-link read; a pre-wait join is not an accepted source receipt.
+    await client.query(`SELECT b.id FROM bugs b
+      WHERE b.project_id=$1 AND b.deleted_at IS NULL AND EXISTS (
+        SELECT 1 FROM bug_links bl WHERE bl.bug_id=b.id AND bl.cycle_id=$2
+          AND bl.execution_id=ANY($3::uuid[]) AND bl.deleted_at IS NULL)
+      ORDER BY b.id FOR SHARE`,[projectId,cycle.id,ids]);
+    const links = await client.query(
+      `SELECT bl.id::text, bl.bug_id::text, bl.execution_id::text
+         FROM bug_links bl JOIN bugs b ON b.id=bl.bug_id
+        WHERE b.project_id=$1 AND bl.cycle_id=$2 AND bl.execution_id=ANY($3::uuid[])
+          AND b.deleted_at IS NULL AND bl.deleted_at IS NULL ORDER BY bl.id FOR SHARE OF bl`,
+      [projectId, cycle.id, ids]
+    );
+    const occurrences = sourceRows.rows.map((row) => {
+      const target = byCase.get(row.testcase_id);
+      return {
+        sourceCycleItemId: row.cycle_item_id, sourceExecutionId: row.execution_id, testcaseId: row.testcase_id,
+        sourceTitle: row.snapshot_title, sourceExternalId: row.snapshot_external_id,
+        sourceApprovalRevision: row.snapshot_approval_revision,
+        sourceDefinition: row.snapshot_reviewed_content ?? row.legacy_definition,
+        sourceDefinitionBasis: row.snapshot_reviewed_content ? "reviewed_snapshot" : "legacy_snapshot_unknown_approval",
+        sourceResult: row.result,
+        sourceEvidence: evidence.rows.filter((item) => item.execution_id === row.execution_id).map(toCamel),
+        sourceBugLinks: links.rows.filter((item) => item.execution_id === row.execution_id).map(toCamel),
+        currentCase: target ? {
+          id: target.id, title: target.title, externalId: target.external_id, status: target.status,
+          approvalRevision: target.approval_revision, approvalCurrent: target.approval_current === true,
+          reviewedContent: target.reviewed_content
+        } : null,
+        eligible: target?.approval_current === true,
+        definitionChanged: row.snapshot_approval_revision !== target?.approval_revision
+      };
+    });
+    const basis = {
+      projectId, sourceCycleId: String(cycle.id),
+      sourceRun: { id: cycle.id, name: cycle.name, source: cycle.source, environment: cycle.environment,
+        buildVersion: cycle.build_version, status: cycle.status },
+      occurrences
+    };
+    // Convert pg Date values identically to their HTTP representation before computing the digest.
+    const normalized = JSON.parse(JSON.stringify(basis)) as typeof basis;
+    return { ...normalized, previewDigest: retestDigest(normalized) };
+  }
+
+  async previewNativeRetest(cycleId: string, userId: string | null | undefined, rawIds: unknown) {
+    const projectId = await this.requireCycleAccess(userId, cycleId);
+    const ids = retestExecutionIds(rawIds);
+    return this.db.transaction(async (client) => {
+      const source = await client.query("SELECT * FROM cycles WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR SHARE", [cycleId, projectId]);
+      if (!source.rows[0]) throw new NotFoundException({ error: "Source run not found" });
+      await this.requireCurrentProjectAuthority(client, projectId, userId);
+      return this.nativeRetestBasis(client, projectId, source.rows[0], ids);
+    });
+  }
+
+  private nativeRetestReceipt(row: Body, replayed: boolean) {
+    return { outcome: "created" as const, cycleId: String(row.id), sourceCycleId: String(row.retest_source_cycle_id),
+      requestKey: String(row.retest_request_key), requestDigest: row.retest_request_digest,
+      manifestDigest: row.retest_manifest_digest, manifest: row.retest_manifest,
+      available: row.deleted_at == null, replayed };
+  }
+
+  private static readonly NATIVE_RETEST_SOURCE_IDENTITY_SQL = `(c.deleted_at IS NULL OR EXISTS (
+    SELECT 1 FROM cycle_retest_requests request WHERE request.project_id=c.project_id
+      AND request.source_cycle_id=c.id))`;
+
+  /** Native recovery can fence an unresolved command even when its source was already deleted. */
+  private async requireNativeRetestSourceAccess(userId: string | null | undefined, cycleId: string, allowUnresolvedDeleted = false) {
+    const uid = this.requireUser(userId);
+    if (!isUuid(cycleId)) throw new NotFoundException({ error: "Source run not found" });
+    const source = await this.db.query(
+      `SELECT c.project_id,c.deleted_at FROM cycles c WHERE c.id=$1 AND
+        ${allowUnresolvedDeleted ? "TRUE" : LegacyService.NATIVE_RETEST_SOURCE_IDENTITY_SQL}`, [cycleId]
+    );
+    if (!source.rows[0]) throw new NotFoundException({ error: "Source run not found" });
+    const projectId = String(source.rows[0].project_id);
+    await this.requireProjectAccess(uid, projectId);
+    return { projectId, deleted: source.rows[0].deleted_at != null };
+  }
+
+  private async lockNativeRetestRequest(client: PoolClient, projectId: string, cycleId: string, userId: string, requestKey: string, creating = false) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`native-retest:${projectId}:${requestKey}`]);
+    const source = await client.query(`SELECT * FROM cycles WHERE id=$1 AND project_id=$2 FOR ${creating ? "UPDATE" : "SHARE"}`, [cycleId,projectId]);
+    if (!source.rows[0]) throw new NotFoundException({ error: "Source run not found" });
+    const authority = await this.requireCurrentProjectAuthority(client, projectId, userId);
+    const prior = await client.query("SELECT * FROM cycle_retest_requests WHERE project_id=$1 AND request_key=$2", [projectId,requestKey]);
+    return { source:source.rows[0], authority, prior:prior.rows[0] };
+  }
+
+  private assertNativeRetestRequestBinding(row: Body, cycleId: string, userId: string, requestDigest?: string) {
+    if (row.source_cycle_id !== cycleId.toLowerCase() || row.requested_by !== userId ||
+        (requestDigest !== undefined && row.request_digest !== requestDigest)) {
+      throw new ConflictException({ code:"RETEST_REQUEST_CONFLICT", error:"This request key already belongs to a different retest request" });
+    }
+  }
+
+  private async nativeRetestRequestResult(client: PoolClient, row: Body) {
+    if (row.outcome === "cancelled") {
+      return { outcome:"cancelled" as const, projectId:String(row.project_id),sourceCycleId:String(row.source_cycle_id),
+        requestKey:String(row.request_key),requestDigest:row.request_digest,requestedBy:String(row.requested_by),
+        cancelledAt:new Date(row.decided_at).toISOString() };
+    }
+    const created = await client.query("SELECT * FROM cycles WHERE id=$1 AND project_id=$2", [row.destination_cycle_id,row.project_id]);
+    if (!created.rows[0]) throw new Error("The retained native retest destination is unavailable");
+    return this.nativeRetestReceipt(created.rows[0],true);
+  }
+
+  async readNativeRetestRequest(cycleId: string, userId: string | null | undefined, rawKey: unknown, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const { projectId } = await this.requireNativeRetestSourceAccess(uid, cycleId, true);
+    const requestKey = retestRequestKey(rawKey);
+    return this.db.transaction(async (client) => {
+      const { prior } = await this.lockNativeRetestRequest(client,projectId,cycleId,uid,requestKey);
+      if (!prior) throw new NotFoundException({ error:"No terminal retest outcome was found for this request" });
+      this.assertNativeRetestRequestBinding(prior,cycleId,uid);
+      return this.nativeRetestRequestResult(client,prior);
+    });
+  }
+
+  async cancelNativeRetestRequest(cycleId: string, userId: string | null | undefined, rawKey: unknown, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const { projectId } = await this.requireNativeRetestSourceAccess(uid,cycleId,true);
+    cycleId = cycleId.toLowerCase();
+    const input = retestCreateInput(body), requestKey = retestRequestKey(rawKey);
+    if (input.requestKey !== requestKey) throw new BadRequestException({ error:"The URL and original request key must match" });
+    const requestDigest = retestDigest({sourceCycleId:cycleId,actorId:uid,...input});
+    return this.db.transaction(async (client) => {
+      const { source,prior } = await this.lockNativeRetestRequest(client,projectId,cycleId,uid,requestKey);
+      if (prior) {
+        this.assertNativeRetestRequestBinding(prior,cycleId,uid,requestDigest);
+        return this.nativeRetestRequestResult(client,prior);
+      }
+      const cancelled = await client.query(`INSERT INTO cycle_retest_requests
+        (project_id,request_key,source_cycle_id,request_digest,requested_by,outcome)
+        VALUES ($1,$2,$3,$4,$5,'cancelled') RETURNING *`, [projectId,requestKey,cycleId,requestDigest,uid]);
+      await this.logProjectActivity(projectId,uid,"run_retest_cancelled","cycle",cycleId,source.name,
+        {requestKey,requestDigest,sourceExecutionIds:input.executionIds,principalKind:"human_session"},client);
+      return this.nativeRetestRequestResult(client,cancelled.rows[0]);
+    });
+  }
+
+  async createNativeRetest(cycleId: string, userId: string | null | undefined, body: Body, principal?: ReviewPrincipal) {
+    // This is the native human retest sibling. External executor assignment has its separate owner.
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const { projectId } = await this.requireNativeRetestSourceAccess(uid, cycleId);
+    cycleId = cycleId.toLowerCase();
+    const input = retestCreateInput(body);
+    const requestDigest = retestDigest({ sourceCycleId: cycleId, actorId: uid, ...input });
+    return this.db.transaction(async (client) => {
+      const { source,authority,prior } = await this.lockNativeRetestRequest(client,projectId,cycleId,uid,input.requestKey,true);
+      if (prior) {
+        this.assertNativeRetestRequestBinding(prior,cycleId,uid,requestDigest);
+        const result = await this.nativeRetestRequestResult(client,prior);
+        if (result.outcome === "cancelled") {
+          throw new ConflictException({code:"RETEST_REQUEST_CANCELLED",error:"This retest request was cancelled; review again before creating a new retest",disposition:result});
+        }
+        return result;
+      }
+      if (source.deleted_at != null) throw new NotFoundException({ error: "Source run not found" });
+      const basis = await this.nativeRetestBasis(client, projectId, source, input.executionIds, true);
+      if (basis.previewDigest !== input.expectedPreviewDigest) {
+        throw new ConflictException({ code: "RETEST_PREVIEW_CHANGED", error: "The source observation or current case definition changed; review a fresh retest preview" });
+      }
+      if (basis.occurrences.some((item) => !item.eligible)) {
+        throw new ConflictException({ code: "TESTCASE_APPROVAL_REQUIRED", error: "Every selected case needs a current exact human approval before retesting" });
+      }
+      // Recheck the canonical entitlement after every source/definition wait, using this native
+      // transaction. A preguard request/Redis cache cannot authorize a newly locked project.
+      await this.planLimits.assertProjectWritable(String(authority.organization_id), projectId, client);
+      const created = await this.createCycleWithTestcasesForUser(uid, projectId, {
+        name: input.name, description: input.description, environment: input.environment,
+        buildVersion: input.buildVersion, ownerId: uid,
+        testcaseIds: basis.occurrences.map((item) => item.testcaseId)
+      }, client);
+      if (created.added !== basis.occurrences.length) throw new ConflictException({ error: "The exact selected cases could not be added; no retest was created" });
+      const targets = await client.query(
+        `SELECT ci.id::text AS cycle_item_id,e.id::text AS execution_id,ci.testcase_id::text AS testcase_id,
+                ci.snapshot_approval_revision,ci.snapshot_reviewed_content
+           FROM cycle_items ci JOIN executions e ON e.cycle_item_id=ci.id
+          WHERE ci.cycle_id=$1 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`, [created.cycle.id]
+      );
+      const byCase = new Map(targets.rows.map((row) => [row.testcase_id, row]));
+      const manifest = {
+        schemaVersion: 1, projectId, sourceCycleId: cycleId, cycleId: created.cycle.id,
+        createdBy: uid, principalKind: "human_session", createdAt: new Date().toISOString(),
+        sourceRun: basis.sourceRun, sourcePreviewDigest: basis.previewDigest,
+        targetRun: { name: input.name, environment: input.environment, buildVersion: input.buildVersion },
+        occurrences: basis.occurrences.map((item) => {
+          const target = byCase.get(item.testcaseId);
+          if (!target || target.snapshot_approval_revision !== item.currentCase?.approvalRevision) {
+            throw new ConflictException({ error: "The retest definition changed; no retest was created" });
+          }
+          return { ...item, cycleItemId: target.cycle_item_id, executionId: target.execution_id,
+            targetApprovalRevision: target.snapshot_approval_revision, targetDefinition: target.snapshot_reviewed_content };
+        })
+      };
+      const saved = await client.query(
+        `UPDATE cycles SET retest_source_cycle_id=$2,retest_request_key=$3,retest_request_digest=$4,
+            retest_manifest=$5::jsonb,retest_manifest_digest=encode(sha256(convert_to(($5::jsonb)::text,'UTF8')),'hex')
+          WHERE id=$1 RETURNING *`, [created.cycle.id, cycleId, input.requestKey, requestDigest, JSON.stringify(manifest)]
+      );
+      await client.query(`INSERT INTO cycle_retest_requests
+        (project_id,request_key,source_cycle_id,request_digest,requested_by,outcome,destination_cycle_id)
+        VALUES ($1,$2,$3,$4,$5,'created',$6)`, [projectId,input.requestKey,cycleId,requestDigest,uid,created.cycle.id]);
+      await this.logProjectActivity(projectId, uid, "run_retest_created", "cycle", created.cycle.id, input.name,
+        { sourceCycleId: cycleId, requestKey: input.requestKey, manifestDigest: saved.rows[0].retest_manifest_digest,
+          sourceExecutionIds: input.executionIds }, client);
+      return this.nativeRetestReceipt(saved.rows[0], false);
+    });
+  }
+
+  async listNativeRetests(cycleId: string, userId: string | null | undefined) {
+    const projectId = await this.requireCycleAccess(userId, cycleId);
+    const result = await this.db.query(
+      `SELECT id,name,status,created_at FROM cycles
+        WHERE project_id=$1 AND retest_source_cycle_id=$2 AND deleted_at IS NULL ORDER BY created_at,id`,
+      [projectId, cycleId]
+    );
+    return result.rows.map(toCamel);
+  }
+
+  /**
+   * A due schedule creates a new native Test Run cloned from the run it points at.
+   *
+   * It deliberately does not write into the scheduled run's own executions: a repeated nightly run
+   * must keep each occurrence's results, attachments and history. Only Approved cases are carried
+   * over, through the same insertApprovedCycleItems writer every other creation path uses, so a case
+   * demoted to Draft between occurrences is skipped rather than smuggled into a run.
+   *
+   * Unauthorized by caller by design: the schedule row's project was authorized when the schedule was
+   * created, and the worker has no session. Like createCycle, this is a system writer — route traffic
+   * never reaches it.
+   */
+  async createCycleFromScheduledRun(input: { projectId: string; cycleId: string; scheduledFor?: Date }) {
+    const source = await this.db.query<Body>(
+      "SELECT * FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL",
+      [input.cycleId, input.projectId]
+    );
+    const cycleRow = source.rows[0];
+    if (!cycleRow) throw new NotFoundException({ error: "Scheduled test run no longer exists" });
+    const cases = await this.db.query<{ testcase_id: string }>(
+      `SELECT DISTINCT ci.testcase_id FROM cycle_items ci
+       JOIN testcases t ON t.id = ci.testcase_id AND t.deleted_at IS NULL
+       WHERE ci.cycle_id = $1`,
+      [input.cycleId]
+    );
+    const stamp = (input.scheduledFor ?? new Date()).toISOString().slice(0, 16).replace("T", " ");
+    const base = String(cycleRow.name || "Test run");
+    const suffix = ` — scheduled ${stamp}Z`;
+    const name = `${base.slice(0, Math.max(1, CYCLE_NAME_MAX_LENGTH - suffix.length))}${suffix}`;
+    return this.db.transaction(async (client) => {
+      const created = await this.createCycle(input.projectId, {
+        planId: cycleRow.plan_id,
+        name,
+        description: cycleRow.description || "",
+        environment: cycleRow.environment,
+        buildVersion: cycleRow.build_version,
+        releaseName: cycleRow.release_name,
+        ownerId: cycleRow.owner_id
+      }, client);
+      await this.insertApprovedCycleItems(client, input.projectId, created.id, cases.rows.map((row) => String(row.testcase_id)));
+      return created;
+    });
   }
 
   /**
@@ -6470,10 +7599,13 @@ export class LegacyService implements OnModuleInit {
   }
 
   async publicCycle(token: string) {
+    // Publish only the eight owner-approved fields rendered by the existing share page.
+    // Never select the full internal Run: new columns must not become public by default.
     // deleted_at IS NULL: a soft-deleted run's public share link must go dead, not keep resolving
     // to a "deleted" run forever (hard-delete remediation Phase 1).
     const res = await this.db.query(
-      "SELECT * FROM cycles WHERE share_token = $1 AND share_enabled = true AND deleted_at IS NULL",
+      `SELECT name, status, description, environment, build_version, created_at, started_at, ended_at
+       FROM cycles WHERE share_token = $1 AND share_enabled = true AND deleted_at IS NULL`,
       [token]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Shared run not found" });
@@ -6565,6 +7697,37 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
+  /**
+   * Serialize Run lifecycle changes with case removals. Every writer which can
+   * remove a run's final active case must acquire this same parent-row lock
+   * before checking/mutating membership. Locking the Run alone in updateCycle
+   * would not make the membership check atomic with a concurrent removal.
+   */
+  private async lockActiveCycle(client: PoolClient, cycleId: string) {
+    const res = await client.query<{ status: string | null; name: string; external_id: string | null; owner_id: string | null; source: string | null; closed_at: Date | null }>(
+      "SELECT status, name, external_id, owner_id, source, closed_at FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+      [cycleId]
+    );
+    if (!res.rows[0]) throw new NotFoundException({ error: "Cycle not found" });
+    return res.rows[0];
+  }
+
+  /**
+   * Automation closeRun owns the final verdict of an automated run. Manual
+   * run actions and MCP result edits share the executions tables, so they
+   * must acquire the parent cycle lock and reject writes after close.
+   * Human-operated manual runs retain their current correction behavior.
+   */
+  private isAutomatedRunFinalized(run: { source?: string | null; closed_at?: Date | null }) {
+    return run.source === "automation" && run.closed_at != null;
+  }
+
+  private assertAutomatedRunWritable(run: { source?: string | null; closed_at?: Date | null }) {
+    if (this.isAutomatedRunFinalized(run)) {
+      throw new ConflictException({ error: "This automated run is finalized; use a new run for corrections" });
+    }
+  }
+
   async updateCycle(cycleId: string, userId: string | null | undefined, body: Body) {
     const projectId = await this.requireCycleAccess(userId, cycleId);
     validateBoundedField(body.name, "Test run name", CYCLE_NAME_MAX_LENGTH);
@@ -6587,26 +7750,43 @@ export class LegacyService implements OnModuleInit {
      *                  so a duration is never computed from a null start
      *   → Planning     leaves the original start alone but clears the end: it is not finished
      */
-    const status = typeof body.status === "string" ? body.status : null;
-    // A run with no cases has nothing to execute or complete; the UI disables both buttons, and
-    // this keeps the API from being a way around it.
-    if (status === "In Progress" || status === "Completed") {
-      const items = await this.db.query(
-        "SELECT 1 FROM cycle_items WHERE cycle_id = $1 AND deleted_at IS NULL LIMIT 1",
-        [cycleId]
-      );
-      if (!items.rows[0]) {
-        throw new BadRequestException({ error: "Add at least one test case before starting or completing a run" });
-      }
+    // Reuse the canonical run vocabulary also enforced for history imports.
+    // Reject malformed and unknown states before they reach the SQL column or
+    // get silently treated as metadata-only updates.
+    if (body.status !== undefined && body.status !== null &&
+        (typeof body.status !== "string" || !LegacyService.RUN_STATUSES.includes(body.status))) {
+      throw new BadRequestException({
+        error: `status must be one of: ${LegacyService.RUN_STATUSES.join(", ")}`
+      });
     }
-    // What the run was before this save, so the status transition can be told after it.
-    const beforeRun = status
-      ? (await this.db.query<{ status: string | null; name: string; external_id: string | null; owner_id: string | null }>(
-          "SELECT status, name, external_id, owner_id FROM cycles WHERE id = $1",
+    const status = typeof body.status === "string" ? body.status : null;
+    // Serialize the case-presence check, previous lifecycle state and status
+    // change with deletions of run membership. The transaction commits before
+    // notification, preventing observers from seeing uncommitted transitions.
+    const beforeRun = await this.db.transaction(async (client) => {
+      const before = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(before);
+      // clearPlan deliberately wins, as in the existing SQL contract. Omitted Plan keeps it.
+      if (body.clearPlan !== true && body.planId) {
+        await this.lockPlanProjectReference(client, "plans", projectId, body.planId, "Plan");
+      }
+      // Automated runs cannot be marked Completed through the generic UI
+      // endpoint: only closeRun seals closed_at together with stored counts.
+      if (before.source === "automation" && status) {
+        throw new ConflictException({ error: "Automated run lifecycle must be changed through the automation run API" });
+      }
+      // Policy unchanged: a Run needs one active case to start or complete.
+      // Pending/Untested cases are permitted until product policy is approved.
+      if (status === "In Progress" || status === "Completed") {
+        const items = await client.query(
+          "SELECT 1 FROM cycle_items WHERE cycle_id = $1 AND deleted_at IS NULL LIMIT 1",
           [cycleId]
-        )).rows[0]
-      : undefined;
-    await this.db.query(
+        );
+        if (!items.rows[0]) {
+          throw new BadRequestException({ error: "Add at least one test case before starting or completing a run" });
+        }
+      }
+      await client.query(
       `UPDATE cycles SET name=COALESCE($2,name), description=COALESCE($3,description),
        environment=COALESCE($4,environment), build_version=COALESCE($5,build_version),
        release_name=COALESCE($6,release_name),
@@ -6614,7 +7794,7 @@ export class LegacyService implements OnModuleInit {
        status=COALESCE($9,status),
        started_at=CASE WHEN $9 IN ('In Progress', 'Completed') THEN COALESCE(started_at, now()) ELSE started_at END,
        ended_at=CASE WHEN $9 = 'Completed' THEN now() WHEN $9 IN ('In Progress', 'Planning') THEN NULL ELSE ended_at END,
-       updated_at=now() WHERE id=$1`,
+       updated_at=now() WHERE id=$1 AND deleted_at IS NULL`,
       [
         cycleId,
         body.name || null,
@@ -6627,6 +7807,8 @@ export class LegacyService implements OnModuleInit {
         status
       ]
     );
+      return status ? before : undefined;
+    });
     if (beforeRun && status) await this.notifyRunLifecycle(cycleId, projectId, userId ?? null, beforeRun, status);
   }
 
@@ -6694,7 +7876,21 @@ export class LegacyService implements OnModuleInit {
     const ids = [...new Set(normalizeJsonArray(raw).map((id) => String(id)).filter((id) => isUuid(id)))];
     if (!ids.length) return { requested, added: 0, skipped: requested };
 
-    const res = await this.db.query<{ id: string }>(
+    const res = await this.db.transaction((client) =>
+      this.insertApprovedCycleItems(client, projectId, cycleId, ids)
+    );
+    return { requested, added: res.rows.length, skipped: requested - res.rows.length };
+  }
+
+  private async insertApprovedCycleItems(
+    client: PoolClient, projectId: string, cycleId: string, ids: string[]
+  ) {
+      const cycle = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(cycle);
+      // Apply the QA approval invariant at the canonical transaction boundary,
+      // not only the Test Run picker. Locks prevent a concurrent Draft demotion.
+      await assertApprovedNewRunCases(client, projectId, cycleId, ids);
+      return client.query<{ id: string }>(
       `WITH input AS (
          SELECT id, ord FROM unnest($2::uuid[]) WITH ORDINALITY AS u(id, ord)
        ),
@@ -6724,14 +7920,17 @@ export class LegacyService implements OnModuleInit {
            cycle_id, testcase_id, snapshot_title, position,
            snapshot_external_id, snapshot_priority, snapshot_type, snapshot_suite_id,
            snapshot_description, snapshot_preconditions, snapshot_postconditions, snapshot_steps,
-           snapshot_test_data, snapshot_automation_status, snapshot_automation_tags
+           snapshot_test_data, snapshot_automation_status, snapshot_automation_tags,
+           snapshot_approval_revision, snapshot_reviewed_content
          )
          SELECT $1, t.id, t.title, base.pos + i.ord,
                 t.external_id, t.priority, t.type, t.suite_id,
                 t.description, t.preconditions, t.postconditions, t.steps,
-                t.test_data, t.automation_status, t.automation_tags
+                t.test_data, t.automation_status, t.automation_tags,
+                encode(sha256(convert_to(testcase_approval_snapshot(t.id)::text,'UTF8')),'hex'),
+                testcase_approval_snapshot(t.id)
            FROM input i
-           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3
+           JOIN testcases t ON t.id = i.id AND t.deleted_at IS NULL AND t.project_id = $3 AND t.status = 'Approved'
            CROSS JOIN base
           WHERE EXISTS (SELECT 1 FROM cycles c WHERE c.id = $1 AND c.deleted_at IS NULL)
          ON CONFLICT (cycle_id, testcase_id) WHERE deleted_at IS NULL DO NOTHING
@@ -6742,9 +7941,8 @@ export class LegacyService implements OnModuleInit {
        ON CONFLICT (cycle_item_id) DO NOTHING
        RETURNING id`,
       [cycleId, ids, projectId]
-    );
+      );
 
-    return { requested, added: res.rows.length, skipped: requested - res.rows.length };
   }
 
   /**
@@ -6759,6 +7957,8 @@ export class LegacyService implements OnModuleInit {
     await this.requireCycleAccess(userId, cycleId);
     if (!isUuid(testcaseId)) throw new NotFoundException({ error: "Test case not found" });
     await this.db.transaction(async (client) => {
+      const cycle = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(cycle);
       const itemRes = await client.query<{ id: string }>(
         `UPDATE cycle_items SET deleted_at = now(), deleted_by = $3
          WHERE cycle_id = $1 AND testcase_id = $2 AND deleted_at IS NULL
@@ -6797,6 +7997,8 @@ export class LegacyService implements OnModuleInit {
     // UPDATE per case (or dropping the entire run). executions are soft-deleted in a second
     // statement scoped to exactly the cycle_items this one just touched.
     await this.db.transaction(async (client) => {
+      const cycle = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(cycle);
       const itemsRes = await client.query<{ id: string }>(
         `UPDATE cycle_items SET deleted_at = now(), deleted_by = $3
          WHERE cycle_id = $1 AND testcase_id = ANY($2::uuid[]) AND deleted_at IS NULL
@@ -6912,17 +8114,45 @@ export class LegacyService implements OnModuleInit {
    * to tell which half of their selection took effect, and the UI offers these actions on a
    * multi-select where "some of them" is not a state the user can see.
    */
-  private async resolveBulkExecutions(cycleId: string, body: Body): Promise<string[]> {
+  private async resolveBulkExecutions(client: PoolClient, cycleId: string, projectId: string, body: Body): Promise<Body[]> {
     const ids = normalizeJsonArray(body.executionIds).map((id) => String(id));
     if (!ids.length) throw new BadRequestException({ error: "executionIds is required" });
     if (!ids.every((id) => isUuid(id))) throw new NotFoundException({ error: "Execution not found" });
-    const res = await this.db.query<{ id: string }>(
-      `SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
-       WHERE ci.cycle_id = $1 AND e.id = ANY($2::uuid[]) AND e.deleted_at IS NULL`,
-      [cycleId, ids]
+    const res = await client.query(
+      `SELECT e.*, c.project_id, ci.cycle_id,
+              COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title,
+              COALESCE(NULLIF(t.external_id, ''), NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Test case') AS tc_label
+       FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id AND ci.deleted_at IS NULL
+       JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL
+       LEFT JOIN testcases t ON t.id = ci.testcase_id
+       WHERE ci.cycle_id = $1 AND e.id = ANY($2::uuid[]) AND e.deleted_at IS NULL AND c.project_id = $3
+       ORDER BY e.id FOR UPDATE OF ci, e`,
+      [cycleId, ids, projectId]
     );
     if (res.rows.length !== ids.length) throw new NotFoundException({ error: "Execution not found" });
-    return res.rows.map((row) => row.id);
+    return res.rows;
+  }
+
+  /** One parent lock, one selection snapshot and one transaction for the entire REST batch. */
+  private async writeBulkExecutions(cycleId: string, projectId: string, uid: string, body: Body, changes: Body, assigneeId: string | null = null) {
+    return this.db.transaction(async (client) => {
+      this.assertAutomatedRunWritable(await this.lockActiveCycle(client, cycleId));
+      if (assigneeId !== null) {
+        // Hold membership until commit. Member cleanup deletes this row before touching executions,
+        // so it either completes first (we refuse) or waits and clears assignments after our batch.
+        const member = await client.query(
+          "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2 FOR KEY SHARE",
+          [projectId, assigneeId]
+        );
+        if (!member.rows[0]) throw new BadRequestException({ error: "The assignee must be a member of this project" });
+      }
+      const selected = await this.resolveBulkExecutions(client, cycleId, projectId, body);
+      const transitions: Array<{ before: Body; after: Body }> = [];
+      for (const before of selected) {
+        transitions.push({ before, after: await this.writeExecution(client, before, uid, changes, assigneeId) });
+      }
+      return transitions;
+    });
   }
 
   /**
@@ -6933,37 +8163,25 @@ export class LegacyService implements OnModuleInit {
    */
   async bulkUpdateExecutionStatus(cycleId: string, userId: string | null | undefined, body: Body) {
     const uid = this.requireUser(userId);
-    await this.requireCycleAccess(uid, cycleId);
+    const projectId = await this.requireCycleAccess(uid, cycleId);
     const status = String(body.status || "").trim();
     if (!LegacyService.EXECUTION_STATUSES.includes(status)) {
       throw new BadRequestException({
         error: `status must be one of: ${LegacyService.EXECUTION_STATUSES.join(", ")}`
       });
     }
-    const executionIds = await this.resolveBulkExecutions(cycleId, body);
     // Failed / Blocked keep their per-case matrix notifications. Any other status would otherwise be
     // one notification per case, so for those the per-case notice is silenced and each assignee gets
     // a single summary below. The "before" picture has to be read first — updateExecution overwrites it.
-    const summarise = status !== "Failed" && status !== "Blocked" && executionIds.length > 0;
-    const before = summarise ? await this.executionsBeforeBulkStatus(executionIds) : [];
-    for (const executionId of executionIds) {
-      await this.updateExecution(executionId, uid, { status }, { quietStatus: summarise });
+    const transitions = await this.writeBulkExecutions(cycleId, projectId, uid, body, { status });
+    const summarise = status !== "Failed" && status !== "Blocked";
+    for (const { before, after } of transitions) {
+      await this.publishExecutionChange(before, after, uid, { quietStatus: summarise });
     }
-    if (summarise) await this.notifyBulkStatusChange(cycleId, uid, status, before);
-    return { updated: executionIds.length, status };
-  }
-
-  private async executionsBeforeBulkStatus(executionIds: string[]): Promise<Array<{ status: string; assignee_id: string | null; tc_label: string }>> {
-    const res = await this.db.query<{ status: string; assignee_id: string | null; tc_label: string }>(
-      `SELECT e.status, e.assignee_id,
-              COALESCE(NULLIF(t.external_id, ''), NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Test case') AS tc_label
-       FROM executions e
-       JOIN cycle_items ci ON ci.id = e.cycle_item_id
-       LEFT JOIN testcases t ON t.id = ci.testcase_id
-       WHERE e.id = ANY($1::uuid[]) AND e.deleted_at IS NULL`,
-      [executionIds]
-    );
-    return res.rows;
+    if (summarise) await this.notifyBulkStatusChange(cycleId, uid, status, transitions.map(({ before }) => ({
+      status: before.status, assignee_id: before.assignee_id, tc_label: before.tc_label
+    })));
+    return { updated: transitions.length, status };
   }
 
   /** One notification per assignee covering every case of theirs whose status actually changed. */
@@ -7015,19 +8233,12 @@ export class LegacyService implements OnModuleInit {
     const assigneeId = body.assigneeId === null || body.assigneeId === undefined ? null : String(body.assigneeId);
     if (assigneeId !== null) {
       if (!isUuid(assigneeId)) throw new NotFoundException({ error: "Assignee not found" });
-      const member = await this.db.query(
-        "SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2",
-        [projectId, assigneeId]
-      );
-      if (!member.rows[0]) {
-        throw new BadRequestException({ error: "The assignee must be a member of this project" });
-      }
     }
-    const executionIds = await this.resolveBulkExecutions(cycleId, body);
-    for (const executionId of executionIds) {
-      await this.updateExecution(executionId, uid, { assigneeId });
+    const transitions = await this.writeBulkExecutions(cycleId, projectId, uid, body, { assigneeId }, assigneeId);
+    for (const { before, after } of transitions) {
+      await this.publishExecutionChange(before, after, uid);
     }
-    return { updated: executionIds.length, assigneeId };
+    return { updated: transitions.length, assigneeId };
   }
 
   /**
@@ -7062,8 +8273,17 @@ export class LegacyService implements OnModuleInit {
     return this.executions(cycleId);
   }
 
-  async updateExecution(executionId: string, actorId: string | null | undefined, body: Body, opts: { quietStatus?: boolean } = {}) {
+  async updateExecution(
+    executionId: string, actorId: string | null | undefined, body: Body,
+    opts: { quietStatus?: boolean; expectedCycleId?: string } = {}
+  ) {
     const uid = this.requireUser(actorId);
+    // The nested REST parent is trusted route context, never a body field. MCP and bulk
+    // callers without a nested URL still resolve/authorize the execution's actual parent.
+    const expectedCycleId = opts.expectedCycleId;
+    if (expectedCycleId !== undefined && !isUuid(expectedCycleId)) {
+      throw new NotFoundException({ error: "Execution not found" });
+    }
     /*
      * Basecamp 10189985971 (automation ingest scoping) surfaced this as a pre-existing defect.
      *
@@ -7091,15 +8311,17 @@ export class LegacyService implements OnModuleInit {
       }
     }
     const before = await this.db.query(
-      `SELECT e.*, c.project_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
+      `SELECT e.*, c.project_id, ci.cycle_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
        FROM executions e
-       JOIN cycle_items ci ON ci.id = e.cycle_item_id
-       JOIN cycles c ON c.id = ci.cycle_id
+       JOIN cycle_items ci ON ci.id = e.cycle_item_id AND ci.deleted_at IS NULL
+       JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL
        LEFT JOIN testcases t ON t.id = ci.testcase_id
        WHERE e.id = $1 AND e.deleted_at IS NULL`,
       [executionId]
     );
-    if (!before.rows[0]) throw new NotFoundException({ error: "Execution not found" });
+    if (!before.rows[0] || (expectedCycleId !== undefined && String(before.rows[0].cycle_id) !== expectedCycleId.toLowerCase())) {
+      throw new NotFoundException({ error: "Execution not found" });
+    }
     // The execution was resolved but its project never was: a signed-in caller from any workspace
     // could rewrite another team's result by execution id.
     await this.requireProjectAccess(uid, before.rows[0].project_id);
@@ -7114,7 +8336,6 @@ export class LegacyService implements OnModuleInit {
      * the database and in every export that reads it. A defect on a case that is no longer failing
      * is not data worth keeping — the bug itself, and its link, are what survive.
      */
-    const clearsDefect = typeof body.status === "string" && body.status !== "" && body.status !== "Failed";
     /*
      * "[Test Runs] Unable to assign test cases for execution": assignee_id used to be written
      * unconditionally as `body.assigneeId ?? null`, so any PATCH that didn't mention it — every
@@ -7122,7 +8343,6 @@ export class LegacyService implements OnModuleInit {
      * had just set. Same explicit-clear convention as clearsDefect/clearsPriority: key absent leaves
      * the column alone (COALESCE), key sent as null/"" clears it on purpose.
      */
-    const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
     let assigneeId: string | null = null;
     if (body.assigneeId !== undefined && body.assigneeId !== null && body.assigneeId !== "") {
       assigneeId = String(body.assigneeId);
@@ -7135,18 +8355,38 @@ export class LegacyService implements OnModuleInit {
         throw new BadRequestException({ error: "The assignee must be a member of this project" });
       }
     }
-    const res = await this.db.query(
+    const after = await this.db.transaction(async (client) => {
+      // Lock the parent run first, matching automation closeRun's lock order.
+      const locked = await client.query<{ source: string | null; closed_at: Date | null }>(
+        "SELECT source, closed_at FROM cycles WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+        [before.rows[0].cycle_id]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Run not found" });
+      this.assertAutomatedRunWritable(locked.rows[0]);
+      return this.writeExecution(client, before.rows[0], uid, body, assigneeId);
+    });
+    await this.publishExecutionChange(before.rows[0], after, uid, opts);
+  }
+
+  /** Shared row writer: caller owns the parent lock and transaction (single, MCP or REST bulk). */
+  private async writeExecution(client: PoolClient, before: Body, uid: string, body: Body, assigneeId: string | null): Promise<Body> {
+    const clearsDefect = typeof body.status === "string" && body.status !== "" && body.status !== "Failed";
+    const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
+    const updated = await client.query(
       `UPDATE executions SET status=COALESCE($2,status),
        assignee_id=CASE WHEN $9::boolean THEN NULL ELSE COALESCE($3,assignee_id) END,
        actual_result=COALESCE($4,actual_result),
        executed_at=CASE WHEN $2 IS NULL THEN executed_at ELSE now() END,
        defect_key=CASE WHEN $8::boolean THEN NULL ELSE COALESCE($5,defect_key) END,
        defect_url=CASE WHEN $8::boolean THEN NULL ELSE COALESCE($6,defect_url) END,
-       executed_by=$7, updated_at=now()
+       -- Metadata-only edits must not reassign execution provenance to the editor.
+       -- Explicit status writes retain the existing attribution convention.
+       executed_by=CASE WHEN $2 IS NULL THEN executed_by ELSE $7 END, updated_at=now()
        WHERE id=$1 AND deleted_at IS NULL
+         AND cycle_item_id IN (SELECT id FROM cycle_items WHERE cycle_id = $10::uuid AND deleted_at IS NULL)
        RETURNING *`,
       [
-        executionId,
+        before.id,
         body.status || null,
         assigneeId,
         body.actualResult || null,
@@ -7154,26 +8394,36 @@ export class LegacyService implements OnModuleInit {
         body.defectUrl || null,
         uid,
         clearsDefect,
-        clearsAssignee
+        clearsAssignee,
+        before.cycle_id
       ]
-    );
+      );
+      // Membership/result deletion or rebinding after the initial read must not turn an
+      // unavailable child into a successful edit/event, nor update a different run's result.
+      if (!updated.rows[0]) throw new NotFoundException({ error: "Execution not found" });
+      return updated.rows[0];
+  }
+
+  /** Called only after the owning single/batch COMMIT; rolled-back rows emit no success effects. */
+  private async publishExecutionChange(before: Body, after: Body, uid: string, opts: { quietStatus?: boolean } = {}) {
     // Fire-and-forget: logProjectActivity already swallows its own errors (see its `.catch` below)
     // and its result is never read, so there is no correctness reason for the status-update response
     // — which a user is watching live in the execution table's dropdown — to wait on this write.
+    const auditBefore = { ...before };
+    delete auditBefore.tc_label; // Batch-notification projection, not an execution/audit field.
     void this.logProjectActivity(
-      before.rows[0].project_id,
+      before.project_id,
       uid,
       "execution_updated",
       "execution",
-      executionId,
-      before.rows[0].testcase_title,
-      { before: toCamel(before.rows[0]), after: toCamel(res.rows[0]) }
+      String(before.id),
+      before.testcase_title,
+      { before: toCamel(auditBefore), after: toCamel(after) }
     );
     // Only when something notifiable moved (a new assignee or a new status), so a save that changes
     // neither does not pay for the extra lookups.
-    const after = res.rows[0];
-    if (after && (after.assignee_id !== before.rows[0].assignee_id || after.status !== before.rows[0].status)) {
-      await this.notifyExecutionChange(executionId, uid, { status: before.rows[0].status ?? null, assigneeId: before.rows[0].assignee_id ?? null }, opts);
+    if (after.assignee_id !== before.assignee_id || after.status !== before.status) {
+      await this.notifyExecutionChange(String(before.id), uid, { status: before.status ?? null, assigneeId: before.assignee_id ?? null }, opts);
     }
   }
 
@@ -7223,6 +8473,9 @@ export class LegacyService implements OnModuleInit {
     if (raw.length > LegacyService.HISTORY_IMPORT_MAX_TEXT) {
       throw new BadRequestException({ error: `${label} is too long (${raw.length} characters, the limit is ${LegacyService.HISTORY_IMPORT_MAX_TEXT})` });
     }
+    // PostgreSQL text/JSONB cannot represent U+0000. Reject it during full-payload
+    // normalization, before any run/result/snapshot writes, rather than stripping it.
+    if (raw.includes("\u0000")) throw new BadRequestException({ error: `${label} must not contain U+0000` });
     return raw;
   }
 
@@ -7261,9 +8514,10 @@ export class LegacyService implements OnModuleInit {
       if (!Array.isArray(run.tags)) throw new BadRequestException({ error: "run.tags must be an array of strings" });
       const seen = new Set<string>();
       const tags: string[] = [];
-      for (const raw of run.tags) {
+      for (const [index, raw] of run.tags.entries()) {
         const tag = typeof raw === "string" ? raw.trim() : "";
         if (!tag || tag.length > 40) throw new BadRequestException({ error: "Each run tag must be 1 to 40 characters" });
+        LegacyService.historyText(tag, `run.tags[${index}]`);
         if (seen.has(tag.toLowerCase())) continue;
         seen.add(tag.toLowerCase());
         tags.push(tag);
@@ -7317,13 +8571,19 @@ export class LegacyService implements OnModuleInit {
     });
   }
 
-  async importRunHistory(userId: string | null | undefined, cycleId: string, body: Body) {
+  private async requireRunHistoryAccess(userId: string | null | undefined, cycleId: string): Promise<string> {
     const uid = this.requireUser(userId);
     const projectId = await this.requireCycleAccess(uid, cycleId);
     const project = await this.requireProjectAccess(uid, projectId);
     if (this.normalizeRole(project.caller_role) === "qa_engineer") {
       throw new ForbiddenException({ error: "QA Engineers cannot import run history" });
     }
+    return projectId;
+  }
+
+  async importRunHistory(userId: string | null | undefined, cycleId: string, body: Body) {
+    const uid = this.requireUser(userId);
+    const projectId = await this.requireRunHistoryAccess(uid, cycleId);
 
     if (body.run !== undefined && (body.run === null || typeof body.run !== "object" || Array.isArray(body.run))) {
       throw new BadRequestException({ error: "run must be an object" });
@@ -7365,6 +8625,15 @@ export class LegacyService implements OnModuleInit {
 
     const refreshSnapshots = body.refreshSnapshots === true;
     const outcome = await this.db.transaction(async (client) => {
+      // Historical imports are intentionally privileged, but must not become
+      // a bypass around an already sealed automation run. Lock the same parent
+      // row as closeRun, so a concurrent close cannot land between the guard
+      // and the imported execution writes. Manual-run migration stays valid.
+      const lockedRun = await this.lockActiveCycle(client, cycleId);
+      this.assertAutomatedRunWritable(lockedRun);
+      if (lockedRun.source === "automation" && runFields.has("closed_at")) {
+        throw new ConflictException({ error: "Automation run finalization is controlled by the automation API" });
+      }
       if (runFields.size) {
         const params: unknown[] = [cycleId];
         const sets = [...runFields].map(([col, value]) => {
@@ -7457,8 +8726,11 @@ export class LegacyService implements OnModuleInit {
           'executionId', bl.execution_id
         ) ORDER BY bl.created_at) AS items
         FROM bug_links bl
-        LEFT JOIN testcases t ON t.id = bl.testcase_id
-        LEFT JOIN cycles c ON c.id = bl.cycle_id
+        -- Existing invalid links are retained as history, not authority to resolve metadata
+        -- from another project. Do not filter deleted local targets: their historical names
+        -- still belong here. Scoping the joins, not the rows, preserves link IDs and edit diffs.
+        LEFT JOIN testcases t ON t.id = bl.testcase_id AND t.project_id = b.project_id
+        LEFT JOIN cycles c ON c.id = bl.cycle_id AND c.project_id = b.project_id
         WHERE bl.bug_id = b.id AND bl.deleted_at IS NULL
       ) links ON true
       LEFT JOIN LATERAL (
@@ -7541,99 +8813,128 @@ export class LegacyService implements OnModuleInit {
     }));
   }
 
-  /*
-   * Linking a bug to a test case in a run marks that execution Failed.
-   *
-   * Basecamp 10226284379 and 10221755377 (the same request from two reporters): a bug was filed
-   * against a case in a run and the case sat there Untested, so the run's own numbers said nothing
-   * had gone wrong. The run screen already prompts for a bug when you mark something Failed; this is
-   * the reverse path — reporting from the Bugs page, or adding a link later — which never touched
-   * the execution at all.
-   *
-   * Decided behaviour: it ALWAYS sets Failed, including over a result someone already recorded. A
-   * bug against a case that is currently Passed is precisely the case worth flipping, and a rule
-   * with an exception in it ("unless someone passed it") is the kind that quietly does nothing on
-   * the day it matters. The previous status is written into the activity payload so the override is
-   * visible afterwards rather than silent, and an execution that is already Failed is left alone so
-   * re-linking doesn't churn executed_at or spam the activity stream.
-   *
-   * Scoped by project: a link row can name any execution id, and without the join a caller could
-   * flip a result in a workspace they cannot see.
-   */
-  private async failLinkedExecutions(projectId: string, actorId: string | null | undefined, links: Body[]) {
-    const executionIds = [...new Set(links.map((link) => link.executionId).filter((id): id is string => isUuid(String(id ?? ""))))];
-    if (executionIds.length === 0) return;
+  // Bug associations preserve execution evidence. The native result writer records an
+  // observed failure explicitly; a relationship alone never changes a verdict or attribution.
 
-    const affected = await this.db.query(
-      `SELECT e.id, e.status, e.assignee_id, COALESCE(NULLIF(ci.snapshot_title, ''), NULLIF(t.title, ''), 'Untitled test case') AS testcase_title
-         FROM executions e
-         JOIN cycle_items ci ON ci.id = e.cycle_item_id
-         JOIN cycles c ON c.id = ci.cycle_id
-         LEFT JOIN testcases t ON t.id = ci.testcase_id
-        WHERE e.id = ANY($1::uuid[]) AND e.deleted_at IS NULL AND c.project_id = $2`,
-      [executionIds, projectId]
-    );
-
-    for (const row of affected.rows) {
-      if (row.status === "Failed") continue;
-      await this.db.query(
-        `UPDATE executions SET status = 'Failed', executed_at = now(), executed_by = $2, updated_at = now()
-          WHERE id = $1 AND deleted_at IS NULL`,
-        [row.id, actorId || null]
-      );
-      await this.logProjectActivity(projectId, actorId ?? null, "execution_updated", "execution", String(row.id), row.testcase_title, {
-        reason: "bug_linked",
-        before: { status: row.status },
-        after: { status: "Failed" }
-      });
-      await this.notifyExecutionChange(String(row.id), actorId ?? null, { status: row.status ?? null, assigneeId: row.assignee_id ?? null });
-    }
+  private bugLinkKey(link: Body, withExecution = false): string {
+    return `${link.testcaseId || ""}|${link.cycleId || ""}${withExecution ? `|${link.executionId || ""}` : ""}`;
   }
 
-  /*
-   * Link targets have to exist in THIS project before they reach an insert.
-   *
-   * `bugs.execution_id`, `testcase_id` and `cycle_id` are all foreign keys, and the ids arrive in a
-   * request body — so a caller naming an execution that does not exist (a stale tab, a copied id, a
-   * CI script with the wrong run) produced a 23503 foreign-key violation, which surfaces as a 500.
-   * Found by the regression test written for the auto-fail change: "a bogus execution id in the
-   * links is ignored rather than 500ing" was asserting the behaviour this now has.
-   *
-   * Unresolvable ids are dropped rather than rejected: a bug report is worth keeping even when one
-   * of its links is stale, and the link rows are a convenience, not the record. A link with nothing
-   * left to point at is dropped entirely.
-   */
-  private async sanitizeBugLinks(projectId: string, links: Body[]): Promise<Body[]> {
-    if (!links.length) return links;
-    const ids = (key: string) => [...new Set(links.map((l) => String(l?.[key] ?? "")).filter((v) => isUuid(v)))];
-    const [testcaseIds, cycleIds, executionIds] = [ids("testcaseId"), ids("cycleId"), ids("executionId")];
+  /** New/changed invalid links reject the entire request; never silently discard target IDs. */
+  private parseBugLinks(raw: unknown): Body[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw)) throw new BadRequestException({ error: "links must be an array", field: "links" });
+    const desired = new Map<string, Body>();
+    for (const value of raw) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new BadRequestException({ error: "Each bug link must be an object", field: "links" });
+      }
+      const link: Body = {};
+      for (const key of ["testcaseId", "cycleId", "executionId"]) {
+        const id = (value as Body)[key];
+        if (id === undefined || id === null || id === "") link[key] = null;
+        else if (typeof id === "string" && isUuid(id)) link[key] = id.toLowerCase();
+        else throw new BadRequestException({ error: `Invalid ${key} in bug links`, field: "links" });
+      }
+      if (!link.testcaseId && !link.cycleId && !link.executionId) {
+        throw new BadRequestException({ error: "A bug link must name a test case, run or execution", field: "links" });
+      }
+      const key = this.bugLinkKey(link);
+      const previous = desired.get(key);
+      if (previous && previous.executionId !== link.executionId) {
+        throw new BadRequestException({ error: "Conflicting execution bindings for the same bug link", field: "links" });
+      }
+      desired.set(key, link);
+    }
+    return [...desired.values()];
+  }
 
-    const resolved = async (sql: string, candidates: string[]): Promise<Set<string>> => {
-      if (!candidates.length) return new Set();
-      const res = await this.db.query<{ id: string }>(sql, [candidates, projectId]);
-      return new Set(res.rows.map((row) => String(row.id)));
+  private async lockBugLinksOwner(client: PoolClient, bugId: string, projectId: string) {
+    const owner = await client.query(
+      "SELECT id FROM bugs WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE", [bugId, projectId]
+    );
+    if (!owner.rows[0]) throw new NotFoundException({ error: "Bug not found" });
+    const existing = await client.query(
+      "SELECT id, testcase_id, cycle_id, execution_id FROM bug_links WHERE bug_id = $1 AND deleted_at IS NULL", [bugId]
+    );
+    return existing.rows.map(toCamel);
+  }
+
+  private async lockBugLinkTargets(client: PoolClient, projectId: string, links: Body[]): Promise<(existing?: Body[]) => void> {
+    if (!links.length) return () => undefined;
+    const ids = (key: string) => [...new Set(links.map((link) => link[key]).filter((id): id is string => typeof id === "string"))];
+    const executionIds = ids("executionId");
+    // Discover actual parents without locking foreign-project rows. Re-read the chain after
+    // acquiring all parents, so an earlier observation can never authorize a different parent.
+    const executions = executionIds.length ? (await client.query(
+      `SELECT e.id, ci.cycle_id, ci.testcase_id FROM executions e
+         JOIN cycle_items ci ON ci.id = e.cycle_item_id
+         JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $2
+         JOIN testcases t ON t.id = ci.testcase_id AND t.project_id = $2
+        WHERE e.id = ANY($1::uuid[])`, [executionIds, projectId]
+    )).rows : [];
+    const cycleIds = [...new Set([...ids("cycleId"), ...executions.map((row) => String(row.cycle_id))])];
+    const testcaseIds = [...new Set([...ids("testcaseId"), ...executions.map((row) => String(row.testcase_id))])];
+    const cycles = cycleIds.length ? (await client.query(
+      "SELECT id, deleted_at FROM cycles WHERE id = ANY($1::uuid[]) AND project_id = $2 ORDER BY id FOR UPDATE", [cycleIds, projectId]
+    )).rows : [];
+    const testcases = testcaseIds.length ? (await client.query(
+      "SELECT id, deleted_at FROM testcases WHERE id = ANY($1::uuid[]) AND project_id = $2 ORDER BY id FOR SHARE", [testcaseIds, projectId]
+    )).rows : [];
+    const pairs = links.filter((link) => link.testcaseId && link.cycleId);
+    const memberships = pairs.length ? (await client.query(
+      `SELECT ci.testcase_id, ci.cycle_id, ci.deleted_at FROM cycle_items ci
+         JOIN unnest($1::uuid[], $2::uuid[]) AS wanted(testcase_id, cycle_id)
+           ON wanted.testcase_id = ci.testcase_id AND wanted.cycle_id = ci.cycle_id
+         JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $3
+         JOIN testcases t ON t.id = ci.testcase_id AND t.project_id = $3
+         ORDER BY ci.id FOR SHARE OF ci`,
+      [pairs.map((link) => link.testcaseId), pairs.map((link) => link.cycleId), projectId]
+    )).rows : [];
+    const authoritative = executionIds.length ? (await client.query(
+      `SELECT e.id, e.deleted_at, ci.testcase_id, ci.cycle_id, ci.deleted_at AS item_deleted_at
+         FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+         JOIN cycles c ON c.id = ci.cycle_id AND c.project_id = $2
+         JOIN testcases t ON t.id = ci.testcase_id AND t.project_id = $2
+        WHERE e.id = ANY($1::uuid[]) ORDER BY e.id FOR KEY SHARE OF e`, [executionIds, projectId]
+    )).rows : [];
+    // KEY SHARE is deliberate: association validation does not change execution data and must
+    // remain compatible with administrative assignee cleanup (execution -> bug). Parent locks
+    // already exclude application writers that delete/move run membership or executions.
+    const cycleById = new Map(cycles.map((row) => [String(row.id), row]));
+    const testcaseById = new Map(testcases.map((row) => [String(row.id), row]));
+    const executionById = new Map(authoritative.map((row) => [String(row.id), row]));
+    // Target locks precede the bug lock. Otherwise member cleanup (execution -> bug) plus a
+    // manual writer (cycle -> execution) could form a three-way deadlock with bug -> cycle.
+    // The returned validator runs only after the bug lock and a fresh association read, so a
+    // concurrently removed/rebound link cannot authorize a new link to deleted history.
+    return (existing: Body[] = []) => {
+      const preserved = new Set(existing.map((link) => this.bugLinkKey(link, true)));
+      const missing = () => new NotFoundException({ error: "Bug link target not found", field: "links" });
+      for (const link of links) {
+        // Only an exact existing tuple may retain deleted local history; a caller-supplied link id
+        // alone grants nothing, and a changed binding must satisfy all active-target checks.
+        const historical = preserved.has(this.bugLinkKey(link, true));
+        const validTarget = (rows: Map<string, Body>, id: string) => {
+          const row = rows.get(id);
+          return !!row && (historical || !row.deleted_at);
+        };
+        if (link.testcaseId && !validTarget(testcaseById, link.testcaseId)) throw missing();
+        if (link.cycleId && !validTarget(cycleById, link.cycleId)) throw missing();
+        if (link.testcaseId && link.cycleId && !memberships.some((row) =>
+          row.testcase_id === link.testcaseId && row.cycle_id === link.cycleId && (historical || !row.deleted_at))) {
+          throw new BadRequestException({ error: "Test case is not linked to the specified run", field: "links" });
+        }
+        if (link.executionId) {
+          const execution = executionById.get(link.executionId);
+          if (!execution || (!historical && (execution.deleted_at || execution.item_deleted_at)) ||
+              !validTarget(cycleById, String(execution.cycle_id)) || !validTarget(testcaseById, String(execution.testcase_id))) throw missing();
+          if ((link.testcaseId && link.testcaseId !== execution.testcase_id) || (link.cycleId && link.cycleId !== execution.cycle_id)) {
+            throw new BadRequestException({ error: "Execution does not match the specified test case and run", field: "links" });
+          }
+        }
+      }
     };
-    const [validTestcases, validCycles, validExecutions] = await Promise.all([
-      resolved("SELECT id FROM testcases WHERE id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL", testcaseIds),
-      resolved("SELECT id FROM cycles WHERE id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL", cycleIds),
-      resolved(
-        `SELECT e.id FROM executions e
-           JOIN cycle_items ci ON ci.id = e.cycle_item_id
-           JOIN cycles c ON c.id = ci.cycle_id
-          WHERE e.id = ANY($1::uuid[]) AND c.project_id = $2 AND e.deleted_at IS NULL`,
-        executionIds
-      )
-    ]);
-
-    const keep = (value: unknown, valid: Set<string>) => (valid.has(String(value ?? "")) ? String(value) : null);
-    return links
-      .map((link) => ({
-        ...link,
-        testcaseId: keep(link?.testcaseId, validTestcases),
-        cycleId: keep(link?.cycleId, validCycles),
-        executionId: keep(link?.executionId, validExecutions)
-      }))
-      .filter((link) => link.testcaseId || link.cycleId || link.executionId);
   }
 
   // A blind delete-all-then-reinsert (the pre-Phase-7 shape) can no longer be a real DELETE, and
@@ -7735,18 +9036,17 @@ export class LegacyService implements OnModuleInit {
   }
 
   async createBug(projectId: string, userId: string | null | undefined, body: Body) {
-    // Deliberately not this.requireUser(userId) — the MCP create_bug tool can call this with a null
-    // userId (an API-token caller with no owning user) and must keep working, same as before this
-    // link-diffing existed. uid is only ever consumed by replaceBugLinks' UPDATE ... deleted_by
-    // branch, which cannot run here (a brand-new bug has no existing links to soft-delete), so
-    // passing null through when there is no authenticated user costs nothing.
-    const uid = userId || null;
+    // REST and MCP share this writer. Current MCP tokens already require a current member;
+    // nullable-user compatibility must not leave browser/anonymous creation unprotected.
+    // Authorize before validation, link resolution, ID allocation or any domain writes.
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
     // A link is required whenever the project actually has test cases/runs to link to — enforced
     // client-side (the UI only lets the field be empty when there's nothing to pick). An empty
     // array is accepted here so reporting a bug is never blocked in a project with no test runs yet.
     validateBoundedField(body.title, "Bug title", BUG_TITLE_MAX_LENGTH);
     validateBoundedField(body.externalUrl, "External URL", BUG_EXTERNAL_URL_MAX_LENGTH);
-    const links = await this.sanitizeBugLinks(projectId, normalizeJsonArray(body.links));
+    const links = this.parseBugLinks(body.links);
     const severity = this.parseBugSeverity(body.severity);
     const priority = this.parseBugPriority(body.priority);
     const assigneeId = await this.parseBugAssignee(projectId, body.assigneeId);
@@ -7763,6 +9063,8 @@ export class LegacyService implements OnModuleInit {
           // not just the retry above, is what makes concurrent creates converge instead of both
           // reading the same MAX and colliding again.
           await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`bug-external-id:${projectId}`]);
+          const validateLinks = await this.lockBugLinkTargets(client, projectId, links);
+          validateLinks();
           const externalId = await this.nextBugExternalId(projectId, client);
           const res = await client.query(
             `INSERT INTO bugs (project_id, external_id, execution_id, testcase_id, cycle_id, title, description, external_url, status, severity, priority, reported_by, integration_provider, integration_issue_key, betterbugs_url, assignee_id)
@@ -7779,7 +9081,7 @@ export class LegacyService implements OnModuleInit {
               body.status || "Open",
               severity,
               priority,
-              userId || null,
+              uid,
               body.integrationProvider || null,
               body.integrationIssueKey || null,
               body.betterbugsUrl || null,
@@ -7798,9 +9100,6 @@ export class LegacyService implements OnModuleInit {
         if (!collided || attempt >= 5) throw error;
       }
     }
-    // After the commit, not inside it: the bug is the record that must exist, and a failure while
-    // flipping an execution should not roll back the bug report someone just wrote.
-    await this.failLinkedExecutions(projectId, userId, links);
     const created: Body = await this.getBug(bugId as string);
     await this.logProjectActivity(projectId, uid, "bug_created", "bug", String(created.id), String(created.title ?? ""), {
       status: created.status ?? null,
@@ -8130,6 +9429,9 @@ export class LegacyService implements OnModuleInit {
 
   /** Validates a batch of comment files before anything is stored — all or nothing, like bug evidence. */
   private async assertBugCommentFiles(organizationId: string, files: Array<{ originalname: string; size: number }>, existing: number) {
+    // Runtime type check: this method is called with caller-supplied multipart files, and a
+    // non-array would make the count below read a string's length instead of a file count.
+    if (!Array.isArray(files)) throw new BadRequestException({ error: "files must be a list" });
     if (existing + files.length > LegacyService.BUG_COMMENT_MAX_ATTACHMENTS) {
       throw new BadRequestException({
         error: `A comment can have at most ${LegacyService.BUG_COMMENT_MAX_ATTACHMENTS} attachments.`
@@ -8155,9 +9457,8 @@ export class LegacyService implements OnModuleInit {
     const stored: Array<{ key: string; id?: string }> = [];
     try {
       for (const file of files) {
-        const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
         const entry: { key: string; id?: string } = {
-          key: `bugs/${projectId}/${bugId}/comments/${commentId}/${randomUUID()}${ext ? `.${ext}` : ""}`
+          key: `bugs/${projectId}/${bugId}/comments/${commentId}/${randomUUID()}${storageKeyExtension(file.originalname)}`
         };
         await this.storage.put(entry.key, file.buffer, file.mimetype);
         stored.push(entry);
@@ -8246,7 +9547,9 @@ export class LegacyService implements OnModuleInit {
     const bug = await this.bugInProject(projectId, bugId);
     const text = LegacyService.bugCommentText(body?.body);
     const parentCommentId = await this.bugCommentParent(bugId, body?.parentCommentId);
-    const uploads = files ?? [];
+    // Multipart is outside the type system; a non-array must not be treated as a file list.
+    if (!Array.isArray(files)) throw new BadRequestException({ error: "files must be a list" });
+    const uploads = files;
     await this.assertBugCommentFiles(String(project.organization_id), uploads, 0);
 
     // The parent is re-checked in the INSERT itself, so a thread deleted since bugCommentParent
@@ -8337,7 +9640,9 @@ export class LegacyService implements OnModuleInit {
     // the bug's evidence is simply not found here.
     const removing = current.filter((file) => removeIds.includes(String(file.id)));
     if (removing.length !== removeIds.length) throw new NotFoundException({ error: "Attachment not found" });
-    const uploads = files ?? [];
+    // Multipart is outside the type system; a non-array must not be treated as a file list.
+    if (!Array.isArray(files)) throw new BadRequestException({ error: "files must be a list" });
+    const uploads = files;
     await this.assertBugCommentFiles(String(project.organization_id), uploads, current.length - removing.length);
 
     const textChanged = text !== null && text !== String(comment.body);
@@ -8427,13 +9732,23 @@ export class LegacyService implements OnModuleInit {
   async getBug(bugId: string) {
     const res = await this.db.query(this.bugSelect("b.id = $1"), [bugId]);
     if (!res.rows[0]) throw new NotFoundException({ error: "Bug not found" });
-    const row = res.rows[0];
+    return this.bugView(res.rows[0]);
+  }
+
+  private bugView(row: Body) {
     return { ...toCamel(row), links: normalizeJsonArray(row.links).map(toCamel), attachments: normalizeJsonArray(row.attachments).map(toCamel) };
+  }
+
+  private async getBugWithClient(client: PoolClient, bugId: string) {
+    const res = await client.query(this.bugSelect("b.id = $1"), [bugId]);
+    if (!res.rows[0]) throw new NotFoundException({ error: "Bug not found" });
+    return this.bugView(res.rows[0]);
   }
 
   async updateBug(userId: string | null | undefined, bugId: string, body: Body) {
     const uid = this.requireUser(userId);
     const projectId = await this.requireBugAccess(userId, bugId);
+    const links = body.links === undefined ? undefined : this.parseBugLinks(body.links);
     // Same refusal as createBug — an unknown severity on edit hit the same constraint and the same
     // opaque 500. Severity can be cleared since V130, with the same explicit-null-or-"" convention as
     // priority below; an absent key still leaves the stored value alone.
@@ -8442,8 +9757,7 @@ export class LegacyService implements OnModuleInit {
     validateBoundedField(body.title, "Bug title", BUG_TITLE_MAX_LENGTH);
     validateBoundedField(body.externalUrl, "External URL", BUG_EXTERNAL_URL_MAX_LENGTH);
     /*
-     * Priority is the one field here that can be cleared. COALESCE means "absent leaves it alone",
-     * which is right for every other column, but an explicitly sent null has to be able to take a
+     * Priority's explicit null has to be able to take a
      * bug back to untriaged — so it gets its own flag rather than another COALESCE.
      */
     const clearsPriority = body.priority === null || body.priority === "";
@@ -8453,83 +9767,79 @@ export class LegacyService implements OnModuleInit {
     // hidden from the picker.
     const clearsAssignee = body.assigneeId === null || body.assigneeId === "";
     const assigneeId = await this.parseBugAssignee(projectId, body.assigneeId);
-    const before = await this.getBug(bugId);
-    await this.db.query(
-      `UPDATE bugs SET title=COALESCE($2,title), description=COALESCE($3,description), external_url=COALESCE($4,external_url),
+    const { before, after } = await this.db.transaction(async (client) => {
+      const validateLinks = await this.lockBugLinkTargets(client, projectId, links ?? []);
+      const existing = await this.lockBugLinksOwner(client, bugId, projectId);
+      validateLinks(existing);
+      // Preserve targets-before-bug lock ordering. Capture fresh before/after under the existing
+      // bug lock so neither an earlier snapshot nor a later writer is attributed to this edit.
+      const before = await this.getBugWithClient(client, bugId);
+      await client.query(
+        `UPDATE bugs SET title=COALESCE($2,title), description=CASE WHEN $15::boolean THEN $3 ELSE description END, external_url=CASE WHEN $16::boolean THEN $4 ELSE external_url END,
        status=COALESCE($5,status), severity=CASE WHEN $14::boolean THEN NULL ELSE COALESCE($6,severity) END, priority=CASE WHEN $10::boolean THEN NULL ELSE COALESCE($11,priority) END,
-       integration_provider=COALESCE($7,integration_provider), integration_issue_key=COALESCE($8,integration_issue_key),
-       betterbugs_url=COALESCE($9,betterbugs_url),
+       integration_provider=CASE WHEN $17::boolean THEN $7 ELSE integration_provider END, integration_issue_key=CASE WHEN $18::boolean THEN $8 ELSE integration_issue_key END,
+       betterbugs_url=CASE WHEN $19::boolean THEN $9 ELSE betterbugs_url END,
        assignee_id=CASE WHEN $12::boolean THEN NULL ELSE COALESCE($13,assignee_id) END,
        updated_at=now() WHERE id=$1`,
-      [
-        bugId,
-        body.title || null,
-        body.description || null,
-        body.externalUrl || null,
-        body.status || null,
-        severity,
-        body.integrationProvider || null,
-        body.integrationIssueKey || null,
-        body.betterbugsUrl || null,
-        clearsPriority,
-        priority,
-        clearsAssignee,
-        assigneeId,
-        clearsSeverity
-      ]
-    );
-    if (Array.isArray(body.links)) {
-      const owner = await this.db.query<{ project_id: string }>("SELECT project_id FROM bugs WHERE id = $1", [bugId]);
-      const sanitized = await this.sanitizeBugLinks(String(owner.rows[0]?.project_id ?? ""), normalizeJsonArray(body.links));
-      await this.db.transaction((client) => this.replaceBugLinks(client, bugId, uid, sanitized));
-    }
-    const after = await this.getBug(bugId);
+        [
+          bugId,
+          body.title || null,
+          body.description ?? null,
+          body.externalUrl ?? null,
+          body.status || null,
+          severity,
+          body.integrationProvider ?? null,
+          body.integrationIssueKey ?? null,
+          body.betterbugsUrl ?? null,
+          clearsPriority,
+          priority,
+          clearsAssignee,
+          assigneeId,
+          clearsSeverity,
+          body.description !== undefined,
+          body.externalUrl !== undefined,
+          body.integrationProvider !== undefined,
+          body.integrationIssueKey !== undefined,
+          body.betterbugsUrl !== undefined
+        ]
+      );
+      if (links !== undefined) await this.replaceBugLinks(client, bugId, uid, links);
+      return { before, after: await this.getBugWithClient(client, bugId) };
+    });
     await this.logBugChanges(projectId, uid, before, after);
     await this.notifyBugChange(projectId, uid, before, after);
     return after;
   }
 
   async addBugLink(userId: string | null | undefined, bugId: string, body: Body) {
-    await this.requireBugAccess(userId, bugId);
-    if (!body.testcaseId && !body.cycleId) throw new BadRequestException({ error: "testcaseId or cycleId is required." });
-    const testcaseId = body.testcaseId || null;
-    const cycleId = body.cycleId || null;
-    const executionId = body.executionId || null;
-    // IS NOT DISTINCT FROM, not ON CONFLICT alone: the partial unique index treats two NULL
-    // cycle_id rows as non-duplicates, so a bug already linked to this test case with no run would
-    // otherwise pass as "new" and insert a second identical row — same root cause as
-    // replaceBugLinks' own comment above.
-    const existing = await this.db.query<{ id: string; execution_id: string | null }>(
-      `SELECT id, execution_id FROM bug_links WHERE bug_id = $1 AND deleted_at IS NULL
-       AND testcase_id IS NOT DISTINCT FROM $2 AND cycle_id IS NOT DISTINCT FROM $3`,
-      [bugId, testcaseId, cycleId]
-    );
-    if (existing.rows[0]) {
-      if (executionId !== existing.rows[0].execution_id) {
-        await this.db.query("UPDATE bug_links SET execution_id = $2 WHERE id = $1", [existing.rows[0].id, executionId]);
-      }
-    } else {
-      await this.db.query(
-        `INSERT INTO bug_links (bug_id, testcase_id, cycle_id, execution_id) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (bug_id, testcase_id, cycle_id) WHERE deleted_at IS NULL DO NOTHING`,
-        [bugId, testcaseId, cycleId, executionId]
-      );
-    }
-    // requireBugAccess already resolved this bug's project; re-read it rather than trusting the
-    // caller's body, which never carries a project id.
-    const owner = await this.db.query<{ project_id: string }>("SELECT project_id FROM bugs WHERE id = $1", [bugId]);
-    const projectId = owner.rows[0]?.project_id;
-    if (projectId) await this.failLinkedExecutions(String(projectId), userId, [body]);
+    const uid = this.requireUser(userId);
+    const projectId = await this.requireBugAccess(uid, bugId);
+    const links = this.parseBugLinks([body]);
+    const link = links[0];
+    if (!link.testcaseId && !link.cycleId) throw new BadRequestException({ error: "testcaseId or cycleId is required." });
+    await this.db.transaction(async (client) => {
+      const validateLinks = await this.lockBugLinkTargets(client, projectId, links);
+      const existing = await this.lockBugLinksOwner(client, bugId, projectId);
+      validateLinks(existing);
+      const desired = new Map(existing.map((item) => [this.bugLinkKey(item), item]));
+      desired.set(this.bugLinkKey(link), link);
+      // The bug lock serializes nullable-key inserts/rebindings with replace and unlink; SQL's
+      // NULL-distinct unique index alone cannot make concurrent testcase-only links idempotent.
+      await this.replaceBugLinks(client, bugId, uid, [...desired.values()]);
+    });
     return this.getBug(bugId);
   }
 
   async removeBugLink(userId: string | null | undefined, bugId: string, linkId: string) {
     const uid = this.requireUser(userId);
-    await this.requireBugAccess(userId, bugId);
-    await this.db.query(
-      "UPDATE bug_links SET deleted_at = now(), deleted_by = $3 WHERE id = $1 AND bug_id = $2 AND deleted_at IS NULL",
-      [linkId, bugId, uid]
-    );
+    const projectId = await this.requireBugAccess(userId, bugId);
+    await this.db.transaction(async (client) => {
+      await this.lockBugLinksOwner(client, bugId, projectId);
+      await client.query(
+        "UPDATE bug_links SET deleted_at = now(), deleted_by = $3 WHERE id = $1 AND bug_id = $2 AND deleted_at IS NULL",
+        [linkId, bugId, uid]
+      );
+    });
     return this.getBug(bugId);
   }
 
@@ -8556,7 +9866,6 @@ export class LegacyService implements OnModuleInit {
   static displayFileName(originalName: string, max = 255): string {
     const base = path
       .basename(String(originalName ?? "").replace(/\\/g, "/"))
-      // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u001f\u007f]/g, "")
       .trim();
     if (!base || base === "." || base === "..") return "upload";
@@ -8647,7 +9956,10 @@ export class LegacyService implements OnModuleInit {
     // is not authorization.
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    // Array.isArray, not just a length check: multipart parsing is outside our types, so a single
+    // field or a malformed payload can arrive as a non-array and `.length` would then read a string
+    // length and count it as files.
+    if (!Array.isArray(files) || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     if (!isUuid(bugId)) throw new NotFoundException({ error: "Bug not found" });
     const bug = await this.db.query("SELECT b.id, b.title FROM bugs b WHERE b.id = $1 AND b.project_id = $2 AND b.deleted_at IS NULL", [bugId, projectId]);
     if (!bug.rows[0]) throw new NotFoundException({ error: "Bug not found" });
@@ -8668,8 +9980,7 @@ export class LegacyService implements OnModuleInit {
 
     const created: Body[] = [];
     for (const file of files) {
-      const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const storageKey = `bugs/${projectId}/${bugId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
+      const storageKey = `bugs/${projectId}/${bugId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
       await this.storage.put(storageKey, file.buffer, file.mimetype);
       const res = await this.db.query(
         `INSERT INTO attachments (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by)
@@ -8745,14 +10056,15 @@ export class LegacyService implements OnModuleInit {
   // attachment routes authorize against — neither carries a projectId in its path. A malformed
   // id is answered the same way as a well-formed one that doesn't exist, rather than being handed
   // to Postgres to fail the uuid cast and turn a typo into a 500.
-  private async executionOwner(cycleId: string, executionId: string): Promise<Body> {
+  private async executionOwner(cycleId: string, executionId: string, activeWriteTarget = false): Promise<Body> {
     if (!isUuid(cycleId) || !isUuid(executionId)) throw new NotFoundException({ error: "Execution not found" });
     const res = await this.db.query(
       `SELECT e.id, c.project_id, p.organization_id FROM executions e
        JOIN cycle_items ci ON ci.id = e.cycle_item_id
        JOIN cycles c ON c.id = ci.cycle_id
        JOIN projects p ON p.id = c.project_id
-       WHERE e.id = $1 AND c.id = $2 AND e.deleted_at IS NULL`,
+        WHERE e.id = $1 AND c.id = $2 AND e.deleted_at IS NULL
+          ${activeWriteTarget ? "AND ci.deleted_at IS NULL AND c.deleted_at IS NULL" : ""}`,
       [executionId, cycleId]
     );
     if (!res.rows[0]) throw new NotFoundException({ error: "Execution not found" });
@@ -8766,11 +10078,12 @@ export class LegacyService implements OnModuleInit {
     files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>
   ) {
     const uid = this.requireUser(actorId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    // Array.isArray, not just a length check: multipart parsing is outside our types, so a single
+    // field or a malformed payload can arrive as a non-array and `.length` would then read a string
+    // length and count it as files.
+    if (!Array.isArray(files) || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
     const execution = await this.executionOwner(cycleId, executionId);
     const projectId = String(execution.project_id);
-    // Being signed in to the workspace isn't enough: attaching evidence to a run means writing
-    // into that project, so the caller has to be a member of it.
     await this.requireProjectAccess(uid, projectId);
     LegacyService.assertValidEvidenceFiles(files);
     await this.planLimits.assertStorageAvailable(
@@ -8778,22 +10091,56 @@ export class LegacyService implements OnModuleInit {
       files.reduce((sum, file) => sum + file.size, 0)
     );
 
-    const created: Body[] = [];
-    for (const file of files) {
-      const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const storageKey = `executions/${projectId}/${executionId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
-      await this.storage.put(storageKey, file.buffer, file.mimetype);
-      const res = await this.db.query(
-        `INSERT INTO attachments (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by)
-         VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [projectId, executionId, LegacyService.displayFileName(file.originalname), file.mimetype, file.size, storageKey, uid]
-      );
-      created.push(toCamel(res.rows[0]));
+    // Storage is external to PostgreSQL: stage bytes outside the run lock,
+    // then serialize metadata writes with the automation close transaction.
+    const uploaded: Array<{ file: typeof files[number]; key: string }> = [];
+    try {
+      for (const file of files) {
+        const key = `executions/${projectId}/${executionId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
+        // Register before the put: a storage driver can write bytes then throw.
+        uploaded.push({ file, key });
+        await this.storage.put(key, file.buffer, file.mimetype);
+      }
+
+      const created = await this.db.transaction(async (client) => {
+        const run = await client.query<{ id: string; source: string | null; closed_at: Date | null }>(
+          "SELECT id, source, closed_at FROM cycles WHERE id = $1 AND project_id = $2 AND deleted_at IS NULL FOR UPDATE",
+          [cycleId, projectId]
+        );
+        if (!run.rows[0]) throw new NotFoundException({ error: "Run not found" });
+        this.assertAutomatedRunWritable(run.rows[0]);
+        const target = await client.query<{ id: string }>(
+          `SELECT e.id FROM executions e JOIN cycle_items ci ON ci.id = e.cycle_item_id
+           WHERE e.id = $1 AND ci.cycle_id = $2 AND ci.deleted_at IS NULL AND e.deleted_at IS NULL`,
+          [executionId, cycleId]
+        );
+        if (!target.rows[0]) throw new NotFoundException({ error: "Execution not found" });
+        const rows: Body[] = [];
+        for (const { file, key } of uploaded) {
+          const res = await client.query(
+            `INSERT INTO attachments (project_id, entity_type, entity_id, file_name, content_type, file_size, storage_path, uploaded_by)
+             VALUES ($1, 'execution', $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [projectId, executionId, LegacyService.displayFileName(file.originalname), file.mimetype, file.size, key, uid]
+          );
+          rows.push(toCamel(res.rows[0]));
+        }
+        return rows;
+      });
+      // Once the SQL transaction commits, never delete the stored objects
+      // in response to a secondary activity-log failure.
+      void this.logProjectActivity(projectId, uid, "execution_evidence_uploaded", "execution", executionId, null, {
+        files: created.map((file) => ({ id: file.id, fileName: file.fileName }))
+      }).catch((error: unknown) => this.logger.error(`Evidence activity log failed: ${String(error)}`));
+      return { list: created, total: created.length };
+    } catch (error) {
+      for (const { key } of uploaded) {
+        try { await this.storage.delete(key); }
+        catch (cleanupError) {
+          this.logger.error(`Failed to clean up uncommitted execution evidence ${key}: ${String(cleanupError)}`);
+        }
+      }
+      throw error;
     }
-    await this.logProjectActivity(projectId, uid, "execution_evidence_uploaded", "execution", executionId, null, {
-      files: created.map((file) => ({ id: file.id, fileName: file.fileName }))
-    });
-    return { list: created, total: created.length };
   }
 
   /**
@@ -9123,11 +10470,19 @@ export class LegacyService implements OnModuleInit {
          b.title AS bug_title,
          b.status AS bug_status,
          b.external_url AS bug_url`;
+    // bug_links is the source of truth for a bug's links (updateBug/addBugLink only touch that
+    // table), while bugs.execution_id is the value captured when the bug was created and goes stale
+    // as soon as it is linked elsewhere. Joining the legacy column hid every bug linked to a second
+    // run from the matrix. A link may name only a case or a cycle, so both sides are optional but a
+    // present one must match this row.
     const joins = `LEFT JOIN suites s ON s.id = t.suite_id AND s.deleted_at IS NULL
        LEFT JOIN cycle_items ci ON ci.testcase_id = t.id AND ci.deleted_at IS NULL
        LEFT JOIN cycles c ON c.id = ci.cycle_id AND c.deleted_at IS NULL
        LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
-       LEFT JOIN bugs b ON b.execution_id = e.id AND b.deleted_at IS NULL`;
+       LEFT JOIN bug_links bl ON bl.deleted_at IS NULL AND bl.testcase_id = t.id
+         AND (bl.cycle_id IS NULL OR bl.cycle_id = c.id)
+         AND (bl.execution_id IS NULL OR bl.execution_id = e.id)
+       LEFT JOIN bugs b ON b.id = bl.bug_id AND b.deleted_at IS NULL`;
     const base = "t.project_id = $1 AND t.deleted_at IS NULL";
     const order = "ORDER BY t.external_id, t.id, c.created_at DESC NULLS LAST";
     const params: unknown[] = [projectId];
@@ -9467,7 +10822,7 @@ export class LegacyService implements OnModuleInit {
         WHERE t.project_id = $1 AND t.deleted_at IS NULL AND t.priority = 'P1'
           AND NOT EXISTS (
             SELECT 1 FROM cycle_items ci
-              JOIN executions e ON e.cycle_item_id = ci.id
+              JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
              WHERE ci.testcase_id = t.id AND ci.deleted_at IS NULL
                AND e.status IS NOT NULL AND e.status <> 'Untested'
           )`,
@@ -9499,7 +10854,7 @@ export class LegacyService implements OnModuleInit {
                   LAG(e.status) OVER (PARTITION BY ci.testcase_id ORDER BY c.created_at, c.id, ci.created_at, ci.id) AS prev
              FROM cycles c
              JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
-             JOIN executions e ON e.cycle_item_id = ci.id
+             JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
             WHERE c.project_id = $1 AND c.deleted_at IS NULL
               AND e.status IS NOT NULL AND e.status <> 'Untested'
          ) s
@@ -9523,7 +10878,7 @@ export class LegacyService implements OnModuleInit {
               COALESCE(s.name, 'Unassigned') AS suite_name,
               e.status, c.name AS run_name
        FROM cycle_items ci
-       JOIN executions e ON e.cycle_item_id = ci.id
+       JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
        JOIN cycles c ON c.id = ci.cycle_id
        LEFT JOIN testcases t ON t.id = ci.testcase_id
        LEFT JOIN suites s ON s.id = COALESCE(ci.snapshot_suite_id, t.suite_id) AND s.deleted_at IS NULL
@@ -9551,6 +10906,36 @@ export class LegacyService implements OnModuleInit {
         flakinessLabel: flipRate >= 0.5 ? "High" : flipRate >= 0.25 ? "Medium" : "Low"
       } as Body;
     });
+  }
+
+  /**
+   * Per-run status buckets for `GET /cycles/:cycleId/report/summary`. Uses the same
+   * EXECUTION_BUCKET_COUNTS definition as the project overview so the run summary and the
+   * pass-rate trend cannot disagree. Previously this endpoint returned a hard-coded all-zero
+   * object for every run, which external callers had no way to distinguish from a real empty run.
+   */
+  async cycleReportSummaryForUser(userId: string | null | undefined, cycleId: string) {
+    await this.requireCycleAccess(userId, cycleId);
+    const res = await this.db.query<{
+      total_cases: number; passed: number; failed: number; blocked: number; skipped: number; untested: number;
+    }>(
+      `SELECT ${LegacyService.EXECUTION_BUCKET_COUNTS}
+         FROM cycles c
+         LEFT JOIN cycle_items ci ON ci.cycle_id = c.id AND ci.deleted_at IS NULL
+         LEFT JOIN executions e ON e.cycle_item_id = ci.id AND e.deleted_at IS NULL
+        WHERE c.id = $1 AND c.deleted_at IS NULL
+        GROUP BY c.id`,
+      [cycleId]
+    );
+    const row = res.rows[0];
+    return {
+      total: Number(row?.total_cases ?? 0),
+      passed: Number(row?.passed ?? 0),
+      failed: Number(row?.failed ?? 0),
+      blocked: Number(row?.blocked ?? 0),
+      skipped: Number(row?.skipped ?? 0),
+      untested: Number(row?.untested ?? 0)
+    };
   }
 
   async reportsOverview(projectId: string) {
@@ -10249,8 +11634,9 @@ export class LegacyService implements OnModuleInit {
   private static readonly KB_DOCUMENT_MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
   private static readonly KB_DOCUMENT_COLUMNS = `id, organization_id, project_id, folder_id, title, content_json, content_html, content_text,
     document_type, status, is_ai_generated, source_provider, source_external_id, source_url,
-    source_role, source_synced_by, source_synced_at, is_read_only,
-    created_by, updated_by, reviewed_by, reviewed_at, is_deleted, created_at, updated_at, deleted_at`;
+    source_role, source_synced_by, source_synced_at, is_read_only, governed_metadata,
+    created_by, updated_by, reviewed_by, reviewed_at, is_deleted, created_at, updated_at, deleted_at,
+    reviewed_version_id, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision`;
 
   private async kbProjectRole(userId: string, projectId: string): Promise<"owner" | "manager" | "qa_engineer"> {
     const res = await this.db.query<{ role: string }>(
@@ -10328,27 +11714,44 @@ export class LegacyService implements OnModuleInit {
 
   async createKnowledgeFolder(projectId: string, userId: string | null | undefined, body: Body) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     const name = this.kbFolderName(body.name);
 
     let parentFolderId = body.parentFolderId ? String(body.parentFolderId) : null;
     if (parentFolderId) {
       await this.kbFolder(projectId, parentFolderId);
-    } else {
-      const root = await this.db.query<{ id: string }>(
-        "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true",
-        [projectId]
-      );
-      parentFolderId = root.rows[0]?.id || null;
     }
 
     try {
-      const res = await this.db.query(
-        `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *`,
-        [project.organization_id, projectId, parentFolderId, name, body.description || null, uid]
-      );
-      await this.logProjectActivity(projectId, uid, "created", "knowledge_folder", res.rows[0].id, name, {});
+      const res = await this.db.transaction(async client => {
+        // Match every other folder mutation: advisory first, then the parent row. A concurrent
+        // cascade must either see this new child or make this create refuse; it must not leave a
+        // live child under a soft-deleted parent.
+        await this.lockSkillAssignments(client, projectId);
+        if (!parentFolderId) {
+          const root = await client.query<{ id: string }>(
+            "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+            [projectId]
+          );
+          parentFolderId = root.rows[0]?.id || null;
+          if (!parentFolderId) throw new BadRequestException({ error: "Knowledge base root folder not found" });
+        } else {
+          const parent = await client.query(
+            "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",
+            [parentFolderId, projectId]
+          );
+          if (!parent.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        }
+        // The preflight access read may be stale after the waits; revalidate membership/archive.
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        const inserted = await client.query(
+          `INSERT INTO knowledge_folders (organization_id, project_id, parent_folder_id, name, description, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING *`,
+          [authority.organization_id, projectId, parentFolderId, name, body.description || null, uid]
+        );
+        await this.logProjectActivity(projectId, uid, "created", "knowledge_folder", inserted.rows[0].id, name, {}, client);
+        return inserted;
+      });
       return toCamel(res.rows[0]);
     } catch (error) {
       if ((error as { code?: string }).code === "23505")
@@ -10439,7 +11842,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async moveKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string, body: Body) {
+  async moveKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const folder = await this.kbFolder(projectId, folderId);
@@ -10451,24 +11855,30 @@ export class LegacyService implements OnModuleInit {
     if (!targetParentId) throw new BadRequestException({ error: "parentFolderId is required" });
     await this.kbFolder(projectId, targetParentId);
 
-    const invalid = await this.db.query(
-      `WITH RECURSIVE descendants AS (
-         SELECT id FROM knowledge_folders WHERE id = $1
-         UNION ALL
-         SELECT kf.id FROM knowledge_folders kf JOIN descendants d ON kf.parent_folder_id = d.id
-       )
-       SELECT 1 FROM descendants WHERE id = $2`,
-      [folderId, targetParentId]
-    );
-    if (invalid.rows[0])
-      throw new BadRequestException({ error: "A folder cannot be moved into itself or one of its subfolders" });
-
     try {
-      const res = await this.db.query(
-        "UPDATE knowledge_folders SET parent_folder_id = $2, updated_by = $3, updated_at = now() WHERE id = $1 RETURNING *",
-        [folderId, targetParentId, uid]
-      );
-      await this.logProjectActivity(projectId, uid, "moved", "knowledge_folder", folderId, res.rows[0].name, {});
+      const res = await this.db.transaction(async client => {
+        await this.lockSkillAssignments(client, projectId);
+        const current = (await client.query("SELECT * FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [folderId, projectId])).rows[0];
+        if (!current) throw new NotFoundException({ error: "Folder not found" });
+        if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be moved" });
+        const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+        this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+        await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
+        // Same-project deletion and moves take the project mutation lock, so this target cannot
+        // change underneath the cycle check and the parent update below.
+        const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [targetParentId, projectId]);
+        if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        const invalid = await client.query(
+          `${LegacyService.DESCENDANTS_CTE} SELECT 1 FROM descendants WHERE id=$2`, [[folderId], targetParentId]
+        );
+        if (invalid.rows[0]) throw new BadRequestException({ error: "A folder cannot be moved into itself or one of its subfolders" });
+        const moved = await client.query(
+          "UPDATE knowledge_folders SET parent_folder_id=$2, updated_by=$3, updated_at=now() WHERE id=$1 AND project_id=$4 RETURNING *",
+          [folderId, targetParentId, uid, projectId]
+        );
+        await this.logProjectActivity(projectId, uid, "moved", "knowledge_folder", folderId, moved.rows[0].name, {}, client);
+        return moved;
+      });
       return toCamel(res.rows[0]);
     } catch (error) {
       if ((error as { code?: string }).code === "23505")
@@ -10490,10 +11900,9 @@ export class LegacyService implements OnModuleInit {
   // Soft-deletes one or more folder trees (and every descendant folder/document/file beneath each),
   // special-casing the Zyra memory document (never deleted, re-homed to its own project's root
   // instead — a correlated subquery on knowledge_documents.project_id, since a single call here can
-  // span multiple projects). Shared by deleteKnowledgeFolder (deletionReason 'manual') and the
-  // integration-disconnect cleanup (deletionReason 'integration_disconnect') so the two removal
-  // paths can never drift apart in behavior — only in whether the result is restorable, which
-  // restoreKnowledgeFolder decides by reading the reason back.
+  // span multiple projects). deleteKnowledgeFolder is currently the only caller and records
+  // deletionReason 'manual'; the reason remains in the row so restoreKnowledgeFolder can refuse a
+  // disconnected item if a future cleanup path starts using 'integration_disconnect' again.
   private async cascadeSoftDeleteFolderTree(
     client: PoolClient,
     folderIds: string[],
@@ -10533,7 +11942,101 @@ export class LegacyService implements OnModuleInit {
     );
   }
 
-  async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
+  /**
+   * Everything the project has moved to Trash, with whether it can come back.
+   *
+   * Documents and folders are recoverable; uploaded files are not — deleting a file removes its
+   * bytes from storage (deleteKnowledgeFile), so restoring only the row would produce an item that
+   * lists correctly and 404s on download. Files are therefore listed with restorable:false instead
+   * of being hidden from the Trash that the delete confirmation promised.
+   */
+  async listKnowledgeTrash(projectId: string, userId: string | null | undefined) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const iso = (value: unknown) => (value ? new Date(value as string).toISOString() : null);
+    const folders = await this.db.query(
+      `SELECT f.id, f.name, f.parent_folder_id, f.deleted_at, f.deletion_reason, f.source_provider,
+              p.name AS parent_name, COALESCE(p.is_deleted, false) AS parent_deleted
+       FROM knowledge_folders f
+       LEFT JOIN knowledge_folders p ON p.id = f.parent_folder_id AND p.project_id = f.project_id
+       WHERE f.project_id = $1 AND f.is_deleted = true AND f.is_root = false
+       ORDER BY f.deleted_at DESC, f.name ASC`,
+      [projectId]
+    );
+    const documents = await this.db.query(
+      `SELECT d.id, d.title, d.folder_id, d.deleted_at,
+              f.name AS folder_name, COALESCE(f.is_deleted, false) AS folder_deleted,
+              f.deletion_reason AS folder_deletion_reason, f.source_provider AS folder_source_provider
+       FROM knowledge_documents d
+       LEFT JOIN knowledge_folders f ON f.id = d.folder_id AND f.project_id = d.project_id
+       WHERE d.project_id = $1 AND d.is_deleted = true
+       ORDER BY d.deleted_at DESC, d.title ASC`,
+      [projectId]
+    );
+    const files = await this.db.query(
+      `SELECT kf.id, kf.original_file_name, kf.folder_id, kf.deleted_at,
+              f.name AS folder_name, COALESCE(f.is_deleted, false) AS folder_deleted
+       FROM knowledge_files kf
+       LEFT JOIN knowledge_folders f ON f.id = kf.folder_id AND f.project_id = kf.project_id
+       WHERE kf.project_id = $1 AND kf.is_deleted = true
+       ORDER BY kf.deleted_at DESC, kf.original_file_name ASC`,
+      [projectId]
+    );
+    const disconnectedReason = (provider: string | null) => {
+      const providerName = PROVIDER_FOLDER_NAMES[provider || ""];
+      const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+      return `This was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`;
+    };
+    const FILE_LOST = "File content is permanently removed from storage when a file is deleted, so it can't be restored.";
+    return {
+      folders: folders.rows.map((row) => {
+        const disconnected = row.deletion_reason === "integration_disconnect";
+        const blockedByParent = row.parent_deleted === true;
+        return {
+          id: row.id,
+          name: row.name,
+          parentFolderId: row.parent_folder_id ?? null,
+          parentName: row.parent_name ?? null,
+          deletedAt: iso(row.deleted_at),
+          restorable: !disconnected && !blockedByParent,
+          unavailableReason: disconnected
+            ? disconnectedReason(row.source_provider)
+            : blockedByParent
+              ? "Restore the containing folder first."
+              : null
+        };
+      }),
+      documents: documents.rows.map((row) => {
+        const folderDeleted = row.folder_deleted === true;
+        const disconnected = row.folder_deletion_reason === "integration_disconnect";
+        return {
+          id: row.id,
+          title: row.title,
+          folderId: row.folder_id ?? null,
+          folderName: row.folder_name ?? null,
+          deletedAt: iso(row.deleted_at),
+          restorable: !folderDeleted,
+          unavailableReason: !folderDeleted
+            ? null
+            : disconnected
+              ? disconnectedReason(row.folder_source_provider)
+              : "Restore the containing folder first."
+        };
+      }),
+      files: files.rows.map((row) => ({
+        id: row.id,
+        name: row.original_file_name,
+        folderId: row.folder_id ?? null,
+        folderName: row.folder_name ?? null,
+        deletedAt: iso(row.deleted_at),
+        restorable: false,
+        unavailableReason: FILE_LOST
+      })),
+      note: "Restoring a folder also restores the folders and documents deleted with it. Deleted files cannot be restored because their content is removed from storage."
+    };
+  }
+
+  async deleteKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const folder = await this.kbFolder(projectId, folderId);
@@ -10541,12 +12044,27 @@ export class LegacyService implements OnModuleInit {
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, folder.created_by, uid);
 
-    const filesToPurge = await this.db.query<{ storage_key: string }>(
-      `${LegacyService.DESCENDANTS_CTE} SELECT storage_key FROM knowledge_files WHERE folder_id IN (SELECT id FROM descendants) AND is_deleted = false`,
-      [[folderId]]
-    );
-
-    await this.db.transaction((client) => this.cascadeSoftDeleteFolderTree(client, [folderId], uid, "manual"));
+    const filesToPurge = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query("SELECT * FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [folderId, projectId])).rows[0];
+      if (!current) throw new NotFoundException({ error: "Folder not found" });
+      if (current.is_root) throw new BadRequestException({ error: "The root folder cannot be deleted" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
+      const documents = await client.query<{ id: string }>(
+        `${LegacyService.DESCENDANTS_CTE} SELECT id FROM knowledge_documents
+         WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants) AND is_deleted=false AND title <> $3`,
+        [[folderId], projectId, LegacyService.ZYRA_MEMORY_DOC_TITLE]
+      );
+      await this.assertSkillsInactive(client, projectId, documents.rows.map(row => row.id));
+      const files = await client.query<{ storage_key: string }>(
+        `${LegacyService.DESCENDANTS_CTE} SELECT storage_key FROM knowledge_files WHERE folder_id IN (SELECT id FROM descendants) AND is_deleted=false`,
+        [[folderId]]
+      );
+      await this.cascadeSoftDeleteFolderTree(client, [folderId], uid, "manual");
+      return files;
+    });
 
     // Storage cleanup runs after the DB commit and is best-effort: the soft-delete is the
     // source of truth, so a transient S3 failure here shouldn't surface as a failed delete.
@@ -10562,7 +12080,22 @@ export class LegacyService implements OnModuleInit {
     return { success: true };
   }
 
-  async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string) {
+  /** Live ancestry check under the project mutation lock; a live row under a deleted ancestor is invisible. */
+  private async knowledgeFolderAncestry(client: PoolClient, projectId: string, folderId: string) {
+    return client.query<{ is_deleted: boolean; deletion_reason: string | null }>(
+      `WITH RECURSIVE ancestry AS (
+         SELECT id, parent_folder_id, is_deleted, deletion_reason FROM knowledge_folders
+          WHERE id = $1 AND project_id = $2
+         UNION ALL
+         SELECT kf.id, kf.parent_folder_id, kf.is_deleted, kf.deletion_reason FROM knowledge_folders kf
+           JOIN ancestry a ON kf.id = a.parent_folder_id AND kf.project_id = $2
+       ) SELECT is_deleted, deletion_reason FROM ancestry`,
+      [folderId, projectId]
+    );
+  }
+
+  async restoreKnowledgeFolder(projectId: string, userId: string | null | undefined, folderId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const role = await this.kbProjectRole(uid, projectId);
@@ -10570,25 +12103,86 @@ export class LegacyService implements OnModuleInit {
     // Restore resolves nothing first (a deleted row is invisible to kbFolder), so the uuid guard
     // has to sit here rather than in the resolver.
     if (!isUuid(folderId)) throw new NotFoundException({ error: "Folder not found" });
-    const existing = await this.db.query<{ deletion_reason: string | null; source_provider: string | null }>(
-      "SELECT deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
-      [folderId, projectId]
-    );
-    if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
-    if (existing.rows[0].deletion_reason === "integration_disconnect") {
-      const providerName = PROVIDER_FOLDER_NAMES[existing.rows[0].source_provider || ""];
-      const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
-      throw new BadRequestException({
-        error: `This folder was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
-      });
-    }
-    const res = await this.db.query(
-      "UPDATE knowledge_folders SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now() WHERE id = $1 AND project_id = $3 RETURNING *",
-      [folderId, uid, projectId]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "Folder not found" });
-    await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, res.rows[0].name, {});
-    return toCamel(res.rows[0]);
+    const restored = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      // deleted_at is read as text on purpose: node-postgres parses timestamptz to a JS Date, which
+      // truncates PostgreSQL's microseconds. Comparing the rounded value back to the stored row made
+      // every restore match zero rows. The text form round-trips exactly.
+      const existing = await client.query<{
+        name: string;
+        is_deleted: boolean;
+        deleted_at: string | null;
+        deletion_reason: string | null;
+        source_provider: string | null;
+        parent_folder_id: string | null;
+      }>(
+        "SELECT name, is_deleted, deleted_at::text AS deleted_at, deletion_reason, source_provider, parent_folder_id FROM knowledge_folders WHERE id = $1 AND project_id = $2 FOR UPDATE",
+        [folderId, projectId]
+      );
+      if (!existing.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      await this.assertAgentMayTouchGovernedFolder(client, projectId, folderId, principal);
+      if (existing.rows[0].deletion_reason === "integration_disconnect") {
+        const providerName = PROVIDER_FOLDER_NAMES[existing.rows[0].source_provider || ""];
+        const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+        throw new BadRequestException({
+          error: `This folder was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
+        });
+      }
+      // Restoring an active folder is a no-op, not an error: the Trash may be stale.
+      if (!existing.rows[0].is_deleted) {
+        const active = await client.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
+        return { folder: active.rows[0], folders: 0, documents: 0, replayed: true };
+      }
+      // Restoring a child while its parent remains in Trash would produce a live folder under a
+      // deleted ancestor: invisible in the tree, absent from Trash, still counted. The project
+      // advisory lock serialises this check with a concurrent parent delete.
+      if (existing.rows[0].parent_folder_id) {
+        const ancestry = await this.knowledgeFolderAncestry(client, projectId, existing.rows[0].parent_folder_id);
+        if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+          const disconnected = ancestry.rows.some((row) => row.deletion_reason === "integration_disconnect");
+          throw new BadRequestException({
+            error: disconnected
+              ? "This folder's parent was removed when an integration was disconnected and cannot be restored. Reconnect and sync instead."
+              : "Restore the parent folder before restoring this folder."
+          });
+        }
+      }
+
+      // Deleting a folder soft-deletes the whole subtree in one transaction, so every row it took
+      // down shares the folder's deleted_at. Restoring only the folder row (the old behaviour) left
+      // its documents and subfolders in Trash and produced an empty-looking folder.
+      const deletedAt = existing.rows[0].deleted_at;
+      const affected = await client.query<{ id: string }>(
+        `${LegacyService.DESCENDANTS_CTE} SELECT id FROM knowledge_documents
+         WHERE folder_id IN (SELECT id FROM descendants) AND project_id=$2 AND is_deleted=true AND deleted_at=$3::timestamptz`,
+        [[folderId], projectId, deletedAt]
+      );
+      await this.assertSkillsInactive(client, projectId, affected.rows.map(row => row.id));
+      const folders = await client.query(
+        `${LegacyService.DESCENDANTS_CTE}
+         UPDATE knowledge_folders SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+         WHERE id IN (SELECT id FROM descendants) AND project_id = $3 AND is_deleted = true AND deleted_at = $4::timestamptz
+         RETURNING id`,
+        [[folderId], uid, projectId, deletedAt]
+      );
+      // Files are deliberately not restored: deleteKnowledgeFolder and deleteKnowledgeFile remove
+      // their bytes from storage, so a restored row would list and then fail to download.
+      const documents = await client.query(
+        `${LegacyService.DESCENDANTS_CTE}
+         UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+         WHERE folder_id IN (SELECT id FROM descendants) AND project_id = $3 AND is_deleted = true AND deleted_at = $4::timestamptz
+         RETURNING id`,
+        [[folderId], uid, projectId, deletedAt]
+      );
+      const folder = await client.query("SELECT * FROM knowledge_folders WHERE id = $1 AND project_id = $2", [folderId, projectId]);
+      await this.logProjectActivity(projectId, uid, "restored", "knowledge_folder", folderId, folder.rows[0].name, {}, client);
+      return { folder: folder.rows[0], folders: folders.rowCount ?? 0, documents: documents.rowCount ?? 0 };
+    });
+    if (!restored.folder) throw new NotFoundException({ error: "Folder not found" });
+    if ("replayed" in restored && restored.replayed) return toCamel(restored.folder);
+    return { ...toCamel(restored.folder), restoredFolders: restored.folders, restoredDocuments: restored.documents };
   }
 
   // Bundles a folder (and every non-deleted subfolder beneath it) into a zip: documents as
@@ -10809,7 +12403,8 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async createKnowledgeDocument(projectId: string, userId: string | null | undefined, body: Body) {
+  async createKnowledgeDocument(projectId: string, userId: string | null | undefined, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     const title = String(body.title || "").trim();
@@ -10827,24 +12422,56 @@ export class LegacyService implements OnModuleInit {
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
     await this.kbFolder(projectId, folderId);
 
-    const documentType = body.documentType || "general";
-    const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'draft', $9, $9) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [
-        project.organization_id,
-        projectId,
-        folderId,
-        title,
-        body.contentJson ? JSON.stringify(body.contentJson) : null,
-        body.contentHtml || null,
-        body.contentText || null,
-        documentType,
-        uid
-      ]
-    );
-    await this.logProjectActivity(projectId, uid, "created", "knowledge_document", res.rows[0].id, title, {});
-    this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    const documentType = String(body.documentType || "general");
+    // Governed manuals/policies are authored and decided on the human KB surface. An agent
+    // token may read them, but it may not originate or rewrite their governance metadata.
+    if (principal?.kind === "api_token" && (isGovernedDocumentType(documentType) || body.governedMetadata !== undefined)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+    const governedMetadata = normalizeGovernedMetadata(body.governedMetadata, documentType);
+    // Exposure hold: governed content stays out of the embedding pipeline until an owner decides
+    // how it may leave the project. `unsupported` is the terminal state that keeps the boot-time
+    // sweep from requeueing it; the sweep and processor also filter by document type so the hold
+    // survives a migration that resets terminal embedding states.
+    const embeddingStatus = isGovernedDocumentType(documentType) ? "unsupported" : "pending";
+    const res = await this.db.transaction(async client => {
+      // Recheck the folder under a shared lock. A delete locks the target FOR UPDATE and its
+      // cascade updates descendants with FOR NO KEY UPDATE; FOR SHARE conflicts with both, so
+      // this insert either wins (and the cascade then sees the new document) or sees the deleted
+      // folder and refuses. The earlier kbFolder() read is only a fast preflight. Do not take the
+      // skill-assignment advisory lock after this point: the delete acquires it before the folder
+      // lock, so reversing that order would create a cycle.
+      const folder = await client.query(
+        "SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE",
+        [folderId, projectId]
+      );
+      if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      // The preflight access read may be stale after the wait; revalidate membership/role here.
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const inserted = await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [
+          project.organization_id,
+          projectId,
+          folderId,
+          title,
+          body.contentJson ? JSON.stringify(body.contentJson) : null,
+          body.contentHtml || null,
+          body.contentText || null,
+          documentType,
+          JSON.stringify(governedMetadata),
+          embeddingStatus,
+          uid
+        ]
+      );
+      await this.logProjectActivity(projectId, uid, "created", "knowledge_document", inserted.rows[0].id, title, {}, client);
+      return inserted;
+    });
+    // Governed manuals/policies remain human-only until an exposure policy is accepted.
+    if (!isGovernedDocumentType(documentType)) {
+      this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    }
     return toCamel(res.rows[0]);
   }
 
@@ -10858,14 +12485,16 @@ export class LegacyService implements OnModuleInit {
     return res.rows[0];
   }
 
-  async getKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async getKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string): Promise<Body> {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const doc = await this.kbDocument(projectId, documentId);
     const breadcrumb = await this.kbBreadcrumb(doc.folder_id);
     // Resolved separately rather than joined: KB_DOCUMENT_COLUMNS is shared with INSERT/UPDATE
     // RETURNING clauses where a join isn't available.
     const syncedByName = await this.kbSyncedByName(doc.source_synced_by);
-    return { ...toCamel(doc), syncedByName, breadcrumb, ...this.zyraMemoryView(doc) };
+    return { ...toCamel(doc), syncedByName, breadcrumb,
+      reviewBinding: doc.reviewed_version_id ? "exact_snapshot" : doc.reviewed_at ? "legacy_unverified" : "none",
+      ...this.zyraMemoryView(doc) };
   }
 
   // Powers the Knowledge Base Change History popover/modal: this document's full add/update
@@ -10920,8 +12549,9 @@ export class LegacyService implements OnModuleInit {
         changed_fields: ChangedField[] | null;
         created_by_name: string | null;
         created_at: string;
+        snapshot_kind: string;
       }>(
-        `SELECT v.id, v.version_number, v.title, v.content_text, v.changed_summary, v.changed_fields,
+        `SELECT v.id, v.version_number, v.title, v.content_text, v.changed_summary, v.changed_fields, v.snapshot_kind,
                 COALESCE(NULLIF(TRIM(u.name), ''), u.email) AS created_by_name, v.created_at
          FROM knowledge_document_versions v
          LEFT JOIN users u ON u.id = v.created_by
@@ -10961,6 +12591,13 @@ export class LegacyService implements OnModuleInit {
     const healPromises: Promise<void>[] = [];
     for (let i = 0; i < versions.length; i++) {
       const v = versions[i];
+      if (v.snapshot_kind && v.snapshot_kind !== "autosave") {
+        entries.push({ id: v.id, eventType: "updated",
+          changedSummary: `${v.snapshot_kind === "submitted" ? "Submitted" : v.snapshot_kind === "approved" ? "Approved" : "Rejected"} exact version ${v.version_number}.`,
+          changedFields: [], createdAt: new Date(v.created_at).toISOString(),
+          actorName: v.created_by_name || "Deleted user", versionId: null });
+        continue; // Governed snapshots are immutable facts, never coalesced or lazily healed.
+      }
       let summary: string;
       let fields: ChangedField[];
       if (v.changed_summary !== null && Array.isArray(v.changed_fields)) {
@@ -11005,7 +12642,7 @@ export class LegacyService implements OnModuleInit {
     // Approve/reject already lands in the project activity feed (logProjectActivity), but that feed
     // mixes every kind of activity across the whole project — folding it in here too means this
     // document's own history never omits the one status change that isn't a content edit.
-    if (doc.document_type === "ai_memory" && doc.reviewed_at) {
+    if (doc.document_type === "ai_memory" && doc.reviewed_at && !doc.reviewed_version_id) {
       const reviewedByName = await this.kbSyncedByName(doc.reviewed_by);
       entries.push({
         id: `${documentId}-review`,
@@ -11079,12 +12716,28 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
-  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
-    const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
-    const doc = await this.kbDocument(projectId, documentId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireMutateAccess(role, doc.created_by, uid);
+  private async assertAgentMayTouchGovernedFolder(client: PoolClient, projectId: string, folderId: string,
+    principal: { kind: "human_session" | "api_token" } | undefined) {
+    if (principal?.kind !== "api_token") return;
+    const governed = await client.query(
+      `${LegacyService.DESCENDANTS_CTE}
+       SELECT 1 FROM knowledge_documents
+        WHERE project_id=$2 AND folder_id IN (SELECT id FROM descendants)
+          AND document_type IN ('user_manual','policy') LIMIT 1`,
+      [[folderId], projectId]
+    );
+    if (governed.rows[0]) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+  }
+
+  private assertAgentMayTouchGoverned(principal: { kind: "human_session" | "api_token" } | undefined, documentType: unknown) {
+    if (principal?.kind === "api_token" && isGovernedDocumentType(documentType)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+  }
+
+  private assertKnowledgeDocumentBodyWritable(doc: Body) {
     // Provider-owned mirrors are rewritten wholesale by every sync, so an edit here would be
     // silently discarded later. Comments are the writable channel on these documents — they live
     // in knowledge_document_comments, untouched by sync. Enforced here and not only in the editor,
@@ -11094,7 +12747,54 @@ export class LegacyService implements OnModuleInit {
         error: `"${doc.title}" is synced from ${PROVIDER_FOLDER_NAMES[String(doc.source_provider || "")] || "an integration"} and its body can't be edited because the next sync would overwrite your changes. Add a comment on the document instead.`
       });
     }
+  }
 
+  async updateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const initial = await this.kbDocument(projectId, documentId);
+    const role = await this.kbProjectRole(uid, projectId);
+    this.kbRequireMutateAccess(role, initial.created_by, uid);
+    this.assertKnowledgeDocumentBodyWritable(initial);
+
+    const { row, before, contentChanged, nextTitle } = await this.db.transaction(async (client) => {
+      await this.lockSkillAssignments(client, projectId);
+      // The existing version lock now covers the live write and coalesced diff too, not only
+      // allocation. A snapshot cannot commit without the document change it describes.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
+      const locked = await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+         WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE`,
+        [documentId, projectId]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), locked.rows[0].created_by, uid);
+      this.assertKnowledgeDocumentBodyWritable(locked.rows[0]);
+      const nextDocumentType = body.documentType || locked.rows[0].document_type;
+      if (nextDocumentType !== locked.rows[0].document_type) {
+        await this.assertSkillsInactive(client, projectId, [documentId]);
+      }
+      return this.writeKnowledgeDocument(client, projectId, uid, documentId, body, locked.rows[0], principal);
+    });
+    await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
+    if (contentChanged && !isGovernedDocumentType(row.document_type)) this.enqueueEmbedding(row.organization_id, projectId, "document", documentId, "updated");
+    if (contentChanged && !this.isZyraMemoryDocument(before)) {
+      await this.notifyKnowledgeItem({ kind: "updated", projectId, actorId: uid, itemId: documentId, name: nextTitle || before.title, ownerId: before.created_by ?? null, isDocument: true });
+    }
+    return toCamel(row);
+  }
+
+  private async writeKnowledgeDocument(client: PoolClient, projectId: string, uid: string, documentId: string, body: Body,
+    doc: Body, principal?: { kind: "human_session" | "api_token" }) {
+    const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision);
+    if (expectedRevision && expectedRevision !== doc.edit_revision) {
+      throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "This document changed. Reload and review the current version before saving." });
+    }
+    if (doc.document_type === "ai_memory" && body.documentType !== undefined && body.documentType !== "ai_memory") {
+      throw new BadRequestException({ error: "AI memory cannot bypass review by changing document type" });
+    }
     const nextTitle = body.title !== undefined ? String(body.title).trim() : doc.title;
     // Renaming detaches the document from the agent: rememberZyraMemory and zyraMemoryText both look
     // it up BY TITLE, so the old memory becomes unreachable and a second, empty one starts.
@@ -11115,9 +12815,24 @@ export class LegacyService implements OnModuleInit {
     } else if (nextTitle === LegacyService.ZYRA_MEMORY_DOC_TITLE && nextTitle !== doc.title) {
       throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
     }
-    const nextJson = body.contentJson !== undefined ? JSON.stringify(body.contentJson) : doc.content_json ? JSON.stringify(doc.content_json) : null;
+    const nextJson = body.contentJson !== undefined ? JSON.stringify(body.contentJson) : doc.content_json != null ? JSON.stringify(doc.content_json) : null;
     const nextHtml = body.contentHtml !== undefined ? body.contentHtml : doc.content_html;
     const nextText = body.contentText !== undefined ? body.contentText : doc.content_text;
+    const nextDocumentType = String(body.documentType || doc.document_type);
+    if (principal?.kind === "api_token"
+      && (isGovernedDocumentType(doc.document_type) || isGovernedDocumentType(nextDocumentType) || body.governedMetadata !== undefined)) {
+      throw new ForbiddenException({ error: "Governed manuals and policies are managed on the human Knowledge Base surface" });
+    }
+    // V165's trigger refuses this too, but as a raw 23514. Refuse it here so the API answers
+    // 400 like every other type-change boundary rather than surfacing a database error as a 500.
+    if ((doc.document_type === "requirement_note" || isGovernedDocumentType(doc.document_type))
+      && nextDocumentType !== doc.document_type) {
+      throw new BadRequestException({ error: "A reviewed requirement, manual or policy cannot change document type" });
+    }
+    const governedMetadata = normalizeGovernedMetadata(
+      body.governedMetadata === undefined ? doc.governed_metadata : body.governedMetadata,
+      nextDocumentType
+    );
 
     if (!nextTitle && !String(nextText || "").trim()) {
       throw new BadRequestException({ error: "A document needs a title or some content — it can't be saved blank." });
@@ -11127,17 +12842,28 @@ export class LegacyService implements OnModuleInit {
     }
     this.assertKnowledgeDocumentPayloadSize(body);
 
+    // JSON-only edits are body edits too; compare using PostgreSQL JSONB semantics so object-key
+    // ordering alone does not invent history or revoke an unchanged document's approval.
+    const jsonChanged = body.contentJson !== undefined && (await client.query<{ changed: boolean }>(
+      "SELECT $1::jsonb IS DISTINCT FROM $2::jsonb AS changed",
+      [doc.content_json != null ? JSON.stringify(doc.content_json) : null, nextJson]
+    )).rows[0].changed;
+    const metadataChanged = (await client.query<{ changed: boolean }>(
+      "SELECT $1::jsonb IS DISTINCT FROM $2::jsonb AS changed",
+      [JSON.stringify(doc.governed_metadata ?? {}), JSON.stringify(governedMetadata)]
+    )).rows[0].changed;
     const contentChanged =
-      nextTitle !== doc.title || nextHtml !== doc.content_html || nextText !== doc.content_text;
+      nextTitle !== doc.title || nextHtml !== doc.content_html || nextText !== doc.content_text || jsonChanged || metadataChanged;
 
     if (contentChanged) {
-      const latest = await this.db.query<{ id: string; title: string; content_text: string | null; created_at: string }>(
-        "SELECT id, title, content_text, created_at FROM knowledge_document_versions WHERE document_id = $1 ORDER BY version_number DESC LIMIT 1",
+      const latest = await client.query<{ id: string; title: string; content_text: string | null; created_at: string; snapshot_kind: string }>(
+        "SELECT id, title, content_text, created_at, snapshot_kind FROM knowledge_document_versions WHERE document_id = $1 ORDER BY version_number DESC LIMIT 1",
         [documentId]
       );
       const staleMinutes = LegacyService.KB_VERSION_SNAPSHOT_MINUTES;
       const isStale =
         !latest.rows[0] ||
+        latest.rows[0].snapshot_kind !== "autosave" ||
         Date.now() - new Date(latest.rows[0].created_at).getTime() > staleMinutes * 60 * 1000;
       if (isStale) {
         // The new row's own diff (what THIS edit changed, relative to the state it snapshots) is
@@ -11147,32 +12873,20 @@ export class LegacyService implements OnModuleInit {
           { title: doc.title, contentText: doc.content_text },
           { title: nextTitle, contentText: nextText }
         );
-        // Serialised per document, and sharing its lock key with restoreKnowledgeDocumentVersion —
-        // MAX(version_number)+1 alone lets a concurrent edit and a concurrent restore compute the
-        // same next number, and the table has no unique constraint to reject the duplicate insert.
-        await this.db.transaction(async (client) => {
-          await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
-          const nextVersion = await client.query<{ max: number }>(
-            "SELECT COALESCE(MAX(version_number), 0) + 1 AS max FROM knowledge_document_versions WHERE document_id = $1",
-            [documentId]
-          );
-          await client.query(
-            `INSERT INTO knowledge_document_versions
-               (document_id, version_number, title, content_json, content_html, content_text, created_by, changed_summary, changed_fields)
-             VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb)`,
-            [
-              documentId,
-              nextVersion.rows[0].max,
-              doc.title,
-              doc.content_json ? JSON.stringify(doc.content_json) : null,
-              doc.content_html,
-              doc.content_text,
-              uid,
-              diff.summary,
-              JSON.stringify(diff.fields)
-            ]
-          );
-        });
+        // The caller holds the same document/version lock as restore for this entire write.
+        // V94's unique constraint remains an additional guard, not the transaction boundary.
+        const nextVersion = await client.query<{ max: number }>(
+          "SELECT COALESCE(MAX(version_number), 0) + 1 AS max FROM knowledge_document_versions WHERE document_id = $1",
+          [documentId]
+        );
+        await client.query(
+          `INSERT INTO knowledge_document_versions
+             (document_id, version_number, title, content_json, content_html, content_text, created_by, changed_summary, changed_fields)
+           VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9::jsonb)`,
+          [documentId, nextVersion.rows[0].max, doc.title,
+            doc.content_json != null ? JSON.stringify(doc.content_json) : null,
+            doc.content_html, doc.content_text, uid, diff.summary, JSON.stringify(diff.fields)]
+        );
       } else if (latest.rows[0]) {
         // No new row this edit (still inside the snapshot-throttling window) — the existing latest
         // row's "after" state has just moved further along, so its stored diff must move with it.
@@ -11182,7 +12896,7 @@ export class LegacyService implements OnModuleInit {
           { title: latest.rows[0].title, contentText: latest.rows[0].content_text },
           { title: nextTitle, contentText: nextText }
         );
-        await this.db.query(
+        await client.query(
           "UPDATE knowledge_document_versions SET changed_summary = $2, changed_fields = $3::jsonb WHERE id = $1",
           [latest.rows[0].id, diff.summary, JSON.stringify(diff.fields)]
         );
@@ -11192,8 +12906,13 @@ export class LegacyService implements OnModuleInit {
     let nextStatus = doc.status;
     let reviewedBy = doc.reviewed_by;
     let reviewedAt = doc.reviewed_at;
-    if (doc.document_type === "ai_memory") {
-      if (doc.status === "approved" && contentChanged) {
+    if (isGovernedDocumentType(nextDocumentType) || isGovernedDocumentType(doc.document_type)) {
+      if (body.status !== undefined && String(body.status) !== String(doc.status)) {
+        throw new BadRequestException({ error: "Governed document status changes only through its exact-version review decision" });
+      }
+      // The review-invalidation trigger clears the binding on content/metadata edits.
+    } else if (doc.document_type === "ai_memory" || body.documentType === "ai_memory") {
+      if (doc.document_type !== "ai_memory" || (doc.status === "approved" && contentChanged)) {
         nextStatus = "draft";
         reviewedBy = null;
         reviewedAt = null;
@@ -11203,63 +12922,102 @@ export class LegacyService implements OnModuleInit {
       nextStatus = String(body.status);
     }
 
-    const res = await this.db.query(
+    const res = await client.query(
       `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5,
-       document_type = COALESCE($6, document_type), status = $7, reviewed_by = $8, reviewed_at = $9,
+       document_type = COALESCE($6, document_type), governed_metadata = $12::jsonb,
+       status = $7, reviewed_by = $8, reviewed_at = $9,
        updated_by = $10, updated_at = now()
-       WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, nextTitle, nextJson, nextHtml, nextText, body.documentType || null, nextStatus, reviewedBy, reviewedAt, uid]
+        WHERE id = $1 AND project_id = $11 AND is_deleted = false RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+      [documentId, nextTitle, nextJson, nextHtml, nextText, body.documentType || null, nextStatus, reviewedBy, reviewedAt, uid, projectId, JSON.stringify(governedMetadata)]
     );
-    await this.logProjectActivity(projectId, uid, "updated", "knowledge_document", documentId, nextTitle, {});
-    if (contentChanged) this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", documentId, "updated");
-    // A real edit of a person's document: its title or its content. Zyra's own memory document and
-    // read-only provider mirrors are rewritten by the system, not by people, and are not announced.
-    if ((contentChanged || nextTitle !== doc.title) && !this.isZyraMemoryDocument(doc)) {
-      await this.notifyKnowledgeItem({ kind: "updated", projectId, actorId: uid, itemId: documentId, name: nextTitle || doc.title, ownerId: doc.created_by ?? null, isDocument: true });
-    }
-    return toCamel(res.rows[0]);
+    if (!res.rows[0]) throw new NotFoundException({ error: "Document not found" });
+    return { row: res.rows[0], before: doc, contentChanged, nextTitle };
   }
 
-  async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async moveKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     const folderId = String(body.folderId || "");
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
     await this.kbFolder(projectId, folderId);
 
-    const res = await this.db.query(
-      `UPDATE knowledge_documents SET folder_id = $2, updated_by = $3, updated_at = now()
-       WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, folderId, uid]
-    );
-    await this.logProjectActivity(projectId, uid, "moved", "knowledge_document", documentId, res.rows[0].title, {});
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query("SELECT document_type, created_by FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE", [documentId, projectId])).rows[0];
+      if (!current) throw new NotFoundException({ error: "Document not found" });
+      // Re-check against the locked row: the document may have become governed while this
+      // token-originated move waited for the transaction.
+      this.assertAgentMayTouchGoverned(principal, current.document_type);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      // Same-project folder deletion takes the project mutation lock before its cascade, so this
+      // destination read cannot observe a folder that is concurrently being soft-deleted.
+      const target = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [folderId, projectId]);
+      if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      const moved = await client.query(
+        `UPDATE knowledge_documents SET folder_id = $2, updated_by = $3, updated_at = now()
+         WHERE id = $1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, folderId, uid, projectId]
+      );
+      await this.logProjectActivity(projectId, uid, "moved", "knowledge_document", documentId, moved.rows[0].title, {}, client);
+      return moved;
+    });
     return toCamel(res.rows[0]);
   }
 
-  async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async duplicateKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
-    const project = await this.requireProjectAccess(uid, projectId);
+    await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
-    const res = await this.db.query(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'draft', $9, $9) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [
-        project.organization_id,
-        projectId,
-        doc.folder_id,
-        `${doc.title} (copy)`,
-        doc.content_json ? JSON.stringify(doc.content_json) : null,
-        doc.content_html,
-        doc.content_text,
-        doc.document_type,
-        uid
-      ]
-    );
-    await this.logProjectActivity(projectId, uid, "duplicated", "knowledge_document", res.rows[0].id, res.rows[0].title, {});
-    this.enqueueEmbedding(project.organization_id, projectId, "document", res.rows[0].id, "created");
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
+    const res = await this.db.transaction(async client => {
+      // Match deleteKnowledgeFolder/move paths: advisory first, then domain rows. Without this the
+      // source-document lock and the folder cascade can deadlock, or the copy can be inserted into
+      // a folder whose ancestor delete already took its document snapshot.
+      await this.lockSkillAssignments(client, projectId);
+      // Pin the source while copying. A token duplicate that waited here must not copy a document
+      // that became governed in the meantime, and a later conversion must see the copy commit first.
+      const source = (await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+          WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE`,
+        [documentId, projectId]
+      )).rows[0];
+      if (!source) throw new NotFoundException({ error: "Document not found" });
+      this.assertAgentMayTouchGoverned(principal, source.document_type);
+      // The source wait can outlive the preflight read; a removed member or archived project must
+      // not still receive a copy. The project mutation advisory lock serialises this with folder
+      // deletion, so source.folder_id cannot be deleted between this check and the insert.
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const embeddingStatus = isGovernedDocumentType(source.document_type) ? "unsupported" : "pending";
+      const inserted = await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, 'draft', $11, $11) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [
+          authority.organization_id,
+          projectId,
+          source.folder_id,
+          `${source.title} (copy)`,
+          source.content_json ? JSON.stringify(source.content_json) : null,
+          source.content_html,
+          source.content_text,
+          source.document_type,
+          JSON.stringify(source.governed_metadata ?? {}),
+          embeddingStatus,
+          uid
+        ]
+      );
+      await this.logProjectActivity(projectId, uid, "duplicated", "knowledge_document", inserted.rows[0].id, inserted.rows[0].title, {}, client);
+      return inserted;
+    });
+    if (!isGovernedDocumentType(res.rows[0].document_type)) {
+      this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", res.rows[0].id, "created");
+    }
     return toCamel(res.rows[0]);
   }
 
@@ -11268,10 +13026,12 @@ export class LegacyService implements OnModuleInit {
     return String(doc?.title ?? "").trim() === LegacyService.ZYRA_MEMORY_DOC_TITLE;
   }
 
-  async deleteKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async deleteKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
     if (this.isZyraMemoryDocument(doc)) {
@@ -11279,10 +13039,23 @@ export class LegacyService implements OnModuleInit {
         error: `"${LegacyService.ZYRA_MEMORY_DOC_TITLE}" is managed by Zyra and can't be deleted — it holds everything Zyra has learned about this project. A project owner or manager can remove individual entries from it instead.`
       });
     }
-    await this.db.query(
-      "UPDATE knowledge_documents SET is_deleted = true, deleted_at = now(), updated_by = $2, updated_at = now() WHERE id = $1",
-      [documentId, uid]
-    );
+    await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
+        [documentId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "Document not found" });
+      this.assertAgentMayTouchGoverned(principal, current.document_type);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.created_by, uid);
+      if (this.isZyraMemoryDocument(current)) throw new BadRequestException({ error: "The managed Zyra memory document cannot be deleted." });
+      await this.assertSkillsInactive(client, projectId, [documentId]);
+      await client.query(
+        "UPDATE knowledge_documents SET is_deleted = true, deleted_at = now(), updated_by = $2, updated_at = now() WHERE id = $1 AND project_id=$3",
+        [documentId, uid, projectId]
+      );
+    });
     await this.logProjectActivity(projectId, uid, "deleted", "knowledge_document", documentId, doc.title, {});
     await this.notifyKnowledgeItem({ kind: "deleted", projectId, actorId: uid, itemId: documentId, name: doc.title, ownerId: doc.created_by ?? null, isDocument: true });
     return { success: true };
@@ -11419,18 +13192,56 @@ export class LegacyService implements OnModuleInit {
     return { ...toCamel(row), ...this.zyraMemoryView(row) };
   }
 
-  async restoreKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string) {
+  async restoreKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireOwnerOrManager(role);
     if (!isUuid(documentId)) throw new NotFoundException({ error: "Document not found" });
-    const res = await this.db.query(
-      `UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
-       WHERE id = $1 AND project_id = $3 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, uid, projectId]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "Document not found" });
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const existing = await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents WHERE id = $1 AND project_id = $2 FOR UPDATE`,
+        [documentId, projectId]
+      );
+      const document = existing.rows[0];
+      if (!document) throw new NotFoundException({ error: "Document not found" });
+      this.assertAgentMayTouchGoverned(principal, document.document_type);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      if (document.is_deleted) await this.assertSkillsInactive(client, projectId, [documentId]);
+      // A document restored into a still-deleted folder would be invisible in every listing while
+      // looking restored. Deleting a folder and its contents together is one action; restoring the
+      // folder brings those documents back with it.
+      if (document.is_deleted && document.folder_id) {
+        const folder = await client.query<{ is_deleted: boolean; deletion_reason: string | null; source_provider: string | null }>(
+          "SELECT is_deleted, deletion_reason, source_provider FROM knowledge_folders WHERE id = $1 AND project_id = $2",
+          [document.folder_id, projectId]
+        );
+        const parent = folder.rows[0];
+        if (parent?.is_deleted) {
+          if (parent.deletion_reason === "integration_disconnect") {
+            const providerName = PROVIDER_FOLDER_NAMES[parent.source_provider || ""];
+            const disconnectedWhat = providerName ? `${providerName} was disconnected` : "the integration was disconnected";
+            throw new BadRequestException({
+              error: `This document was removed when ${disconnectedWhat} and can't be restored. Reconnect and sync to create a new one.`
+            });
+          }
+          throw new ConflictException({ error: "Restore the containing folder first" });
+        }
+      }
+      // Restoring an active document is a no-op, not an error: the Trash may be stale.
+      const restored = document.is_deleted
+        ? await client.query(
+            `UPDATE knowledge_documents SET is_deleted = false, deleted_at = NULL, updated_by = $2, updated_at = now()
+             WHERE id = $1 AND project_id = $3 AND is_deleted = true RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+            [documentId, uid, projectId]
+          )
+        : existing;
+      if (!restored.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      return restored;
+    });
     await this.logProjectActivity(projectId, uid, "restored", "knowledge_document", documentId, res.rows[0].title, {});
     return toCamel(res.rows[0]);
   }
@@ -11737,18 +13548,164 @@ export class LegacyService implements OnModuleInit {
     }
   }
 
+  // A transcription is an external, potentially minutes-long operation. The claim makes the row's
+  // owner explicit so a retry (upload re-send, boot sweep, or a second process) cannot dispatch a
+  // second provider request for the same file. A claim older than the lease is treated as abandoned:
+  // the process that held it is assumed dead, which is exactly what a backend restart leaves behind.
+  private async claimKnowledgeTranscription(fileId: string): Promise<string | null> {
+    const token = randomUUID();
+    const claimed = await this.db.query<{ extraction_claim_token: string | null }>(
+      `UPDATE knowledge_files kf
+          SET extraction_status = 'processing', extraction_claimed_at = now(),
+              extraction_claim_token = $2, updated_at = now()
+         FROM projects p
+        WHERE kf.id = $1 AND p.id = kf.project_id AND p.archived_at IS NULL AND kf.is_deleted = false
+          AND (kf.extraction_status = 'pending'
+               OR (kf.extraction_status = 'processing'
+                   AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
+        RETURNING kf.extraction_claim_token`,
+      [fileId, token]
+    );
+    return claimed.rows[0]?.extraction_claim_token ?? null;
+  }
+
+  // Recover transcriptions abandoned by a restart. Upload fires transcription without waiting, so
+  // a process that dies between COMMIT and dispatch (or mid-provider-call) leaves the row pending or
+  // stale-processing and the content is silently never embedded. Embedding recovery only covers
+  // rows that already have extracted_text; it cannot invent a transcript, so this sweep is separate.
+  // Claims happen before dispatch, one at a time, so re-entering this sweep (or a still-live worker)
+  // cannot double-charge the provider for the same file.
+  private async resumeInterruptedKnowledgeTranscriptions(projectIdFilter?: string): Promise<void> {
+    const res = await this.db.query<Body>(
+      `SELECT kf.id, kf.project_id, kf.storage_key, kf.file_extension, kf.mime_type, kf.original_file_name
+         FROM knowledge_files kf
+         JOIN projects p ON p.id = kf.project_id
+        WHERE kf.is_deleted = false AND p.archived_at IS NULL
+          AND ($1::uuid IS NULL OR kf.project_id = $1)
+          AND (kf.extraction_status = 'pending'
+               OR (kf.extraction_status = 'processing'
+                   AND (kf.extraction_claimed_at IS NULL OR kf.extraction_claimed_at < now() - interval '5 minutes')))
+        ORDER BY kf.extraction_claimed_at NULLS FIRST, kf.created_at
+        LIMIT 25`,
+      [projectIdFilter ?? null]
+    ).catch((err) => {
+      this.logger.warn(`Could not scan for interrupted knowledge transcripts: ${err instanceof Error ? err.message : err}`);
+      return { rows: [] as Body[] };
+    });
+    for (const row of res.rows) {
+      const projectId = String(row.project_id);
+      const fileId = String(row.id);
+      const storageKey = String(row.storage_key || "");
+      const claimToken = await this.claimKnowledgeTranscription(fileId).catch(() => null);
+      if (!claimToken) continue;
+      if (!storageKey) {
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+        continue;
+      }
+      // Reading the object can itself be slow (large video, object-store retry). Renew the same
+      // claim while it runs so another sweep cannot take it over before the provider call starts.
+      const keepAlive = setInterval(() => {
+        void this.db.query(
+          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing'",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+      }, 60 * 1000);
+      keepAlive.unref?.();
+      try {
+        let readTimeout: NodeJS.Timeout | undefined;
+        const buffer = await Promise.race([
+          this.storage.getBuffer(storageKey),
+          new Promise<never>((_resolve, reject) => {
+            readTimeout = setTimeout(() => reject(new Error("storage read timed out")), 60 * 1000);
+            readTimeout.unref?.();
+          })
+        ]);
+        if (readTimeout) clearTimeout(readTimeout);
+        clearInterval(keepAlive);
+        const ext = String(row.file_extension || path.extname(String(row.original_file_name || "")).replace(/^\./, "")).toLowerCase();
+        void this.transcribeKnowledgeFile(
+          projectId,
+          fileId,
+          buffer,
+          ext,
+          String(row.mime_type || ""),
+          String(row.original_file_name || ""),
+          true,
+          claimToken
+        ).catch(() => undefined);
+      } catch (err) {
+        clearInterval(keepAlive);
+        this.logger.warn(`Could not reload knowledge file ${fileId} for transcription recovery: ${err instanceof Error ? err.message : err}`);
+        // A missing object is permanent. Anything else (timeout, object-store 5xx, credentials)
+        // is treated as transient: release the claim so the next sweep retries instead of losing
+        // the transcript forever.
+        const code = String((err as { code?: unknown })?.code || (err as { name?: unknown })?.name || "");
+        const message = err instanceof Error ? err.message : String(err);
+        const missing = ["ENOENT", "NoSuchKey", "NotFound"].includes(code)
+          || /NoSuchKey|not found|does not exist|specified key does not exist/i.test(message);
+        // A release records when it was attempted, so the sweep's least-recently-tried ordering
+        // cannot keep the same broken rows at the head of every batch.
+        await this.db.query(
+          `UPDATE knowledge_files
+              SET extraction_status = $3, extraction_claimed_at = $4,
+                  extraction_claim_token = NULL, updated_at = now()
+            WHERE id = $1 AND extraction_claim_token = $2`,
+          [fileId, claimToken, missing ? "failed" : "pending", missing ? null : new Date()]
+        ).catch((releaseError) => {
+          this.logger.warn(`Could not release knowledge transcription ${fileId}: ${releaseError instanceof Error ? releaseError.message : releaseError}`);
+        });
+      }
+    }
+  }
+
   // Async speech-to-text for uploaded audio/video files, fired-and-forgotten from
   // uploadKnowledgeFiles (mirrors the processZyraTask pattern used for AI task generation)
   // so a multi-minute meeting recording doesn't block the upload HTTP response. Only attempted
   // when the project has an OpenAI key allocated — no other provider offers a compatible
   // transcription endpoint we can safely assume the shape of.
-  private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<void> {
+  private async transcribeKnowledgeFile(projectId: string, fileId: string, buffer: Buffer, ext: string, mimeType: string, fileName: string, alreadyClaimed = false, claimTokenInput?: string | null): Promise<void> {
+    const traceSeed = `knowledge:transcription:${fileId}`;
+    // File names belong in masked input, never in unmasked observation metadata.
+    const traceMeta = { projectId, fileId, ext };
+    let requestAttempted = false;
+    // Keep the lease alive for the duration of the provider call, so a slow but healthy
+    // transcription is never mistaken for an abandoned one and dispatched twice.
+    let heartbeat: NodeJS.Timeout | undefined;
+    let claimToken: string | null = null;
     try {
-      const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
+      claimToken = alreadyClaimed ? claimTokenInput ?? null : await this.claimKnowledgeTranscription(fileId);
+      if (!claimToken) return;
+      heartbeat = setInterval(() => {
+        void this.db.query(
+          "UPDATE knowledge_files SET extraction_claimed_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing' AND is_deleted = false",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+      }, 60 * 1000);
+      heartbeat.unref?.();
+      const project = await this.db.query<{ organization_id: string }>(
+        "SELECT organization_id FROM projects WHERE id = $1 AND archived_at IS NULL",
+        [projectId]
+      );
+      if (!project.rows[0]) {
+        // Archived/deleted between claim and dispatch: release rather than terminalise, so an
+        // unarchived project can still recover it on the next sweep.
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'pending', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        ).catch(() => undefined);
+        return;
+      }
       const allocation = await this.zyraAiAllocation(projectId);
       const key = allocation.key;
       if (!key || String(key.provider || "").toLowerCase() !== "openai") {
-        await this.db.query("UPDATE knowledge_files SET extraction_status = 'unsupported' WHERE id = $1", [fileId]);
+        await this.db.query(
+          "UPDATE knowledge_files SET extraction_status = 'unsupported', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2",
+          [fileId, claimToken]
+        );
+        // No model request occurred; do not invent a generation observation.
         return;
       }
       const form = new FormData();
@@ -11756,24 +13713,58 @@ export class LegacyService implements OnModuleInit {
       form.append("model", "whisper-1");
       const authHeader = String(key.auth_header_name || "Authorization");
       const scheme = String(key.auth_scheme || "Bearer").trim();
-      const headers: Record<string, string> = {};
-      headers[authHeader] = scheme ? `${scheme} ${key.api_key}` : String(key.api_key);
-      const res = await fetch(normalizeAudioTranscriptionsUrl(key.base_url), { method: "POST", headers, body: form });
+      const headers = buildAiProviderHeaders(() => {
+        // FormData owns Content-Type, including its multipart boundary.
+        const value = new Headers();
+        value.set(authHeader, scheme ? `${scheme} ${key.api_key}` : String(key.api_key));
+        return value;
+      });
+      const url = normalizeAudioTranscriptionsUrl(key.base_url);
+      requestAttempted = true;
+      const res = await this.fetchAiProvider("openai", url, { method: "POST", headers, body: form });
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Body)) as Body;
+        const errBody = await this.readAiProviderJson("openai", res);
         const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-        throw new Error(rawMessage);
+        throw new Error(LegacyService.describeProviderError("openai", res.status, rawMessage));
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson("openai", res);
       const text = String(data.text || "").trim().slice(0, LegacyService.KB_EXTRACTED_TEXT_LIMIT);
-      await this.db.query(
-        "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', updated_at = now() WHERE id = $1",
-        [fileId, text || null]
+      const saved = await this.db.query(
+        "UPDATE knowledge_files SET extracted_text = $2, extraction_status = 'ready', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $3 AND extraction_status = 'processing' AND is_deleted = false RETURNING id",
+        [fileId, text || null, claimToken]
       );
-      if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+      if (saved.rows[0]) {
+        if (text) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "file", fileId, "transcribed");
+        // A stale owner's provider call is real, but its result was fenced out; recording it as a
+        // successful generation would double-count one persisted transcript in observability.
+        void recordStandaloneGeneration({
+          traceSeed,
+          name: "knowledge.transcription",
+          provider: "openai",
+          model: "whisper-1",
+          input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+          output: { status: "ready", transcriptChars: text.length },
+          metadata: traceMeta
+        });
+      }
     } catch (err) {
-      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${err instanceof Error ? err.message : err}`);
-      await this.db.query("UPDATE knowledge_files SET extraction_status = 'failed', updated_at = now() WHERE id = $1", [fileId]).catch(() => undefined);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Knowledge-base transcription failed for file ${fileId}: ${message}`);
+      const failed = await this.db.query(
+        "UPDATE knowledge_files SET extraction_status = 'failed', extraction_claimed_at = NULL, extraction_claim_token = NULL, updated_at = now() WHERE id = $1 AND extraction_claim_token = $2 AND extraction_status = 'processing' RETURNING id",
+        [fileId, claimToken]
+      ).catch(() => null);
+      if (requestAttempted && failed?.rows[0]) void recordStandaloneGeneration({
+        traceSeed,
+        name: "knowledge.transcription",
+        provider: "openai",
+        model: "whisper-1",
+        input: { fileName, ext, mimeType, sizeBytes: buffer.length },
+        errorMessage: message,
+        metadata: traceMeta
+      });
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
     }
   }
 
@@ -11791,6 +13782,13 @@ export class LegacyService implements OnModuleInit {
     const camelled = toCamel(row);
     delete camelled.storageKey;
     delete camelled.fileName;
+    // Upload identity and transcription ownership are internal coordination state, not client data.
+    // The digest in particular is a content fingerprint and has no reason to leave the service.
+    delete camelled.uploadRequestKey;
+    delete camelled.uploadRequestFileIndex;
+    delete camelled.uploadRequestDigest;
+    delete camelled.extractionClaimedAt;
+    delete camelled.extractionClaimToken;
     return camelled;
   }
 
@@ -11804,12 +13802,20 @@ export class LegacyService implements OnModuleInit {
     return res.rows[0];
   }
 
-  private async kbUniqueFileName(folderId: string, desiredName: string): Promise<string> {
+  /**
+   * Name allocation belongs inside the upload transaction, after the project advisory lock: two
+   * concurrent uploads of the same name must observe each other's committed row rather than both
+   * choosing the unsuffixed name. It deliberately reuses the caller's client, not the pool.
+   */
+  private async kbUniqueFileName(client: PoolClient, folderId: string, desiredName: string): Promise<string> {
     const ext = path.extname(desiredName);
     const base = path.basename(desiredName, ext);
-    const existing = await this.db.query<{ original_file_name: string }>(
-      "SELECT original_file_name FROM knowledge_files WHERE folder_id = $1 AND is_deleted = false",
-      [folderId]
+    // Only the desired name and its numbered variants can affect this allocation. Restrict the
+    // transaction's read instead of pulling every name in a large folder.
+    const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
+    const existing = await client.query<{ original_file_name: string }>(
+      "SELECT original_file_name FROM knowledge_files WHERE folder_id = $1 AND is_deleted = false AND (original_file_name = $2 OR original_file_name LIKE $3 ESCAPE '\\')",
+      [folderId, desiredName, `${escapeLike(base)} (%${escapeLike(ext)}`]
     );
     const taken = new Set(existing.rows.map((row) => row.original_file_name));
     if (!taken.has(desiredName)) return desiredName;
@@ -11822,54 +13828,213 @@ export class LegacyService implements OnModuleInit {
     projectId: string,
     userId: string | null | undefined,
     folderId: string,
-    files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>
+    files: Array<{ buffer: Buffer; originalname: string; mimetype: string; size: number }>,
+    requestKeyInput?: string | null
   ) {
+    // The multipart interceptor normally supplies an array, but an HTTP field can arrive in other
+    // shapes; normalize once so every later array operation has a real array, not a tainted value.
+    const batchFiles = Array.isArray(files) ? files : [];
     const uid = this.requireUser(userId);
     const project = await this.requireProjectAccess(uid, projectId);
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
-    await this.kbFolder(projectId, folderId);
-    if (!files || files.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
-    await this.planLimits.assertStorageAvailable(
-      project.organization_id,
-      files.reduce((sum, file) => sum + file.size, 0)
-    );
+    if (batchFiles.length === 0) throw new BadRequestException({ error: "No files were uploaded" });
+    const rawRequestKey = typeof requestKeyInput === "string" ? requestKeyInput.trim() : "";
+    // An explicitly supplied empty key is a client mistake, not "no key": silently treating it as
+    // absent would promise retry safety the caller does not actually get.
+    if (requestKeyInput != null && rawRequestKey.length === 0) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    if (rawRequestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    // Optional for backward compatibility: clients that do not send one keep the old
+    // fire-and-forget semantics. A client that wants an uncertain upload to be safely retryable
+    // sends the same key for the same logical batch.
+    const requestKey = rawRequestKey || null;
+    // Identity is the caller's request key plus batch position. The digest binds that slot to the
+    // exact request (destination and ordered file manifest), so reusing a key for different content
+    // is a conflict, while two different files that happen to share a name remain distinct requests.
+    const requestDigest = requestKey
+      ? createHash("sha256").update(JSON.stringify({
+          folderId,
+          files: batchFiles.map((file, index) => ({
+            index,
+            name: file.originalname,
+            size: file.size,
+            mimeType: file.mimetype,
+            sha256: createHash("sha256").update(file.buffer).digest("hex")
+          }))
+        })).digest("hex")
+      : null;
 
     // Files are held in memory (never touch disk) until the whole batch passes validation,
     // so a single unsupported file rejects the batch atomically with nothing left behind —
     // this holds regardless of storage backend (local disk or S3-compatible).
-    const invalid = files.find((file) => !LegacyService.KB_ALLOWED_EXTENSIONS.has(path.extname(file.originalname).replace(/^\./, "").toLowerCase()));
+    const invalid = batchFiles.find((file) => !LegacyService.KB_ALLOWED_EXTENSIONS.has(path.extname(file.originalname).replace(/^\./, "").toLowerCase()));
     if (invalid) {
       throw new BadRequestException({ error: `This file type is not supported: ${invalid.originalname}` });
     }
 
+    // A fully committed request is answered from its rows without writing storage again. A partial
+    // one resumes only the missing positions: the committed rows are already authoritative.
+    const existingByIndex = new Map<number, Body>();
+    if (requestKey) {
+      const prior = await this.db.query<Body>(
+        "SELECT * FROM knowledge_files WHERE project_id = $1 AND uploaded_by = $2 AND upload_request_key = $3 ORDER BY upload_request_file_index",
+        [projectId, uid, requestKey]
+      );
+      for (const row of prior.rows) {
+        const index = Number(row.upload_request_file_index);
+        if (!Number.isInteger(index) || index < 0 || index >= batchFiles.length || row.upload_request_digest !== requestDigest) {
+          throw new ConflictException({ code: "UPLOAD_REQUEST_CONFLICT", error: "This requestKey already belongs to a different upload" });
+        }
+        if (row.is_deleted) {
+          throw new ConflictException({ code: "UPLOAD_REQUEST_CLOSED", error: "This upload request was completed, but its file has since been deleted" });
+        }
+        existingByIndex.set(index, row);
+      }
+      if (existingByIndex.size === batchFiles.length) {
+        return {
+          list: batchFiles.map((_, index) => this.kbFileView(existingByIndex.get(index) as Body)),
+          total: batchFiles.length,
+          replayed: true
+        };
+      }
+    }
+
+    // A full replay is answered above without requiring the original folder to still exist. Only a
+    // request that still has positions to write needs a live destination.
+    await this.kbFolder(projectId, folderId);
+    const missing = batchFiles.filter((_, index) => !existingByIndex.has(index));
+    await this.planLimits.assertStorageAvailable(
+      project.organization_id,
+      missing.reduce((sum, file) => sum + file.size, 0)
+    );
+
     const created: Body[] = [];
-    for (const file of files) {
+    let wroteNew = false;
+    let adoptedReplay = false;
+    for (let index = 0; index < batchFiles.length; index += 1) {
+      const file = batchFiles[index];
+      const prior = existingByIndex.get(index);
+      if (prior) {
+        created.push(this.kbFileView(prior));
+        continue;
+      }
       const ext = path.extname(file.originalname).replace(/^\./, "").toLowerCase();
-      const originalFileName = await this.kbUniqueFileName(folderId, file.originalname);
-      const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${ext ? `.${ext}` : ""}`;
-      await this.storage.put(storageKey, file.buffer, file.mimetype);
+      const storageKey = `knowledge-base/${project.organization_id}/${projectId}/${randomUUID()}${storageKeyExtension(file.originalname)}`;
       // Audio/video transcription is slow (calls an external AI provider) and shouldn't block
       // the upload response — it's kicked off after insert, below, and fills in extracted_text
       // asynchronously. Everything else extracts synchronously (local CPU/WASM work only).
       const isTranscribable = LegacyService.KB_AUDIO_EXTENSIONS.has(ext) || LegacyService.KB_TRANSCRIBABLE_VIDEO_EXTENSIONS.has(ext);
-      const extractedText = isTranscribable ? null : await this.extractKnowledgeFileText(file.buffer, ext);
-      const extractionStatus = isTranscribable ? "pending" : null;
-      const res = await this.db.query(
-        `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-        [project.organization_id, projectId, folderId, path.basename(storageKey), originalFileName, file.mimetype, ext, file.size, storageKey, uid, extractedText, extractionStatus]
-      );
+      let res: { rows: Body[] };
+      try {
+        await this.storage.put(storageKey, file.buffer, file.mimetype);
+        const extractedText = isTranscribable ? null : await this.extractKnowledgeFileText(file.buffer, ext);
+        const extractionStatus = isTranscribable ? "pending" : null;
+        res = await this.db.transaction(async client => {
+          // Match the document/folder writers: advisory first, then a locked destination. A
+          // folder delete that wins makes this row refuse; the catch below removes only this
+          // upload's newly written object, never an existing one.
+          await this.lockSkillAssignments(client, projectId);
+          const target = await client.query(
+            "SELECT id FROM knowledge_folders WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR SHARE",
+            [folderId, projectId]
+          );
+          if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+          const ancestry = await this.knowledgeFolderAncestry(client, projectId, folderId);
+          if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+            throw new NotFoundException({ error: "Folder not found" });
+          }
+          const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+          // Allocate the displayed name under the same project lock as the insert. Moving this
+          // outside the transaction let concurrent uploads choose the same unsuffixed name.
+          const originalFileName = await this.kbUniqueFileName(client, folderId, file.originalname);
+          const inserted = await client.query(
+            `INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, mime_type, file_extension, file_size, storage_key, uploaded_by, extracted_text, extraction_status, upload_request_key, upload_request_file_index, upload_request_digest)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+            [authority.organization_id, projectId, folderId, path.basename(storageKey), originalFileName, file.mimetype, ext, file.size, storageKey, uid, extractedText, extractionStatus, requestKey, requestKey ? index : null, requestDigest]
+          );
+          await this.logProjectActivity(projectId, uid, "uploaded", "knowledge_file", inserted.rows[0].id, originalFileName, {}, client);
+          return inserted;
+        });
+      } catch (error) {
+        // A lost COMMIT acknowledgement is indistinguishable from a rollback at the driver level.
+        // Reconcile by the unique storage key first: delete only when the row is known not to have
+        // committed. If the check itself fails, preserve the object and surface the error rather
+        // than risk deleting bytes a committed row still references.
+        // A COMMIT whose acknowledgement was lost is never treated as proof of rollback: the row
+        // may be committed and an absent observation (replica lag, fault-injected lookup) cannot
+        // establish otherwise. Only a failure before COMMIT permits compensation.
+        const commitUncertain = Boolean(error && typeof error === "object" && (error as { commitUncertain?: boolean }).commitUncertain);
+        if (!commitUncertain) {
+          let persisted: boolean | null = null;
+          let replay: Body | null = null;
+          let conflict = false;
+          let closed = false;
+          try {
+            if (requestKey) {
+              // A concurrent retry with the same key can make this INSERT lose the unique index
+              // race after the winner committed. The winner's row is the authoritative outcome.
+              const row = await this.db.query<Body>(
+                "SELECT * FROM knowledge_files WHERE project_id = $1 AND uploaded_by = $2 AND upload_request_key = $3 AND upload_request_file_index = $4",
+                [projectId, uid, requestKey, index]
+              );
+              if (row.rows[0]) {
+                if (row.rows[0].upload_request_digest !== requestDigest) {
+                  persisted = false;
+                  conflict = true;
+                } else if (row.rows[0].is_deleted) {
+                  persisted = false;
+                  closed = true;
+                } else {
+                  replay = row.rows[0];
+                  persisted = true;
+                }
+              }
+            }
+            if (persisted === null) {
+              const row = await this.db.query<{ id: string }>(
+                "SELECT id FROM knowledge_files WHERE project_id = $1 AND storage_key = $2",
+                [projectId, storageKey]
+              );
+              persisted = Boolean(row.rows[0]);
+            }
+          } catch (reconcileError) {
+            this.logger.warn(`Could not reconcile upload ${storageKey} after failure: ${reconcileError}`);
+          }
+          if (persisted === false) {
+            await this.storage.delete(storageKey).catch((storageError) =>
+              this.logger.warn(`Failed to compensate storage object ${storageKey}: ${storageError}`));
+          }
+          if (closed) {
+            throw new ConflictException({ code: "UPLOAD_REQUEST_CLOSED", error: "This upload request was completed, but its file has since been deleted" });
+          }
+          if (conflict) {
+            throw new ConflictException({ code: "UPLOAD_REQUEST_CONFLICT", error: "This requestKey already belongs to a different upload" });
+          }
+          if (replay && persisted) {
+            // This attempt's object is unreferenced; the prior row owns a different object.
+            await this.storage.delete(storageKey).catch((storageError) =>
+              this.logger.warn(`Failed to compensate duplicate upload object ${storageKey}: ${storageError}`));
+            adoptedReplay = true;
+            created.push(this.kbFileView(replay));
+            continue;
+          }
+        }
+        throw error;
+      }
+      wroteNew = true;
       created.push(this.kbFileView(res.rows[0]));
-      await this.logProjectActivity(projectId, uid, "uploaded", "knowledge_file", res.rows[0].id, originalFileName, {});
       if (isTranscribable) {
         // Embedding is enqueued once the transcript lands (transcribeKnowledgeFile), not here —
         // there's no content yet for audio/video at upload time.
-        void this.transcribeKnowledgeFile(projectId, res.rows[0].id, file.buffer, ext, file.mimetype, originalFileName).catch(() => undefined);
+        void this.transcribeKnowledgeFile(projectId, res.rows[0].id, file.buffer, ext, file.mimetype, String(res.rows[0].original_file_name || file.originalname)).catch(() => undefined);
       } else {
         this.enqueueEmbedding(project.organization_id, projectId, "file", res.rows[0].id, "created");
       }
     }
-    return { list: created, total: created.length };
+    return {
+      list: created,
+      total: created.length,
+      replayed: !wroteNew && (existingByIndex.size > 0 || adoptedReplay)
+    };
   }
 
   async getKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string) {
@@ -11898,18 +14063,37 @@ export class LegacyService implements OnModuleInit {
   async moveKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string, body: Body) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
-    const file = await this.kbFile(projectId, fileId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireMutateAccess(role, file.uploaded_by, uid);
     const folderId = String(body.folderId || "");
     if (!folderId) throw new BadRequestException({ error: "folderId is required" });
+    // Fast preflight only; the transaction below rechecks the file, authority and destination.
+    await this.kbFile(projectId, fileId);
     await this.kbFolder(projectId, folderId);
 
-    const res = await this.db.query(
-      "UPDATE knowledge_files SET folder_id = $2, updated_at = now() WHERE id = $1 RETURNING *",
-      [fileId, folderId]
-    );
-    await this.logProjectActivity(projectId, uid, "moved", "knowledge_file", fileId, res.rows[0].original_file_name, {});
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query<Body>(
+        "SELECT * FROM knowledge_files WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE",
+        [fileId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "File not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireMutateAccess(this.normalizeRole(authority.caller_role), current.uploaded_by, uid);
+      const target = await client.query(
+        "SELECT id FROM knowledge_folders WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR SHARE",
+        [folderId, projectId]
+      );
+      if (!target.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      const ancestry = await this.knowledgeFolderAncestry(client, projectId, folderId);
+      if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+        throw new NotFoundException({ error: "Folder not found" });
+      }
+      const updated = await client.query(
+        "UPDATE knowledge_files SET folder_id = $2, updated_at = now() WHERE id = $1 AND project_id = $3 AND is_deleted = false RETURNING *",
+        [fileId, folderId, projectId]
+      );
+      await this.logProjectActivity(projectId, uid, "moved", "knowledge_file", fileId, updated.rows[0].original_file_name, {}, client);
+      return updated;
+    });
     return this.kbFileView(res.rows[0]);
   }
 
@@ -11933,15 +14117,33 @@ export class LegacyService implements OnModuleInit {
   async restoreKnowledgeFile(projectId: string, userId: string | null | undefined, fileId: string) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireOwnerOrManager(role);
     if (!isUuid(fileId)) throw new NotFoundException({ error: "File not found" });
-    const res = await this.db.query(
-      "UPDATE knowledge_files SET is_deleted = false, deleted_at = NULL, updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING *",
-      [fileId, projectId]
-    );
-    if (!res.rows[0]) throw new NotFoundException({ error: "File not found" });
-    await this.logProjectActivity(projectId, uid, "restored", "knowledge_file", fileId, res.rows[0].original_file_name, {});
+    const res = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query<Body>(
+        "SELECT * FROM knowledge_files WHERE id = $1 AND project_id = $2 FOR UPDATE",
+        [fileId, projectId]
+      )).rows[0];
+      if (!current) throw new NotFoundException({ error: "File not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      if (!current.is_deleted) return { rows: [current] };
+      const ancestry = await this.knowledgeFolderAncestry(client, projectId, String(current.folder_id));
+      if (!ancestry.rows.length || ancestry.rows.some((row) => row.is_deleted)) {
+        const disconnected = ancestry.rows.some((row) => row.deletion_reason === "integration_disconnect");
+        throw new BadRequestException({
+          error: disconnected
+            ? "This file's folder was removed when an integration was disconnected and cannot be restored. Reconnect and sync instead."
+            : "Restore the parent folder before restoring this file."
+        });
+      }
+      const updated = await client.query(
+        "UPDATE knowledge_files SET is_deleted = false, deleted_at = NULL, updated_at = now() WHERE id = $1 AND project_id = $2 RETURNING *",
+        [fileId, projectId]
+      );
+      await this.logProjectActivity(projectId, uid, "restored", "knowledge_file", fileId, updated.rows[0].original_file_name, {}, client);
+      return updated;
+    });
     return this.kbFileView(res.rows[0]);
   }
 
@@ -12034,22 +14236,125 @@ export class LegacyService implements OnModuleInit {
 
   // ─── Knowledge Base v2: versioning ─────────────────────────────────────────
 
+  async getKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, versionId: string) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    await this.kbDocument(projectId, documentId);
+    if (!isUuid(versionId)) throw new NotFoundException({ error: "Version not found" });
+    const result = await this.db.query("SELECT * FROM knowledge_document_versions WHERE document_id = $1 AND id = $2", [documentId, versionId]);
+    if (!result.rows[0]) throw new NotFoundException({ error: "Version not found" });
+    return toCamel(result.rows[0]);
+  }
+
+  /** A submission preserves exact bytes/metadata; it does not approve or activate any guidance. */
+  async submitKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body, principal?: ReviewPrincipal) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    await this.kbDocument(projectId, documentId);
+    const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision, true)!;
+    const submissionKey = String(body.submissionKey ?? "");
+    if (!isUuid(submissionKey)) throw new BadRequestException({ error: "submissionKey must be a UUID identifying this submission" });
+    return this.db.transaction(async (client) => {
+      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      // Agent tokens may read governed documents but may not move them through the review cycle.
+      this.assertAgentMayTouchGoverned(principal, doc.document_type);
+      this.kbRequireMutateAccess(role, doc.created_by, uid);
+      this.assertKnowledgeDocumentBodyWritable(doc);
+      const prior = await client.query("SELECT * FROM knowledge_document_versions WHERE document_id = $1 AND submission_key = $2", [documentId, submissionKey]);
+      if (prior.rows[0]) {
+        const metadata = prior.rows[0].snapshot_metadata;
+        if (metadata.expectedRevision !== expectedRevision || metadata.actorId !== uid || metadata.actorKind !== (principal?.kind ?? "unknown")) {
+          throw new ConflictException({ code: "SUBMISSION_KEY_CONFLICT", error: "This submission key already identifies different content or an actor" });
+        }
+        return toCamel(prior.rows[0]); // Exact retry reads its receipt, even after later edits.
+      }
+      // A governed submission snapshots the current draft. Approved/rejected governed content must be
+      // edited back to draft first. Skill candidates keep their existing review flow and are excluded.
+      if (isGovernedDocumentType(doc.document_type) && doc.status !== "draft") {
+        throw new ConflictException({ code: "DOCUMENT_NOT_DRAFT", error: "Only a draft governed document can be submitted for review" });
+      }
+      this.assertKnowledgeReviewRevision(doc, expectedRevision);
+      const snapshot = await this.writeKnowledgeGovernedVersion(client, doc, uid, "submitted", expectedRevision, principal?.kind ?? "unknown", submissionKey);
+      await this.logProjectActivity(projectId, uid, "submitted", "knowledge_document", documentId, doc.title,
+        { versionId: snapshot.id, expectedRevision, contentDigest: snapshot.snapshot_metadata.contentDigest }, client);
+      return toCamel(snapshot);
+    });
+  }
+
+  private async lockKnowledgeReviewDocument(client: PoolClient, projectId: string, uid: string, documentId: string) {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
+    const locked = await client.query(
+      `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+       WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE`, [documentId, projectId]);
+    const doc = locked.rows[0];
+    if (!doc) throw new NotFoundException({ error: "Document not found" });
+    // Re-read membership after any wait, and hold it until this decision commits. A cached
+    // preflight role cannot authorize a review after revocation while waiting on the document.
+    const membership = await client.query<{ role: string }>(
+      `SELECT pm.role FROM project_members pm JOIN projects p ON p.id = pm.project_id
+       WHERE pm.project_id = $1 AND pm.user_id = $2 AND p.archived_at IS NULL AND p.organization_id = $3
+       FOR SHARE OF pm, p`, [projectId, uid, doc.organization_id]);
+    if (!membership.rows[0]) throw new NotFoundException({ error: "Project not found" });
+    return { doc, role: this.normalizeRole(membership.rows[0].role) };
+  }
+
+  private assertKnowledgeReviewRevision(doc: Body, expectedRevision: string) {
+    if (doc.edit_revision !== expectedRevision) {
+      throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "This document changed. Reload and review the current version before deciding." });
+    }
+  }
+
+  private async writeKnowledgeGovernedVersion(client: PoolClient, doc: Body, uid: string, kind: "submitted" | "approved" | "rejected", expectedRevision: string, actorKind: string, submissionKey: string | null = null,
+    options: { authority?: string; criteria?: unknown; skillContext?: unknown; sourceVersionId?: string; reason?: string; carryForwardLinks?: unknown } = {}) {
+    const metadata = {
+      schemaVersion: 1, actorId: uid, actorKind, expectedRevision,
+      contentDigest: knowledgeDocumentContentDigest(doc), documentType: doc.document_type,
+      projectId: doc.project_id, folderId: doc.folder_id,
+      sourceProvider: doc.source_provider, sourceExternalId: doc.source_external_id,
+      sourceUrl: doc.source_url, sourceRole: doc.source_role, isReadOnly: doc.is_read_only,
+      // This is the existing document review, not a Skills assignment or authority bootstrap.
+      authority: options.authority ?? (kind === "submitted" ? "candidate" : "ai_memory_review"),
+      ...(governedMetadataSnapshot(doc.governed_metadata) ? { governedMetadata: doc.governed_metadata } : {}),
+      ...(options.criteria === undefined ? {} : { criteria: options.criteria }),
+      ...(options.skillContext === undefined ? {} : { skillContext: options.skillContext }),
+      ...(options.sourceVersionId === undefined ? {} : { sourceVersionId: options.sourceVersionId }),
+      ...(options.reason === undefined ? {} : { reason: options.reason }),
+      ...(options.carryForwardLinks === undefined ? {} : { carryForwardLinks: options.carryForwardLinks })
+    };
+    const governed = isGovernedDocumentType(doc.document_type);
+    const summary = governed
+      ? `${kind === "submitted" ? "Submitted" : kind === "approved" ? "Approved" : "Rejected"} exact governed document version.`
+      : kind === "submitted" ? "Submitted exact document version." : `${kind === "approved" ? "Approved" : "Rejected"} exact AI memory version.`;
+    const result = await client.query(
+      `INSERT INTO knowledge_document_versions
+         (document_id, version_number, title, content_json, content_html, content_text, created_by,
+          snapshot_kind, snapshot_metadata, submission_key, changed_summary, changed_fields)
+       SELECT $1, COALESCE(MAX(version_number), 0) + 1, $2, $3::jsonb, $4, $5, $6, $7, $8::jsonb, $9,
+              $10, '[]'::jsonb
+       FROM knowledge_document_versions WHERE document_id = $1 RETURNING *`,
+      [doc.id, doc.title, doc.content_json == null ? null : JSON.stringify(doc.content_json), doc.content_html,
+        doc.content_text, uid, kind, JSON.stringify(metadata), submissionKey, summary]);
+    return result.rows[0];
+  }
+
   async listKnowledgeDocumentVersions(projectId: string, userId: string | null | undefined, documentId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     await this.kbDocument(projectId, documentId);
     const res = await this.db.query(
-      "SELECT id, version_number, title, created_by, created_at FROM knowledge_document_versions WHERE document_id = $1 ORDER BY version_number DESC",
+      "SELECT id, version_number, title, created_by, created_at, snapshot_kind, snapshot_metadata FROM knowledge_document_versions WHERE document_id = $1 ORDER BY version_number DESC",
       [documentId]
     );
     return { list: res.rows.map(toCamel), total: res.rowCount };
   }
 
-  async restoreKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body) {
+  async restoreKnowledgeDocumentVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body,
+    principal?: { kind: "human_session" | "api_token" }) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const doc = await this.kbDocument(projectId, documentId);
+    this.assertAgentMayTouchGoverned(principal, doc.document_type);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireMutateAccess(role, doc.created_by, uid);
+    this.assertKnowledgeDocumentBodyWritable(doc);
     // A restore rewrites the whole body — the same unrestricted edit updateKnowledgeDocument refuses.
     if (this.isZyraMemoryDocument(doc)) {
       throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_EDIT_ERROR });
@@ -12068,32 +14373,46 @@ export class LegacyService implements OnModuleInit {
 
     // Serialised per document, and sharing its lock key with the auto-snapshot step in
     // updateKnowledgeDocument — a concurrent restore and a concurrent edit both read-then-write
-    // this same version_number sequence, and the table has no unique constraint to reject a
-    // collision. The whole snapshot-then-overwrite sequence also runs inside one transaction so a
+    // this same version_number sequence. V94's unique constraint additionally rejects collisions.
+    // The whole snapshot-then-overwrite sequence also runs inside one transaction so a
     // mid-sequence failure can never leave a snapshot inserted without the restore having applied,
     // or vice versa.
-    const res = await this.db.transaction(async (client) => {
+    const { res, changed } = await this.db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
 
       // Re-read the document fresh, inside the lock — `doc` above may already be stale by the time
       // this transaction gets to run, e.g. a concurrent edit committed while we waited on the lock.
       const current = await client.query(
-        `SELECT title, content_json, content_html, content_text FROM knowledge_documents
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
          WHERE id = $1 AND project_id = $2 AND is_deleted = false FOR UPDATE`,
         [documentId, projectId]
       );
       if (!current.rows[0]) throw new NotFoundException({ error: "Document not found" });
       const cur = current.rows[0];
+      // The pre-lock guard may have seen a general document. Re-check the locked type so a token
+      // restore that waited cannot overwrite a document that became governed.
+      this.assertAgentMayTouchGoverned(principal, cur.document_type);
+      const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision);
+      if (expectedRevision && expectedRevision !== cur.edit_revision) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "This document changed. Reload before restoring a version." });
+      }
+      this.kbRequireMutateAccess(role, cur.created_by, uid);
+      this.assertKnowledgeDocumentBodyWritable(cur);
+      if (this.isZyraMemoryDocument(cur)) throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_EDIT_ERROR });
 
       // Restoring a version whose content already matches the current document (restoring the
       // same version twice in a row, or a stray extra click before the UI caught up) has nothing to
       // snapshot — skip the insert so repeated restores don't pile up identical junk versions, but
       // still apply the write below so the call remains a normal, idempotent success.
+      const restoreMetadata = isGovernedDocumentType(cur.document_type)
+        ? (v.snapshot_metadata?.governedMetadata ?? cur.governed_metadata ?? {})
+        : {};
       const isNoop =
         cur.title === v.title &&
         cur.content_html === v.content_html &&
         cur.content_text === v.content_text &&
-        JSON.stringify(cur.content_json) === JSON.stringify(v.content_json);
+        JSON.stringify(cur.content_json) === JSON.stringify(v.content_json) &&
+        JSON.stringify(cur.governed_metadata ?? {}) === JSON.stringify(restoreMetadata);
 
       if (!isNoop) {
         // Snapshot the current state before overwriting, so restoring a version is itself reversible.
@@ -12118,7 +14437,7 @@ export class LegacyService implements OnModuleInit {
             documentId,
             nextVersion.rows[0].max,
             cur.title,
-            cur.content_json ? JSON.stringify(cur.content_json) : null,
+            cur.content_json != null ? JSON.stringify(cur.content_json) : null,
             cur.content_html,
             cur.content_text,
             uid,
@@ -12128,57 +14447,70 @@ export class LegacyService implements OnModuleInit {
         );
       }
 
-      return client.query(
-        `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5, updated_by = $6, updated_at = now()
-         WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-        [documentId, v.title, v.content_json ? JSON.stringify(v.content_json) : null, v.content_html, v.content_text, uid]
+      // The existing approved-memory edit rule also applies when the body edit is a restore.
+      const revokeApproval = !isNoop && cur.document_type === "ai_memory" && cur.status === "approved";
+      const restored = await client.query(
+        `UPDATE knowledge_documents SET title = $2, content_json = $3::jsonb, content_html = $4, content_text = $5, updated_by = $6, updated_at = now(),
+         governed_metadata = $11::jsonb, status = $7, reviewed_by = $8, reviewed_at = $9
+         WHERE id = $1 AND project_id = $10 AND is_deleted = false RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, v.title, v.content_json != null ? JSON.stringify(v.content_json) : null, v.content_html, v.content_text, uid,
+          revokeApproval ? "draft" : cur.status, revokeApproval ? null : cur.reviewed_by, revokeApproval ? null : cur.reviewed_at, projectId,
+          JSON.stringify(restoreMetadata)]
       );
+      if (!restored.rows[0]) throw new NotFoundException({ error: "Document not found" });
+      return { res: restored, changed: !isNoop };
     });
     await this.logProjectActivity(projectId, uid, "restored_version", "knowledge_document", documentId, res.rows[0].title, { versionNumber: v.version_number });
+    if (changed && !isGovernedDocumentType(res.rows[0].document_type)) this.enqueueEmbedding(res.rows[0].organization_id, projectId, "document", documentId, "updated");
     return toCamel(res.rows[0]);
   }
 
   // ─── Knowledge Base v2: AI memory approval ─────────────────────────────────
 
-  async approveAiMemory(projectId: string, userId: string | null | undefined, documentId: string) {
-    const uid = this.requireUser(userId);
-    await this.requireProjectAccess(uid, projectId);
-    const role = await this.kbProjectRole(uid, projectId);
-    this.kbRequireOwnerOrManager(role);
-    const doc = await this.kbDocument(projectId, documentId);
-    if (doc.document_type !== "ai_memory")
-      throw new BadRequestException({ error: "Only AI memory documents can be approved" });
-
-    const res = await this.db.query(
-      `UPDATE knowledge_documents SET status = 'approved', reviewed_by = $2, reviewed_at = now(), updated_at = now()
-       WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, uid]
-    );
-    await this.logProjectActivity(projectId, uid, "approved", "knowledge_document", documentId, res.rows[0].title, {});
-    return toCamel(res.rows[0]);
+  async approveAiMemory(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.reviewAiMemory(projectId, userId, documentId, "approved", body, principal);
   }
 
-  async rejectAiMemory(projectId: string, userId: string | null | undefined, documentId: string) {
+  async rejectAiMemory(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.reviewAiMemory(projectId, userId, documentId, "rejected", body, principal);
+  }
+
+  private async reviewAiMemory(projectId: string, userId: string | null | undefined, documentId: string, decision: "approved" | "rejected", body: Body, principal?: ReviewPrincipal): Promise<Body> {
     const uid = this.requireUser(userId);
+    requireHumanReviewPrincipal(principal);
     await this.requireProjectAccess(uid, projectId);
     const role = await this.kbProjectRole(uid, projectId);
     this.kbRequireOwnerOrManager(role);
-    const doc = await this.kbDocument(projectId, documentId);
-    if (doc.document_type !== "ai_memory")
-      throw new BadRequestException({ error: "Only AI memory documents can be rejected" });
-
-    const res = await this.db.query(
-      `UPDATE knowledge_documents SET status = 'rejected', reviewed_by = $2, reviewed_at = now(), updated_at = now()
-       WHERE id = $1 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
-      [documentId, uid]
-    );
-    await this.logProjectActivity(projectId, uid, "rejected", "knowledge_document", documentId, res.rows[0].title, {});
-    return toCamel(res.rows[0]);
+    const initial = await this.kbDocument(projectId, documentId);
+    if (initial.document_type !== "ai_memory") throw new BadRequestException({ error: "Only AI memory documents can be reviewed" });
+    const expectedRevision = expectedKnowledgeDocumentRevision(body.expectedRevision, true)!;
+    const result = await this.db.transaction(async (client) => {
+      const { doc, role: currentRole } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      this.kbRequireOwnerOrManager(currentRole);
+      this.assertKnowledgeDocumentBodyWritable(doc);
+      if (doc.document_type !== "ai_memory") throw new BadRequestException({ error: "Only AI memory documents can be reviewed" });
+      if (doc.status === decision && doc.reviewed_by === uid && doc.reviewed_version_id) {
+        const prior = await client.query("SELECT snapshot_metadata FROM knowledge_document_versions WHERE id = $1 AND document_id = $2 AND snapshot_kind = $3", [doc.reviewed_version_id, documentId, decision]);
+        const receipt = prior.rows[0]?.snapshot_metadata;
+        if (receipt?.expectedRevision === expectedRevision && receipt.contentDigest === knowledgeDocumentContentDigest(doc)) return doc;
+      }
+      this.assertKnowledgeReviewRevision(doc, expectedRevision);
+      const snapshot = await this.writeKnowledgeGovernedVersion(client, doc, uid, decision, expectedRevision, "human_session");
+      const updated = await client.query(
+        `UPDATE knowledge_documents SET status = $2, reviewed_by = $3, reviewed_at = now(),
+           reviewed_version_id = $4, updated_at = now()
+         WHERE id = $1 AND project_id = $5 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, decision, uid, snapshot.id, projectId]);
+      await this.logProjectActivity(projectId, uid, decision, "knowledge_document", documentId, doc.title,
+        { versionId: snapshot.id, expectedRevision, contentDigest: snapshot.snapshot_metadata.contentDigest, actorKind: "human_session" }, client);
+      return updated.rows[0];
+    });
+    this.enqueueEmbedding(result.organization_id, projectId, "document", documentId, "updated");
+    return { ...toCamel(result), reviewBinding: "exact_snapshot" };
   }
 
   async adminCustomers(userId: string | null | undefined) {
     await this.requirePlatformAdmin(userId);
-    const summary = await this.analytics();
     const customers = await this.db.query(
       `SELECT o.id, o.name, o.slug, o.created_at,
               COUNT(DISTINCT om.user_id)::int AS member_count,
@@ -12192,21 +14524,29 @@ export class LegacyService implements OnModuleInit {
        LEFT JOIN testcases t ON t.project_id = p.id
        GROUP BY o.id ORDER BY o.created_at DESC`
     );
+    const rows = customers.rows.map((row) => {
+      const item: Body = toCamel(row);
+      const total = Number(item.testCaseCount || 0);
+      const automated = Number(item.automatedCount || 0);
+      return { ...item, automationCoverage: total ? Math.round((automated / total) * 100) : 0 };
+    });
+    // The summary is the totals of the rows above, not a second aggregate that can drift. Previously
+    // it reported the project count as the organization count and hardcoded the member/automated/
+    // coverage totals to zero, which is exactly what an operator would read as "nobody uses this".
+    const sum = (key: "memberCount" | "projectCount" | "testCaseCount" | "automatedCount") =>
+      rows.reduce((total, row) => total + Number((row as Body)[key] || 0), 0);
+    const totalTestCases = sum("testCaseCount");
+    const totalAutomated = sum("automatedCount");
     return {
       summary: {
-        totalOrganizations: summary.projectCount,
-        totalMembers: 0,
-        totalProjects: summary.projectCount,
-        totalTestCases: summary.testCaseCount,
-        totalAutomated: 0,
-        overallAutomationCoverage: 0
+        totalOrganizations: rows.length,
+        totalMembers: sum("memberCount"),
+        totalProjects: sum("projectCount"),
+        totalTestCases,
+        totalAutomated,
+        overallAutomationCoverage: totalTestCases ? Math.round((totalAutomated / totalTestCases) * 100) : 0
       },
-      customers: customers.rows.map((row) => {
-        const item = toCamel(row);
-        const total = Number(item.testCaseCount || 0);
-        const automated = Number(item.automatedCount || 0);
-        return { ...item, automationCoverage: total ? Math.round((automated / total) * 100) : 0 };
-      })
+      customers: rows
     };
   }
 
@@ -12269,19 +14609,30 @@ export class LegacyService implements OnModuleInit {
   }
 
   async addAdmin(userId: string | null | undefined, body: Body) {
-    const grantedBy = await this.requirePlatformAdmin(userId);
+    const grantedBy = await this.requirePlatformAdminOwner(userId);
     const email = String(body.email || "").trim().toLowerCase();
     if (!email) throw new BadRequestException({ error: "email is required" });
     const uid = await this.upsertUser(email);
+    // Adding an existing owner is a no-op that keeps their role. The previous unconditional
+    // `role = EXCLUDED.role` silently demoted the install owner to plain admin.
     const res = await this.db.query(
-      "INSERT INTO platform_admins (user_id, role, granted_by) VALUES ($1, 'admin', $2) ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role RETURNING id, user_id, role",
+      `INSERT INTO platform_admins (user_id, role, granted_by) VALUES ($1, 'admin', $2)
+       ON CONFLICT (user_id) DO UPDATE
+         SET role = CASE WHEN platform_admins.role = 'owner' THEN 'owner' ELSE EXCLUDED.role END
+       RETURNING id, user_id, role`,
       [uid, grantedBy]
     );
     return { ...toCamel(res.rows[0]), email };
   }
 
   async deleteAdmin(userId: string | null | undefined, adminId: string) {
-    await this.requirePlatformAdmin(userId);
+    await this.requirePlatformAdminOwner(userId);
+    if (!isUuid(adminId)) throw new NotFoundException({ error: "Platform admin not found" });
+    const target = await this.db.query<{ role: string }>("SELECT role FROM platform_admins WHERE id = $1", [adminId]);
+    if (!target.rows[0]) throw new NotFoundException({ error: "Platform admin not found" });
+    if (target.rows[0].role === "owner") {
+      throw new ForbiddenException({ error: "A platform owner cannot be removed here" });
+    }
     await this.db.query("DELETE FROM platform_admins WHERE id = $1 AND role <> 'owner'", [adminId]);
   }
 
@@ -12351,6 +14702,10 @@ export class LegacyService implements OnModuleInit {
     const p = assertIntegrationProvider(provider);
     const workspace = await this.workspace(userId);
     if (this.normalizeRole(workspace.role) !== "owner") throw new ForbiddenException({ error: "Only the workspace owner can manage integrations" });
+    // Same entitlement gate as the callback, but before the provider consent screen. Without it a
+    // Launch workspace could authorize a Pro-only integration, complete the provider flow and only
+    // then be refused — a fail-late path with credentials already exchanged at the provider.
+    await this.planLimits.assertIntegrationAllowed(workspace.id, p);
     const { clientId, redirectUri } = this.integrationOAuthConfig(p);
     const state = signOAuthState(p, workspace.id);
     if (p === "jira") {
@@ -12806,6 +15161,10 @@ export class LegacyService implements OnModuleInit {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     const organizationId = await this.projectOrganizationId(projectId);
+    // Same entitlement decision the nightly scheduler makes (integration-sync.service.ts). A
+    // Pro-only integration that stays connected after a downgrade must not keep syncing through
+    // the manual button while the scheduler silently skips it.
+    await this.planLimits.assertIntegrationAllowed(organizationId, provider);
     const label = TICKET_PROVIDER_LABELS[provider];
 
     const connection = await this.getIntegrationConnection(organizationId, provider, false);
@@ -14079,9 +16438,9 @@ export class LegacyService implements OnModuleInit {
         `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
                 requested_count, generated_count, generated_payload, saved_count, save_events, created_at, updated_at,
                 agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
-                source_summary, activity_log
+                source_summary, activity_log, task_kind
          FROM ai_generation_requests
-         WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL
+         WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND chat_session_id IS NULL AND task_kind IN ('legacy_generation_review','governed_proposal')
          ORDER BY updated_at DESC LIMIT 50`,
         [projectId, ZYRA_AGENT_NAMES]
       ),
@@ -14102,9 +16461,10 @@ export class LegacyService implements OnModuleInit {
       // <> 'failed') is deliberate: a 'in_review' task has drafts generated and saved_count still
       // 0 simply because the user hasn't finished reviewing it yet, not because they rejected
       // anything — counting it here would drag the rate down for work that is still pending, not
-      // decided. 'done' is only ever reached via aiSave or zyraCloseTask, an explicit save-or-close
-      // action, which is what "approved and saved" in the ticket actually means. Excludes 'failed'
-      // the same way, since a generation error leaves nothing to approve or reject.
+      // decided. Case-generation 'done' is reached through an explicit save-or-close
+      // decision. Other proposal types can also reach 'done' after a document or
+      // requirement decision; their operation counts are excluded below.
+      // 'failed' is excluded because no successful generation was reviewed.
       //
       // Deliberately NOT filtered on chat_session_id, unlike `tasks` above: a chat-staged batch is
       // not display-list material (it has no task-board card to show), but it is saved through the
@@ -14116,7 +16476,13 @@ export class LegacyService implements OnModuleInit {
       this.db.query<{ saved: string; generated: string }>(
         `SELECT COALESCE(SUM(saved_count), 0) AS saved, COALESCE(SUM(generated_count), 0) AS generated
            FROM ai_generation_requests
-          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'`,
+          WHERE project_id = $1 AND agent_name = ANY($2::text[]) AND task_status = 'done'
+             AND task_kind IN ('legacy_generation_review','governed_proposal')
+            -- Only completed testcase proposal batches are eligible. Requirement
+            -- bundles count revision/link operations; managed document requests
+            -- count documents. Neither is a generated testcase denominator.
+            AND provider IS DISTINCT FROM 'external_requirement_proposal'
+            AND provider IS DISTINCT FROM 'external_document_proposal'`,
         [projectId, ZYRA_AGENT_NAMES]
       )
     ]);
@@ -14201,7 +16567,7 @@ export class LegacyService implements OnModuleInit {
       }
       if (providerWire(provider) === "anthropic") {
         const headers = this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme);
-        const res = await fetch(normalizeAnthropicMessagesUrlFor(provider, key.base_url), {
+        const res = await this.fetchAiProvider(provider, normalizeAnthropicMessagesUrlFor(provider, key.base_url), {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -14210,23 +16576,23 @@ export class LegacyService implements OnModuleInit {
             messages: [{ role: "user", content: "hi" }]
           })
         });
-        const body = await res.json().catch(() => ({} as Body)) as Body;
+        const body = await this.readAiProviderJson(provider, res);
         if (!res.ok) {
           const raw = String(body.error?.message || body.error || res.statusText);
-          return { ok: false, provider, model, error: this.describeProviderError(provider, res.status, raw) || raw, latencyMs: Math.round(performance.now() - start) };
+          return { ok: false, provider, model, error: LegacyService.describeProviderError(provider, res.status, raw), latencyMs: Math.round(performance.now() - start) };
         }
         return { ok: true, provider, model, latencyMs: Math.round(performance.now() - start) };
       }
       const authHeaders = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-      const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+      const res = await this.fetchAiProvider(provider, providerChatUrl(provider, key.base_url, model), {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content: "hi" }] })
       });
-      const body = await res.json().catch(() => ({} as Body)) as Body;
+      const body = await this.readAiProviderJson(provider, res);
       if (!res.ok) {
         const raw = String(body.error?.message || body.error || res.statusText);
-        return { ok: false, provider, model, error: this.describeProviderError(provider, res.status, raw) || raw, latencyMs: Math.round(performance.now() - start) };
+        return { ok: false, provider, model, error: LegacyService.describeProviderError(provider, res.status, raw), latencyMs: Math.round(performance.now() - start) };
       }
       return { ok: true, provider, model, latencyMs: Math.round(performance.now() - start) };
     } catch (err) {
@@ -14292,17 +16658,2206 @@ export class LegacyService implements OnModuleInit {
   async zyraTask(projectId: string, userId: string | null | undefined, taskId: string) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    const res = await this.db.query(
-      `SELECT id, requested_by, provider, model, user_story, acceptance_criteria, custom_prompt, style,
-              requested_count, generated_count, generated_payload, saved_count, save_events, created_at, updated_at,
-              agent_name, task_status, feedback, context, jira_issue_keys, token_input, token_output, token_total,
-              source_summary, activity_log
-       FROM ai_generation_requests
-       WHERE id = $1 AND project_id = $2 AND agent_name = ANY($3::text[])`,
-      [taskId, projectId, ZYRA_AGENT_NAMES]
+    const row = await this.readTestcaseProposal(this.db, projectId, taskId);
+    const task = await this.formatAiTask(row);
+    return row.provider === "external_document_proposal" && process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1"
+      ? this.managedDocumentProposalView(projectId, task)
+      : task;
+  }
+
+  // All three governed inlets share the existing project/principal/request
+  // uniqueness and lock. Never recover a receipt owned by another task lane,
+  // even when its digest happens to match.
+  private assertNativeProposalRequestReplay(row: Body, digest: string, provider: string): void {
+    if (row.task_kind !== "governed_proposal" || row.provider !== provider || row.proposal_request_digest !== digest) {
+      throw new ConflictException({ code: "PROPOSAL_REQUEST_CONFLICT", error: "This requestKey already belongs to different proposal content" });
+    }
+  }
+
+  /** Native no-model inlet: stores unpublished operations in the existing review task owner. */
+  async stageTestcaseChanges(projectId: string, userId: string | null | undefined, body: Body, principal: TestcaseProposalPrincipal) {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented", error: "External testcase proposal submission is a disabled preview until governed effective-skill authority is implemented and accepted" });
+    }
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!principal || !["human_session", "api_token"].includes(principal.kind) ||
+        (principal.kind === "api_token" && !isUuid(String(principal.tokenId || "")))) {
+      throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+    }
+    const requestKey = typeof body.requestKey === "string" ? body.requestKey.trim() : "";
+    if (!requestKey || requestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    if (!Array.isArray(body.operations) || !body.operations.length || body.operations.length > MAX_TESTCASE_PROPOSAL_OPERATIONS) {
+      throw new BadRequestException({ error: `operations must contain 1–${MAX_TESTCASE_PROPOSAL_OPERATIONS} proposals` });
+    }
+    const operations = body.operations.map((raw: Body) => {
+      if (!raw || typeof raw !== "object" || !["create", "update", "archive"].includes(raw.opType)) {
+        throw new BadRequestException({ error: "Each proposal must be create, update or archive" });
+      }
+      const input = raw.opType === "create" ? raw.draft : raw.fields ?? {};
+      if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !TESTCASE_PROPOSAL_FIELDS.has(key))) {
+        throw new BadRequestException({ error: "Proposal fields must use the native testcase field contract" });
+      }
+      const fields = this.normalizeProposalCaseFields(input);
+      if (raw.opType === "create") {
+        if (typeof fields.title !== "string" || !fields.title.trim()) throw new BadRequestException({ error: "A create proposal requires title" });
+        if (fields.status !== undefined && fields.status !== "Draft") throw new BadRequestException({ error: "New testcase proposals must create Draft cases" });
+        return { opType: "create", native: true, draft: { ...fields, status: "Draft" }, reason: String(raw.reason || "").slice(0, 4000) };
+      }
+      if (!isUuid(String(raw.testcaseId || ""))) throw new BadRequestException({ error: "A target testcaseId is required" });
+      const revision = expectedTestcaseRevision(raw.expectedRevision);
+      if (!revision) throw new BadRequestException({ error: "An update/archive proposal requires expectedRevision from get_testcase" });
+      if (raw.opType === "archive" && Object.keys(fields).some(key => key !== "status")) throw new BadRequestException({ error: "An archive proposal changes only status" });
+      return { opType: raw.opType, native: true, testcaseId: String(raw.testcaseId), targetEditRevision: revision,
+        fields: raw.opType === "archive" ? { status: "Archived" } : fields, reason: String(raw.reason || "").slice(0, 4000) };
+    });
+    const { principalKey, producerActorId, provenance, activityActor } = nativeProposalProducerIdentity(principal, uid);
+    const title = String(body.title || "Proposed testcase changes").trim().slice(0, 512);
+    const requestDigest = proposalDigest({ title, operations });
+    const taskId = await this.db.transaction(async client => {
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      const authority = await this.requireProposalAuthority(client, projectId, uid);
+      await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_testcase_changes");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      if (prior.rows[0]) {
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_proposal");
+        return String(prior.rows[0].id);
+      }
+      const ids = Array.from(new Set(operations.filter((op: Body) => op.testcaseId).map((op: Body) => String(op.testcaseId)))).sort();
+      if (ids.length) await client.query("SELECT id FROM testcases WHERE project_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR SHARE", [projectId, ids]);
+      for (const operation of operations as Body[]) {
+        const fields = operation.draft || operation.fields;
+        await this.assertProposalReferences(client, projectId, fields);
+        if (!operation.testcaseId) continue;
+        const target = await client.query(`SELECT testcases.*, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, testcase_approval_snapshot(id) AS snapshot FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`, [operation.testcaseId, projectId]);
+        const row = target.rows[0];
+        if (!row) throw new NotFoundException({ error: "Proposal target not found in this project" });
+        if (row.edit_revision !== operation.targetEditRevision) throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The testcase changed before this proposal was staged" });
+        operation.targetApprovalRevision = row.approval_revision;
+        operation.targetSnapshot = row.snapshot;
+        operation.externalId = row.external_id;
+      }
+      const result = await client.query(
+        `INSERT INTO ai_generation_requests
+          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log)
+         VALUES ($1,$2,'external_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb) RETURNING id`,
+        [projectId,uid,title,operations.length,JSON.stringify(operations),ZYRA_AGENT_NAME,requestKey,requestDigest,JSON.stringify(provenance),JSON.stringify([{actor: activityActor,stage:"in_review",title:"Submitted testcase proposals",detail:`${operations.length} unpublished proposal(s) await human review.`,createdAt:new Date().toISOString(),provenance}])]
+      );
+      await this.logProjectActivity(projectId, producerActorId, "testcase_proposals_staged", "ai_generation_request", result.rows[0].id, title, { provenance, requestDigest, count: operations.length }, client);
+      return String(result.rows[0].id);
+    });
+    return this.zyraTask(projectId, uid, taskId);
+  }
+
+  /**
+   * Work Package A Slice 1: stage one unpublished bundle in the existing proposal task owner.
+   *
+   * The typed entries live in `generated_payload` itself — the same array `testcase_proposal_review_snapshot()`
+   * returns and `proposalDigest()` covers. Nothing is published: no requirement document/version,
+   * testcase, active link or approval is created. Apply is refused by the Skills gate until an
+   * approved effective-skill resolver exists.
+   */
+  async stageRequirementChangeBundle(projectId: string, userId: string | null | undefined, body: Body, principal: TestcaseProposalPrincipal) {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented", error: "External proposal submission is a disabled preview until governed effective-skill authority is implemented and accepted" });
+    }
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!principal || !["human_session", "api_token"].includes(principal.kind) ||
+        (principal.kind === "api_token" && !isUuid(String(principal.tokenId || "")))) {
+      throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+    }
+    const requestKey = typeof body.requestKey === "string" ? body.requestKey.trim() : "";
+    if (!requestKey || requestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    const bundle = this.normalizeRequirementBundle(body.operations);
+    const title = String(body.title || "Proposed requirement change bundle").trim().slice(0, 512);
+    const requestDigest = proposalDigest({ title, operations: bundle.operations });
+    const { principalKey, producerActorId, provenance, activityActor } = nativeProposalProducerIdentity(principal, uid);
+    const taskId = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority, "stage_requirement_change_bundle");
+      // Both proposal inlets share the same unique request identity and serialization owner.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      if (prior.rows[0]) {
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_requirement_proposal");
+        return String(prior.rows[0].id);
+      }
+      // A lost response recovers the committed task above even if a reference has since changed.
+      // Mutable references are validated only for a new staging write, after current authority.
+      if (bundle.requirement.documentId) {
+        await this.assertRequirementDocumentBase(client, projectId, String(bundle.requirement.documentId), String(bundle.requirement.expectedRevision));
+      }
+      if (bundle.testcase) await this.assertProposalReferences(client, projectId, bundle.testcase.draft);
+      if (bundle.requirement.carryForwardLinks?.length) {
+        bundle.requirement.carryForwardLinks = await this.reviewRequirementCarryForward(client, projectId, String(bundle.requirement.documentId), bundle.requirement.criteria, bundle.requirement.carryForwardLinks);
+      }
+      // Resolve inside the producer's transaction and pin the exact assignment/version basis into
+      // the reviewed task. An unassigned or conflicting basis is still stageable, but apply refuses
+      // it; a later assignment change cannot silently rewrite what this reviewer saw.
+      const skillContext = await resolveEffectiveSkills(client, projectId, requirementBundleTargets(bundle.operations));
+      const result = await client.query(
+        `INSERT INTO ai_generation_requests
+          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log,skill_context)
+         VALUES ($1,$2,'external_requirement_proposal',NULL,$3,$4,$4,$5::jsonb,$6,'in_review',$7,$8,$9::jsonb,$10::jsonb,$11::jsonb) RETURNING id`,
+        [projectId, uid, title, bundle.operations.length, JSON.stringify(bundle.operations), ZYRA_AGENT_NAME, requestKey,
+          requestDigest, JSON.stringify(provenance),
+          JSON.stringify([{ actor: activityActor, stage: "in_review",
+            title: "Submitted requirement change bundle",
+            detail: "One requirement revision, one testcase candidate and one link intent await human review. Nothing was published.",
+            createdAt: new Date().toISOString(), provenance, skillContext }]), JSON.stringify(skillContext)]
+      );
+      await this.logProjectActivity(projectId, producerActorId, "requirement_proposals_staged", "ai_generation_request", result.rows[0].id, title,
+        { provenance, requestDigest, operationCount: bundle.operations.length, skillContext }, client);
+      return String(result.rows[0].id);
+    });
+    return this.zyraTask(projectId, uid, taskId);
+  }
+
+  /** Skill scope for a manual/policy candidate; audience is the existing assignment subtype. */
+  private managedDocumentSkillTargets(documentType: string, metadata: Body): Array<{ module: string; subtype: string; operation: string }> {
+    const module = documentType === "user_manual" ? "user_manuals" : "policies";
+    const operation = documentType === "user_manual" ? "manual_revision" : "policy_revision";
+    return [{ module, subtype: metadata.audience === "external" ? "external" : "internal", operation }];
+  }
+
+  private normalizeManagedDocumentProposal(body: Body, documentType: string) {
+    const operation = String(body.operation || "");
+    if (operation !== "create" && operation !== "update") throw new BadRequestException({ error: "operation must be create or update" });
+    const raw = body.document;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BadRequestException({ error: "document must contain the proposed title and content" });
+    const doc = raw as Body;
+    const title = String(doc.title || "").trim();
+    if (!title) throw new BadRequestException({ error: "The proposed document requires a title" });
+    if (title.length > LegacyService.KB_DOCUMENT_TITLE_MAX_LENGTH) {
+      throw new BadRequestException({ error: `Title must be at most ${LegacyService.KB_DOCUMENT_TITLE_MAX_LENGTH} characters` });
+    }
+    if (title === LegacyService.ZYRA_MEMORY_DOC_TITLE) {
+      throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
+    }
+    // Omitted representations on an update mean "leave the current value"; do not coerce them to
+    // JSON null, which the KB writer would apply as an erase. A body-changing update must carry
+    // the whole representation set, though: the editor mounts from contentJson, so applying a new
+    // text/HTML over stale JSON leaves one Draft that shows a different body on each surface and
+    // the next editor save would silently revert the other two. Metadata/title-only updates omit
+    // all three and preserve the current body exactly.
+    const contentKeys = ["contentText", "contentHtml", "contentJson"] as const;
+    const suppliedContent = contentKeys.filter((key) => doc[key] !== undefined);
+    if (suppliedContent.length > 0 && suppliedContent.length < contentKeys.length) {
+      throw new BadRequestException({ error: "A body-changing proposal must supply contentText, contentHtml and contentJson together; on an update, omit all three to keep the current body" });
+    }
+    const content: Body = {};
+    if (doc.contentText !== undefined) content.contentText = doc.contentText == null ? null : String(doc.contentText);
+    if (doc.contentHtml !== undefined) content.contentHtml = doc.contentHtml == null ? null : String(doc.contentHtml);
+    if (doc.contentJson !== undefined) content.contentJson = doc.contentJson;
+    this.assertKnowledgeDocumentPayloadSize(content);
+    const governedMetadata = normalizeGovernedMetadata(doc.governedMetadata, documentType);
+    const folderId = operation === "create" ? String(body.folderId || "") : null;
+    if (operation === "create" && !isUuid(folderId)) throw new BadRequestException({ error: "A create proposal requires folderId" });
+    const expectedRevision = operation === "update" ? expectedKnowledgeDocumentRevision(body.expectedRevision, true) : null;
+    if (operation === "update" && (!isUuid(String(body.documentId || "")) || !expectedRevision)) {
+      throw new BadRequestException({ error: "An update proposal requires documentId and expectedRevision" });
+    }
+    return {
+      opType: MANAGED_DOCUMENT_OP_TYPE, documentType, operation,
+      documentId: operation === "update" ? String(body.documentId) : null,
+      targetEditRevision: expectedRevision,
+      target: null as Body | null,
+      folderId,
+      document: { title, ...content, governedMetadata },
+      reason: String(body.reason || "").slice(0, 4000)
+    };
+  }
+
+  private requireManagedDocumentProposalPreview() {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented",
+        error: "Governed document proposals are a disabled preview on this deployment" });
+    }
+  }
+
+  /** Stage an inert manual/policy candidate in the existing proposal-task owner. */
+  async stageManagedDocumentProposal(projectId: string, userId: string | null | undefined, body: Body,
+    principal: TestcaseProposalPrincipal, forcedType?: "user_manual" | "policy"): Promise<Body> {
+    if (process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED !== "1") {
+      throw new NotImplementedException({ code: "capability_unavailable", reason: "not_implemented", error: "External document proposal submission is a disabled preview until governed effective-skill authority is implemented and accepted" });
+    }
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!principal || !["human_session", "api_token"].includes(principal.kind) ||
+        (principal.kind === "api_token" && !isUuid(String(principal.tokenId || "")))) {
+      throw new ForbiddenException({ error: "A trusted proposal producer identity is required" });
+    }
+    let documentType = forcedType ?? String(body.documentType || "");
+    // An update may omit documentType; the locked target is authoritative. Derive the type for
+    // validation, then re-check it inside the transaction where the row is locked.
+    if (!documentType && String(body.operation || "") === "update" && isUuid(String(body.documentId || ""))) {
+      const targetType = (await this.db.query(
+        "SELECT document_type FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false",
+        [String(body.documentId), projectId]
+      )).rows[0]?.document_type;
+      if (targetType) documentType = String(targetType);
+    }
+    if (!isGovernedDocumentType(documentType)) throw new BadRequestException({ error: "documentType must be user_manual or policy" });
+    const requestKey = typeof body.requestKey === "string" ? body.requestKey.trim() : "";
+    if (!requestKey || requestKey.length > 160) throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    const operation = this.normalizeManagedDocumentProposal(body, documentType);
+    const title = String(body.title || `Proposed ${documentType === "policy" ? "policy" : "manual"}: ${operation.document.title}`).trim().slice(0, 512);
+    const requestDigest = proposalDigest({ title, operations: [operation] });
+    const { principalKey, producerActorId, provenance, activityActor } = nativeProposalProducerIdentity(principal, uid);
+    const taskId = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      await this.requireCurrentProposalProducer(client, projectId, uid, principal, authority,
+        documentType === "user_manual" ? "propose_manual_revision" : "propose_policy_revision");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`testcase-proposal:${projectId}:${principalKey}:${requestKey}`]);
+      const prior = await client.query("SELECT id,proposal_request_digest,task_kind,provider FROM ai_generation_requests WHERE project_id=$1 AND proposal_provenance->>'principalKey'=$2 AND proposal_request_key=$3", [projectId, principalKey, requestKey]);
+      if (prior.rows[0]) {
+        this.assertNativeProposalRequestReplay(prior.rows[0], requestDigest, "external_document_proposal");
+        return String(prior.rows[0].id);
+      }
+      if (operation.operation === "create") {
+        const folder = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [operation.folderId, projectId]);
+        if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+      } else {
+        const target = (await client.query(
+          `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+            WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR SHARE`,
+          [operation.documentId, projectId]
+        )).rows[0];
+        if (!target) throw new NotFoundException({ error: "Target document not found" });
+        if (!isGovernedDocumentType(target.document_type) || target.document_type !== documentType) {
+          throw new BadRequestException({ error: "The target must be the same governed document type" });
+        }
+        if (target.source_provider) throw new ConflictException({ code: "GOVERNED_DOCUMENT_EXTERNAL_OWNED", error: "A provider-synced document remains read-only" });
+        if (target.edit_revision !== operation.targetEditRevision) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The document changed before this proposal was staged" });
+        }
+        operation.target = {
+          documentId: String(target.id), targetEditRevision: String(target.edit_revision),
+          base: {
+            title: target.title, contentJson: target.content_json, contentHtml: target.content_html, contentText: target.content_text,
+            governedMetadata: target.governed_metadata ?? {}, documentType: target.document_type, status: target.status,
+            editRevision: String(target.edit_revision), contentDigest: knowledgeDocumentContentDigest(target)
+          }
+        };
+      }
+      const skillTargets = this.managedDocumentSkillTargets(documentType, operation.document.governedMetadata);
+      const skillContext = await resolveEffectiveSkills(client, projectId, skillTargets);
+      const result = await client.query(
+        `INSERT INTO ai_generation_requests
+          (project_id,requested_by,provider,model,user_story,requested_count,generated_count,generated_payload,agent_name,task_status,proposal_request_key,proposal_request_digest,proposal_provenance,activity_log,skill_context)
+         VALUES ($1,$2,'external_document_proposal',NULL,$3,1,1,$4::jsonb,$5,'in_review',$6,$7,$8::jsonb,$9::jsonb,$10::jsonb) RETURNING id`,
+        [projectId, uid, title, JSON.stringify([operation]), ZYRA_AGENT_NAME, requestKey, requestDigest,
+          JSON.stringify(provenance),
+          JSON.stringify([{ actor: activityActor, stage: "in_review", title: "Staged governed document proposal",
+            detail: "One manual/policy candidate awaits human review. The governed document was not changed; Skill applicability is pinned in this task.",
+            createdAt: new Date().toISOString(), provenance, skillContext }]),
+          JSON.stringify(skillContext)]
+      );
+      await this.logProjectActivity(projectId, producerActorId, "managed_document_proposals_staged", "ai_generation_request",
+        result.rows[0].id, title, { provenance, requestDigest, operation: operation.operation, documentType, skillContext }, client);
+      return String(result.rows[0].id);
+    });
+    return this.managedDocumentProposalTask(projectId, uid, taskId);
+  }
+
+  /** The reviewer's read model: base identity/content, proposed content/metadata, diff and applicability. */
+  async managedDocumentProposalTask(projectId: string, userId: string | null | undefined, taskId: string): Promise<Body> {
+    this.requireManagedDocumentProposalPreview();
+    const task = await this.zyraTask(projectId, userId, taskId) as Body;
+    if (!task.managedDocumentProposal) throw new NotFoundException({ error: "Document proposal not found" });
+    return task;
+  }
+
+  private async managedDocumentProposalView(projectId: string, task: Body): Promise<Body> {
+    const operation = normalizeJsonArray(task.proposalSnapshot?.operations || []).find(entry => entry?.opType === MANAGED_DOCUMENT_OP_TYPE);
+    if (!operation) return task;
+    const pinned = task.skillContext || null;
+    const current = await resolveEffectiveSkills(this.db, projectId,
+      this.managedDocumentSkillTargets(String(operation.documentType), operation.document?.governedMetadata || {}));
+    const applicability = classifySkillResolution(pinned, current);
+    const base = operation.target?.base || null;
+    const proposed = operation.document;
+    // The base revision was pinned when the candidate was staged. A later edit to the target makes
+    // apply refuse even when the Skill basis is current, so the reviewer must see that before opening.
+    let targetApplicability: "current" | "changed" | "missing" | null = null;
+    if (operation.operation === "update" && operation.target?.documentId) {
+      const target = await this.db.query<{ edit_revision: string | null }>(
+        `SELECT ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision FROM knowledge_documents
+          WHERE id=$1 AND project_id=$2 AND is_deleted=false`,
+        [operation.target.documentId, projectId]
+      );
+      targetApplicability = !target.rows[0] ? "missing"
+        : target.rows[0].edit_revision === operation.target.targetEditRevision ? "current" : "changed";
+    }
+    // Omitted representations are preserved on apply, so the comparison must show the effective
+    // value too. Diffing an omitted contentText as "" would claim the body is being erased.
+    const effective = (key: string) => proposed?.[key] !== undefined ? proposed[key] : base?.[key] ?? null;
+    const diff = summarizeDocumentChange(
+      { title: base?.title || "", contentText: base?.contentText || "" },
+      { title: String(effective("title") ?? ""), contentText: String(effective("contentText") ?? "") }
     );
-    if (!res.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
-    return await this.formatAiTask(res.rows[0]);
+    const receipt = normalizeJsonArray(task.saveEvents)
+      .filter((entry: Body) => entry?.action === "managed_document_apply")
+      .sort((left: Body, right: Body) => String(left.appliedAt || "").localeCompare(String(right.appliedAt || "")))
+      .pop() || null;
+    const changes: string[] = [];
+    if (operation.operation === "create") changes.push("New governed document");
+    else {
+      if (String(effective("title") ?? "") !== String(base?.title ?? "")) changes.push("Title");
+      if (effective("contentText") !== (base?.contentText ?? null)) changes.push("Plain text");
+      if (effective("contentHtml") !== (base?.contentHtml ?? null)) changes.push("HTML");
+      if (JSON.stringify(effective("contentJson") ?? null) !== JSON.stringify(base?.contentJson ?? null)) changes.push("Editor JSON");
+      if (JSON.stringify(effective("governedMetadata") ?? null) !== JSON.stringify(base?.governedMetadata ?? null)) changes.push("Governance metadata");
+    }
+    return {
+      ...task,
+      managedDocumentProposal: {
+        operation: operation.operation, documentType: operation.documentType,
+        target: operation.target ? {
+          documentId: operation.target.documentId, editRevision: operation.target.targetEditRevision,
+          applicability: targetApplicability,
+          base: base ? { ...base, governedMetadata: base.governedMetadata } : null
+        } : null,
+        folderId: operation.folderId,
+        proposed: { ...proposed },
+        changes,
+        provenance: task.proposalProvenance || null,
+        reason: operation.reason || "",
+        diff: { summary: diff.summary, fields: diff.fields },
+        skillContext: pinned,
+        skillApplicability: { status: applicability, current },
+        applyReceipt: receipt
+      }
+    };
+  }
+
+  async listManagedDocumentProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    this.requireManagedDocumentProposalPreview();
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const documentType = query.documentType == null || query.documentType === "" ? null : String(query.documentType);
+    if (documentType && !isGovernedDocumentType(documentType)) {
+      throw new BadRequestException({ error: "documentType must be user_manual or policy" });
+    }
+    const status = query.status == null || query.status === "" ? "pending" : String(query.status);
+    if (!["pending", "in_review", "failed"].includes(status)) {
+      throw new BadRequestException({ error: "status must be pending, in_review or failed" });
+    }
+    const operation = query.operation == null || query.operation === "" ? null : String(query.operation);
+    if (operation && operation !== "create" && operation !== "update") {
+      throw new BadRequestException({ error: "operation must be create or update" });
+    }
+    const search = typeof query.q === "string" ? query.q.trim().slice(0, 200) : "";
+    const conditions = ["project_id=$1", "task_kind='governed_proposal'", "provider='external_document_proposal'"];
+    const params: unknown[] = [projectId];
+    const bind = (value: unknown) => { params.push(value); return `$${params.length}`; };
+    conditions.push(status === "pending" ? "task_status IN ('in_review','failed')" : `task_status=${bind(status)}`);
+    if (documentType) conditions.push(`generated_payload->0->>'documentType'=${bind(documentType)}`);
+    if (operation) conditions.push(`generated_payload->0->>'operation'=${bind(operation)}`);
+    if (search) {
+      // Treat the query as literal text: % and _ are wildcards in ILIKE, and PostgreSQL rejects a
+      // NUL byte. Project members only, but a 500 on a pasted title is still wrong.
+      const escaped = search.split("\u0000").join("").replace(/[\\%_]/g, (char) => "\\" + char);
+      conditions.push(`user_story ILIKE ${bind(`%${escaped}%`)} ESCAPE '\\'`);
+    }
+    const where = conditions.join(" AND ");
+    // One statement for page and count keeps total/hasMore consistent with the rows under
+    // concurrent staging. An out-of-range page returns no row, so only then fall back to a count
+    // (the caller uses it to clamp the offset and reload).
+    const rows = await this.db.query<{ id: string; total: string }>(
+      `SELECT id, COUNT(*) OVER() AS total FROM ai_generation_requests WHERE ${where}
+        ORDER BY updated_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    );
+    const total = rows.rows.length
+      ? Number(rows.rows[0].total)
+      : Number((await this.db.query<{ total: string }>(
+        `SELECT COUNT(*)::int AS total FROM ai_generation_requests WHERE ${where}`, params
+      )).rows[0]?.total || 0);
+    return {
+      list: await Promise.all(rows.rows.map(row => this.managedDocumentProposalTask(projectId, userId, String(row.id)))),
+      total, limit, offset, hasMore: offset + rows.rows.length < total
+    };
+  }
+
+  /** Protected human apply. Publishes a native Draft only; submission/approval remain separate. */
+  async applyManagedDocumentProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {},
+    principal?: ReviewPrincipal) {
+    this.requireManagedDocumentProposalPreview();
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const decisionKey = proposalDigest({ action: "managed_document_apply", revision, reviewerId: uid });
+    const result = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal' FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      // The provider is the ownership boundary for the operation shape below; do not infer it
+      // from an opType another producer could one day emit.
+      if (!existing || existing.provider !== "external_document_proposal") {
+        throw new NotFoundException({ error: "Document proposal not found" });
+      }
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      const prior = normalizeJsonArray(existing.save_events).find((entry: Body) => entry?.decisionKey === decisionKey);
+      if (prior) return { receipt: prior, replayed: true };
+      if (existing.task_status !== "in_review") throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This document proposal is not awaiting review" });
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposal or its Skill basis changed since review; reload and review the exact revision again" });
+      }
+      const operation = normalizeJsonArray(reviewed.proposal_snapshot.operations).find(entry => entry?.opType === MANAGED_DOCUMENT_OP_TYPE);
+      if (!operation) throw new BadRequestException({ error: "This task is not a governed document proposal" });
+      const targets = this.managedDocumentSkillTargets(String(operation.documentType), operation.document?.governedMetadata || {});
+      const currentSkills = await resolveEffectiveSkills(client, projectId, targets);
+      const applicability = classifySkillResolution(existing.skill_context, currentSkills);
+      if (applicability !== "current") {
+        throw new ConflictException({ code: "DOCUMENT_PROPOSAL_SKILL_STALE",
+          error: "The exact approved Skill basis for this candidate is no longer current; review a refreshed proposal", current: currentSkills, applicability });
+      }
+      const proposed = operation.document;
+      let document: Body;
+      if (operation.operation === "create") {
+        if (!isGovernedDocumentType(operation.documentType)) {
+          throw new BadRequestException({ error: "A managed candidate must create a user_manual or policy document" });
+        }
+        // Staging refuses this too. Keep the check here so a candidate staged before that guard
+        // existed still cannot capture the title Zyra looks its memory up by.
+        if (String(proposed.title) === LegacyService.ZYRA_MEMORY_DOC_TITLE) {
+          throw new BadRequestException({ error: LegacyService.ZYRA_MEMORY_RESERVED_TITLE_ERROR });
+        }
+        const folder = await client.query("SELECT id FROM knowledge_folders WHERE id=$1 AND project_id=$2 AND is_deleted=false", [operation.folderId, projectId]);
+        if (!folder.rows[0]) throw new NotFoundException({ error: "Folder not found" });
+        const inserted = (await client.query(
+          `INSERT INTO knowledge_documents
+             (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, governed_metadata, embedding_status, status, created_by, updated_by)
+           VALUES ((SELECT organization_id FROM projects WHERE id=$1),$1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,'unsupported','draft',$9,$9)
+           RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+          [projectId, operation.folderId, proposed.title, proposed.contentJson ? JSON.stringify(proposed.contentJson) : null,
+            proposed.contentHtml, proposed.contentText, operation.documentType, JSON.stringify(proposed.governedMetadata), uid]
+        )).rows[0];
+        document = { documentId: String(inserted.id), editRevision: String(inserted.edit_revision), title: inserted.title,
+          status: inserted.status, documentType: inserted.document_type, operation: "create" };
+      } else {
+        const target = operation.target;
+        if (!target?.documentId) throw new BadRequestException({ error: "This update candidate has no exact target" });
+        if (!isGovernedDocumentType(operation.documentType)) {
+          throw new BadRequestException({ error: "A managed candidate must revise a user_manual or policy document" });
+        }
+        const current = (await client.query(
+          `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+            WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
+          [target.documentId, projectId]
+        )).rows[0];
+        if (!current) throw new NotFoundException({ error: "Target document not found" });
+        if (current.document_type !== operation.documentType) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The target document type changed" });
+        }
+        if (current.source_provider) {
+          throw new ConflictException({ code: "GOVERNED_DOCUMENT_EXTERNAL_OWNED", error: "A provider-synced document remains read-only" });
+        }
+        this.assertKnowledgeDocumentBodyWritable(current);
+        if (current.edit_revision !== target.targetEditRevision) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", error: "The target document changed after this candidate was staged" });
+        }
+        const written = await this.writeKnowledgeDocument(client, projectId, uid, String(target.documentId), {
+          title: proposed.title, contentJson: proposed.contentJson, contentHtml: proposed.contentHtml,
+          contentText: proposed.contentText, governedMetadata: proposed.governedMetadata,
+          expectedRevision: target.targetEditRevision, documentType: operation.documentType
+        }, current, { kind: "human_session" });
+        document = { documentId: String(written.row.id), editRevision: String(written.row.edit_revision), title: written.row.title,
+          status: written.row.status, documentType: written.row.document_type,
+          operation: written.contentChanged ? "update" : "no_change",
+          contentChanged: written.contentChanged };
+      }
+      const receipt = {
+        id: randomUUID(), decisionKey, proposalRevision: revision, reviewerId: uid, principalKind: "human_session",
+        action: "managed_document_apply", skillContext: currentSkills, proposalSnapshot: reviewed.proposal_snapshot,
+        document, appliedAt: new Date().toISOString()
+      };
+      const activity = [{ actor: "user", stage: "done", title: "Applied governed document proposal",
+        detail: document.operation === "no_change"
+          ? `No content or metadata changed; the document remains ${document.status}. Nothing was submitted or approved.`
+          : "Published one native Draft manual/policy revision. Submission and human approval remain separate decisions.",
+        createdAt: receipt.appliedAt, reviewerId: uid, proposalRevision: revision }];
+      await client.query(
+        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal'",
+        [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]
+      );
+      await this.logProjectActivity(projectId, uid, "managed_document_proposal_applied", "ai_generation_request", taskId,
+        existing.user_story, { decisionKey, proposalRevision: revision, documentId: document.documentId, editRevision: document.editRevision, skillContext: currentSkills }, client);
+      // Give the published document its own history entry, not only the proposal task's, in the
+      // same transaction so a replay cannot append a second row for one publication.
+      if (document.operation !== "no_change") {
+        await this.logProjectActivity(projectId, uid, document.operation === "create" ? "created" : "updated",
+          "knowledge_document", document.documentId, document.title,
+          { source: "managed_document_proposal", taskId, proposalRevision: revision }, client);
+      }
+      return { receipt, replayed: false };
+    });
+    return { taskId, taskStatus: "done", ...result };
+  }
+
+  /** Human refusal of a candidate; nothing is published. */
+  async rejectManagedDocumentProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {},
+    principal?: ReviewPrincipal) {
+    this.requireManagedDocumentProposalPreview();
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Document proposal not found" });
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    // The key identifies the decision, not the note attached to it: a retry after a lost response
+    // must replay the stored receipt even if the reason field arrived empty on the second attempt.
+    const decisionKey = proposalDigest({ action: "managed_document_reject", revision, reviewerId: uid });
+    const result = await this.db.transaction(async client => {
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal' FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      if (!existing || existing.provider !== "external_document_proposal") throw new NotFoundException({ error: "Document proposal not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      const prior = normalizeJsonArray(existing.save_events).find((entry: Body) => entry?.decisionKey === decisionKey);
+      if (prior) return { receipt: prior, replayed: true };
+      if (existing.task_status === "done") {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This document proposal was already applied or decided; reload its recorded outcome" });
+      }
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposal or its Skill basis changed since review; reload and review the exact revision again" });
+      }
+      const receipt = {
+        id: randomUUID(), decisionKey, proposalRevision: revision, reviewerId: uid, principalKind: "human_session",
+        action: "managed_document_reject", reason: reason || null, decidedAt: new Date().toISOString()
+      };
+      const activity = [{ actor: "user", stage: "done", title: "Rejected governed document proposal",
+        detail: reason || "Nothing was published.", createdAt: receipt.decidedAt, reviewerId: uid, proposalRevision: revision }];
+      await client.query("UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2 AND task_kind = 'governed_proposal' AND provider = 'external_document_proposal'",
+        [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]);
+      await this.logProjectActivity(projectId, uid, "managed_document_proposal_rejected", "ai_generation_request", taskId,
+        existing.user_story, { decisionKey, proposalRevision: revision, reason: reason || null }, client);
+      return { receipt, replayed: false };
+    });
+    return { taskId, taskStatus: "done", ...result };
+  }
+
+  async requirementProposalTask(projectId: string, userId: string | null | undefined, taskId: string) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const task = await this.zyraTask(projectId, userId, taskId);
+    if (!this.taskHasRequirementBundle(task.proposalSnapshot?.operations || task.requirementBundle)) {
+      throw new NotFoundException({ error: "Requirement proposal not found" });
+    }
+    return task;
+  }
+
+  async listRequirementProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const limit = pageNumber(query.limit, 25, 1, 100), offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const rows = await this.db.query(
+      `SELECT id FROM ai_generation_requests
+        WHERE project_id=$1 AND task_status IN ('in_review','failed')
+          AND task_kind IN ('legacy_generation_review','governed_proposal')
+          AND generated_payload @> '[{"opType":"requirement_revision"}]'::jsonb
+        ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset]
+    );
+    return { list: await Promise.all(rows.rows.map(row => this.requirementProposalTask(projectId, userId, String(row.id)))) };
+  }
+
+  /** Authorized rejection by a project owner/manager. Inert bundle; no native artifact is written. */
+  async rejectRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.closeRequirementProposal(projectId, userId, taskId, "rejected", body, principal);
+  }
+
+  /** The producer may withdraw their own bundle. */
+  async withdrawRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.closeRequirementProposal(projectId, userId, taskId, "withdrawn", body, principal);
+  }
+
+  private async closeRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string,
+    decision: "rejected" | "withdrawn", body: Body, principal?: ReviewPrincipal): Promise<Body> {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    const decisionKey = proposalDigest({ kind: "requirement_bundle_decision", decision, revision, reviewerId: uid, reason });
+    return this.db.transaction(async client => {
+      // Preserve the established suite/project/task lock order. Authority and review dependencies
+      // remain locked through commit; a stale request-cache result never authorizes this decision.
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      if (!this.parseRole(authority.caller_role) || !this.parseRole(authority.workspace_role)) {
+        throw new ForbiddenException({ error: "A current project and workspace role is required" });
+      }
+      if (decision === "rejected") this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
+      if (!this.isRequirementBundleTask(existing)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
+      if (decision === "withdrawn" && existing.requested_by !== uid && existing.proposal_provenance?.issuerId !== uid) {
+        throw new ForbiddenException({ error: "Only the proposal producer can withdraw it" });
+      }
+      const payloadDigest = proposalDigest(existing.generated_payload);
+      const prior = this.requirementDecisionReceipt(existing);
+      if (prior || existing.task_status === "done") {
+        if (existing.task_status === "done" && prior?.decisionKey === decisionKey && prior.payloadDigest === payloadDigest) {
+          return { ...await this.formatAiTask(await this.readTestcaseProposal(client, projectId, taskId)), replayed: true };
+        }
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This bundle already has a different decision; reload its recorded outcome before continuing" });
+      }
+      if (!["in_review", "failed"].includes(String(existing.task_status))) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This bundle is not awaiting review" });
+      }
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The bundle or its review context changed; reload and review it again" });
+      }
+      const now = new Date().toISOString();
+      const receipt = { id: randomUUID(), decisionKey, decision, reviewerId: uid, principalKind: "human_session",
+        proposalRevision: revision, payloadDigest, reason: reason || null, createdAt: now, reviewedSnapshot: reviewed.proposal_snapshot };
+      const activity = [{
+        actor: "user", stage: "done", kind: "requirement_bundle_decision", decisionReceipt: receipt,
+        title: decision === "rejected" ? "Rejected requirement change bundle" : "Withdrew requirement change bundle",
+        detail: reason || (decision === "rejected" ? "Rejected during human review; nothing was published." : "Withdrawn by its producer; nothing was published."),
+        createdAt: now, reviewerId: uid, decision
+      }];
+      await client.query(
+        `UPDATE ai_generation_requests SET task_status='done', activity_log=activity_log||$3::jsonb, updated_at=now()
+         WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') AND task_status<>'done' RETURNING *`,
+        [taskId, projectId, JSON.stringify(activity)]
+      );
+      await this.logProjectActivity(projectId, uid, `requirement_proposal_${decision}`, "ai_generation_request", taskId, existing.user_story,
+        { decision, reason: reason || null, operationCount: normalizeJsonArray(existing.generated_payload).length, decisionReceipt: receipt }, client);
+      return { ...await this.formatAiTask(await this.readTestcaseProposal(client, projectId, taskId)), replayed: false };
+    });
+  }
+
+  // ─── Work Package A Slice 2: governed Skills + protected publication ───────────────────────
+
+  /** Create an inert skill candidate in the native KB identity/version owner. */
+  async createSkillCandidate(projectId: string, userId: string | null | undefined, body: Body,
+    principal?: { kind: "human_session" | "api_token"; tokenId?: string }): Promise<Body> {
+    const uid = this.requireUser(userId);
+    const project = await this.requireProjectAccess(uid, projectId);
+    const title = String(body.title || "").trim();
+    const module = String(body.module || "").trim();
+    const subtype = String(body.subtype || "*").trim() || "*";
+    const instructions = typeof body.instructions === "string" ? body.instructions.trim() : "";
+    if (!title || title.length > 512) throw new BadRequestException({ error: "Skill title must contain 1–512 characters" });
+    if (!SKILL_MODULES.has(module)) {
+      throw new BadRequestException({ error: "Unknown skill module" });
+    }
+    if (!instructions || instructions.length > 20000) throw new BadRequestException({ error: "Skill instructions must contain 1–20000 characters" });
+    // The optional key is part of the requested content only when the caller supplied it. An
+    // automatically generated identity must not change the request digest between retries.
+    // Null/false/0/undefined mean "no key". An explicitly supplied blank or whitespace-only string
+    // is refused rather than silently generating an identity: an empty field must not disable the
+    // request identity a retry depends on.
+    const rawSkillKey = body.skillKey;
+    const suppliedSkillKey = rawSkillKey === undefined || rawSkillKey === null || rawSkillKey === false || rawSkillKey === 0
+      ? null
+      : String(rawSkillKey).trim();
+    const skillKey = suppliedSkillKey ?? `SKL-${randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase()}`;
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/.test(skillKey)) throw new BadRequestException({ error: "skillKey must be 2–64 safe characters" });
+    const requestKey = body.requestKey === undefined || body.requestKey === null ? null : String(body.requestKey).trim();
+    if (requestKey !== null && (!requestKey || requestKey.length > 160)) {
+      throw new BadRequestException({ error: "requestKey must contain 1–160 characters" });
+    }
+    const principalKey = principal?.kind === "api_token"
+      ? `api_token:${principal.tokenId || ""}`
+      : `human_session:${uid}`;
+    const requestDigest = requestKey
+      ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey: suppliedSkillKey, instructions })).digest("hex")
+      : null;
+    const contentJson = { schemaVersion: "tesbo-skill/1", module, subtype, instructions };
+    const contentText = `${title}\n\n${instructions}`;
+    const contentHtml = `<h1>${this.escapeProposalHtml(title)}</h1><pre>${this.escapeProposalHtml(instructions)}</pre>`;
+    const result = await this.db.transaction(async client => {
+      let replayed = false;
+      if (requestKey) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`skill-create:${projectId}:${principalKey}:${requestKey}`]);
+        const prior = await client.query(
+          `SELECT sp.document_id, sp.creation_request_digest, sp.skill_key, sp.creation_basis_version
+             FROM skill_profiles sp
+            WHERE sp.project_id=$1 AND sp.creation_principal=$2 AND sp.creation_request_key=$3`,
+          [projectId, principalKey, requestKey]
+        );
+        if (prior.rows[0]) {
+          // Pre-marker V161 rows hashed whatever key they stored (generated or explicit). The
+          // fallback is only for that legacy basis and only when the retry still omits the key.
+          // New rows carry basis version 2, so an explicit-key row can never replay as omitted.
+          const legacyDigest = !suppliedSkillKey && Number(prior.rows[0].creation_basis_version) < 2
+            ? createHash("sha256").update(JSON.stringify({ title, module, subtype, skillKey: prior.rows[0].skill_key, instructions })).digest("hex")
+            : null;
+          const digestMatches = prior.rows[0].creation_request_digest === requestDigest
+            || (!!legacyDigest && prior.rows[0].creation_request_digest === legacyDigest);
+          if (!digestMatches) {
+            throw new ConflictException({ code: "SKILL_REQUEST_CONFLICT", error: "This requestKey already belongs to different candidate content" });
+          }
+          const existingDoc = (await client.query(
+            `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+              WHERE id=$1 AND project_id=$2 AND is_deleted=false`, [prior.rows[0].document_id, projectId]
+          )).rows[0];
+          if (!existingDoc) {
+            throw new ConflictException({ code: "SKILL_REQUEST_CONFLICT", error: "The candidate for this requestKey is no longer available; choose a new requestKey" });
+          }
+          return { doc: existingDoc, replayed: true, skillKey: String(prior.rows[0].skill_key) };
+        }
+      }
+      // A skillKey identifies the project's stable skill identity. A duplicate is a refusal, not a
+      // generic 500 from the profile's unique index. Check before the document insert so the
+      // ordinary path never creates and then rolls back a second KB row.
+      const existing = await client.query("SELECT document_id FROM skill_profiles WHERE project_id=$1 AND skill_key=$2", [projectId, skillKey]);
+      if (existing.rows[0]) {
+        throw new ConflictException({ code: "SKILL_KEY_CONFLICT", error: "A skill with this key already exists in this project" });
+      }
+      const folderId = await this.kbRootFolderId(client, projectId, String(project.organization_id));
+      const doc = (await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,'skill','draft',$8,$8) RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [project.organization_id, projectId, folderId, title, JSON.stringify(contentJson), contentHtml, contentText, uid]
+      )).rows[0];
+      try {
+        await client.query(
+          `INSERT INTO skill_profiles(document_id,project_id,skill_key,module,subtype,creation_principal,creation_request_key,creation_request_digest,creation_basis_version)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,2)`,
+          [doc.id, projectId, skillKey, module, subtype, requestKey ? principalKey : null, requestKey, requestDigest]
+        );
+      } catch (error) {
+        // Two concurrent candidates can both pass the pre-check; the unique index decides. The
+        // transaction rolls back the loser's document, and the caller receives the same refusal.
+        if ((error as { code?: string }).code === "23505") {
+          throw new ConflictException({ code: "SKILL_KEY_CONFLICT", error: "A skill with this key already exists in this project" });
+        }
+        throw error;
+      }
+      await this.logProjectActivity(projectId, uid, "skill_candidate_created", "knowledge_document", doc.id, title, { skillKey, module, subtype }, client);
+      return { doc, replayed, skillKey };
+    });
+    if (!result.replayed) this.enqueueEmbedding(String(result.doc.organization_id), projectId, "document", String(result.doc.id), "created");
+    return { ...toCamel(result.doc), skillKey: result.skillKey ?? skillKey, module, subtype, state: "draft", effective: false, replayed: result.replayed };
+  }
+
+  /** Human-only approval of the exact submitted skill version. Approval stays separate from assignment. */
+  async approveSkillVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Skill not found" });
+    const versionId = String(body.versionId || "");
+    if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted skill version under review" });
+    const result = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const { doc } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      if (doc.document_type !== "skill") throw new BadRequestException({ error: "Only skill documents can be approved here" });
+      const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1 AND project_id=$2", [documentId, projectId])).rows[0];
+      if (!profile) throw new BadRequestException({ error: "The skill has no native profile" });
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
+      if (!version || version.snapshot_kind !== "submitted") throw new BadRequestException({ error: "versionId must identify a submitted version of this skill" });
+      // Approval is tied to the exact submission the reviewer loaded. A newer submission makes
+      // that decision stale even when the older version's digest still matches the working copy.
+      const latestSubmitted = (await client.query(
+        `SELECT id,version_number FROM knowledge_document_versions
+          WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1`, [documentId]
+      )).rows[0];
+      if (latestSubmitted && String(latestSubmitted.id) !== versionId) {
+        throw new ConflictException({ code: "SKILL_VERSION_SUPERSEDED",
+          error: "A newer submitted version is awaiting review; open the current submission before approving",
+          currentVersionId: String(latestSubmitted.id), currentVersionNumber: Number(latestSubmitted.version_number) });
+      }
+      const reviewed = doc.reviewed_version_id
+        ? (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0]
+        : null;
+      if (doc.status === "approved" && reviewed?.snapshot_kind === "approved" && reviewed.snapshot_metadata?.sourceVersionId === versionId) {
+        return { doc, profile, approvedVersionId: String(reviewed.id), replayed: true };
+      }
+      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The skill changed after this version was submitted; approve the exact submitted version or request a new submission" });
+      }
+      const approved = await this.writeKnowledgeGovernedVersion(client, doc, uid, "approved", doc.edit_revision, "human_session", null,
+        { authority: "skill_review", sourceVersionId: versionId });
+      const updated = (await client.query(
+        `UPDATE knowledge_documents SET status='approved', reviewed_by=$2, reviewed_at=now(), reviewed_version_id=$3, updated_at=now()
+          WHERE id=$1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, uid, approved.id, projectId]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, "skill_approved", "knowledge_document", documentId, doc.title,
+        { versionId: approved.id, sourceVersionId: versionId, profileId: profile.skill_key }, client);
+      return { doc: updated, profile, approvedVersionId: String(approved.id), replayed: false };
+    });
+    this.enqueueEmbedding(String(result.doc.organization_id), projectId, "document", documentId, "updated");
+    return { ...toCamel(result.doc), skillProfile: toCamel(result.profile), approvedVersionId: result.approvedVersionId, replayed: result.replayed };
+  }
+
+  /** Shared native assignment eligibility; the latest reviewed pointer is not an assignment pin. */
+  private async skillAssignmentSource(client: PoolClient, projectId: string, skillDocumentId: string, versionId: string, modules: string[]) {
+    const doc = (await client.query("SELECT id,document_type,project_id,is_deleted FROM knowledge_documents WHERE id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+    if (!doc || doc.is_deleted || doc.document_type !== "skill") throw new NotFoundException({ error: "Skill not found" });
+    const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, skillDocumentId])).rows[0];
+    if (!version || version.snapshot_kind !== "approved") throw new BadRequestException({ error: "Only an approved immutable skill version can be assigned" });
+    const profile = (await client.query("SELECT * FROM skill_profiles WHERE document_id=$1 AND project_id=$2", [skillDocumentId, projectId])).rows[0];
+    if (!profile || modules.some(module => profile.module !== module)) throw new BadRequestException({ error: "The assignment module must match the skill profile" });
+    return { version, profile };
+  }
+
+  /** Human-only assignment of an approved immutable version to one project authoring context. */
+  async assignSkill(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const skillDocumentId = String(body.skillDocumentId || "");
+    const versionId = String(body.versionId || "");
+    const module = String(body.module || "").trim();
+    const subtype = String(body.subtype || "*").trim() || "*";
+    const operation = String(body.operation || "*").trim() || "*";
+    const precedence = body.precedence === undefined ? 0 : Number(body.precedence);
+    if (!isUuid(skillDocumentId) || !isUuid(versionId)) throw new BadRequestException({ error: "skillDocumentId and versionId must be skill identities" });
+    if (!module) throw new BadRequestException({ error: "module is required" });
+    if (!Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
+    const assignment = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const { profile } = await this.skillAssignmentSource(client, projectId, skillDocumentId, versionId, [module]);
+      await client.query(
+        `UPDATE skill_assignments SET status='inactive', deactivated_by=$4, deactivated_at=now()
+          WHERE project_id=$1 AND module=$2 AND subtype=$3 AND operation=$5 AND status='active'`,
+        [projectId, module, subtype, uid, operation]
+      );
+      const created = (await client.query(
+        `INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by,precedence)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [projectId, module, subtype, operation, skillDocumentId, versionId, uid, precedence]
+      )).rows[0];
+      // Conflict checks compare intersecting scopes in both directions, including a wildcard
+      // introduced after an exact assignment. Any refusal rolls the replacement back as well.
+      const conflicts = await findSkillAssignmentConflicts(client, projectId, { module, subtype, operation }, String(created.id));
+      if (conflicts.length) throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "This scope overlaps another active Skill assignment.", conflicts });
+      const resolved = await resolveEffectiveSkills(client, projectId, [{ module, subtype, operation }]);
+      await this.logProjectActivity(projectId, uid, "skill_assigned", "skill_assignment", created.id, `${profile.skill_key} → ${module}/${subtype}/${operation}`,
+        { skillDocumentId, versionId, precedence }, client);
+      return { created, resolved };
+    });
+    return { assignment: toCamel(assignment.created), resolution: assignment.resolved };
+  }
+
+  private skillAssignmentBatchInput(body: Body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new BadRequestException({ error: "A Skill assignment command is required" });
+    }
+    const identity = (value: unknown, field: string) => {
+      if (typeof value !== "string" || !isUuid(value.trim())) {
+        throw new BadRequestException({ error: `${field} must be a UUID` });
+      }
+      return value.trim().toLowerCase();
+    };
+    const requestKey = identity(body.requestKey, "requestKey");
+    const skillDocumentId = identity(body.skillDocumentId, "skillDocumentId");
+    const versionId = identity(body.versionId, "versionId");
+    if (!Array.isArray(body.targets) || body.targets.length < 1 || body.targets.length > 50) {
+      throw new BadRequestException({ error: "Select between 1 and 50 assignment targets" });
+    }
+    const seen = new Set<string>();
+    const targets: SkillAssignmentBatchTarget[] = Array.from(body.targets, (input: unknown) => {
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new BadRequestException({ error: "Each assignment target must be an object" });
+      }
+      const item = input as Body;
+      const scope = (field: string, limit: number) => {
+        const value = typeof item[field] === "string" ? item[field].trim() : "";
+        if (!value || value.length > limit || value.includes("\u0000")) {
+          throw new BadRequestException({ error: `${field} must contain 1–${limit} characters; use * for an explicit wildcard` });
+        }
+        return value;
+      };
+      const module = scope("module", 32), subtype = scope("subtype", 32), operation = scope("operation", 64);
+      if (!SKILL_MODULES.has(module)) throw new BadRequestException({ error: "Unknown skill module" });
+      const expectedAssignmentId = item.expectedAssignmentId === null ? null : identity(item.expectedAssignmentId, "expectedAssignmentId");
+      const precedence = item.precedence === undefined ? 0 : item.precedence;
+      if (typeof precedence !== "number" || !Number.isInteger(precedence) || precedence < -1000 || precedence > 1000) {
+        throw new BadRequestException({ error: "precedence must be an integer between -1000 and 1000" });
+      }
+      const key = JSON.stringify([module, subtype, operation]);
+      if (seen.has(key)) throw new BadRequestException({ error: "Each assignment target may appear only once" });
+      seen.add(key);
+      return { module, subtype, operation, expectedAssignmentId, precedence };
+    });
+    // Order and explicit default zero are presentation choices, not a different command intent.
+    targets.sort((a, b) => {
+      const left = JSON.stringify([a.module, a.subtype, a.operation]);
+      const right = JSON.stringify([b.module, b.subtype, b.operation]);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+    const requestDigest = createHash("sha256").update(JSON.stringify({ skillDocumentId, versionId, targets })).digest("hex");
+    return { requestKey, skillDocumentId, versionId, targets, requestDigest };
+  }
+
+  /** One native transaction for a bounded, explicitly reviewed assignment selection.
+   * Receipt replay precedes live dependency checks: it describes a historical commitment,
+   * never an assertion that its assignments or Skill are still active.
+   */
+  async assignSkillBatch(projectId: string, userId: string | null | undefined, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const { requestKey, skillDocumentId, versionId, targets, requestDigest } = this.skillAssignmentBatchInput(body);
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const previous = (await client.query(
+        "SELECT requested_by,request_digest,receipt FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2",
+        [projectId, requestKey]
+      )).rows[0];
+      if (previous) {
+        if (String(previous.requested_by) !== uid || previous.request_digest !== requestDigest) {
+          throw new ConflictException({ code: "SKILL_ASSIGNMENT_REQUEST_CONFLICT", error: "This request key already belongs to another assignment command" });
+        }
+        return { receipt: previous.receipt as Body, replayed: true };
+      }
+      const { version, profile } = await this.skillAssignmentSource(client, projectId, skillDocumentId, versionId, targets.map(target => target.module));
+      const contentDigest = version.snapshot_metadata?.contentDigest;
+      if (typeof contentDigest !== "string" || !/^[a-f0-9]{64}$/.test(contentDigest)) {
+        throw new BadRequestException({ error: "The approved Skill version has no verifiable content digest" });
+      }
+      const current = (await client.query(
+        `SELECT a.* FROM skill_assignments a
+           JOIN jsonb_to_recordset($2::jsonb) AS t(module text,subtype text,operation text)
+             ON a.module=t.module AND a.subtype=t.subtype AND a.operation=t.operation
+          WHERE a.project_id=$1 AND a.status='active' FOR UPDATE OF a`,
+        [projectId, JSON.stringify(targets)]
+      )).rows;
+      const scopeKey = (target: { module: string; subtype: string; operation: string }) => JSON.stringify([target.module, target.subtype, target.operation]);
+      const currentByScope = new Map(current.map(row => [scopeKey(row as SkillAssignmentBatchTarget), row]));
+      for (const target of targets) {
+        const prior = currentByScope.get(scopeKey(target));
+        if ((prior ? String(prior.id) : null) !== target.expectedAssignmentId) {
+          throw new ConflictException({ code: "SKILL_ASSIGNMENT_STALE", error: "An assignment changed after it was reviewed; refresh and review the selected targets again",
+            target: { module: target.module, subtype: target.subtype, operation: target.operation } });
+        }
+      }
+      const committedAt = new Date().toISOString();
+      const results: Body[] = [];
+      for (const selection of targets) {
+        const { module, subtype, operation, precedence } = selection;
+        const target = { module, subtype, operation };
+        const prior = currentByScope.get(scopeKey(target));
+        const before = prior ? toCamel(prior) : null;
+        if (prior && String(prior.skill_document_id) === skillDocumentId && String(prior.skill_version_id) === versionId && prior.precedence === precedence) {
+          results.push({ target, outcome: "already_satisfied", before, after: before });
+          continue;
+        }
+        if (prior) {
+          await client.query(
+            "UPDATE skill_assignments SET status='inactive',deactivated_by=$3,deactivated_at=$4 WHERE id=$1 AND project_id=$2",
+            [prior.id, projectId, uid, committedAt]
+          );
+        }
+        const created = (await client.query(
+          `INSERT INTO skill_assignments(project_id,module,subtype,operation,skill_document_id,skill_version_id,assigned_by,precedence,assigned_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+          [projectId, module, subtype, operation, skillDocumentId, versionId, uid, precedence, committedAt]
+        )).rows[0];
+        results.push({ target, outcome: prior ? "replaced" : "added", before, after: toCamel(created),
+          ...(prior ? { priorDeactivation: { assignmentId: String(prior.id), actorId: uid, at: committedAt } } : {}) });
+      }
+      // Use the same symmetric eligibility/overlap owner as single-context assignment.
+      // Check the final selection, including unchanged generations, before committing any effect.
+      for (const result of results) {
+        const conflicts = await findSkillAssignmentConflicts(client, projectId, result.target, result.after.id);
+        if (conflicts.length) throw new ConflictException({ code: "SKILL_ASSIGNMENT_CONFLICT", error: "A selected scope overlaps another active Skill assignment", conflicts });
+      }
+      // Persist exactly the JSON returned to the first caller so replay is identical, including dates.
+      const receipt: Body = JSON.parse(JSON.stringify({
+        schemaVersion: 1, id: randomUUID(), requestKey, projectId: String(authority.id), skillDocumentId, skillVersionId: versionId,
+        actorId: uid, principalKind: "human_session", requestDigest, contentDigest, committedAt, targets: results
+      }));
+      await client.query(
+        `INSERT INTO skill_assignment_requests(id,project_id,request_key,request_digest,requested_by,skill_document_id,skill_version_id,content_digest,committed_at,receipt)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+        [receipt.id, projectId, requestKey, requestDigest, uid, skillDocumentId, versionId, contentDigest, committedAt, JSON.stringify(receipt)]
+      );
+      // Project Activity is also readable by members and machine tokens. Keep the full
+      // actor-owned command in its protected receipt store; the mandatory audit links to it.
+      await this.logProjectActivity(projectId, uid, "skill_assignment_batch_committed", "skill_assignment_request", receipt.id, profile.skill_key,
+        { receiptId: receipt.id, skillDocumentId, versionId, targetCount: results.length }, client);
+      return { receipt, replayed: false };
+    });
+  }
+
+  /** Actor-owned recovery uses current human authority, even after a timeout or later revocation. */
+  async skillAssignmentBatch(projectId: string, userId: string | null | undefined, requestKey: string, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    if (!isUuid(projectId)) throw new NotFoundException({ error: "Project not found" });
+    if (typeof requestKey !== "string" || !isUuid(requestKey.trim())) throw new BadRequestException({ error: "requestKey must be a UUID" });
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const stored = (await client.query(
+        "SELECT receipt FROM skill_assignment_requests WHERE project_id=$1 AND request_key=$2 AND requested_by=$3",
+        [projectId, requestKey.trim().toLowerCase(), uid]
+      )).rows[0];
+      if (!stored) throw new NotFoundException({ error: "Skill assignment command not found" });
+      return { receipt: stored.receipt as Body, replayed: true };
+    });
+  }
+
+  async deactivateSkillAssignment(projectId: string, userId: string | null | undefined, assignmentId: string, _body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(assignmentId)) throw new NotFoundException({ error: "Skill assignment not found" });
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const current = (await client.query("SELECT * FROM skill_assignments WHERE id=$1 AND project_id=$2 FOR UPDATE", [assignmentId, projectId])).rows[0];
+      if (!current) throw new NotFoundException({ error: "Skill assignment not found" });
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      if (current.status === "inactive") return { assignment: toCamel(current), replayed: true };
+      const updated = (await client.query(
+        `UPDATE skill_assignments SET status='inactive', deactivated_by=$3, deactivated_at=now()
+          WHERE id=$1 AND project_id=$2 RETURNING *`, [assignmentId, projectId, uid]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, "skill_assignment_deactivated", "skill_assignment", assignmentId, current.skill_version_id, {}, client);
+      return { assignment: toCamel(updated), replayed: false };
+    });
+  }
+
+  /** Human-readable Skills library: candidates, exact versions and assignment history. */
+  async listSkills(projectId: string, userId: string | null | undefined) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const docs = (await this.db.query(
+      `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS} FROM knowledge_documents
+        WHERE project_id=$1 AND document_type='skill' AND is_deleted=false ORDER BY title,id`, [projectId]
+    )).rows;
+    const documentIds = docs.map((doc: Body) => String(doc.id));
+    const profiles = documentIds.length ? (await this.db.query("SELECT * FROM skill_profiles WHERE project_id=$1 AND document_id=ANY($2::uuid[])", [projectId, documentIds])).rows : [];
+    const versions = documentIds.length ? (await this.db.query(
+      `SELECT v.id,v.document_id,v.version_number,v.snapshot_kind,v.snapshot_metadata,v.created_by,v.created_at,u.name AS created_by_name
+         FROM knowledge_document_versions v LEFT JOIN users u ON u.id=v.created_by
+        WHERE v.document_id=ANY($1::uuid[]) ORDER BY v.version_number DESC`, [documentIds]
+    )).rows : [];
+    const assignments = documentIds.length ? (await this.db.query(
+      `SELECT a.*, v.version_number, v.snapshot_metadata->>'contentDigest' AS content_digest
+         FROM skill_assignments a
+         JOIN knowledge_document_versions v ON v.id=a.skill_version_id AND v.document_id=a.skill_document_id
+        WHERE a.project_id=$1 AND a.skill_document_id=ANY($2::uuid[])
+        ORDER BY a.assigned_at DESC,a.id`, [projectId, documentIds]
+    )).rows : [];
+    const profileByDoc = new Map(profiles.map((profile: Body) => [String(profile.document_id), profile]));
+    const versionsByDoc = new Map<string, Body[]>();
+    for (const row of versions) {
+      const list = versionsByDoc.get(String(row.document_id)) || [];
+      list.push({
+        id: String(row.id), versionNumber: Number(row.version_number), kind: String(row.snapshot_kind),
+        createdAt: row.created_at, createdBy: row.created_by, createdByName: row.created_by_name ?? null,
+        contentDigest: row.snapshot_metadata?.contentDigest ?? null,
+        authority: row.snapshot_metadata?.authority ?? null,
+        sourceVersionId: row.snapshot_metadata?.sourceVersionId ?? null
+      });
+      versionsByDoc.set(String(row.document_id), list);
+    }
+    const assignmentsByDoc = new Map<string, Body[]>();
+    for (const row of assignments) {
+      const list = assignmentsByDoc.get(String(row.skill_document_id)) || [];
+      list.push(toCamel(row));
+      assignmentsByDoc.set(String(row.skill_document_id), list);
+    }
+    return {
+      skills: docs.map((doc: Body) => {
+        const profile = profileByDoc.get(String(doc.id));
+        const history = versionsByDoc.get(String(doc.id)) || [];
+        return {
+          ...toCamel(doc),
+          skillKey: profile?.skill_key ?? null,
+          module: profile?.module ?? null,
+          subtype: profile?.subtype ?? null,
+          state: profile?.state ?? "draft",
+          approvedVersionId: doc.reviewed_version_id ? String(doc.reviewed_version_id) : null,
+          submittedVersionId: history.find((version: Body) => version.kind === "submitted")?.id ?? null,
+          versions: history,
+          assignments: assignmentsByDoc.get(String(doc.id)) || []
+        };
+      })
+    };
+  }
+
+  /** Full assignment ledger, including revoked/inactive generations. */
+  async listSkillAssignments(projectId: string, userId: string | null | undefined) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const rows = (await this.db.query(
+      `SELECT a.*, d.title AS skill_title, sp.skill_key, v.version_number,
+              v.snapshot_metadata->>'contentDigest' AS content_digest
+         FROM skill_assignments a
+         JOIN knowledge_documents d ON d.id=a.skill_document_id AND d.project_id=a.project_id
+         JOIN skill_profiles sp ON sp.document_id=a.skill_document_id
+         JOIN knowledge_document_versions v ON v.id=a.skill_version_id AND v.document_id=a.skill_document_id
+        WHERE a.project_id=$1 ORDER BY a.assigned_at DESC,a.id`, [projectId]
+    )).rows;
+    return { list: rows.map((row: Body) => toCamel(row)) };
+  }
+
+  /** Read-only effective resolution for the caller's existing project/context. */
+  async effectiveSkills(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    const module = String(query.module || "requirements");
+    const subtype = String(query.subtype || "functional");
+    const operation = String(query.operation || "requirement_revision");
+    return this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      await this.requireCurrentProjectAuthority(client, projectId, uid);
+      return resolveEffectiveSkills(client, projectId, [{ module, subtype, operation }]);
+    });
+  }
+
+  /** Protected apply of the exact reviewed bundle. One native transaction; no partial publication. */
+  async applyRequirementProposal(projectId: string, userId: string | null | undefined, taskId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const decisionKey = proposalDigest({ action: "requirement_bundle_apply", revision, reviewerId: uid });
+    let organizationId: string | null = null;
+    const result = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      // Fail fast without holding the membership rows: the authoritative check runs after the task
+      // wait, and a locking preflight here would prevent a demotion from committing before it.
+      const authority = await this.requireProposalAuthority(client, projectId, uid, false);
+      // Use the shared normalized role policy here and after the wait, matching approval and link
+      // activation. Legacy admin/test_manager values are the manager interpretation.
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authority.caller_role)));
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
+      const existing = locked.rows[0];
+      if (!existing) throw new NotFoundException({ error: "Requirement proposal not found" });
+      // Re-read the full proposal authority after the task wait, before any reviewed content is
+      // used. This is the locking read: it re-checks membership and workspace role and also the
+      // project's testcaseStorage capability, which a settings change can disable while we wait.
+      const authorityAfterWait = await this.requireProposalAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(String(authorityAfterWait.caller_role)));
+      if (!this.taskHasRequirementBundle(existing.generated_payload)) throw new BadRequestException({ error: "This task is not a requirement change bundle" });
+      const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
+      if (prior) return { receipt: prior, replayed: true };
+      if (existing.task_status !== "in_review") throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This bundle is not awaiting review; reload it before applying" });
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposal, its bases or its pinned skills changed since review; reload and review the exact revision again" });
+      }
+      const snapshot = reviewed.proposal_snapshot as Body;
+      const operations = normalizeJsonArray(snapshot.operations);
+      const targets = requirementBundleTargets(operations);
+      const currentSkills = await resolveEffectiveSkills(client, projectId, targets);
+      const pinnedSkills = existing.skill_context as SkillResolution | Body;
+      this.assertCurrentSkillContext(pinnedSkills, currentSkills);
+      const requirementOperation = operations.find((entry: Body) => entry.opType === "requirement_revision") as Body;
+      const caseOperation = operations.find((entry: Body) => entry.opType === "testcase_create") as Body | undefined;
+      const linkOperation = operations.find((entry: Body) => entry.opType === "requirement_case_link") as Body | undefined;
+      if (requirementOperation.carryForwardLinks?.length) {
+        await this.assertRequirementDocumentBase(client, projectId, String(requirementOperation.documentId), String(requirementOperation.expectedRevision));
+        const verified = await this.reviewRequirementCarryForward(client, projectId, String(requirementOperation.documentId), requirementOperation.criteria, requirementOperation.carryForwardLinks);
+        if (proposalDigest(verified) !== proposalDigest(requirementOperation.carryForwardLinks)) {
+          throw new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "The selected link basis changed; stage and review a refreshed requirement revision." });
+        }
+      }
+      const requirement = await this.applyRequirementRevision(client, projectId, uid, requirementOperation, currentSkills);
+      organizationId = requirement.organizationId;
+      let testcase: Body | null = null;
+      if (caseOperation) {
+        const fields = { ...caseOperation.draft, status: "Draft" };
+        await this.assertProposalReferences(client, projectId, fields);
+        const saved = await this.insertTestCaseWithClient(client, projectId, uid, fields);
+        const fresh = (await client.query(
+          `SELECT testcases.*, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
+                  ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
+             FROM testcases WHERE id=$1 AND project_id=$2`, [saved.id, projectId]
+        )).rows[0];
+        testcase = { id: String(saved.id), title: String(fresh.title), editRevision: String(fresh.edit_revision),
+          approvalRevision: String(fresh.approval_revision), approvalCurrent: fresh.approval_current === true, status: String(fresh.status) };
+      }
+      let link: Body | null = null;
+      if (linkOperation) {
+        if (!testcase) throw new BadRequestException({ error: "A requirement_case_link requires the reviewed testcase_create in the same bundle" });
+        const inserted = (await client.query(
+          `INSERT INTO requirement_case_links
+             (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+           VALUES ($1,$2,$3,$4::text[],$5,$6,$7,'active',$8,$8,now()) RETURNING *`,
+          [projectId, requirement.documentId, requirement.versionId, linkOperation.criterionKeys, testcase.id,
+            testcase.editRevision, testcase.approvalCurrent ? testcase.approvalRevision : null, uid]
+        )).rows[0];
+        link = toCamel(inserted);
+      }
+      const receipt = {
+        id: randomUUID(), decisionKey, proposalRevision: revision, reviewerId: uid, principalKind: "human_session",
+        action: "requirement_bundle_apply", skillContext: currentSkills, proposalSnapshot: snapshot,
+        requirement, testcase, link, appliedAt: new Date().toISOString()
+      };
+      const activity = [{ actor: "user", stage: "done", title: "Applied requirement change bundle",
+        detail: "Published the reviewed requirement version, Draft case candidate and exact link in one transaction. Requirement approval remains a separate human decision.",
+        createdAt: receipt.appliedAt, reviewerId: uid, proposalRevision: revision }];
+      await client.query(
+        "UPDATE ai_generation_requests SET task_status='done', save_events=save_events||$3::jsonb, activity_log=activity_log||$4::jsonb, updated_at=now() WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal')",
+        [taskId, projectId, JSON.stringify([receipt]), JSON.stringify(activity)]
+      );
+      await this.logProjectActivity(projectId, uid, "requirement_bundle_applied", "ai_generation_request", taskId, existing.user_story,
+        { decisionKey, proposalRevision: revision, requirementDocumentId: requirement.documentId, requirementVersionId: requirement.versionId,
+          testcaseId: testcase?.id ?? null, linkId: link?.id ?? null, skillContext: currentSkills }, client);
+      return { receipt, replayed: false };
+    });
+    if (!result.replayed && result.receipt?.testcase?.id) {
+      // This bundle uses the nested case writer; its outer commit owns repository projections.
+      // Replays and requirement-only bundles publish no testcase and need no cache mutation.
+      await this.suitesCache.invalidate(projectId);
+      await this.testcasesListCache.invalidate(projectId);
+    }
+    if (result.receipt?.requirement?.documentId && organizationId) {
+      this.enqueueEmbedding(organizationId, projectId, "document", String(result.receipt.requirement.documentId), "updated");
+    }
+    return { taskId, taskStatus: "done", ...result };
+  }
+
+  /** Approve the exact submitted requirement version. Approval is human-only and separate from apply. */
+  async approveRequirementVersion(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Requirement not found" });
+    const versionId = String(body.versionId || "");
+    if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted requirement version under review" });
+    let organizationId: string | null = null;
+    const result = await this.db.transaction(async client => {
+      await this.lockSkillAssignments(client, projectId);
+      const { doc } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      this.kbRequireOwnerOrManager(this.normalizeRole(authority.caller_role));
+      organizationId = String(doc.organization_id);
+      if (doc.document_type !== "requirement_note") throw new BadRequestException({ error: "Only native requirement notes can be approved here" });
+      if (doc.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement remains read-only" });
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
+      if (!version || version.snapshot_kind !== "submitted") throw new BadRequestException({ error: "versionId must identify a submitted version of this requirement" });
+      if (doc.reviewed_version_id) {
+        const reviewed = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0];
+        if (reviewed?.snapshot_kind === "approved" && reviewed.snapshot_metadata?.sourceVersionId === versionId) {
+          return { doc, approvedVersionId: String(reviewed.id), links: 0, replayed: true };
+        }
+      }
+      // A metadata-only revision can change selected link authority while leaving document
+      // content bytes unchanged. A superseded submission must not regain that authority.
+      const latestSubmission = (await client.query(
+        "SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1",
+        [documentId]
+      )).rows[0];
+      if (String(latestSubmission?.id) !== versionId || version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The requirement changed or a newer revision was submitted; review the exact current submission before approving" });
+      }
+      // Re-resolve the exact basis the reviewed version pinned (requirement, link and case targets),
+      // not only the requirement target, or every approval would compare against a smaller digest.
+      const pinnedTargets = normalizeJsonArray(version.snapshot_metadata?.skillContext?.assignments)
+        .map((assignment: Body) => assignment?.target)
+        .filter((target: Body) => target && typeof target.module === "string" && typeof target.subtype === "string" && typeof target.operation === "string");
+      const current = await resolveEffectiveSkills(client, projectId,
+        pinnedTargets.length ? pinnedTargets : requirementBundleTargets([{ opType: "requirement_revision" }]));
+      this.assertCurrentSkillContext(version.snapshot_metadata?.skillContext, current);
+      const criteria = (doc.content_json as Body | null)?.criteria;
+      const carryForwardLinks = version.snapshot_metadata?.carryForwardLinks;
+      if (Array.isArray(carryForwardLinks) && carryForwardLinks.length) {
+        const verified = await this.reviewRequirementCarryForward(client, projectId, documentId, criteria, carryForwardLinks);
+        if (proposalDigest(verified) !== proposalDigest(carryForwardLinks)) {
+          throw new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "The selected link basis changed after submission; stage a new reviewed requirement revision." });
+        }
+      }
+      const approved = await this.writeKnowledgeGovernedVersion(client, doc, uid, "approved", doc.edit_revision, "human_session", null,
+        { authority: "requirement_review", criteria, skillContext: current, sourceVersionId: versionId, carryForwardLinks });
+      const updated = (await client.query(
+        `UPDATE knowledge_documents SET status='approved', reviewed_by=$2, reviewed_at=now(), reviewed_version_id=$3, updated_at=now()
+          WHERE id=$1 AND project_id=$4 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, uid, approved.id, projectId]
+      )).rows[0];
+      const links = await client.query(
+        `INSERT INTO requirement_case_links
+           (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+         SELECT l.project_id,l.requirement_id,$4,l.criterion_keys,l.testcase_id,l.testcase_revision,l.testcase_approval_revision,'active',l.proposed_by,$5,now()
+           FROM requirement_case_links l
+          WHERE l.project_id=$1 AND l.requirement_id=$2 AND l.requirement_version_id=$3 AND l.state='active'
+            AND NOT EXISTS (SELECT 1 FROM requirement_case_links x
+                             WHERE x.requirement_version_id=$4 AND x.testcase_id=l.testcase_id
+                               AND x.criterion_keys=l.criterion_keys AND x.state IN ('proposed','active'))
+         RETURNING id`,
+        [projectId, documentId, versionId, approved.id, uid]
+      );
+      await this.logProjectActivity(projectId, uid, "requirement_approved", "knowledge_document", documentId, doc.title,
+        { versionId: approved.id, sourceVersionId: versionId, linkRowsCreated: links.rowCount, skillContext: current }, client);
+      return { doc: updated, approvedVersionId: String(approved.id), links: links.rowCount, replayed: false };
+    });
+    if (organizationId) this.enqueueEmbedding(organizationId, projectId, "document", documentId, "updated");
+    return { ...toCamel(result.doc), approvedVersionId: result.approvedVersionId, sourceVersionId: versionId, linkRowsCreated: result.links, replayed: result.replayed };
+  }
+
+  /**
+   * Re-apply one active link to the case's current approved revision. Human-only and explicit:
+   * the earlier link is retired, never rewritten, so historical coverage stays attributable.
+   */
+  async reapplyRequirementCaseLink(projectId: string, userId: string | null | undefined, documentId: string, linkId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId) || !isUuid(linkId)) throw new NotFoundException({ error: "Requirement link not found" });
+    const expectedCaseRevision = String(body.expectedCaseRevision || "");
+    const expectedApprovalRevision = String(body.expectedApprovalRevision || "");
+    if (!/^[a-f0-9]{64}$/.test(expectedCaseRevision) || !/^[a-f0-9]{64}$/.test(expectedApprovalRevision)) {
+      throw new BadRequestException({ error: "expectedCaseRevision and expectedApprovalRevision must be the current case revisions" });
+    }
+    // Optional for existing clients; the native review surface quotes the approved requirement
+    // it displayed so a later human approval cannot silently become this action's target.
+    if (body.expectedRequirementVersionId !== undefined
+      && (typeof body.expectedRequirementVersionId !== "string" || !isUuid(body.expectedRequirementVersionId))) {
+      throw new BadRequestException({ error: "expectedRequirementVersionId must identify the approved requirement version under review" });
+    }
+    const expectedRequirementVersionId = body.expectedRequirementVersionId === undefined
+      ? null : String(body.expectedRequirementVersionId).toLowerCase();
+    return this.db.transaction(async client => {
+      // Share the same project lock as assignment writers, proposal apply and requirement approval.
+      await this.lockSkillAssignments(client, projectId);
+      const access = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      // Use the same normalized role policy as requirement approval and the review surface:
+      // legacy admin/test_manager values normalize to manager.
+      if (!["owner", "manager"].includes(this.normalizeRole(String(access.caller_role)))) {
+        throw new ForbiddenException({ error: "Only project owners and managers can re-apply a requirement link" });
+      }
+      const doc = (await client.query(
+        `SELECT id,document_type,source_provider,reviewed_version_id FROM knowledge_documents WHERE id=$1 AND project_id=$2 AND is_deleted=false FOR UPDATE`,
+        [documentId, projectId]
+      )).rows[0];
+      if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
+      if (expectedRequirementVersionId !== null && String(doc.reviewed_version_id) !== expectedRequirementVersionId) {
+        throw new ConflictException({ code: "REQUIREMENT_VERSION_CONFLICT", error: "The approved requirement version changed since review; reload the coverage before activating a case link" });
+      }
+      if (!doc.reviewed_version_id) {
+        throw new ConflictException({ code: "REQUIREMENT_NOT_APPROVED", error: "Approve the exact requirement version before activating a case link" });
+      }
+      const requirementVersionId = String(doc.reviewed_version_id);
+      const link = (await client.query("SELECT * FROM requirement_case_links WHERE id=$1 AND project_id=$2 AND requirement_id=$3 FOR UPDATE", [linkId, projectId, documentId])).rows[0];
+      if (!link) throw new NotFoundException({ error: "Requirement link not found" });
+      let replay: Body | null = null;
+      if (link.state !== "active") {
+        // A lost-response retry may only replay the current approved generation, never a link that
+        // was superseded by a later requirement approval.
+        replay = (await client.query(
+          `SELECT * FROM requirement_case_links WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3
+             AND testcase_revision=$4 AND testcase_approval_revision=$5 AND criterion_keys=$6
+             AND requirement_version_id=$7 AND state='active' LIMIT 1`,
+          [projectId, documentId, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, link.criterion_keys, requirementVersionId]
+        )).rows[0];
+        if (!replay) throw new ConflictException({ code: "LINK_NOT_ACTIVE", error: "This link is no longer active; load the current requirement coverage and choose an active link" });
+      }
+      const lockedCase = (await client.query(
+        "SELECT id FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE",
+        [link.testcase_id, projectId]
+      )).rows[0];
+      if (!lockedCase) throw new NotFoundException({ error: "Test case not found" });
+      // Match native case approval's lock-then-read boundary. A fresh statement observes any
+      // dependency writer that committed while the case lock was being acquired (V155).
+      const testcase = (await client.query(
+        `SELECT testcases.id, ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision,
+                ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
+           FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`, [link.testcase_id, projectId]
+      )).rows[0];
+      if (!testcase) throw new NotFoundException({ error: "Test case not found" });
+      if (String(testcase.edit_revision) !== expectedCaseRevision) throw new ConflictException({ code: "CASE_REVISION_CONFLICT", error: "The case changed since this revision was read" });
+      if (testcase.approval_current !== true || String(testcase.approval_revision) !== expectedApprovalRevision) {
+        throw new ConflictException({ code: "CASE_NOT_APPROVED", error: "The case is not currently approved at the reviewed revision" });
+      }
+      // This is a current active-link readback, not a historical command receipt. Returning an
+      // earlier link must still satisfy the same current case approval as an initial activation.
+      const reviewedLinkAuthority = await this.assertRequirementLinkAuthority(client, projectId, documentId, requirementVersionId, link, expectedCaseRevision, expectedApprovalRevision);
+      if (replay) return { link: toCamel(replay), retiredLinkId: String(link.id), replayed: true };
+      // One live relation per case/criteria. Retire every active/proposed generation that would
+      // collide with the current approved basis, not only the row the caller happened to read.
+      await client.query(
+        `UPDATE requirement_case_links SET state='retired', retired_by=$5, retired_at=now()
+          WHERE project_id=$1 AND requirement_id=$2 AND testcase_id=$3 AND criterion_keys=$4
+            AND state IN ('proposed','active')`,
+        [projectId, documentId, link.testcase_id, link.criterion_keys, uid]
+      );
+      const created = (await client.query(
+        `INSERT INTO requirement_case_links
+           (project_id,requirement_id,requirement_version_id,criterion_keys,testcase_id,testcase_revision,testcase_approval_revision,state,proposed_by,applied_by,applied_at)
+         VALUES ($1,$2,$3,$4::text[],$5,$6,$7,'active',$8,$8,now()) RETURNING *`,
+        [projectId, documentId, requirementVersionId, link.criterion_keys, link.testcase_id, expectedCaseRevision, expectedApprovalRevision, uid]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, "requirement_link_reapplied", "requirement_case_link", created.id, doc.id,
+        { retiredLinkId: linkId, requirementVersionId, testcaseId: link.testcase_id, testcaseRevision: expectedCaseRevision, approvalRevision: expectedApprovalRevision, reviewedLinkAuthority }, client);
+      return { link: toCamel(created), retiredLinkId: String(linkId), replayed: false };
+    });
+  }
+
+  async approveGovernedKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.reviewGovernedKnowledgeDocument(projectId, userId, documentId, "approved", body, principal);
+  }
+
+  async rejectGovernedKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string, body: Body = {}, principal?: ReviewPrincipal) {
+    return this.reviewGovernedKnowledgeDocument(projectId, userId, documentId, "rejected", body, principal);
+  }
+
+  /** Human exact-version decision for a governed manual/policy. Separate from requirement and AI-memory review. */
+  private async reviewGovernedKnowledgeDocument(projectId: string, userId: string | null | undefined, documentId: string,
+    decision: "approved" | "rejected", body: Body, principal?: ReviewPrincipal): Promise<Body> {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    await this.requireProjectAccess(uid, projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Document not found" });
+    const versionId = String(body.versionId || "");
+    if (!isUuid(versionId)) throw new BadRequestException({ error: "versionId must identify the submitted governed document version" });
+    const reason = decision === "rejected" && typeof body.reason === "string" ? body.reason.trim().slice(0, 2000) : "";
+    const result = await this.db.transaction(async (client) => {
+      const { doc, role } = await this.lockKnowledgeReviewDocument(client, projectId, uid, documentId);
+      this.kbRequireOwnerOrManager(role);
+      this.assertKnowledgeDocumentBodyWritable(doc);
+      if (!isGovernedDocumentType(doc.document_type)) {
+        throw new BadRequestException({ error: "Only user manuals and policies can be reviewed here" });
+      }
+      if (doc.source_provider) {
+        throw new ConflictException({ code: "GOVERNED_DOCUMENT_EXTERNAL_OWNED", error: "A provider-synced document remains read-only" });
+      }
+      const version = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [versionId, documentId])).rows[0];
+      if (!version || version.snapshot_kind !== "submitted") {
+        throw new BadRequestException({ error: "versionId must identify a submitted version of this document" });
+      }
+      if (doc.reviewed_version_id) {
+        const reviewed = (await client.query("SELECT * FROM knowledge_document_versions WHERE id=$1 AND document_id=$2", [doc.reviewed_version_id, documentId])).rows[0];
+        if (reviewed?.snapshot_kind === decision && reviewed.snapshot_metadata?.sourceVersionId === versionId) {
+          return { doc, decidedVersionId: String(reviewed.id), sourceVersionId: versionId, replayed: true };
+        }
+      }
+      // A newer submission supersedes an older one even when the content is identical. Without
+      // this, a manager holding an older tab can bind an approval to a version the UI no longer
+      // shows as current, leaving the latest submission "awaiting" a decision that already exists.
+      const latestSubmitted = (await client.query(
+        `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted'
+          ORDER BY version_number DESC LIMIT 1`, [documentId]
+      )).rows[0];
+      if (latestSubmitted && String(latestSubmitted.id) !== versionId) {
+        throw new ConflictException({ code: "GOVERNED_VERSION_SUPERSEDED", error: "A newer submitted version exists; review that exact version instead" });
+      }
+      if (version.snapshot_metadata?.contentDigest !== knowledgeDocumentContentDigest(doc)) {
+        throw new ConflictException({ code: "DOCUMENT_REVISION_CONFLICT", error: "The document changed after this version was submitted; review the exact submitted version or submit a refreshed revision" });
+      }
+      const snapshot = await this.writeKnowledgeGovernedVersion(client, doc, uid, decision, doc.edit_revision, "human_session", null,
+        { authority: "governed_document_review", sourceVersionId: versionId, ...(reason ? { reason } : {}) });
+      const updated = (await client.query(
+        `UPDATE knowledge_documents SET status=$2, reviewed_by=$3, reviewed_at=now(), reviewed_version_id=$4, updated_at=now()
+          WHERE id=$1 AND project_id=$5 RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}`,
+        [documentId, decision, uid, snapshot.id, projectId]
+      )).rows[0];
+      await this.logProjectActivity(projectId, uid, decision === "approved" ? "governed_document_approved" : "governed_document_rejected",
+        "knowledge_document", documentId, doc.title,
+        { versionId: snapshot.id, sourceVersionId: versionId, ...(reason ? { reason } : {}) }, client);
+      return { doc: updated, decidedVersionId: String(snapshot.id), sourceVersionId: versionId, replayed: false };
+    });
+    return { ...toCamel(result.doc), decidedVersionId: result.decidedVersionId, sourceVersionId: result.sourceVersionId, replayed: result.replayed };
+  }
+
+  private isApprovedRequirementCase(row: Body, approvedVersionId: string | null): boolean {
+    return approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId
+      && row.testcase_revision === row.current_edit_revision && row.testcase_approval_revision != null
+      && row.testcase_approval_revision === row.current_approval_revision && row.approval_current === true;
+  }
+
+  /** Export one native, human-applied bundle item at its current approved basis. Read-only. */
+  async requirementAutomationHandoff(projectId: string, userId: string | null | undefined, taskId: string, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
+    const uid = this.requireUser(userId);
+    if (!isUuid(projectId) || !isUuid(taskId)) throw new NotFoundException({ error: "Requirement proposal not found" });
+    return this.db.transaction(async client => {
+      // Hold membership until the read finishes. All material basis data below shares one
+      // PostgreSQL statement snapshot, including the current case and both historical receipts.
+      const authority = await this.requireCurrentProjectAuthority(client, projectId, uid);
+      const { receiptId, proposalRevision, selectedIndex, requirementId, requirementVersionId, linkId,
+        testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = body ?? {};
+      const ids = [receiptId, requirementId, requirementVersionId, linkId, testcaseId];
+      const revisions = [proposalRevision, testcaseRevision, testcaseApprovalRevision];
+      if (!ids.every(id => typeof id === "string" && isUuid(id)) ||
+          !revisions.every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value)) ||
+          !Number.isSafeInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= MAX_TESTCASE_PROPOSAL_OPERATIONS ||
+          !Array.isArray(criterionKeys) || !criterionKeys.length || criterionKeys.length > REQUIREMENT_MAX_CRITERIA ||
+          !criterionKeys.every(key => typeof key === "string" && key.length > 0) ||
+          new Set(criterionKeys).size !== criterionKeys.length) {
+        throw new BadRequestException({ error: "Supply one exact applied operation, approved requirement and case link with their revisions and criterion keys" });
+      }
+      const unavailable = () => new ConflictException({ code: "AUTOMATION_HANDOFF_UNAVAILABLE",
+        error: "This selection has no current approved automation handoff. Review the selected bundle, requirement, case and link again." });
+      const row = (await client.query(
+        `SELECT r.requested_by, r.proposal_provenance, saved.receipt,
+                d.reviewed_version_id, v.snapshot_metadata AS version_metadata,
+                case_decision.id AS case_approval_receipt_id, case_decision.actor_id AS case_approver_id,
+                l.criterion_keys, l.requirement_version_id, l.testcase_revision, l.testcase_approval_revision,
+                testcases.id, testcases.external_id, testcases.title, testcases.description, testcases.preconditions, testcases.steps,
+                testcases.postconditions, testcases.test_data, testcases.automation_repo, testcases.automation_path,
+                testcases.automation_framework, testcases.automation_test_name,
+                ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
+                ${TESTCASE_APPROVAL_REVISION_SQL} AS current_approval_revision, ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current
+           FROM ai_generation_requests r
+           CROSS JOIN LATERAL jsonb_array_elements(r.save_events) saved(receipt)
+           JOIN knowledge_documents d ON d.project_id=r.project_id AND d.id=$4 AND d.is_deleted=false
+             AND d.document_type='requirement_note' AND d.source_provider IS NULL AND d.status='approved'
+           JOIN knowledge_document_versions v ON v.document_id=d.id AND v.id=d.reviewed_version_id
+             AND v.id=$5 AND v.snapshot_kind='approved' AND v.snapshot_metadata->>'authority'='requirement_review'
+             AND v.snapshot_metadata->>'actorKind'='human_session'
+           JOIN requirement_case_links l ON l.project_id=r.project_id AND l.requirement_id=d.id
+             AND l.id=$6 AND l.requirement_version_id=v.id AND l.state='active'
+           JOIN testcases ON testcases.id=l.testcase_id AND testcases.id=$7 AND testcases.project_id=r.project_id AND testcases.deleted_at IS NULL
+           JOIN requirement_case_links original_link ON original_link.id::text=saved.receipt->'link'->>'id'
+             AND original_link.requirement_id=d.id AND original_link.project_id=r.project_id
+             AND original_link.requirement_version_id::text=v.snapshot_metadata->>'sourceVersionId'
+             AND original_link.testcase_id=l.testcase_id AND original_link.criterion_keys=l.criterion_keys
+           JOIN LATERAL (SELECT ar.id, ar.actor_id FROM testcase_approval_receipts ar
+             WHERE ar.project_id=r.project_id AND ar.testcase_id=testcases.id AND ar.semantic_revision=$8
+               AND ar.principal_kind='human_session' AND ar.reviewed_snapshot IS NOT NULL
+             ORDER BY ar.created_at DESC, ar.id DESC LIMIT 1) case_decision ON TRUE
+           WHERE r.project_id=$1 AND r.id=$2 AND r.task_kind='governed_proposal' AND r.provider='external_requirement_proposal' AND r.task_status='done'
+             AND saved.receipt->>'id'=$3 AND saved.receipt->>'action'='requirement_bundle_apply'
+             AND saved.receipt->>'principalKind'='human_session'`,
+        [projectId, taskId, receiptId, requirementId, requirementVersionId, linkId, testcaseId, testcaseApprovalRevision]
+      )).rows[0];
+      if (!row || !this.isApprovedRequirementCase(row, row.reviewed_version_id)) throw unavailable();
+
+      const receipt = row.receipt, metadata = row.version_metadata;
+      const operations = normalizeJsonArray(receipt.proposalSnapshot?.operations);
+      const selected = operations[selectedIndex];
+      const link = operations.find(op => op.opType === "requirement_case_link");
+      const requirement = operations.find(op => op.opType === "requirement_revision");
+      // Native apply creates exactly one case and links its operation ID. Formal case approval
+      // changes the edit digest (Draft -> Approved); its semantic digest must still match the
+      // case returned by the original apply, including custom-field and tag dependencies.
+      if (receipt.proposalRevision !== proposalRevision || !isUuid(receipt.reviewerId) ||
+          selected?.opType !== "testcase_create" || !isUuid(selected.operationId) ||
+          link?.testcaseOperationId !== selected.operationId || !requirement || link.requirementOperationId !== requirement.operationId ||
+          receipt.testcase?.id !== row.id || receipt.testcase.approvalRevision !== row.current_approval_revision ||
+          receipt.requirement?.documentId !== requirementId || receipt.requirement.versionId !== metadata.sourceVersionId ||
+          receipt.link?.testcaseId !== row.id || receipt.link.requirementVersionId !== metadata.sourceVersionId ||
+          ![receipt.link.criterionKeys, link.criterionKeys, row.criterion_keys].every(keys => isDeepStrictEqual(keys, criterionKeys)) ||
+          row.current_edit_revision !== testcaseRevision || row.current_approval_revision !== testcaseApprovalRevision ||
+          !row.automation_repo?.trim() || !row.automation_path?.trim() ||
+          row.automation_framework?.trim().toLowerCase() !== "playwright") throw unavailable();
+
+      // The native writer accepts legacy action/result aliases and preserves arbitrary extra
+      // fields. Only a complete manual step can be handed to this generator. A richer shape,
+      // including a shared-step reference, needs its own resolver and review basis.
+      const manualStepFields = new Set(["stepNumber", "action", "step", "description", "expectedResult", "expected"]);
+      const steps = this.safeSteps(row.steps).map((entry, index) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw unavailable();
+        const step = entry as Body;
+        if (Object.keys(step).some(key => !manualStepFields.has(key))) throw unavailable();
+        const { action, expectedResult, stepNumber = index + 1 } = step;
+        if (typeof action !== "string" || !action.trim() || typeof expectedResult !== "string" || !expectedResult.trim() ||
+            !Number.isSafeInteger(stepNumber) || stepNumber < 1 ||
+            [step.step, step.description].some(alias => alias != null && alias !== "" && alias !== action) ||
+            (step.expected != null && step.expected !== "" && step.expected !== expectedResult)) throw unavailable();
+        return { stepNumber, action, expectedResult };
+      });
+      if (!steps.length) throw unavailable();
+      const producer = row.proposal_provenance ?? {};
+      const criteria = criterionKeys.map(key => normalizeJsonArray(metadata.criteria).find(item => item.key === key));
+      if (criteria.some(criterion => !criterion || typeof criterion.text !== "string" || !criterion.text.trim())) throw unavailable();
+      return {
+        projectId, taskId, receiptId, proposalRevision, selectedIndex, requirementId, requirementVersionId, linkId,
+        testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys, criteria: criteria.map(({ key, text }) => ({ key, text })),
+        testcase: { id: row.id, externalId: row.external_id, title: row.title, description: row.description, preconditions: row.preconditions, steps,
+          postconditions: row.postconditions, testData: row.test_data, automationRepo: row.automation_repo, automationPath: row.automation_path,
+          automationFramework: row.automation_framework, automationTestName: row.automation_test_name },
+        provenance: { requestedBy: row.requested_by,
+          producer: { kind: producer.kind, issuerId: producer.issuerId, tokenId: producer.tokenId, actorId: producer.actorId },
+          reviewerId: receipt.reviewerId, requirementApproverId: metadata.actorId, caseApprovalReceiptId: row.case_approval_receipt_id,
+          caseApproverId: row.case_approver_id, exportedBy: uid, exporterRole: this.normalizeRole(authority.caller_role),
+          operationId: selected.operationId, submittedVersionId: metadata.sourceVersionId, appliedSkillDigest: receipt.skillContext?.digest ?? null,
+          appliedSkills: normalizeJsonArray(receipt.skillContext?.assignments).map(({ target, assignmentId, skillDocumentId, skillVersionId, contentDigest }) =>
+            ({ target: { module: target.module, subtype: target.subtype, operation: target.operation },
+              assignmentId, skillDocumentId, skillVersionId, contentDigest })) }
+      };
+    });
+  }
+
+  /** Authored/approved/executed/passing remain distinct; only persisted exact-basis attempts qualify. */
+  async requirementCoverage(projectId: string, userId: string | null | undefined, documentId: string) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    if (!isUuid(documentId)) throw new NotFoundException({ error: "Requirement not found" });
+    const doc = (await this.db.query(
+      `SELECT d.id,d.title,d.content_json,d.reviewed_version_id,d.document_type,d.source_provider,
+              v.snapshot_metadata->'carryForwardLinks' AS approved_carry_forward
+         FROM knowledge_documents d
+         LEFT JOIN knowledge_document_versions v ON v.id=d.reviewed_version_id AND v.document_id=d.id AND v.snapshot_kind='approved'
+        WHERE d.id=$1 AND d.project_id=$2 AND d.is_deleted=false`, [documentId, projectId]
+    )).rows[0];
+    if (!doc || doc.document_type !== "requirement_note" || doc.source_provider) throw new NotFoundException({ error: "Native requirement not found" });
+    const approvedVersionId = doc.reviewed_version_id ? String(doc.reviewed_version_id) : null;
+    const latestSubmittedRow = (await this.db.query(
+      `SELECT id FROM knowledge_document_versions WHERE document_id=$1 AND snapshot_kind='submitted' ORDER BY version_number DESC LIMIT 1`, [documentId]
+    )).rows[0];
+    const latestSubmitted = latestSubmittedRow ? String(latestSubmittedRow.id) : null;
+    // Selected historical links are actionable before rebind, but are not current coverage.
+    // Read only the exact source IDs pinned by the current approved snapshot.
+    const selectedLinkIds = normalizeJsonArray(doc.approved_carry_forward)
+      .map((entry: Body) => String(entry?.linkId || "")).filter(isUuid);
+    const rows = (await this.db.query(
+      `SELECT l.id, l.criterion_keys, l.testcase_id, l.testcase_revision, l.testcase_approval_revision,
+              l.requirement_version_id, testcases.title,
+              ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision,
+              ${TESTCASE_APPROVAL_REVISION_SQL} AS current_approval_revision,
+              ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current,
+              attempt.attempt_count, attempt.latest_status, attempt.latest_at, attempt.conflicting_attempts,
+              attempt.latest_execution_id, attempt.latest_cycle_id
+         FROM requirement_case_links l
+         JOIN testcases ON testcases.id=l.testcase_id AND testcases.project_id=l.project_id
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::int AS attempt_count,
+                  (ARRAY_AGG(e.status ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_status,
+                  MAX(e.executed_at) AS latest_at,
+                  (ARRAY_AGG(e.id ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_execution_id,
+                  (ARRAY_AGG(ci.cycle_id ORDER BY e.executed_at DESC, e.id DESC))[1] AS latest_cycle_id,
+                  BOOL_OR(e.status='Passed') AND BOOL_OR(e.status='Failed') AS conflicting_attempts
+             FROM executions e
+             JOIN cycle_items ci ON ci.id=e.cycle_item_id AND ci.testcase_id=l.testcase_id
+             JOIN cycles c ON c.id=ci.cycle_id AND c.project_id=l.project_id
+            WHERE e.deleted_at IS NULL AND e.executed_at IS NOT NULL AND e.executed_by IS NOT NULL
+              AND l.testcase_approval_revision IS NOT NULL
+              AND ci.snapshot_approval_revision = l.testcase_approval_revision
+         ) attempt ON true
+        WHERE l.project_id=$1 AND l.requirement_id=$2 AND l.state='active'
+          AND (l.requirement_version_id = ANY($3::uuid[]) OR l.id = ANY($4::uuid[]))
+        ORDER BY l.testcase_id,l.id`,
+      [projectId, documentId, [approvedVersionId, latestSubmitted].filter(Boolean), selectedLinkIds]
+    )).rows;
+    const criteria = normalizeJsonArray((doc.content_json as Body | null)?.criteria);
+    const projectCase = (row: Body) => {
+      const onApprovedVersion = approvedVersionId !== null && String(row.requirement_version_id) === approvedVersionId;
+      const approved = this.isApprovedRequirementCase(row, approvedVersionId);
+      const executed = approved && Number(row.attempt_count || 0) > 0;
+      return {
+        linkId: String(row.id), testcaseId: String(row.testcase_id), title: String(row.title),
+        criterionKeys: normalizeJsonArray(row.criterion_keys).map(String), requirementVersionId: String(row.requirement_version_id),
+        testcaseRevision: String(row.testcase_revision),
+        testcaseApprovalRevision: row.testcase_approval_revision == null ? null : String(row.testcase_approval_revision),
+        authored: true, approved, executed, passing: executed && row.latest_status === "Passed",
+        latestAttempt: row.latest_status ? {
+          status: String(row.latest_status), executedAt: row.latest_at,
+          executionId: row.latest_execution_id ? String(row.latest_execution_id) : null,
+          cycleId: row.latest_cycle_id ? String(row.latest_cycle_id) : null
+        } : null,
+        attemptCount: Number(row.attempt_count || 0), conflictingAttempts: row.conflicting_attempts === true,
+        reasons: [
+          ...(onApprovedVersion ? [] : ["REQUIREMENT_VERSION_SUPERSEDED"]),
+          ...(approved || !onApprovedVersion ? [] : ["CASE_REVISION_CHANGED_OR_NOT_APPROVED"]),
+          ...(executed || !approved ? [] : ["NO_QUALIFYING_ATTEMPT"])
+        ]
+      };
+    };
+    const isCurrentBasis = (row: Body) => [approvedVersionId, latestSubmitted].includes(String(row.requirement_version_id));
+    const cases = rows.filter(isCurrentBasis).map(projectCase);
+    const pendingCarryForwardCases = rows.filter((row: Body) => !isCurrentBasis(row) && selectedLinkIds.includes(String(row.id)))
+      .map((row: Body) => ({ ...projectCase(row), authored: false, approved: false, executed: false, passing: false,
+        latestAttempt: null, attemptCount: 0, conflictingAttempts: false, reasons: ["REVIEWED_CARRY_FORWARD_PENDING"] }));
+    const summary = criteria.map((criterion: Body) => {
+      const key = String(criterion.key);
+      const linked = cases.filter(item => item.criterionKeys.includes(key));
+      return {
+        key, text: String(criterion.text || ""), authored: linked.length > 0,
+        approved: linked.some(item => item.approved), executed: linked.some(item => item.executed),
+        passing: linked.some(item => item.passing), mixed: linked.some(item => item.conflictingAttempts),
+        caseCount: linked.length
+      };
+    });
+    return {
+      requirementId: documentId, approvedVersionId, latestSubmittedVersionId: latestSubmitted,
+      readings: {
+        authored: cases.length > 0,
+        approved: approvedVersionId !== null && cases.some(item => item.approved),
+        executed: cases.some(item => item.executed),
+        passing: cases.some(item => item.passing),
+        mixed: cases.some(item => item.conflictingAttempts)
+      },
+      criteria: summary, cases, pendingCarryForwardCases,
+      basis: "Current approved requirement version and its exact active links; historical attempts remain readable and are not deleted."
+    };
+  }
+
+  private escapeProposalHtml(value: string): string {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  private async kbRootFolderId(client: PoolClient, projectId: string, organizationId: string): Promise<string> {
+    const existing = (await client.query("SELECT id FROM knowledge_folders WHERE project_id=$1 AND is_root=true AND is_deleted=false LIMIT 1", [projectId])).rows[0];
+    if (existing) return String(existing.id);
+    return String((await client.query(
+      `INSERT INTO knowledge_folders(organization_id,project_id,name,is_root) VALUES ($1,$2,'Knowledge base',true) RETURNING id`,
+      [organizationId, projectId]
+    )).rows[0].id);
+  }
+
+  private async allocateRequirementKey(client: PoolClient, projectId: string): Promise<string> {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const key = `REQ-${randomUUID().replaceAll("-", "").slice(0, 8 + attempt).toUpperCase()}`;
+      const taken = await client.query("SELECT 1 FROM requirement_profiles WHERE project_id=$1 AND requirement_key=$2", [projectId, key]);
+      if (!taken.rows[0]) return key;
+    }
+    throw new ConflictException({ error: "Could not allocate a requirement key" });
+  }
+
+  /** Apply one reviewed requirement revision as an immutable submitted KB version. */
+  private async applyRequirementRevision(client: PoolClient, projectId: string, uid: string, operation: Body, skillContext: SkillResolution) {
+    const title = String(operation.title || "").trim();
+    const description = typeof operation.description === "string" ? operation.description : "";
+    const criteria = normalizeJsonArray(operation.criteria);
+    const contentJson = { schemaVersion: "tesbo-requirement/1", description, criteria };
+    const contentText = [title, description, ...criteria.map((criterion: Body) => `${criterion.key}: ${criterion.text}`)].filter(Boolean).join("\n");
+    const contentHtml = `<h1>${this.escapeProposalHtml(title)}</h1><p>${this.escapeProposalHtml(description)}</p><ul>${criteria.map((criterion: Body) => `<li><strong>${this.escapeProposalHtml(String(criterion.key))}</strong> ${this.escapeProposalHtml(String(criterion.text))}</li>`).join("")}</ul>`;
+    let doc: Body;
+    if (operation.documentId) {
+      const current = (await client.query(
+        `SELECT ${LegacyService.KB_DOCUMENT_COLUMNS}, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision
+           FROM knowledge_documents WHERE id=$1 AND project_id=$2 FOR UPDATE`, [operation.documentId, projectId]
+      )).rows[0];
+      if (!current || current.is_deleted) throw new NotFoundException({ error: "Requirement document not found in this project" });
+      if (current.document_type !== "requirement_note") throw new BadRequestException({ code: "REQUIREMENT_DOCUMENT_TYPE", error: "The target document is not a requirement note" });
+      if (current.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement is read-only and cannot be revised natively" });
+      if (String(current.edit_revision) !== String(operation.expectedRevision)) throw new ConflictException({ code: "REQUIREMENT_REVISION_CONFLICT", error: "The requirement changed since this revision was based on it" });
+      doc = (await client.query(
+        `UPDATE knowledge_documents
+            SET title=$2, content_json=$3::jsonb, content_html=$4, content_text=$5, updated_by=$6, updated_at=now(),
+                status='draft', reviewed_by=NULL, reviewed_at=NULL, reviewed_version_id=NULL
+          WHERE id=$1 AND project_id=$7
+          RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision`,
+        [operation.documentId, title, JSON.stringify(contentJson), contentHtml, contentText, uid, projectId]
+      )).rows[0];
+      await client.query("UPDATE requirement_profiles SET state='active', updated_at=now() WHERE document_id=$1", [operation.documentId]);
+    } else {
+      const folderId = await this.kbRootFolderId(client, projectId, String((await client.query("SELECT organization_id FROM projects WHERE id=$1", [projectId])).rows[0].organization_id));
+      const requirementKey = await this.allocateRequirementKey(client, projectId);
+      doc = (await client.query(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_json, content_html, content_text, document_type, status, created_by, updated_by)
+         SELECT organization_id,id,$2,$3,$4::jsonb,$5,$6,'requirement_note','draft',$7,$7 FROM projects WHERE id=$1
+         RETURNING ${LegacyService.KB_DOCUMENT_COLUMNS}, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision`,
+        [projectId, folderId, title, JSON.stringify(contentJson), contentHtml, contentText, uid]
+      )).rows[0];
+      await client.query("INSERT INTO requirement_profiles(document_id,project_id,requirement_key,state) VALUES ($1,$2,$3,'active')", [doc.id, projectId, requirementKey]);
+    }
+    const version = await this.writeKnowledgeGovernedVersion(client, doc, uid, "submitted", String(doc.edit_revision), "human_session", String(operation.operationId),
+      { authority: "requirement_candidate", criteria, skillContext, carryForwardLinks: operation.carryForwardLinks });
+    return { documentId: String(doc.id), versionId: String(version.id), versionNumber: Number(version.version_number),
+      editRevision: String(doc.edit_revision), organizationId: String(doc.organization_id) };
+  }
+
+  private taskHasRequirementBundle(payload: unknown): boolean {
+    return normalizeJsonArray(payload).some(entry => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
+  }
+
+  private isRequirementBundleTask(row: Body): boolean {
+    // The immutable producer kind remains a boundary even if old code damaged a bundle's payload.
+    return row.provider === "external_requirement_proposal" || this.taskHasRequirementBundle(row.generated_payload);
+  }
+
+  private taskRowForRead(row: Body): Body {
+    const item = toCamel(row as QueryResultRow);
+    if (this.isRequirementBundleTask(row)) {
+      // The historical save events contain the original snapshots and decision digests. Both
+      // the task detail and history expose the bounded receipt used to reopen the applied case.
+      item.requirementApplyReceipt = this.requirementApplyReceipt(row);
+      delete item.saveEvents;
+    }
+    return item;
+  }
+
+  private requirementDecisionReceipt(row: Body): Body | null {
+    return normalizeJsonArray(row.activity_log).find((entry: Body) => entry.kind === "requirement_bundle_decision")?.decisionReceipt || null;
+  }
+
+  /**
+   * The bounded apply receipt the Zyra task surface may use to reopen the exact submitted
+   * requirement version. `save_events` also carries the full proposal snapshot, pinned skills and
+   * decision digest; none of that is needed to review the published version, so it is not exposed.
+   * The last matching apply wins, which is the one that moved the task to done.
+   */
+  private requirementApplyReceipt(row: Body): Body | null {
+    const receipt = normalizeJsonArray(row.save_events)
+      .filter((event: Body) => event?.action === "requirement_bundle_apply" && event?.requirement?.documentId && event?.requirement?.versionId)
+      .sort((left: Body, right: Body) => String(left.appliedAt || "").localeCompare(String(right.appliedAt || "")))
+      .pop();
+    if (!receipt) return null;
+    const requirement = receipt.requirement as Body;
+    const testcase = receipt.testcase as Body | null;
+    const link = receipt.link as Body | null;
+    const operations = normalizeJsonArray(receipt.proposalSnapshot?.operations);
+    const linkIntent = operations.find(op => op.opType === "requirement_case_link");
+    const selectedIndex = operations.findIndex(op => op.opType === "testcase_create" && op.operationId === linkIntent?.testcaseOperationId);
+    return {
+      ...(selectedIndex >= 0 && testcase?.id && link?.id && receipt.principalKind === "human_session" ?
+        { id: receipt.id, proposalRevision: receipt.proposalRevision, selectedIndex } : {}),
+      requirement: {
+        documentId: String(requirement.documentId),
+        versionId: String(requirement.versionId),
+        versionNumber: requirement.versionNumber ?? null,
+        editRevision: requirement.editRevision ?? null
+      },
+      testcase: testcase?.id ? {
+        id: String(testcase.id), title: testcase.title ?? null, editRevision: testcase.editRevision ?? null
+      } : null,
+      link: link?.id ? {
+        id: String(link.id), criterionKeys: normalizeJsonArray(link.criterionKeys).map(String)
+      } : null,
+      appliedAt: receipt.appliedAt ?? null
+    };
+  }
+
+  private assertOrdinaryProposalMutation(row: Body): void {
+    if (this.isRequirementBundleTask(row)) throw new ConflictException({ code: "REQUIREMENT_BUNDLE_IMMUTABLE",
+      error: "Requirement bundles are immutable. Review the exact bundle and use its authorized Reject or Withdraw action." });
+    if (row.provider === "external_document_proposal") throw new ConflictException({ code: "MANAGED_DOCUMENT_PROPOSAL_IMMUTABLE",
+      error: "Governed document candidates are immutable. Use the owner/manager Apply or Reject action." });
+  }
+
+  private assertGuardedPublicationAvailable(row: Body): void {
+    if (!this.isRequirementBundleTask(row)) return;
+    throw new ConflictException({
+      code: "SKILL_CONTEXT_UNAVAILABLE",
+      error: "Requirement change bundles cannot be applied while the required approved effective skills are unavailable. Review, reject or withdraw the exact staged revision; nothing was published."
+    });
+  }
+
+  private async assertRequirementDocumentBase(client: PoolClient, projectId: string, documentId: string, expectedRevision: string) {
+    if (!isUuid(documentId)) throw new BadRequestException({ error: "documentId must be a requirement document id" });
+    if (!/^[a-f0-9]{64}$/.test(expectedRevision)) throw new BadRequestException({ error: "A revision of an existing requirement requires expectedRevision" });
+    const row = (await client.query(
+      `SELECT id, ${KNOWLEDGE_DOCUMENT_REVISION_SQL} AS edit_revision, document_type, source_provider, is_deleted
+         FROM knowledge_documents WHERE id=$1 AND project_id=$2 FOR SHARE`, [documentId, projectId]
+    )).rows[0];
+    if (!row || row.is_deleted) throw new NotFoundException({ error: "Requirement document not found in this project" });
+    if (row.document_type !== "requirement_note") throw new BadRequestException({ code: "REQUIREMENT_DOCUMENT_TYPE", error: "The target document is not a requirement note" });
+    if (row.source_provider) throw new ConflictException({ code: "REQUIREMENT_EXTERNAL_OWNED", error: "A provider-synced requirement is read-only and cannot be revised natively" });
+    if (row.edit_revision !== expectedRevision) throw new ConflictException({ code: "REQUIREMENT_REVISION_CONFLICT", error: "The requirement changed since this revision was based on it" });
+  }
+
+  /** A selection is an intent, never a caller-supplied Skill authorization. */
+  private normalizeRequirementCarryForward(raw: unknown, keys: Set<string>): Body[] {
+    if (!Array.isArray(raw) || raw.length > REQUIREMENT_MAX_CRITERIA) {
+      throw new BadRequestException({ error: "carryForwardLinks must be an array of at most 50 existing link selections" });
+    }
+    const ids = new Set<string>(), groups = new Set<string>();
+    return raw.map(value => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new BadRequestException({ error: "Invalid carry-forward selection" });
+      const item = value as Body;
+      const { linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = item;
+      if (Object.keys(item).some(key => !["linkId", "requirementVersionId", "testcaseId", "testcaseRevision", "testcaseApprovalRevision", "criterionKeys"].includes(key))
+        || ![linkId, requirementVersionId, testcaseId].every(id => typeof id === "string" && isUuid(id))
+        || ![testcaseRevision, testcaseApprovalRevision].every(rev => typeof rev === "string" && /^[a-f0-9]{64}$/.test(rev))
+        || !Array.isArray(criterionKeys) || !criterionKeys.length || criterionKeys.length > REQUIREMENT_MAX_CRITERIA
+        || !criterionKeys.every(key => typeof key === "string" && keys.has(key))
+        || new Set(criterionKeys).size !== criterionKeys.length) {
+        throw new BadRequestException({ error: "Select exact existing link, requirement version, approved case revisions and ordered criteria in this revision" });
+      }
+      const group = JSON.stringify([testcaseId.toLowerCase(), criterionKeys]);
+      if (ids.has(linkId.toLowerCase()) || groups.has(group)) throw new BadRequestException({ error: "Duplicate carry-forward link group" });
+      ids.add(linkId.toLowerCase()); groups.add(group);
+      return { linkId: linkId.toLowerCase(), requirementVersionId: requirementVersionId.toLowerCase(), testcaseId: testcaseId.toLowerCase(),
+        testcaseRevision, testcaseApprovalRevision, criterionKeys };
+    });
+  }
+
+  /** Resolve the selected source from persisted native records, locking the current case basis.
+   * Caller holds the existing project Skill lock and the requirement document lock. Reused at
+   * stage, apply and approval; the returned historical basis is part of the exact reviewed payload.
+   */
+  private async reviewRequirementCarryForward(client: PoolClient, projectId: string, documentId: string, criteria: unknown, selections: Body[]): Promise<Body[]> {
+    const keys = new Set(normalizeJsonArray(criteria).map((criterion: Body) => String(criterion.key)));
+    const result: Body[] = [];
+    const unavailable = () => new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "An existing selected link or its approved case basis is unavailable or changed; review a refreshed selection." });
+    for (const selected of selections) {
+      const link = (await client.query(
+        "SELECT * FROM requirement_case_links WHERE id=$1 AND project_id=$2 AND requirement_id=$3 FOR UPDATE",
+        [selected.linkId, projectId, documentId]
+      )).rows[0];
+      if (!link || link.state !== "active" || String(link.requirement_version_id) !== selected.requirementVersionId
+        || String(link.testcase_id) !== selected.testcaseId
+        || JSON.stringify(link.criterion_keys) !== JSON.stringify(selected.criterionKeys)
+        || !selected.criterionKeys.every((key: string) => keys.has(key))) throw unavailable();
+      const lockedCase = (await client.query("SELECT id FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE", [selected.testcaseId, projectId])).rows[0];
+      if (!lockedCase) throw unavailable();
+      const current = (await client.query(
+        `SELECT ${TESTCASE_EDIT_REVISION_SQL} AS edit_revision, ${TESTCASE_APPROVAL_REVISION_SQL} AS approval_revision,
+                ${TESTCASE_APPROVAL_CURRENT_SQL} AS approval_current FROM testcases WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`,
+        [selected.testcaseId, projectId]
+      )).rows[0];
+      if (!current || !current.approval_current || String(current.edit_revision) !== selected.testcaseRevision
+        || String(current.approval_revision) !== selected.testcaseApprovalRevision) throw unavailable();
+      // The originating reviewed basis must exist, but need not still be effective: a fresh
+      // explicit review may intentionally choose a newly assigned Skill. Never synthesize it.
+      const origin = (await client.query(
+        `SELECT v.id,v.snapshot_metadata FROM knowledge_document_versions v
+           WHERE v.document_id=$1 AND v.snapshot_kind='approved'
+             AND (v.id=$2 OR v.snapshot_metadata->>'sourceVersionId'=$2::text)
+           ORDER BY CASE WHEN v.id=$2 THEN 0 ELSE 1 END,v.version_number DESC LIMIT 1`,
+        [documentId, selected.requirementVersionId]
+      )).rows[0];
+      const originLinkSkill = reviewedSkillTarget(origin?.snapshot_metadata?.skillContext, REQUIREMENT_SKILL_TARGETS.requirement_case_link);
+      if (!origin || !originLinkSkill) throw unavailable();
+      const { linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys } = selected;
+      const orderedCriteria = (value: unknown) => criterionKeys.map((key: string) => {
+        const criterion = normalizeJsonArray(value).find((item: Body) => item?.key === key);
+        if (!criterion || typeof criterion.text !== "string") throw unavailable();
+        return { key, text: criterion.text, normative: criterion.normative !== false };
+      });
+      result.push({ linkId, requirementVersionId, testcaseId, testcaseRevision, testcaseApprovalRevision, criterionKeys,
+        originatingApprovedVersionId: String(origin.id), originatingLinkSkill: originLinkSkill,
+        originatingCriteria: orderedCriteria(origin.snapshot_metadata?.criteria), proposedCriteria: orderedCriteria(criteria),
+        sourceTestcaseRevision: String(link.testcase_revision), sourceTestcaseApprovalRevision: link.testcase_approval_revision == null ? null : String(link.testcase_approval_revision) });
+    }
+    return result;
+  }
+
+  private async assertRequirementLinkAuthority(client: PoolClient, projectId: string, documentId: string, requirementVersionId: string,
+    link: Body, expectedCaseRevision: string, expectedApprovalRevision: string) {
+    const approved = (await client.query(
+      "SELECT snapshot_metadata FROM knowledge_document_versions WHERE id=$1 AND document_id=$2 AND snapshot_kind='approved'",
+      [requirementVersionId, documentId]
+    )).rows[0];
+    const metadata = approved?.snapshot_metadata;
+    const pinned = metadata?.skillContext;
+    const assignments = normalizeJsonArray(pinned?.assignments);
+    const missingReview = () => new ConflictException({ code: "SKILL_LINK_REVIEW_REQUIRED", error: "This link has no current reviewed Skill authority. Stage and review a requirement revision with the exact existing link selected." });
+    if (!approved || !reviewedSkillTarget(pinned, REQUIREMENT_SKILL_TARGETS.requirement_case_link)) throw missingReview();
+    const sameVersion = String(link.requirement_version_id) === requirementVersionId
+      || String(link.requirement_version_id) === String(metadata.sourceVersionId);
+    const selected = normalizeJsonArray(metadata.carryForwardLinks).find((entry: Body) =>
+      String(entry.testcaseId) === String(link.testcase_id) && JSON.stringify(entry.criterionKeys) === JSON.stringify(link.criterion_keys));
+    if (selected) {
+      // A carried group stays bounded to the case basis reviewed with this revision. The old
+      // selected row is retired on activation; a replay must still name its exact lineage.
+      if ((!sameVersion && String(selected.linkId) !== String(link.id))
+        || selected.testcaseRevision !== expectedCaseRevision || selected.testcaseApprovalRevision !== expectedApprovalRevision) throw missingReview();
+    } else if (!sameVersion) throw missingReview();
+    const targets = assignments.map((entry: Body) => entry?.target)
+      .filter((target: Body) => target && typeof target.module === "string" && typeof target.subtype === "string" && typeof target.operation === "string");
+    const current = await resolveEffectiveSkills(client, projectId, targets);
+    this.assertCurrentSkillContext(pinned, current);
+    return { skillContext: current, sourceVersionId: metadata.sourceVersionId, carriedSourceLinkId: selected?.linkId ?? null,
+      originatingApprovedVersionId: selected?.originatingApprovedVersionId ?? requirementVersionId };
+  }
+
+  private normalizeRequirementBundle(rawOperations: unknown) {
+    if (!Array.isArray(rawOperations) || rawOperations.length < 1 || rawOperations.length > 3) {
+      throw new BadRequestException({ error: "operations must contain a requirement_revision, optional testcase_create and optional requirement_case_link" });
+    }
+    const seen = new Set<string>();
+    let requirement: Body | null = null;
+    let testcase: Body | null = null;
+    let link: Body | null = null;
+    const operations = rawOperations.map((raw: unknown) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BadRequestException({ error: "Each operation must be an object" });
+      const entry = raw as Body;
+      const opType = String(entry.opType || "");
+      if (!REQUIREMENT_BUNDLE_OPERATION_KINDS.has(opType)) throw new BadRequestException({ error: "Unsupported requirement bundle operation" });
+      const operationId = String(entry.operationId || "");
+      if (!isUuid(operationId) || seen.has(operationId)) throw new BadRequestException({ error: "Each operation requires a unique operationId UUID" });
+      seen.add(operationId);
+      const reason = typeof entry.reason === "string" ? entry.reason.slice(0, 4000) : "";
+      if (opType === "requirement_revision") {
+        if (requirement) throw new BadRequestException({ error: "A bundle contains exactly one requirement_revision" });
+        const title = typeof entry.title === "string" ? entry.title.trim() : "";
+        if (!title || title.length > 512) throw new BadRequestException({ error: "A requirement revision requires a title of at most 512 characters" });
+        const description = typeof entry.description === "string" ? entry.description.slice(0, 20000) : "";
+        const criteria = Array.isArray(entry.criteria) ? entry.criteria : [];
+        if (!criteria.length || criteria.length > REQUIREMENT_MAX_CRITERIA) throw new BadRequestException({ error: `A requirement revision requires 1–${REQUIREMENT_MAX_CRITERIA} criteria` });
+        const keys = new Set<string>();
+        const normalizedCriteria = criteria.map((criterion: unknown) => {
+          if (!criterion || typeof criterion !== "object" || Array.isArray(criterion)) throw new BadRequestException({ error: "Each criterion must be an object" });
+          const item = criterion as Body;
+          const key = String(item.key || "").trim();
+          const text = typeof item.text === "string" ? item.text.trim() : "";
+          if (!REQUIREMENT_CRITERION_KEY.test(key) || keys.has(key)) throw new BadRequestException({ error: "Criterion keys must be unique identifiers (1–32 characters)" });
+          if (!text || text.length > 4000) throw new BadRequestException({ error: "Each criterion requires text of at most 4000 characters" });
+          keys.add(key);
+          return { key, text, normative: item.normative === undefined ? true : item.normative === true };
+        });
+        const documentId = entry.documentId === undefined ? null : String(entry.documentId);
+        const expectedRevision = entry.expectedRevision === undefined ? null : String(entry.expectedRevision);
+        if (documentId && !expectedRevision) throw new BadRequestException({ error: "Revising an existing requirement requires expectedRevision" });
+        const carryForwardLinks = entry.carryForwardLinks === undefined ? undefined
+          : this.normalizeRequirementCarryForward(entry.carryForwardLinks, keys);
+        if (carryForwardLinks?.length && !documentId) throw new BadRequestException({ error: "Carrying existing links requires an existing requirement" });
+        requirement = { opType, operationId, documentId, expectedRevision, title, description, criteria: normalizedCriteria, reason,
+          ...(carryForwardLinks === undefined ? {} : { carryForwardLinks }) };
+        return requirement;
+      }
+      if (opType === "testcase_create") {
+        if (testcase) throw new BadRequestException({ error: "A bundle contains at most one testcase_create" });
+        const input = entry.draft ?? entry.fields ?? {};
+        if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).some(key => !TESTCASE_PROPOSAL_FIELDS.has(key))) {
+          throw new BadRequestException({ error: "The testcase candidate must use the native testcase field contract" });
+        }
+        const fields = this.normalizeProposalCaseFields(input);
+        if (typeof fields.title !== "string" || !fields.title.trim()) throw new BadRequestException({ error: "A testcase candidate requires title" });
+        if (fields.status !== undefined && fields.status !== "Draft") throw new BadRequestException({ error: "A testcase candidate must be a Draft proposal" });
+        testcase = { opType, operationId, draft: { ...fields, status: "Draft" }, reason };
+        return testcase;
+      }
+      if (link) throw new BadRequestException({ error: "A bundle contains at most one requirement_case_link" });
+      const requirementOperationId = String(entry.requirementOperationId || "");
+      const testcaseOperationId = String(entry.testcaseOperationId || "");
+      const criterionKeys = Array.isArray(entry.criterionKeys) ? entry.criterionKeys.map((key: unknown) => String(key)) : [];
+      if (!Array.isArray(entry.criterionKeys) || !criterionKeys.length || criterionKeys.length > REQUIREMENT_MAX_CRITERIA) {
+        throw new BadRequestException({ error: "A link intent requires 1–50 criterion keys" });
+      }
+      link = { opType, operationId, requirementOperationId, testcaseOperationId, criterionKeys, reason };
+      return link;
+    });
+    if (!requirement) throw new BadRequestException({ error: "A bundle requires one requirement_revision" });
+    if (link) {
+      const requirementKeys = new Set((requirement as Body).criteria.map((criterion: Body) => criterion.key));
+      if (!operations.some((entry: Body) => entry.operationId === (link as Body).requirementOperationId && entry.opType === "requirement_revision")) {
+        throw new BadRequestException({ error: "The link intent must reference the bundle's requirement revision" });
+      }
+      if (!testcase || !operations.some((entry: Body) => entry.operationId === (link as Body).testcaseOperationId && entry.opType === "testcase_create")) {
+        throw new BadRequestException({ error: "The link intent must reference a testcase candidate in this bundle" });
+      }
+      const unknown = (link as Body).criterionKeys.filter((key: string) => !requirementKeys.has(key));
+      if (unknown.length) throw new BadRequestException({ error: `The link intent names criteria that are not in the requirement revision: ${unknown.join(", ")}` });
+    }
+    // The assignments happen inside the map callback, which TypeScript's control-flow analysis
+    // does not follow; the runtime values are validated above.
+    return { operations, requirement: requirement as Body, testcase: testcase as unknown as Body | null, link: link as unknown as Body | null };
+  }
+
+  async listTestcaseProposals(projectId: string, userId: string | null | undefined, query: Body = {}) {
+    await this.requireProjectAccess(this.requireUser(userId), projectId);
+    const rows = await this.db.query("SELECT id FROM ai_generation_requests WHERE project_id=$1 AND task_status='in_review' AND task_kind IN ('legacy_generation_review','governed_proposal') AND provider IS DISTINCT FROM 'external_document_proposal' ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3", [projectId, pageNumber(query.limit, 25, 1, 100), pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER)]);
+    return { list: await Promise.all(rows.rows.map(row => this.zyraTask(projectId, userId, String(row.id)))) };
+  }
+
+  private async requireProposalAuthority(client: PoolClient, projectId: string, uid: string, lock = true) {
+    const access = await this.requireCurrentProjectAuthority(client, projectId, uid, lock);
+    if (!this.parseRole(access.caller_role) || !this.parseRole(access.workspace_role)) throw new ForbiddenException({error:"A current authoring role is required"});
+    if (!this.normalizeZyraCapabilities(this.parseProjectSettings(access.settings).zyraAgent?.capabilities).testcaseStorage) {
+      throw new ForbiddenException({ error: "Testcase proposal storage is disabled for this project" });
+    }
+    return access;
+  }
+
+  /** Both native proposal inlets recheck the same current producer and MCP consent authority. */
+  private async requireCurrentProposalProducer(client: PoolClient, projectId: string, uid: string,
+    principal: TestcaseProposalPrincipal, authority: Body, toolName: string) {
+    if (!this.parseRole(authority.caller_role) || !this.parseRole(authority.workspace_role)) {
+      throw new ForbiddenException({ error: "A current authoring role is required" });
+    }
+    if (principal.kind !== "api_token") return;
+    const token = await client.query("SELECT scopes FROM api_tokens WHERE id=$1 AND project_id=$2 AND user_id=$3 FOR SHARE", [principal.tokenId, projectId, uid]);
+    if (!token.rows[0] || !normalizeApiTokenScopes(token.rows[0].scopes).includes("write")) {
+      throw new ForbiddenException({ error: "A current write-scoped project token is required" });
+    }
+    if (principal.transport !== "mcp") return;
+    let access;
+    try { access = readMcpAccess(authority.settings); } catch { access = null; }
+    const grant = access?.clients.find(client => "tokenId" in client && client.tokenId === principal.tokenId!.toLowerCase());
+    if (!access?.enabled || !grant?.scopes.includes("write") || grant.expiresAt && Date.parse(grant.expiresAt) <= Date.now() ||
+        grant.allowedTools && !grant.allowedTools.includes(toolName)) {
+      throw new ForbiddenException({ error: "Current project consent for this MCP proposal client is required" });
+    }
+  }
+
+  private normalizeProposalCaseFields(input: Body): Body {
+    const fields = { ...input };
+    this.assertTestcaseFieldLengths(fields);
+    if (fields.steps !== undefined && fields.stepsJson !== undefined) throw new BadRequestException({ error: "Use steps or stepsJson, not both" });
+    if (fields.steps !== undefined || fields.stepsJson !== undefined) {
+      fields.steps = JSON.stringify(this.safeSteps(fields.steps ?? fields.stepsJson));
+      delete fields.stepsJson;
+    }
+    if (fields.sourceRefs !== undefined) fields.sourceRefs = LegacyService.sanitizeSourceRefsInput(fields.sourceRefs);
+    if (fields.customTagIds !== undefined && (!Array.isArray(fields.customTagIds) || fields.customTagIds.some((id: unknown) => !isUuid(String(id))))) throw new BadRequestException({ error: "customTagIds must contain valid tag ids" });
+    if (fields.customFieldValues !== undefined && (!fields.customFieldValues || typeof fields.customFieldValues !== "object" || Array.isArray(fields.customFieldValues))) throw new BadRequestException({ error: "customFieldValues must be an object" });
+    this.normalizeEstimatedDuration(fields.estimatedDuration);
+    return fields;
+  }
+
+  private async assertProposalReferences(client: PoolClient, projectId: string, fields: Body) {
+    await this.assertTestcaseSuites(client, projectId, [fields.suiteId]);
+    if (fields.ownerId != null) {
+      const owner = isUuid(String(fields.ownerId)) ? await client.query("SELECT 1 FROM project_members WHERE project_id=$1 AND user_id=$2 FOR SHARE", [projectId, fields.ownerId]) : { rows: [] };
+      if (!owner.rows[0]) throw new BadRequestException({ error: "ownerId must be a current member of this project" });
+    }
+    if (Array.isArray(fields.customTagIds) && fields.customTagIds.length) {
+      const tags = await client.query("SELECT id FROM custom_tags WHERE project_id=$1 AND id=ANY($2::uuid[])", [projectId, fields.customTagIds]);
+      if (tags.rows.length !== new Set(fields.customTagIds).size) throw new BadRequestException({ error: "Every custom tag must exist in this project" });
+    }
+    if (fields.customFieldValues && Object.keys(fields.customFieldValues).length) {
+      const context = await this.customFields.loadWriteContext(projectId, client, "enforce");
+      if (!context || Object.keys(fields.customFieldValues).some(id => !context.definitionsById.has(id))) throw new BadRequestException({ error: "Every custom field must exist in this project" });
+    }
+  }
+
+  private async readTestcaseProposal(runner: QueryRunner, projectId: string, taskId: string): Promise<Body> {
+    const result = await runner.query("SELECT r.*,testcase_proposal_review_snapshot(r.id) AS proposal_snapshot FROM ai_generation_requests r WHERE r.id=$1 AND r.project_id=$2 AND r.task_kind IN ('legacy_generation_review','governed_proposal')", [taskId,projectId]);
+    if (!result.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    const row = result.rows[0];
+    if (row.provider === "external_document_proposal") {
+      // Managed document candidates bind only their exact operation and pinned Skill context;
+      // unrelated testcase suites/custom fields must not change this review revision.
+      row.proposal_snapshot = {
+        operations: normalizeJsonArray(row.generated_payload),
+        skillContext: row.skill_context && Object.keys(row.skill_context).length ? row.skill_context : null
+      };
+      row.proposal_review_revision = proposalDigest(row.proposal_snapshot);
+      return row;
+    }
+    row.proposal_snapshot.operations = this.reviewedTestcaseOperations(row, row.proposal_snapshot);
+    row.proposal_review_revision = proposalDigest(row.proposal_snapshot);
+    return row;
+  }
+
+  /** The same normalized operations are displayed, hashed and applied; no save-time retarget. */
+  private reviewedTestcaseOperations(row: Body, snapshot: Body): Body[] {
+    const sources = snapshot.sourceLinks || {};
+    const jiraKeys = normalizeJsonArray(sources.jiraIssueKeys).map(String), linearKeys = normalizeJsonArray(sources.linearIssueKeys).map(String), notionIds = normalizeJsonArray(sources.notionPageIds).map(String);
+    const single = jiraKeys.length + linearKeys.length + notionIds.length === 1;
+    return normalizeJsonArray(row.generated_payload).map((entry: Body) => {
+      const opType = entry.opType || "create";
+      if (opType === MANAGED_DOCUMENT_OP_TYPE) return { ...entry, opType };
+      if (opType !== "create") {
+        const raw = { ...(entry.fields || {}) };
+        if (raw.expectedSummary !== undefined && raw.description === undefined) raw.description = raw.expectedSummary;
+        delete raw.expectedSummary;
+        return { ...entry, opType, native: true, fields: this.normalizeProposalCaseFields(raw) };
+      }
+      const draft = entry.draft || entry;
+      if (entry.native) return { ...entry, native: true, draft: this.normalizeProposalCaseFields(draft) };
+      const jiraIssueKey = draft.jiraIssueKey || (single ? jiraKeys[0] : null) || null;
+      const linearIssueKey = draft.linearIssueKey || (single ? linearKeys[0] : null) || null;
+      const notionPageId = draft.notionPageId || (single ? notionIds[0] : null) || null;
+      const sourceUrl = (provider: string, key: unknown) => normalizeJsonArray(sources[provider]).find((source: Body) => source.key === key)?.url || null;
+      return { ...entry, opType, native: true,
+        reviewMetadata: { tags: Array.isArray(draft.tags) ? [...draft.tags] : [], techniques: Array.isArray(draft.techniques) ? [...draft.techniques] : [] },
+        draft: this.normalizeProposalCaseFields({
+        suiteId: draft.suiteId || null, ...(draft.suiteName ? { suiteName: draft.suiteName } : {}),
+        title: draft.title || "Untitled test case", description: draft.description || draft.expectedSummary || "", preconditions: draft.preconditions || "", postconditions: draft.postconditions || "",
+        steps: draft.stepsJson || draft.steps || [], testData: draft.testData || "", attachments: draft.attachments || "",
+        priority: draft.priority ?? TESTCASE_PRIORITY_NOT_SET, severity: draft.severity || null, component: draft.component || null, type: draft.type || "Functional", status: "Draft",
+        automationTags: Array.from(new Set([...(Array.isArray(draft.tags) ? draft.tags.map(String) : []),"zyra","zyra-generated",...(jiraIssueKey ? [`jira:${jiraIssueKey}`] : []),...(linearIssueKey ? [`linear:${linearIssueKey}`] : []),...(notionPageId ? [notionPageKey(notionPageId)] : [])])).join(","),
+        jiraIssueKey,jiraUrl:draft.jiraUrl || sourceUrl("jira",jiraIssueKey),linearIssueKey,linearUrl:draft.linearUrl || sourceUrl("linear",linearIssueKey),notionPageId,notionUrl:draft.notionUrl || sourceUrl("notion",notionPageId),
+        sourceRefs:Array.isArray(draft.sourceRefs) ? draft.sourceRefs : [], ...(draft.technique ? {technique:draft.technique} : {}), ...(draft.reviewViews ? {reviewViews:draft.reviewViews} : {})
+      }) };
+    });
   }
 
   async updateZyraSettings(projectId: string, userId: string | null | undefined, body: Body) {
@@ -14321,7 +18876,14 @@ export class LegacyService implements OnModuleInit {
       ...(body.capabilities && typeof body.capabilities === "object" ? body.capabilities : {})
     });
     settings.zyraAgent = { ...current, testcaseCount: requestedCount, testcaseRange, capabilities };
-    await this.db.query("UPDATE projects SET settings = $2::jsonb, updated_at = now() WHERE id = $1", [projectId, JSON.stringify(settings)]);
+    // Only update Zyra's own setting. A stale whole-project snapshot must never restore a revoked
+    // MCP grant or erase a concurrent external-access decision.
+    await this.db.query(
+      `UPDATE projects SET settings = jsonb_set(CASE jsonb_typeof(settings)
+         WHEN 'object' THEN settings WHEN 'string' THEN (settings #>> '{}')::jsonb ELSE '{}'::jsonb END,
+         '{zyraAgent}', $2::jsonb, true), updated_at = now() WHERE id = $1`,
+      [projectId, JSON.stringify(settings.zyraAgent)]
+    );
     this.requestCache.invalidate(`projectBasics:${projectId}`);
     // requireProjectAccess (line above, at entry) memoized this project's row including the settings
     // just overwritten — without this, a second requireProjectAccess call later in this same request
@@ -14639,7 +19201,13 @@ export class LegacyService implements OnModuleInit {
       if (!choice) throw new BadRequestException({ error: "Unknown option for this question." });
     } else {
       if (!latest?.options || latest.options.answeredId) return null;
-      const typed = message.trim().replace(/[.!)\s]+$/, "");
+      // Trailing punctuation is trimmed with a scan instead of `/[.!)\s]+$/`: the message is
+      // caller-supplied, and a long run of those characters makes the regex backtrack polynomially.
+      const typedText = message.trim();
+      let typedEnd = typedText.length;
+      const isTrailingChoicePunct = (ch: string) => ch === "." || ch === "!" || ch === ")" || /\s/.test(ch);
+      while (typedEnd > 0 && isTrailingChoicePunct(typedText[typedEnd - 1])) typedEnd -= 1;
+      const typed = typedText.slice(0, typedEnd);
       choice = /^\d{1,2}$/.test(typed)
         ? choices[Number(typed) - 1]
         : choices.find((option) => String(option.label || "").trim().toLowerCase() === typed.toLowerCase());
@@ -14941,6 +19509,32 @@ export class LegacyService implements OnModuleInit {
       // A confirmed archive is applied now rather than staged — but only when THIS message really is
       // the user's confirmation (zyraIsArchiveConfirmation), never on the model's word alone.
       const applied = await this.applyZyraChatOperations(projectId, uid, sessionId, decision.operations, { archiveConfirmed: this.zyraIsArchiveConfirmation(message), live: decision.liveStaged });
+      // Suite creation/assignment can return normally after a recorded operation error. Report that on
+      // the existing step so the recorder does not label the turn completed without errors. This
+      // neither infers rollback/suite counts nor changes how any operation is applied.
+      const operationFailed = decision.operations.length > 0 &&
+        applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases" || entry.title === "Could not create suite");
+      const suiteOperationFailed = operationFailed &&
+        decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite");
+      if (suiteOperationFailed) {
+        onStage?.("staging", { status: "failed" }, "update");
+      }
+      if (decision.operations.length) void recordStandaloneTool({
+        traceSeed: traceMessageId,
+        name: "zyra.apply_operations",
+        input: {
+          operationsRequested: decision.operations.length,
+          operationTypes: LegacyService.tallyZyraOperationTypes(decision.operations)
+        },
+        output: {
+          testcases: applied.testcases.length,
+          reviewRequestId: applied.reviewRequestId || null
+        },
+        metadata: { projectId, sessionId, userId: uid },
+        errorMessage: operationFailed
+          ? (suiteOperationFailed ? "One or more suite operations reported an error" : "One or more operations reported an error")
+          : undefined
+      });
       const activity = [
         { actor: "user", title: "Asked Zyra", detail: message.slice(0, 320), createdAt: new Date().toISOString() },
         ...applied.activity
@@ -14953,9 +19547,14 @@ export class LegacyService implements OnModuleInit {
       // `{testcaseIds: [], totalCount: 0}` on every create turn, silently erasing the
       // pendingReviewRequestIds recordZyraPendingReviewRequest had just set moments earlier in the
       // SAME call. See the changelog entry this was fixed alongside.
+      // Move cards are capped per operation; the existing readback, not that preview, has the full count.
+      // Keep known preview counts as a lower bound if the best-effort readback was unavailable.
+      // Repeated moves keep every card/write, but the saved-case count (like the footer) is distinct.
+      const movedPreviewCount = new Set(applied.testcases.filter((tc) => tc.action === "moved").map((tc) => tc.id)).size;
+      const movedCount = Math.max(movedPreviewCount, applied.moveBreakdown?.reduce((total, suite) => total + suite.count, 0) ?? 0);
       onStage?.("finalizing", {
-        savedCount: applied.testcases.filter((tc) => !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length,
-        proposedCount: applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length
+        savedCount: applied.testcases.filter((tc) => tc.action !== "moved" && !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length + movedCount,
+        proposedCount: (applied.proposedCount ?? applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length)
       });
       const item = await this.insertZyraAssistantMessage({ sessionId, projectId, uid, decision, applied, testcases, activity, traceMessageId });
       const title = this.compactTitle(message);
@@ -15006,17 +19605,20 @@ export class LegacyService implements OnModuleInit {
       // precise, never changes what actually gets saved or shown to the user.
       const requested = decision.operations.filter((op) => op.type !== "create_suite").length;
       const appliedCount = applied.testcases.length;
-      const proposedCount = applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length;
+      const proposedCount = (applied.proposedCount ?? applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length);
       let bannerFired: string | null = null;
       // Recognises the Russian banners too, so a Russian turn's trace records the same outcome.
-      if (finalReply.includes("Sorry! Nothing was saved") || finalReply.includes(ZYRA_RU.falseClaimBanner.split("\n")[0])) bannerFired = "false-completion-claim";
+      if (finalReply.startsWith("⚠️ Suite operations reported an error.") || finalReply.startsWith(ZYRA_RU.suiteOperationError)) bannerFired = "suite-operation-error";
+      else if (finalReply.includes("Sorry! Nothing was saved") || finalReply.includes(ZYRA_RU.falseClaimBanner.split("\n")[0])) bannerFired = "false-completion-claim";
       else if (finalReply.includes("⚠️ Nothing was saved.") || finalReply.startsWith("⚠️ Ничего не сохранено.")) bannerFired = "zero-applied";
       else if (/were drafted for review\.?$/m.test(finalReply.split("\n")[0] || "") || (finalReply.split("\n")[0] || "").includes("Подготовлено для проверки операций с тест-кейсами")) bannerFired = "partial-application";
       await recordReconciliation(
         { messageId: traceMessageId, sessionId, projectId, userId: uid },
         {
           bannerFired,
-          reason: bannerFired ? `${bannerFired} — ${appliedCount} of ${requested} applied, ${proposedCount} proposed` : "reply passed through unmodified",
+          reason: bannerFired === "suite-operation-error"
+            ? "suite-operation-error — an operation reported an error; any completed changes were kept"
+            : bannerFired ? `${bannerFired} — ${appliedCount} of ${requested} applied, ${proposedCount} proposed` : "reply passed through unmodified",
           requested,
           appliedCount,
           proposedCount,
@@ -15220,7 +19822,7 @@ export class LegacyService implements OnModuleInit {
       }
       stage("finalizing", {
         savedCount: applied.testcases.filter((tc) => !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length,
-        proposedCount: applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length
+        proposedCount: (applied.proposedCount ?? applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length)
       });
       const trace = recorder.finish(decision.timedOut ? "timed_out" : undefined);
       await recorder.drain();
@@ -15238,7 +19840,7 @@ export class LegacyService implements OnModuleInit {
       // cleared now the new reply carries it, so the original message reads as its first attempt again.
       await this.db.query("UPDATE zyra_chat_messages SET status = 'resumed', trace = NULL WHERE id = $1 AND status = 'resuming'", [messageId]);
       onSettled?.({ ok: true, payload: { message: item, session: await this.zyraChatSession(projectId, userId, sessionId) } });
-    } catch (err) {
+    } catch {
       // Anything that throws here (not a timeout — those are caught inside buildZyraChatDecision and
       // returned as another timed-out decision, not thrown) leaves this checkpoint resumable again
       // rather than stranding it in 'resuming' forever. Still counts toward the cap: the user's
@@ -15695,7 +20297,7 @@ export class LegacyService implements OnModuleInit {
       "- answer: answer product, feature, test strategy, or knowledge-base questions conversationally.",
       "- list: show existing testcase or coverage rows when the user asks to show/list/compare coverage.",
       "- jira_pending_testcases: count Jira tickets, linked testcase coverage, and pending tickets for testcase writing.",
-      "- create: create new testcase drafts/saved cases only when the user clearly asks to create/generate/add/write testcases. If the user names an existing suite for these new testcases (or a prior turn already established one, e.g. confirming 'yes' to save into the suite you just discussed), set operation.suiteId (preferred, from 'Existing suites' below) or operation.suiteName directly on the create operation so the testcase lands in that suite immediately — do not require a separate move_to_suite step for testcases you are creating in this same turn.",
+      "- create: propose new testcase drafts only when the user clearly asks to create/generate/add/write testcases. If the user names an existing suite for these new testcases (or a prior turn already established one, e.g. confirming 'yes' to save into the suite you just discussed), set operation.suiteId (preferred, from 'Existing suites' below) or operation.suiteName directly on the create operation as its proposed destination after human review and Save — do not require a separate move_to_suite step for testcases you are proposing in this same turn.",
       "CRITICAL for a create op: do NOT author the actual testcase content. Leave operation.draft unset and the top-level testcases array empty — a separate authoring step writes the real title/steps/preconditions/etc. immediately after this routing decision, using its own dedicated response budget, and never reads operation.draft or testcases for a create op. Only set operation.suiteId/operation.suiteName (when known) and operation.reason. Writing out full draft content here produces nothing useful (it is always discarded and re-generated from scratch) and for a large or 'exhaustive' request can consume your entire response before you finish the JSON envelope, corrupting this turn's routing decision — reply/reasoningSummary/action all become unrecoverable, not just the drafts.",
       "- update: update an existing testcase only when the user clearly asks to update/edit/mark/revise a testcase.",
       // Like create, an update's new content is NOT written here: a bulk request ("rewrite every vague
@@ -15703,16 +20305,16 @@ export class LegacyService implements OnModuleInit {
       // which ran past its 60s / 4096-token budget and timed out. authorZyraUpdates writes the content
       // in its own batched calls, with the generation budget, from each case's full current state.
       "CRITICAL for an update op: do NOT write the new content. Leave operation.fields empty. Set operation.externalId to the test case to change, and set operation.reason to a precise instruction saying exactly what must change in that test case and why (e.g. 'Steps 1 and 2 have placeholder expected results — rewrite them as specific, observable outcomes'). A separate step reads the full test case and writes the changes from that instruction. Emit one update op per test case that genuinely needs a change, and none for test cases that are already fine. Leave the top-level testcases array empty for an update.",
-      "- archive: archive an existing testcase when the user asks to remove/delete/archive testcase coverage. IMPORTANT: before archiving, always describe which testcases will be archived and explicitly ask the user to confirm (e.g. 'I found TC-5 Login Test. Should I archive it? Reply yes to confirm.'). Only include archive operations if the user's current message is a clear confirmation (yes, confirm, go ahead, proceed) after you already proposed what would be archived in the prior assistant turn. To archive a SET in one operation — every existing testcase, or several named ones — emit a single archive operation with operation.allExisting=true or operation.externalIds; the same confirmation rule applies. An archive emitted on the user's clear confirmation is APPLIED IMMEDIATELY (not staged for review): describe it as archived, never as staged or pending review.",
+      "- archive: propose archiving an existing testcase when the user asks to remove/delete/archive testcase coverage. Name the exact existing targets; for a set use operation.allExisting=true or operation.externalIds. Every archive remains an unpublished proposal, including after conversational confirmation. Say it is proposed for review; only an authenticated human can inspect the exact selected revisions and Save them.",
       "- create_suite: create a new test suite (a folder/group for testcases) when the user asks to create/add a suite, folder, or group. Put the suite name in operation.suiteName.",
-      "- move_to_suite: move/assign EXISTING testcases into a suite when the user asks to move/assign/organize/group/put existing testcases into a suite. The target suite goes in operation.suiteName (it is created automatically if it does not already exist, so you do not need a separate create_suite op for the same suite). List the testcases to move in operation.externalIds (use the external IDs shown under 'Existing suites' / 'Existing testcases'), set operation.allExisting=true when the user means every existing testcase, or set operation.fromLastPlan=true when the user refers to 'all'/'the N cases' from a recent generation batch (see 'Most recently generated batch' below) — fromLastPlan is exact and does not depend on you correctly recalling every external ID from earlier in the conversation, so prefer it over externalIds whenever the user is clearly referring to a just-generated batch rather than naming specific unrelated testcases.",
-      "CRITICAL: 'create'/'update'/'archive' operations are STAGED for review, not applied immediately — nothing is inserted, changed, or removed in the repository until the user separately reviews and saves the staged batch. Still emit the operation as soon as you are confident the user wants it — do not add an extra 'would you like me to save these?' round-trip of your own in the chat, the review step already exists downstream and is not yours to gate. But your WORDING must match reality: describe what you produce as DRAFTED/PROPOSED and staged for review — never as 'created', 'saved', 'updated', or 'archived' (all past tense, all claims about work this turn did not do), however many testcases your reply text lists. If the user wants testcases, choose 'create' now; otherwise do not enumerate any as if they existed.",
+      "- move_to_suite: propose moving/assigning EXISTING testcases into a suite when the user asks to move/assign/organize/group/put existing testcases into a suite. The target suite goes in operation.suiteName (it is created atomically with human Save if it does not already exist, so you do not need a separate create_suite op for the same suite). List the testcases to move in operation.externalIds (use the external IDs shown under 'Existing suites' / 'Existing testcases'), set operation.allExisting=true when the user means every existing testcase, or set operation.fromLastPlan=true when the user refers to 'all'/'the N cases' from a recent generation batch (see 'Most recently generated batch' below) — fromLastPlan is exact and does not depend on you correctly recalling every external ID from earlier in the conversation, so prefer it over externalIds whenever the user is clearly referring to a just-generated batch rather than naming specific unrelated testcases.",
+      "CRITICAL: 'create'/'update'/'archive'/'move_to_suite' operations are STAGED for review, not applied immediately — nothing is inserted, changed, or removed in the repository until the user separately reviews and saves the staged batch. Still emit the operation as soon as you are confident the user wants it — do not add an extra 'would you like me to save these?' round-trip of your own in the chat, the review step already exists downstream and is not yours to gate. But your WORDING must match reality: describe what you produce as DRAFTED/PROPOSED and staged for review — never as 'created', 'saved', 'updated', 'moved', or 'archived' (all past tense, all claims about work this turn did not do), however many testcases your reply text lists. If the user wants testcases, choose 'create' now; otherwise do not enumerate any as if they existed.",
       `What you create is staged as a draft pending the user's review — it does not exist in the repository yet. Once saved it lands with status Draft, in the suite the request named, or in "${LegacyService.ZYRA_DRAFT_SUITE_NAME}" if it named none. So say where it WILL be filed once saved, never where it "is" — nothing you create this turn is openable or runnable until the user reviews and saves it.`,
       `"Save them" / "save them to <suite>" after you already emitted a create operation is a move, not a new create: emit move_to_suite with fromLastPlan=true and the target suiteName — fromLastPlan reaches BOTH a batch already saved to the repository AND a batch still only staged/drafted (re-pointing the unsaved ones at the new suite; they still need the user's own Save afterwards, so describe that as staged/drafted, never as saved or moved). Re-creating them would duplicate every case. The signal for "was anything drafted for this" is the transcript's PROPOSAL annotation on a create-routed turn, or the recent-batch counts below (saved + staged) — NOT whether that turn "saved" anything, since a staged create always shows saved nothing and still has real drafts to move. Only treat "save them" as a brand-new create when NEITHER signal shows anything: a plain answer turn that only described hypothetical cases in prose, with no tracked batch below.`,
       "A short confirmation of an offer you made in your previous turn ('yes', 'yes please', 'go ahead', 'do it', 'please start generating', 'save it', 'save them into <suite>') is a create request: choose 'create', and set suiteName/suiteId on the create operation when a suite is named.",
       "Only use move_to_suite for testcases that appear under 'Existing suites'/'Existing testcases' below, or in the most recently generated batch. If the user asks you to save or file testcases that so far only appeared as text in this chat, those testcases DO NOT EXIST yet — choose 'create' with the suite named on the create operation, never move_to_suite.",
       "CRITICAL: moving or assigning existing testcases into a suite is NEVER a create action. Do not generate, draft, or duplicate testcases for a move/assign/organize request — only emit move_to_suite operations that reference the existing testcases. Use create only when the user explicitly asks to author brand-new testcases.",
-      "When the user asks to create a suite AND move existing testcases into it in one message, return a single move_to_suite operation with the suiteName (the suite is auto-created) — or a create_suite plus move_to_suite — but never any create operations.",
+      "When the user asks to create a suite AND move existing testcases into it in one message, return a single move_to_suite operation with the suiteName (the suite is created when the human saves those exact proposals), but never any create operations.",
       "Use the project snapshot to choose the action. If the query asks for numbers from Jira/testcase links, choose jira_pending_testcases instead of guessing.",
       "If the user asks a normal product, feature, explanation, example, or how-to question, choose answer with empty operations and empty testcases.",
       "Only return testcase rows when the user explicitly asks to archive/remove, list, compare, or show testcase coverage — NOT for create or update (see the CRITICAL notes under those actions above: leave testcases/operation.draft empty for a create op, and testcases/operation.fields empty for an update op).",
@@ -15823,9 +20425,8 @@ export class LegacyService implements OnModuleInit {
           ? this.zyraChatWithAnthropic(key, model, context, message)
           : this.zyraChatWithOpenAi(key, model, context, message);
       let raw = await callRouter();
-      // Real provider usage (raw.__zyraUsage) rather than the estimateTokens() guess the Langfuse
-      // trace below still uses for its own, separate purpose.
-      await this.recordZyraTokenUsage(projectId, "chat_router", provider, model, raw.__zyraUsage || {});
+      // Only provider-reported usage is a measurement; missing usage stays unknown.
+      await this.recordZyraTokenUsage(projectId, "chat_router", provider, raw.__zyraModel || model, raw.__zyraUsage || {});
       /*
        * raw.__salvaged means the router's JSON was unparseable and parseModelJson fell back to
        * pulling only `reply`/`reasoningSummary` out as plain text — action/operations/testcases were
@@ -15839,27 +20440,29 @@ export class LegacyService implements OnModuleInit {
         recordGeneration(trace, {
           name: "router",
           provider,
-          model,
+          model: raw.__zyraModel || model,
           input: { message, context },
           output: raw,
           rawOutput: raw.__rawCompletion,
           salvaged: true,
+          usage: raw.__zyraUsage,
           errorMessage: "Router JSON unparseable; only reply/reasoningSummary salvaged. Retrying once."
         });
         onStage?.("routing", { attempts: 2 }, "update");
         const retried = await callRouter();
-        await this.recordZyraTokenUsage(projectId, "chat_router", provider, model, retried.__zyraUsage || {});
+        await this.recordZyraTokenUsage(projectId, "chat_router", provider, retried.__zyraModel || model, retried.__zyraUsage || {});
         raw = retried;
       }
       if (raw.__salvaged) {
         recordGeneration(trace, {
           name: "router",
           provider,
-          model,
+          model: raw.__zyraModel || model,
           input: { message, context },
           output: raw,
           rawOutput: raw.__rawCompletion,
           salvaged: true,
+          usage: raw.__zyraUsage,
           errorMessage: "Router JSON unparseable on retry too; returning an honest failure instead of the salvaged narrative."
         });
         await this.logProjectActivity(projectId, userId, "zyra_chat_ai_failed", "zyra_chat", sessionId, "Zyra chat", { stage: "routing_salvaged" });
@@ -15876,11 +20479,11 @@ export class LegacyService implements OnModuleInit {
       recordGeneration(trace, {
         name: "router",
         provider,
-        model,
+        model: raw.__zyraModel || model,
         input: { message, context },
         output: raw,
         salvaged: false,
-        usage: { input: estimateTokens(context) + estimateTokens(message), output: estimateTokens(JSON.stringify(raw ?? "")) }
+        usage: raw.__zyraUsage
       });
       endZyraTurn(trace, {
         reply: String(raw.reply || ""),
@@ -16299,7 +20902,7 @@ export class LegacyService implements OnModuleInit {
     // trips to the hosted database — about 30 s of a batch's staging (zyra_chat_messages.trace,
     // 2026-10-13). A suite this call created is reported and logged once, as before.
     const createSuiteById: Map<string, Awaited<ReturnType<LegacyService["getProjectSuite"]>>> = options.suiteCache?.byId ?? new Map();
-    const createSuiteByName: Map<string, Awaited<ReturnType<LegacyService["resolveOrCreateSuiteByName"]>>> = options.suiteCache?.byName ?? new Map();
+    const createSuiteByName: Map<string, {id:string|null;name:string;created:boolean}> = options.suiteCache?.byName ?? new Map();
     for (const op of allowed.slice(0, LegacyService.ZYRA_CHAT_MAX_OPERATIONS)) {
       // F5: this loop is not one transaction — each operation below issues its own independent
       // DB statement(s) (see moveTargetIds' own comment above for why move counts are read back
@@ -16329,17 +20932,14 @@ export class LegacyService implements OnModuleInit {
         const suiteName = op.suiteName || (suiteId ? null : LegacyService.ZYRA_DRAFT_SUITE_NAME);
         if (!suiteId && suiteName) {
           const known = createSuiteByName.get(suiteName);
-          // Only the lookup that created it says so — every later draft finds it existing.
-          const suite = known ? { ...known, created: false } : await this.resolveOrCreateSuiteByName(projectId, suiteName);
+          // A proposal may name a future suite; creation belongs to the atomic human Save.
+          const suite = known || await this.proposedSuiteByName(projectId, suiteName);
           if (!known) createSuiteByName.set(suiteName, suite);
           suiteId = suite.id;
-          if (suite.created) {
-            activity.push({ actor: "agent", title: "Created suite", detail: suite.name, createdAt: new Date().toISOString() });
-            await this.logProjectActivity(projectId, actorId, "zyra_suite_created", "suite", suite.id, suite.name, { source: "zyra_chat", reason: op.reason || null });
-          }
         }
         const draftPayload = {
           suiteId,
+          ...(!suiteId && suiteName ? {suiteName} : {}),
           title: op.draft.title,
           description: op.draft.description || op.draft.expectedSummary || "",
           preconditions: op.draft.preconditions || "",
@@ -16443,7 +21043,7 @@ export class LegacyService implements OnModuleInit {
         // Staged only — the real row is untouched until zyraSave applies `fields` to it.
         // sourceRefs: what informed THIS change (authorZyraUpdates). Stored beside `fields`, not in
         // them — they describe the proposal, and Save applies `fields` only, exactly as before.
-        proposals.push({ opType: op.type, testcaseId: found.id, externalId: row.externalId, fields, reason: op.reason || "", ...(op.sourceRefs?.length ? { sourceRefs: op.sourceRefs } : {}) });
+        proposals.push({ opType: op.type, testcaseId: found.id, externalId: row.externalId, fields, targetEditRevision: row.editRevision, targetApprovalRevision: row.approvalRevision, targetSnapshot: row.approvalSnapshot, reason: op.reason || "", ...(op.sourceRefs?.length ? { sourceRefs: op.sourceRefs } : {}) });
         const action = op.type === "archive" ? "proposed-archive" : "proposed-update";
         // The review row previews what the case will look like AFTER saving (row + fields merged),
         // not its current state — `row` alone would show what's about to change as if it already had.
@@ -16459,8 +21059,14 @@ export class LegacyService implements OnModuleInit {
       } else if (op.type === "move_to_suite" && (op.suiteName || op.suiteId)) {
         const suite = op.suiteId
           ? await this.getProjectSuite(projectId, op.suiteId)
-          : await this.resolveOrCreateSuiteByName(projectId, String(op.suiteName));
-        if (!suite) continue;
+          : await this.proposedSuiteByName(projectId, String(op.suiteName));
+        if (!suite) {
+          // The destination is unavailable; this says nothing about whether the source cases exist.
+          activity.push({ actor: "agent", title: "Could not move testcases",
+            detail: "The destination suite is unavailable in this project, so this assignment was not applied. Check the destination suite before retrying.",
+            createdAt: new Date().toISOString() });
+          continue;
+        }
         let matchedAnything = false;
         let patchedTotal = 0;
 
@@ -16481,7 +21087,7 @@ export class LegacyService implements OnModuleInit {
           // next Save).
           const pendingBatches = await this.zyraPendingCreateBatches(projectId, sessionId);
           for (const batch of pendingBatches) {
-            const patched = await this.patchZyraPendingBatchSuite(projectId, batch.reviewRequestId, suite.id);
+            const patched = await this.patchZyraPendingBatchSuite(projectId, batch.reviewRequestId, suite.id, suite.name);
             if (!patched) continue;
             patchedTotal += patched.patchedCount;
             patched.updatedDrafts.forEach((entry, index) => {
@@ -16526,42 +21132,20 @@ export class LegacyService implements OnModuleInit {
         }
         if (targets.length) {
           matchedAnything = true;
-          const movedIds = targets.map((target) => target.id);
-          for (const id of movedIds) moveTargetIds.add(id);
-          await this.db.query(
-            "UPDATE testcases SET suite_id = $2, updated_by = $4, updated_at = now() WHERE project_id = $1 AND id = ANY($3::uuid[]) AND deleted_at IS NULL",
-            [projectId, suite.id, movedIds, actorId]
-          );
-          for (const target of targets.slice(0, 25)) {
+          for (let index = 0; index < targets.length; index++) {
+            const target = targets[index];
             const row = await this.getTestCase(target.id);
-            testcases.push(this.chatTestcaseRow(row, "moved", op.reason || `Moved to suite ${suite.name}`));
+            const fields = suite.id ? {suiteId:suite.id} : {suiteName:suite.name};
+            proposals.push({opType:"update",native:true,testcaseId:row.id,externalId:row.externalId,fields,
+              targetEditRevision:row.editRevision,targetApprovalRevision:row.approvalRevision,targetSnapshot:row.approvalSnapshot,
+              reason:op.reason || `Proposed move to suite ${suite.name}`});
+            if (index < 25) testcases.push({...this.chatTestcaseRow({...row,...fields},"proposed-update",op.reason || `Proposed move to suite ${suite.name}`),draftIndex:proposals.length-1});
           }
-          activity.push({ actor: "agent", title: `Moved ${movedIds.length} testcase(s) to suite`, detail: `${suite.name}${"created" in suite && suite.created ? " (created)" : ""}`, createdAt: new Date().toISOString() });
-          await this.logProjectActivity(projectId, actorId, "zyra_moved_to_suite", "suite", suite.id, suite.name, { source: "zyra_chat", movedCount: movedIds.length, testcaseIds: movedIds, reason: op.reason || null });
-          await this.suitesCache.invalidate(projectId);
-          await this.testcasesListCache.invalidate(projectId);
+          activity.push({actor:"agent",title:"Proposed moves for review",detail:`${targets.length} testcase move(s) into "${suite.name}" await exact human review; no case assignment changed.`,createdAt:new Date().toISOString()});
         }
-
-        // zyraMoveBreakdownSuffix's footer is DB-move ground truth ("Moved to suites (actual)") — it
-        // must never register a suite that was ONLY touched via the pending-draft patch above, or the
-        // footer reads "Suite: 0 (none matched)" directly alongside reviewHint's true "N staged for
-        // review, will be filed into Suite" for the very same turn, a self-contradiction of exactly
-        // the shape the 2026-09-02 moveBreakdown fix (see this doc's changelog) exists to prevent.
-        // Still registered at 0 when NOTHING matched either path, preserving the original "a suite
-        // the model claimed to move cases into must not silently disappear from the breakdown" intent
-        // for a genuine total failure.
-        if (targets.length || !matchedAnything) {
-          const existingMoveSuite = moveSuites.get(suite.id);
-          moveSuites.set(suite.id, {
-            suiteName: suite.name,
-            created: existingMoveSuite?.created || ("created" in suite && !!suite.created)
-          });
-        }
-
+        if (!matchedAnything && suite.id) moveSuites.set(suite.id,{suiteName:suite.name,created:false});
         if (!matchedAnything) {
-          // resolveOrCreateSuiteByName above may have just created the suite, so bailing silently
-          // here left a new empty suite behind with no activity entry and no signal that the move
-          // matched nothing — while the model's reply still announced a successful save.
+          // Report unmatched sources without creating a destination suite or implying a move.
           activity.push({
             actor: "agent",
             title: "No testcases matched",
@@ -16571,7 +21155,13 @@ export class LegacyService implements OnModuleInit {
         }
       }
       } catch (err) {
-        this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}: ${err instanceof Error ? err.message : err}`);
+        if (err instanceof ForbiddenException && (err.getResponse() as Body)?.code === "HUMAN_REVIEW_REQUIRED") {
+          activity.push({ actor: "agent", title: "Could not create suite",
+            detail: "Suite creation requires a human editing action. Create it in the testcase repository, or choose a new suite while saving exact reviewed case proposals. No suite was created.",
+            createdAt: new Date().toISOString() });
+          continue;
+        }
+        this.logger.error(`Zyra chat operation (${op.type}) failed for project ${projectId}.`);
         activity.push({
           actor: "agent",
           title: "An operation failed unexpectedly",
@@ -16618,45 +21208,9 @@ export class LegacyService implements OnModuleInit {
         await this.recordZyraPendingReviewRequest(sessionId, reviewRequestId);
       }
     }
-    // An archive the user has explicitly confirmed (the router only emits one after asking — see the
-    // archive rule in the router prompt — and archiveConfirmed is the server's own check of the
-    // confirming message) is applied now instead of waiting in the review panel: committed through
-    // zyraSave itself, so it gets exactly what the panel's Save would — one transaction, the target
-    // lock and stale-target check, audit entries, cache refresh, embeddings and the ticket
-    // auto-comment. Any create/update staged in the same turn stays staged for review. Archive only
-    // ever sets status to Archived, which the repository can restore.
-    let archivedNowCount = 0;
-    const archiveIndexes = proposals.map((p, index) => ((p as Body).opType === "archive" ? index : -1)).filter((index) => index >= 0);
-    if (options.archiveConfirmed && reviewRequestId && archiveIndexes.length) {
-      try {
-        const saved = (await this.zyraSave(projectId, userId, reviewRequestId, { selectedDraftIndexes: archiveIndexes })) as Body;
-        archivedNowCount = Number(saved.savedCount) || 0;
-        const archivedSet = new Set(archiveIndexes);
-        // Positions the unsaved proposals now hold — zyraSave keeps them in their original order.
-        const remainingIndex = new Map<number, number>();
-        proposals.forEach((_, index) => {
-          if (!archivedSet.has(index)) remainingIndex.set(index, remainingIndex.size);
-        });
-        for (const tc of testcases) {
-          if (tc.reviewRequestId !== reviewRequestId || typeof tc.draftIndex !== "number") continue;
-          if (archivedSet.has(tc.draftIndex)) {
-            tc.action = "archived";
-            delete tc.draftIndex;
-            delete tc.reviewRequestId;
-          } else {
-            tc.draftIndex = remainingIndex.get(tc.draftIndex);
-          }
-        }
-        if (!remainingIndex.size) reviewRequestId = null;
-        activity.push({ actor: "agent", title: "Archived testcases", detail: `Archived ${archivedNowCount} test case(s) as confirmed.`, createdAt: new Date().toISOString() });
-      } catch (err) {
-        // Nothing was archived (zyraSave is one transaction) and the batch is still in review, so
-        // the user can still Save it from the panel — say so instead of claiming it happened.
-        const reason = this.extractAiErrorMessage(err) || (err instanceof Error ? err.message : String(err));
-        this.logger.warn(`Confirmed Zyra archive failed for project ${projectId}: ${reason}`);
-        activity.push({ actor: "agent", title: "Could not archive testcases", detail: `The confirmed archive failed and nothing was archived: ${reason}. The cases are still listed for review.`, createdAt: new Date().toISOString() });
-      }
-    }
+    // Conversational confirmation is not a decision over an exact rendered proposal revision.
+    // Archive remains staged for the same explicit human selected Save as create and update.
+    const archivedNowCount = 0;
     const moveBreakdown = await this.zyraMoveBreakdown(projectId, moveSuites, moveTargetIds);
     if (options.live) {
       // The whole batch as it stands — the drafts staged live and the ones added just now.
@@ -16665,6 +21219,7 @@ export class LegacyService implements OnModuleInit {
         testcases: rows,
         activity: [...options.live.activity, ...activity],
         reviewRequestId: options.live.reviewRequestId,
+        proposedCount: rows.length,
         moveBreakdown,
         unresolvedMoveTargetCount,
         archivedNowCount,
@@ -16672,7 +21227,8 @@ export class LegacyService implements OnModuleInit {
         liveSavedCount: savedCount
       };
     }
-    return { testcases, activity, reviewRequestId, moveBreakdown, unresolvedMoveTargetCount, archivedNowCount, appendClosed, liveSavedCount: 0 };
+    const proposedCount = appendClosed ? 0 : proposals.length + testcases.filter(row => row.reviewRequestId && row.reviewRequestId !== reviewRequestId && String(row.action || "").startsWith("proposed-")).length;
+    return { testcases, activity, reviewRequestId, proposedCount, moveBreakdown, unresolvedMoveTargetCount, archivedNowCount, appendClosed, liveSavedCount: 0 };
   }
 
   // Ground truth for how many testcases actually ended up in each suite a move_to_suite operation
@@ -16703,12 +21259,20 @@ export class LegacyService implements OnModuleInit {
     }));
   }
 
+  private async proposedSuiteByName(projectId: string, name: string): Promise<{id:string|null;name:string;created:boolean}> {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) throw new BadRequestException({error:"Suite name is required"});
+    validateBoundedField(trimmed,"Suite name",SUITE_NAME_MAX_LENGTH);
+    const found = await this.db.query("SELECT id,name FROM suites WHERE project_id=$1 AND lower(name)=lower($2) AND deleted_at IS NULL ORDER BY id LIMIT 1",[projectId,trimmed]);
+    return found.rows[0] ? {id:String(found.rows[0].id),name:String(found.rows[0].name),created:false} : {id:null,name:trimmed,created:false};
+  }
+
   private async resolveOrCreateSuiteByName(projectId: string, name: string): Promise<{ id: string; name: string; created: boolean }> {
     const trimmed = String(name || "").trim();
     const existing = await this.db.query(
       "SELECT id, name FROM suites WHERE project_id = $1 AND lower(name) = lower($2) AND deleted_at IS NULL ORDER BY position, created_at LIMIT 1",
       [projectId, trimmed]
-    ).catch(() => ({ rows: [] as Body[] }));
+    );
     if (existing.rows[0]) return { id: String(existing.rows[0].id), name: String(existing.rows[0].name), created: false };
     const created = await this.createSuite(projectId, { name: trimmed }) as Body;
     return { id: String(created.id), name: String(created.name), created: true };
@@ -16739,7 +21303,7 @@ export class LegacyService implements OnModuleInit {
       // transaction by the caller (patchZyraPendingBatchSuite), so nothing is held concurrently
       // across this loop today — but a nondeterministic row order is a latent deadlock trap the
       // moment a future change ever does lock more than one of these in the same transaction.
-      "SELECT id, generated_payload FROM ai_generation_requests WHERE id = ANY($1::uuid[]) AND project_id = $2 AND task_status = 'in_review' ORDER BY id",
+      "SELECT id, generated_payload FROM ai_generation_requests WHERE id = ANY($1::uuid[]) AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'in_review' ORDER BY id",
       [ids, projectId]
     ).catch(() => ({ rows: [] as Body[] }));
     return res.rows
@@ -16759,24 +21323,25 @@ export class LegacyService implements OnModuleInit {
   // simply serialize against each other on this one row; this always re-checks task_status =
   // 'in_review' under the lock rather than trusting the candidate list, so a batch saved or closed a
   // moment ago is silently skipped (returns null) instead of resurrected.
-  private async patchZyraPendingBatchSuite(projectId: string, reviewRequestId: string, suiteId: string): Promise<{ updatedDrafts: Body[]; patchedCount: number } | null> {
+  private async patchZyraPendingBatchSuite(projectId: string, reviewRequestId: string, suiteId: string | null, suiteName?: string): Promise<{ updatedDrafts: Body[]; patchedCount: number } | null> {
     return this.db.transaction(async (client) => {
       const res = await client.query(
-        "SELECT generated_payload FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_status = 'in_review' FOR UPDATE",
+        "SELECT generated_payload, provider FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') AND task_status = 'in_review' FOR UPDATE",
         [reviewRequestId, projectId]
       );
       if (!res.rows[0]) return null;
+      this.assertOrdinaryProposalMutation(res.rows[0]);
       let patchedCount = 0;
       const updatedDrafts = normalizeJsonArray(res.rows[0].generated_payload).map((entry) => {
         const row = entry as Body;
         if (row.opType !== "create") return row;
         patchedCount += 1;
-        return { ...row, draft: { ...(row.draft as Body), suiteId } };
+        return { ...row, draft: { ...(row.draft as Body), suiteId, suiteName: suiteId ? undefined : suiteName } };
       });
       if (!patchedCount) return null;
       await client.query(
-        "UPDATE ai_generation_requests SET generated_payload = $2::jsonb, updated_at = now() WHERE id = $1",
-        [reviewRequestId, JSON.stringify(updatedDrafts)]
+        "UPDATE ai_generation_requests SET generated_payload = $2::jsonb, updated_at = now() WHERE id = $1 AND project_id = $3 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
+        [reviewRequestId, JSON.stringify(updatedDrafts), projectId]
       );
       return { updatedDrafts, patchedCount };
     });
@@ -16855,13 +21420,17 @@ export class LegacyService implements OnModuleInit {
     const externalIds = [...(op.externalIds || []), ...(op.externalId ? [op.externalId] : [])].map((value) => String(value).trim()).filter(Boolean);
     const internalIds = [...(op.testcaseIds || []), ...(op.testcaseId ? [op.testcaseId] : [])].map((value) => String(value).trim()).filter((value) => uuidPattern.test(value));
     if (!externalIds.length && !internalIds.length) return { targets: [], requestedCount: null };
-    // Unique named identifiers, not the raw (possibly duplicate-heavy) list — the model repeating
-    // "TC-5" twice in the same operation must not manufacture a false "1 of 2 could not be moved".
-    const requestedCount = new Set([...externalIds, ...internalIds]).size;
     const res = await this.db.query(
-      "SELECT id FROM testcases WHERE project_id = $1 AND (external_id = ANY($2::text[]) OR id = ANY($3::uuid[])) AND deleted_at IS NULL",
+      "SELECT id, external_id FROM testcases WHERE project_id = $1 AND (external_id = ANY($2::text[]) OR id = ANY($3::uuid[])) AND deleted_at IS NULL",
       [projectId, externalIds, internalIds]
     ).catch(() => ({ rows: [] as Body[] }));
+    // Count resolved identities once, even when both UUID and external-id aliases name them.
+    // Keep unresolved selectors distinct; only UUIDs have case-insensitive identity semantics.
+    const matchedIds = new Set(res.rows.map((row) => String(row.id).toLowerCase()));
+    const matchedExternalIds = new Set(res.rows.map((row) => row.external_id));
+    const unresolvedIds = new Set(internalIds.map((id) => id.toLowerCase()).filter((id) => !matchedIds.has(id)));
+    const unresolvedExternalIds = new Set(externalIds.filter((id) => !matchedExternalIds.has(id)));
+    const requestedCount = matchedIds.size + unresolvedIds.size + unresolvedExternalIds.size;
     return { targets: res.rows.map((row) => ({ id: String(row.id) })), requestedCount };
   }
 
@@ -17041,8 +21610,8 @@ export class LegacyService implements OnModuleInit {
           [updateTargetIds]
         );
         for (const row of existingRows.rows) updateTargetFieldsById.set(row.id, { severity: row.severity, component: row.component });
-      } catch (err) {
-        this.logger.warn(`Existing severity/component lookup failed for update-redirect targets in project ${params.projectId}, leaving both fields untouched: ${err instanceof Error ? err.message : err}`);
+      } catch {
+        this.logger.warn(`Existing severity/component lookup failed for update-redirect targets in project ${params.projectId}, leaving both fields untouched.`);
       }
     }
     // Resolve each draft's model-reported sourceRefs against the exact labels offered in THIS
@@ -17247,7 +21816,7 @@ export class LegacyService implements OnModuleInit {
       } catch (err) {
         // Never blocks the turn — the original, unrevised drafts still ship. Same fail-open
         // contract as RagRetrievalService itself.
-        this.logger.warn(`Similarity-revision generation call failed for project ${args.projectId}, keeping original drafts: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Similarity-revision generation call failed for project ${args.projectId}, keeping original drafts: ${this.extractAiErrorMessage(err)}`);
       }
     }
     return { result: finalResult, matchesByIndex, revised: finalResult !== aiResult };
@@ -17306,7 +21875,8 @@ export class LegacyService implements OnModuleInit {
         // A chunk numbers its scenarios 1..size; renumber against the whole batch. A number outside
         // the chunk is dropped, so the batch outcome counts it as unmapped rather than misattributing it.
         const scenario = typeof draft.scenario === "number" && draft.scenario >= 1 && draft.scenario <= size ? draft.scenario + offset : undefined;
-        const { scenario: _drop, ...rest } = draft;
+        const rest = { ...(draft as Record<string, unknown>) };
+        delete rest.scenario;
         drafts.push(scenario === undefined ? rest : { ...rest, scenario });
       }
       // Kept aligned with this chunk's drafts, so a later chunk's matches stay at its own drafts' indexes.
@@ -17416,8 +21986,8 @@ export class LegacyService implements OnModuleInit {
           ].join("\n")
         : null;
       return { feedback, matchesByIndex };
-    } catch (err) {
-      this.logger.warn(`zyraSimilarityFeedbackForDrafts failed for project ${projectId}: ${err instanceof Error ? err.message : err}`);
+    } catch {
+      this.logger.warn(`zyraSimilarityFeedbackForDrafts failed for project ${projectId}.`);
       return { feedback: null, matchesByIndex: noMatches };
     }
   }
@@ -17670,7 +22240,7 @@ export class LegacyService implements OnModuleInit {
     const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
       `SELECT id, title, content_text
        FROM knowledge_documents
-       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+       WHERE project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}
          AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
          AND ($2::uuid IS NULL OR id > $2::uuid)
        ORDER BY id
@@ -17993,6 +22563,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         status: "running",
         originalMessage: params.message,
         jiraIssueKeys: params.jiraIssueKeys,
+        // The turn that started this plan. Background batches outlive its span; seeding their
+        // standalone generations from this same value rejoins the originating chat trace.
+        traceSeed: params.trace?.traceSeed || null,
         // The starting turn's sources: originalMessage is often the follow-up that confirmed the plan
         // ("yes"), which names none of them, so re-gathering on it alone would lose them by batch 2.
         contextRefs: params.contextRefs || null,
@@ -18148,6 +22721,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         status: "running",
         originalMessage: params.message,
         jiraIssueKeys: params.jiraIssueKeys,
+        // See the regular plan's identical field: keeps background batches on the originating trace.
+        traceSeed: params.trace?.traceSeed || null,
         // Not carried: the starting turn's sources are the first tickets the message named, and each
         // batch reads its own tickets instead (generateZyraScopedBatch).
         contextRefs: null,
@@ -18472,7 +23047,29 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         });
         live.total = batch.length;
         const batchLive = live;
-        const decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+        // A plan started before this field existed (or by a path with no turn handle) falls back to
+        // its old standalone per-batch seed.
+        const batchTraceSeed = plan.traceSeed ? String(plan.traceSeed) : `zyra:plan-batch:${planId}:${doneCount}:${randomUUID()}`;
+        let decision: ZyraChatDecision;
+        try {
+          decision = await runWithZyraLiveBatch(batchLive, () => this.generateZyraPlanPiece({ ...pieceContext, scenarios: batch, onContext: emitContext }));
+          void recordStandaloneTool({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            output: { draftedCount: LegacyService.zyraDraftedCount(decision) },
+            metadata: { projectId, sessionId, planId }
+          });
+        } catch (err) {
+          void recordStandaloneTool({
+            traceSeed: batchTraceSeed,
+            name: "zyra.plan.generate_batch",
+            input: { planId, sessionId, scenarios: batch.slice(0, 20), batchSize: batch.length, doneCount, totalCount },
+            errorMessage: err instanceof Error ? err.message : String(err),
+            metadata: { projectId, sessionId, planId }
+          });
+          throw err;
+        }
         stage("generating", { draftedCount: LegacyService.zyraDraftedCount(decision) }, "update");
         const gated = this.applyStorageGateToGenerated(decision, capabilities);
         if (gated.operations.length) stage("staging", { operationCounts: LegacyService.tallyZyraOperationTypes(gated.operations) });
@@ -18488,7 +23085,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         const testcases = applied.testcases.length ? applied.testcases : gated.testcases;
         stage("finalizing", {
           savedCount: applied.testcases.filter((tc) => !(typeof tc.action === "string" && tc.action.startsWith("proposed-"))).length,
-          proposedCount: applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length
+          proposedCount: (applied.proposedCount ?? applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length)
         });
         const batchTrace = recorder.finish();
 
@@ -18672,10 +23269,36 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `Tool name: ${params.toolName}`,
       `Tool result JSON: ${JSON.stringify(params.toolDecision)}`
     ].join("\n");
-    const raw = providerWire(params.provider) === "anthropic"
-      ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message)
-      : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message);
-    await this.recordZyraTokenUsage(params.projectId, "chat_tool_finalize", params.provider, params.model, raw.__zyraUsage || {});
+    const traceSeed = `zyra:tool-finalize:${params.projectId}:${randomUUID()}`;
+    const attempt: ZyraProviderAttempt = {};
+    let raw: Body;
+    try {
+      raw = providerWire(params.provider) === "anthropic"
+        ? await this.zyraChatWithAnthropic(params.key, params.model, finalizePrompt, params.message, attempt)
+        : await this.zyraChatWithOpenAi(params.key, params.model, finalizePrompt, params.message, attempt);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed,
+        name: "zyra.tool_decision.finalize",
+        provider: params.provider,
+        model: attempt.model || params.model,
+        input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId, toolName: params.toolName }
+      });
+      throw err;
+    }
+    await this.recordZyraTokenUsage(params.projectId, "chat_tool_finalize", params.provider, raw.__zyraModel || params.model, raw.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed,
+      name: "zyra.tool_decision.finalize",
+      provider: params.provider,
+      model: raw.__zyraModel || params.model,
+      input: { system: finalizePrompt, user: params.message, toolName: params.toolName },
+      output: { reply: String(raw.reply || "").slice(0, 500), reasoningSummary: String(raw.reasoningSummary || "").slice(0, 300) },
+      usage: raw.__zyraUsage,
+      metadata: { projectId: params.projectId, toolName: params.toolName }
+    });
     return {
       reply: this.sanitizeZyraReply(raw.reply, String(params.toolDecision.reply || "")),
       reasoningSummary: String(raw.reasoningSummary || params.toolDecision.reasoningSummary || "").slice(0, 1500),
@@ -18797,7 +23420,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    */
   private async notifyZyraTask(projectId: string, taskId: string, kind: "ready" | "failed" | "reviewed", actorId: string | null = null): Promise<void> {
     try {
-      const res = await this.db.query<{ requested_by: string | null }>("SELECT requested_by FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+      const res = await this.db.query<{ requested_by: string | null }>("SELECT requested_by FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))", [taskId, projectId]);
       const requester = res.rows[0]?.requested_by;
       if (!requester) return;
       const [type, title] =
@@ -18812,31 +23435,41 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
-  private async markZyraTaskFailed(projectId: string, taskId: string, detail: string) {
+  // Gate K: a worker may consume only its existing task lane. The governed
+  // testcase proposal subtype retains its existing feedback continuation.
+  private isLegacyProviderTask(row: Body, allowTestcaseFeedback = false): boolean {
+    return !this.isRequirementBundleTask(row) &&
+      (row.task_kind === "legacy_generation_review" ||
+        (allowTestcaseFeedback && row.task_kind === "governed_proposal" && row.provider === "external_proposal"));
+  }
+
+  private async markZyraTaskFailed(projectId: string, taskId: string, detail: string, allowTestcaseFeedback = false) {
     const failedAt = new Date().toISOString();
     const activity = [{ actor: "agent", stage: "failed", title: "Generation failed", detail, createdAt: failedAt }];
-    const res = await this.db.query(
-      `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND task_status IN ('todo', 'in_progress') RETURNING id`,
-      [taskId, projectId, JSON.stringify(activity)]
-    );
-    if (res.rowCount === 0) {
+    const failed = await this.db.transaction(async client => {
+      // The worker's initial task lookup may itself have failed. Re-establish ownership here,
+      // under the mutation lock, before either a status change or the late-failure activity.
+      const current = await client.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2 FOR UPDATE", [taskId, projectId]);
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], allowTestcaseFeedback)) return false;
+      const res = await client.query(
+        `UPDATE ai_generation_requests SET task_status = 'failed', activity_log = activity_log || $3::jsonb, updated_at = now()
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR ($4::boolean AND task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status IN ('todo', 'in_progress') RETURNING id`,
+        [taskId, projectId, JSON.stringify(activity), allowTestcaseFeedback]
+      );
+      if (res.rowCount) return true;
       const note = [{
-        actor: "agent",
-        stage: "failed",
-        title: "Generation failed after task was already updated",
+        actor: "agent", stage: "failed", title: "Generation failed after task was already updated",
         detail: `${detail} (the task had already moved on by the time this was recorded, so its status was left as-is)`,
         createdAt: failedAt
       }];
-      await this.db.query(
-        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
-        [taskId, projectId, JSON.stringify(note)]
+      await client.query(
+        "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR ($4::boolean AND task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
+        [taskId, projectId, JSON.stringify(note), allowTestcaseFeedback]
       );
-    } else {
-      // Only when this call is what moved the task to 'failed'. A task the user already closed or
-      // saved (the rowCount === 0 branch above) did not fail from their point of view.
-      await this.notifyZyraTask(projectId, taskId, "failed");
-    }
+      return false;
+    });
+    // Notify only after this transaction committed an ordinary task's transition to failed.
+    if (failed) await this.notifyZyraTask(projectId, taskId, "failed");
   }
 
   private async processZyraTask(projectId: string, taskId: string, options: { userId: string; knowledgeItemIds?: string[] }) {
@@ -18849,6 +23482,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const taskRes = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
       const task = taskRes.rows[0];
       if (!task) return;
+      if (!this.isLegacyProviderTask(task)) return;
       const allocation = await this.db.query(
         `SELECT k.provider, k.default_model, k.api_key, k.base_url, k.auth_header_name, k.auth_scheme
          FROM project_ai_key_allocations a
@@ -18874,7 +23508,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }];
       const startRes = await this.db.query(
         `UPDATE ai_generation_requests SET task_status = 'in_progress', activity_log = activity_log || $3::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'todo' RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'todo' RETURNING id`,
         [taskId, projectId, JSON.stringify(startedActivity)]
       );
       if (startRes.rowCount === 0) {
@@ -18949,7 +23583,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
              token_input = $5, token_output = $6, token_total = $7,
              source_summary = $8::jsonb, activity_log = activity_log || $9::jsonb,
              task_status = 'in_review', updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'in_progress' RETURNING id`,
+         WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review' AND task_status = 'in_progress' RETURNING id`,
         [taskId, projectId, drafts.length, JSON.stringify(drafts), tokenInput, tokenOutput, tokenInput + tokenOutput, JSON.stringify(sourceSummary), JSON.stringify(activity)]
       );
       // Logged regardless of whether the row above actually applied (see the rowCount===0 branch
@@ -18971,7 +23605,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           createdAt: droppedAt
         }];
         await this.db.query(
-          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND task_kind = 'legacy_generation_review'",
           [taskId, projectId, JSON.stringify(note)]
         );
         return;
@@ -18987,22 +23621,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         outcome: `Generated ${drafts.length} testcase draft(s) using ${knowledge.length} knowledge-base item(s), ${jira.length} Jira ticket(s), and ${linear.length} Linear ticket(s). Coverage plan: ${this.zyraThinking({ story, context, acceptanceCriteria, feedback, knowledgeCount: knowledge.length, jiraCount: jira.length, linearCount: linear.length })}`
       });
     } catch (error) {
-      // Nest builds HttpExceptions from an object payload, so `error.message` is the generic
-      // status text ("Bad Request Exception") and the real cause — provider status, invalid
-      // JSON, revoked key — is only in getResponse(). Reading `.message` here made every
-      // failure indistinguishable in the activity log. extractAiErrorMessage unwraps it, the
-      // same way the Zyra chat paths already do.
-      const summary = this.extractAiErrorMessage(error) || "Zyra failed to generate testcase drafts.";
-      // `error` alone is often still generic ("Claude testcase generation failed"); the provider's
-      // own text lives in `detail`. Keep both so the activity log names the actual cause.
-      const payload = typeof (error as { getResponse?: () => unknown })?.getResponse === "function"
-        ? (error as { getResponse: () => unknown }).getResponse()
-        : null;
-      const providerDetail = payload && typeof payload === "object"
-        ? String((payload as Record<string, unknown>).detail || "")
-        : "";
-      const detail = providerDetail && providerDetail !== summary ? `${summary} (${providerDetail})` : summary;
-      this.logger.error(`Zyra task ${taskId} (project ${projectId}) failed: ${detail}`, error instanceof Error ? error.stack : undefined);
+      // Provider failures are already safe at ingress. Do not revive nested response
+      // detail or an original stack here: the task's activity is product content too.
+      const detail = this.extractAiErrorMessage(error) || "Zyra failed to generate testcase drafts.";
+      this.logger.error(`Zyra task ${taskId} (project ${projectId}) failed: ${detail}`);
       // A provider response that arrived (and was billed) but failed to parse into usable drafts
       // carries its usage on the thrown error (see generateZyraWithOpenAi/Anthropic) — without
       // this, those tokens would silently vanish, which is exactly how 4 of the task-board's
@@ -19024,40 +23646,32 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     const limit = pageNumber(query.limit, 50, 0, 100);
     const offset = pageNumber(query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    // While the governed document proposal surface is disabled, keep staged candidates out
+    // of generic history rather than exposing their payload and receipts.
+    const managedPreview = process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
     const res = await this.db.query(
-      `SELECT * FROM ai_generation_requests WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-      [projectId, limit, offset]
+      `SELECT * FROM ai_generation_requests WHERE project_id = $1
+         AND task_kind IN ('legacy_generation_review','governed_proposal')
+         AND ($4::boolean OR provider IS DISTINCT FROM 'external_document_proposal')
+       ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+      [projectId, limit, offset, managedPreview]
     );
-    return { list: res.rows.map(toCamel) };
+    return { list: res.rows.map(row => this.taskRowForRead(row)) };
   }
 
-  async aiSave(projectId: string, userId: string | null | undefined, requestId: string, body: Body) {
-    await this.requireProjectAccess(this.requireUser(userId), projectId);
-    if (!isUuid(requestId)) throw new NotFoundException({ error: "Zyra task not found" });
-    const savedAt = new Date().toISOString();
-    const events = [{ suiteId: body.suiteId || null, testcaseIds: body.testcaseIds || [], savedAt }];
-    const activity = [{
-      actor: "user",
-      stage: "done",
-      title: "Accepted and saved testcases",
-      detail: `Saved ${Array.isArray(body.testcaseIds) ? body.testcaseIds.length : 0} testcase(s).`,
-      createdAt: savedAt
-    }];
-    await this.db.query(
-      `UPDATE ai_generation_requests
-       SET saved_count = saved_count + $3, save_events = save_events || $4::jsonb,
-           activity_log = activity_log || $5::jsonb, task_status = 'done', updated_at = now()
-       WHERE id = $1 AND project_id = $2`,
-      [requestId, projectId, Array.isArray(body.testcaseIds) ? body.testcaseIds.length : 0, JSON.stringify(events), JSON.stringify(activity)]
-    );
+  async aiSave(projectId: string, userId: string | null | undefined, requestId: string, body: Body, principal?: ReviewPrincipal) {
+    // Historical callers now use the same actual selected publication transaction. A supplied
+    // testcaseIds list alone is not evidence that this proposal was reviewed or applied.
+    return this.zyraSave(projectId,userId,requestId,body,principal);
   }
-
-  async zyraFeedback(projectId: string, userId: string | null | undefined, taskId: string, body: Body) {
+  async zyraFeedback(projectId: string, userId: string | null | undefined, taskId: string, body: Body, principal?: TestcaseProposalPrincipal) {
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
     const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    this.assertOrdinaryProposalMutation(existing.rows[0]);
+    if (!this.isLegacyProviderTask(existing.rows[0], true)) throw new ConflictException({ code: "TASK_KIND_NOT_ADMITTED", error: "This task is not eligible for legacy provider feedback." });
     const statusBeforeFeedback = String(existing.rows[0].task_status || "");
     // Feedback only makes sense once there is something to review, or to retry after a failure.
     // Without this guard, feedback could be sent while processZyraTask was still mid-flight for
@@ -19098,7 +23712,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // before this field existed have no `kind`; the frontend falls back to matching this exact
     // title for those, so old feedback still shows up correctly.
     const feedbackActivity = [{
-      actor: "user",
+      ...this.proposalActivityPrincipal(principal,userId),
       stage: "todo",
       kind: "feedback",
       title: "Review feedback submitted",
@@ -19116,7 +23730,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // Russian; feedback with no signal ("ok", a ticket key) keeps the task's language.
       `UPDATE ai_generation_requests SET task_status = 'todo', feedback = $3, activity_log = activity_log || $4::jsonb, updated_at = now(),
               language = COALESCE($6, language)
-       WHERE id = $1 AND project_id = $2 AND task_status = $5 RETURNING *`,
+       WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status = $5 RETURNING *`,
       [taskId, projectId, feedback, JSON.stringify(feedbackActivity), statusBeforeFeedback, detectScriptLanguage(feedbackText)]
     );
     if (claimRes.rowCount === 0) {
@@ -19213,6 +23827,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       requestedCount, testcaseRange, provider, model, allocation, previousSourceSummary
     } = options;
     try {
+      // A queued continuation may outlive the request that admitted it. Keep the same immutable
+      // task-owner boundary before collecting context or making any billable provider call.
+      const current = await this.db.query("SELECT provider, generated_payload, task_kind FROM ai_generation_requests WHERE id=$1 AND project_id=$2", [taskId, projectId]);
+      if (!current.rows[0] || !this.isLegacyProviderTask(current.rows[0], true)) return;
       // These four snapshots are independent reads (knowledge base, Jira, Linear, existing
       // testcases) — gathering them concurrently instead of one after another cuts this stage's
       // wall time down to the slowest of the four instead of their sum, without changing what any
@@ -19265,11 +23883,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       ];
       const res = await this.db.query(
         `UPDATE ai_generation_requests
-         SET generated_count = $3, generated_payload = $4::jsonb, feedback = $5,
+         SET generated_count = GREATEST(generated_count,saved_count+$3), generated_payload = $4::jsonb, feedback = $5,
              token_input = token_input + $6, token_output = token_output + $7, token_total = token_total + $8,
              activity_log = activity_log || $9::jsonb, source_summary = $10::jsonb, jira_issue_keys = $11::jsonb,
              linear_issue_keys = $12::jsonb, notion_page_ids = $13::jsonb, task_status = 'in_review', updated_at = now()
-         WHERE id = $1 AND project_id = $2 AND task_status = 'todo'
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status = 'todo'
          RETURNING *`,
         [
           taskId,
@@ -19301,7 +23919,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           createdAt: droppedAt
         }];
         await this.db.query(
-          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2",
+          "UPDATE ai_generation_requests SET activity_log = activity_log || $3::jsonb, updated_at = now() WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
           [taskId, projectId, JSON.stringify(note)]
         );
         return;
@@ -19323,15 +23941,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ].filter(Boolean).join(" ")
       });
     } catch (error) {
-      const summary = this.extractAiErrorMessage(error) || "Zyra failed to regenerate testcase drafts.";
-      const payload = typeof (error as { getResponse?: () => unknown })?.getResponse === "function"
-        ? (error as { getResponse: () => unknown }).getResponse()
-        : null;
-      const providerDetail = payload && typeof payload === "object"
-        ? String((payload as Record<string, unknown>).detail || "")
-        : "";
-      const detail = providerDetail && providerDetail !== summary ? `${summary} (${providerDetail})` : summary;
-      this.logger.error(`Zyra task ${taskId} (project ${projectId}) feedback regeneration failed: ${detail}`, error instanceof Error ? error.stack : undefined);
+      const detail = this.extractAiErrorMessage(error) || "Zyra failed to regenerate testcase drafts.";
+      this.logger.error(`Zyra task ${taskId} (project ${projectId}) feedback regeneration failed: ${detail}`);
       // See processZyraTask's identical check: a response that arrived and was billed but failed
       // to parse still carries its usage on the thrown error.
       const zyraUsage = (error as { zyraUsage?: { input?: number; output?: number; total?: number } } | null)?.zyraUsage;
@@ -19340,19 +23951,23 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }
       // markZyraTaskFailed only marks 'failed' if the row is still 'todo'/'in_progress' — if a
       // concurrent close/save already moved it on, that action wins and this only leaves a note.
-      await this.markZyraTaskFailed(projectId, taskId, detail);
+      await this.markZyraTaskFailed(projectId, taskId, detail, true);
     }
   }
 
-  async zyraDeleteDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number) {
+  async zyraDeleteDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, principal?: TestcaseProposalPrincipal) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    const result = await this.db.transaction(async (client) => {
+    await this.db.transaction(async (client) => {
       // FOR UPDATE serializes this read-modify-write against any concurrent delete/edit/save on the
       // same row — without it, two concurrent deletes (or a delete racing an edit) each read the same
       // array, and whichever writes last silently discards the other's change.
-      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
+      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+      this.assertGuardedPublicationAvailable(existing.rows[0]);
+      // A governed document candidate is the exact artifact the owner reviews. Deleting its only
+      // operation would destroy that artifact and rewrite the review revision.
+      this.assertOrdinaryProposalMutation(existing.rows[0]);
       const drafts = normalizeJsonArray(existing.rows[0].generated_payload);
       if (!Number.isInteger(draftIndex) || draftIndex < 0 || draftIndex >= drafts.length) {
         throw new BadRequestException({ error: "Invalid testcase draft index" });
@@ -19360,7 +23975,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const [removed] = drafts.splice(draftIndex, 1);
       const now = new Date().toISOString();
       const activity = [{
-        actor: "user",
+        ...this.proposalActivityPrincipal(principal,userId),
         stage: "in_review",
         title: "Deleted testcase draft",
         detail: String(removed?.title || removed?.draft?.title || `Draft ${draftIndex + 1}`),
@@ -19368,29 +23983,33 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }];
       const res = await client.query(
         `UPDATE ai_generation_requests
-         SET generated_payload = $3::jsonb, generated_count = $4,
+         SET generated_payload = $3::jsonb, generated_count = GREATEST(generated_count,saved_count+$4),
              activity_log = activity_log || $5::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), drafts.length, JSON.stringify(activity)]
       );
       return res.rows[0];
     });
-    return await this.formatAiTask(result);
+    return await this.zyraTask(projectId,userId,taskId);
   }
 
   // Inline edit of one pending draft's fields — the review step's "edit" action. Task-board drafts
   // (opType defaults to "create" when absent) edit `.draft`; chat-staged update/archive proposals
   // edit `.fields` instead, since there's no new test case content to describe for those.
-  async zyraEditDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, fields: Body) {
+  async zyraEditDraft(projectId: string, userId: string | null | undefined, taskId: string, draftIndex: number, fields: Body, principal?: TestcaseProposalPrincipal) {
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
     // Reuses the same field-length limits real testcases enforce, so an edit that would fail at
     // save time (title too long, etc.) is rejected here instead — at the point the user made it.
     this.assertTestcaseFieldLengths(fields);
-    const result = await this.db.transaction(async (client) => {
-      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
+    await this.db.transaction(async (client) => {
+      const existing = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId, projectId]);
       if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+      this.assertGuardedPublicationAvailable(existing.rows[0]);
+      // The candidate is the reviewed artifact; an inline draft edit would rewrite the operation
+      // under the reviewer without changing the exact revision they approved.
+      this.assertOrdinaryProposalMutation(existing.rows[0]);
       if (existing.rows[0].task_status !== "in_review") {
         throw new ConflictException({ error: `This batch is currently "${existing.rows[0].task_status}" and can no longer be edited — it may have already been saved or closed elsewhere. Reload and try again.` });
       }
@@ -19403,14 +24022,14 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       if (opType === "create") {
         // Same allowlist/sanitizing an update-op edit gets — keeps an edit from smuggling in a field
         // (suiteId, jiraIssueKey overrides) the lightweight editor was never meant to expose.
-        entry.draft = { ...entry.draft, ...this.sanitizeZyraUpdateFields(fields) };
+        entry.draft = { ...(entry.draft || entry), ...this.sanitizeZyraUpdateFields(fields) };
       } else {
         entry.fields = { ...entry.fields, ...this.sanitizeZyraUpdateFields(fields) };
       }
       drafts[draftIndex] = entry;
       const now = new Date().toISOString();
       const activity = [{
-        actor: "user",
+        ...this.proposalActivityPrincipal(principal,userId),
         stage: "in_review",
         title: "Edited testcase draft",
         detail: String(entry.draft?.title || entry.fields?.title || `Draft ${draftIndex + 1}`),
@@ -19419,20 +24038,27 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const res = await client.query(
         `UPDATE ai_generation_requests
          SET generated_payload = $3::jsonb, activity_log = activity_log || $4::jsonb, updated_at = now()
-         WHERE id = $1 AND project_id = $2
+         WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))
          RETURNING *`,
         [taskId, projectId, JSON.stringify(drafts), JSON.stringify(activity)]
       );
       return res.rows[0];
     });
-    return await this.formatAiTask(result);
+    return await this.zyraTask(projectId,userId,taskId);
   }
 
-  async zyraCloseTask(projectId: string, userId: string | null | undefined, taskId: string) {
+  private proposalActivityPrincipal(principal: TestcaseProposalPrincipal | undefined, userId: string | null | undefined) {
+    return { actor:principal?.kind === "human_session" ? "user" : principal?.kind === "api_token" ? "agent" : "system",
+      principalKind:principal?.kind || "unobserved",tokenId:principal?.tokenId || null,issuerId:userId || null };
+  }
+
+  async zyraCloseTask(projectId: string, userId: string | null | undefined, taskId: string, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
     await this.requireProjectAccess(this.requireUser(userId), projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-    const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+    const existing = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal')", [taskId, projectId]);
     if (!existing.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
+    this.assertOrdinaryProposalMutation(existing.rows[0]);
     if (existing.rows[0].task_status === "done") {
       // Already closed — a double-click or a second tab landing here after the first request
       // already won should be a harmless no-op, not a duplicate "Closed task" activity entry.
@@ -19449,14 +24075,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const res = await this.db.query(
       `UPDATE ai_generation_requests
        SET task_status = 'done', activity_log = activity_log || $3::jsonb, updated_at = now()
-       WHERE id = $1 AND project_id = $2 AND task_status <> 'done'
+       WHERE id = $1 AND project_id = $2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal')) AND task_status <> 'done'
        RETURNING *`,
       [taskId, projectId, JSON.stringify(activity)]
     );
     if (!res.rows[0]) {
       // Lost a race to a concurrent close (two tabs, double-click before the button disabled) —
       // return the current state instead of erroring on an action that already succeeded.
-      const fresh = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2", [taskId, projectId]);
+      const fresh = await this.db.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 AND task_kind IN ('legacy_generation_review','governed_proposal')", [taskId, projectId]);
+      if (!fresh.rows[0]) throw new NotFoundException({ error: "Zyra task not found" });
       return await this.formatAiTask(fresh.rows[0]);
     }
     // A review finished without saving: the requester hears about it unless they are the reviewer.
@@ -19471,257 +24098,131 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // retried instead, fresh, up to 5 times.
   //
   // Lock ordering, fixed across every call path (this method, zyraDeleteDraft, zyraEditDraft):
-  // ai_generation_requests row first, then target testcase rows (sorted by id ascending), then the
-  // per-project external-id advisory lock. Two calls that only ever acquire locks in this same
-  // order can wait on each other but can never deadlock.
-  private async zyraSaveAttempt(projectId: string, uid: string, taskId: string, body: Body, selectedIndexes: number[] | null) {
-    // Resolved before the transaction: createSuite runs its own insert/commit, and Task-board drafts
-    // (no per-draft suiteId) need one shared target suite chosen once for the whole batch. A chat-
-    // staged create draft already carries its own suiteId from when the operation was proposed, and
-    // takes precedence over this one below.
-    let batchSuiteId: string | null = body.suiteId || null;
-    if (!batchSuiteId && body.suiteName) {
-      const suite = await this.createSuite(projectId, { name: body.suiteName });
-      batchSuiteId = (suite as Body).id;
-    }
-
+  // suite-tree project mutex first, then ai_generation_requests/target testcase rows and the
+  // external-id lock. Other assignment writers take that mutex before their own row/id locks;
+  // edit/delete-draft never request it. Never acquire it for the first time inside the entry loop.
+  private async zyraSaveAttempt(projectId: string, uid: string, taskId: string, body: Body, selectedIndexes: number[]) {
+    const revision = expectedProposalRevision(body.expectedProposalRevision);
+    const applyParameters = {
+      suiteIdProvided:Object.prototype.hasOwnProperty.call(body,"suiteId"),
+      suiteId: body.suiteId ?? null,
+      suiteNameProvided:Object.prototype.hasOwnProperty.call(body,"suiteName"),
+      suiteName: typeof body.suiteName === "string" ? body.suiteName.trim() : null
+    };
+    if (applyParameters.suiteIdProvided && applyParameters.suiteNameProvided) throw new BadRequestException({ error: "Choose an existing suite or a new suite name, not both" });
+    if (applyParameters.suiteIdProvided && body.suiteId !== null && !isUuid(String(body.suiteId))) throw new BadRequestException({error:"suiteId must be an active suite id, or null for no suite"});
+    if (applyParameters.suiteNameProvided && !applyParameters.suiteName) throw new BadRequestException({error:"suiteName must contain a name"});
+    if (applyParameters.suiteName) validateBoundedField(applyParameters.suiteName, "Suite name", SUITE_NAME_MAX_LENGTH);
+    const decisionKey = proposalDigest({ revision, selectedIndexes, applyParameters, reviewerId: uid });
     return this.db.transaction(async (client) => {
-      // Serializes this whole save against any concurrent save/edit/delete/close on the same
-      // batch — the loser blocks here until the winner commits, then sees the post-commit status
-      // below and reacts to it instead of racing the write.
-      const lockedRes = await client.query("SELECT * FROM ai_generation_requests WHERE id = $1 AND project_id = $2 FOR UPDATE", [taskId, projectId]);
-      const existing = lockedRes.rows[0];
+      await this.lockTestcaseSuiteWrites(client, projectId);
+      const authority = await this.requireProposalAuthority(client, projectId, uid);
+      const locked = await client.query("SELECT * FROM ai_generation_requests WHERE id=$1 AND project_id=$2 AND task_kind IN ('legacy_generation_review','governed_proposal') FOR UPDATE", [taskId,projectId]);
+      const existing = locked.rows[0];
       if (!existing) throw new NotFoundException({ error: "Zyra task not found" });
-      if (existing.task_status === "in_progress") {
-        // Nothing generated yet for this row — saving now would either save nothing or save
-        // drafts from a stale client-side cache that the still-running job is about to replace.
-        throw new ConflictException({ error: "Zyra is still generating drafts for this task. Wait for it to finish before saving." });
+      // Work Package A Slice 1: a requirement change bundle is staging-only until the required
+      // approved effective skills can be resolved and pinned. Refuse before any write so the
+      // blocked apply creates no requirement version, case, link or approval.
+      this.assertGuardedPublicationAvailable(existing);
+      this.assertOrdinaryProposalMutation(existing);
+      // A lost response is recovered from the committed native receipt, without another write.
+      const prior = normalizeJsonArray(existing.save_events).find((event: Body) => event.decisionKey === decisionKey);
+      if (prior) return { savedCount: prior.testcases.length, suiteId: prior.suiteId, testcases: prior.testcases, remaining: prior.remaining, saveReceipt: prior, replayed: true, touchedActions: [] };
+      if (!["in_review","failed"].includes(String(existing.task_status))) {
+        throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "This proposal batch is not awaiting review; reload it before deciding" });
       }
-      if (!["in_review", "failed"].includes(String(existing.task_status))) {
-        throw new ConflictException({ error: `This batch is currently "${existing.task_status}" — it looks like it was already saved or closed elsewhere. Reload and try again.` });
-      }
-      // Defense in depth: a plan downgraded between staging and saving shouldn't let a save through
-      // just because the staging-time capability check already passed.
-      const capabilities = await this.zyraProjectCapabilities(projectId);
-      if (!capabilities.testcaseStorage) {
-        throw new ForbiddenException({ error: "Test case storage is disabled for Zyra in this project — enable it under Zyra → Settings → Capabilities before saving." });
-      }
-
-      const drafts = normalizeJsonArray(existing.generated_payload);
-      const selected = (selectedIndexes
-        ? selectedIndexes.map((index) => (drafts[index] ? { ...drafts[index], __index: index } : null)).filter(Boolean)
-        : drafts.map((draft: Body, index: number) => ({ ...draft, __index: index }))) as Body[];
-      if (!selected.length) return { savedCount: 0, suiteId: batchSuiteId, testcases: [] };
-
-      const jiraKeys = normalizeJsonArray(existing.jira_issue_keys).map(String).filter(Boolean);
-      const linearKeys = normalizeJsonArray(existing.linear_issue_keys).map(String).filter(Boolean);
-      // A task can name several tickets, across both providers (the Feedback tab's pickers, or
-      // several keys passed to createZyraTask). Only a single-ticket task links every draft to its
-      // ticket; with more, each draft carries the one it was attributed to at generation time
-      // (zyraAttributeDraftsToTickets) — never "the first key" for all of them, which posted every
-      // test case to one ticket and, with Jira + Linear, to both. Chat-staged rows never set these,
-      // so all of this is empty for them — every chat create draft goes through the plain "create
-      // new testcase" branch.
-      const notionPageIds = normalizeJsonArray(existing.notion_page_ids).map(String).filter(Boolean);
-      const singleTicket = jiraKeys.length + linearKeys.length + notionPageIds.length === 1;
-      const jiraIssueKey = singleTicket ? jiraKeys[0] ?? null : null;
-      const linearIssueKey = singleTicket ? linearKeys[0] ?? null : null;
-      const notionPageId = singleTicket ? notionPageIds[0] ?? null : null;
-      const ticketUrls = new Map<string, string | null>();
-      if (jiraKeys.length) {
-        const res = await client.query("SELECT jira_issue_key, jira_url FROM jira_tickets WHERE project_id = $1 AND jira_issue_key = ANY($2::text[])", [projectId, jiraKeys]).catch(() => ({ rows: [] as Body[] }));
-        for (const row of res.rows) if (!ticketUrls.get(`jira:${row.jira_issue_key}`)) ticketUrls.set(`jira:${row.jira_issue_key}`, row.jira_url || null);
-      }
-      if (linearKeys.length) {
-        const res = await client.query("SELECT linear_issue_key, linear_url FROM linear_tickets WHERE project_id = $1 AND linear_issue_key = ANY($2::text[])", [projectId, linearKeys]).catch(() => ({ rows: [] as Body[] }));
-        for (const row of res.rows) if (!ticketUrls.get(`linear:${row.linear_issue_key}`)) ticketUrls.set(`linear:${row.linear_issue_key}`, row.linear_url || null);
-      }
-      if (notionPageIds.length) {
-        const res = await client.query("SELECT notion_page_id, notion_url FROM notion_pages WHERE project_id = $1 AND notion_page_id = ANY($2::text[])", [projectId, notionPageIds]).catch(() => ({ rows: [] as Body[] }));
-        for (const row of res.rows) if (!ticketUrls.get(`notion:${row.notion_page_id}`)) ticketUrls.set(`notion:${row.notion_page_id}`, row.notion_url || null);
-      }
-      // The test cases already linked to each of the task's tickets, oldest first, for the
-      // "already linked, update in place" pairing (zyraDraftTicketLink). severity/component are
-      // selected alongside id so the create/update payload below can decide "only fill if blank"
-      // for those two fields — see its own comment.
-      const existingLinkedByTicket = new Map<string, Body[]>();
-      if (jiraKeys.length || linearKeys.length || notionPageIds.length) {
-        const linked = await client.query(
-          `SELECT id, severity, component, jira_issue_key, linear_issue_key, notion_page_id FROM testcases
-           WHERE project_id = $1 AND deleted_at IS NULL
-             AND (jira_issue_key = ANY($2::text[]) OR linear_issue_key = ANY($3::text[]) OR notion_page_id = ANY($4::text[]))
-           ORDER BY updated_at ASC`,
-          [projectId, jiraKeys, linearKeys, notionPageIds]
-        );
-        for (const row of linked.rows) {
-          const pools = [
-            ...(row.jira_issue_key && jiraKeys.includes(row.jira_issue_key) ? [`jira:${row.jira_issue_key}`] : []),
-            ...(row.linear_issue_key && linearKeys.includes(row.linear_issue_key) ? [`linear:${row.linear_issue_key}`] : []),
-            ...(row.notion_page_id && notionPageIds.includes(row.notion_page_id) ? [`notion:${row.notion_page_id}`] : [])
-          ];
-          for (const pool of pools) existingLinkedByTicket.set(pool, [...(existingLinkedByTicket.get(pool) || []), row]);
-        }
-      }
-
-      // Pre-validate every update/archive target still exists before writing anything, so a target
-      // deleted between staging and saving aborts the whole batch with a clear list, rather than an
-      // unpredictable partial write inside an otherwise-atomic transaction.
-      const updateOrArchive = selected.filter((entry) => entry.opType === "update" || entry.opType === "archive");
-      if (updateOrArchive.length) {
-        const ids = Array.from(new Set(updateOrArchive.map((entry) => String(entry.testcaseId)))).sort();
-        const found = await client.query("SELECT id FROM testcases WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL FOR UPDATE", [ids]);
-        const foundIds = new Set(found.rows.map((row) => String(row.id)));
-        const stale = updateOrArchive.filter((entry) => !foundIds.has(String(entry.testcaseId)));
-        if (stale.length) {
-          throw new ConflictException({
-            error: "Some selected drafts target a test case that no longer exists. Deselect them and try again.",
-            staleDraftIndexes: stale.map((entry) => entry.__index)
-          });
-        }
-      }
-
-      // Q11 (Zyra context integrity progress log, Phase 3/4): a suite a create-type entry targets —
-      // `batchSuiteId` above, or a chat-staged draft's own `draft.suiteId` (written once, at
-      // resolveOrCreateSuiteByName / patchZyraPendingBatchSuite time, then frozen inside
-      // generated_payload until the user hits Save, potentially hours later) — can have been
-      // soft-deleted out from under it since it was resolved. Before this, that couldn't happen
-      // silently: a suite id that resolved once couldn't stop existing without a hard delete, and a
-      // hard-deleted suite would make the FK insert fail loudly. Now the row still exists (just
-      // filtered out of every list), so the FK is satisfied and the insert would otherwise succeed
-      // with a `suite_id` pointing at a suite that already looks deleted everywhere else — a
-      // create-time version of the same "ghost suite reference" this phase closes off on the read
-      // side. Re-validated live, under this same lock/transaction, rather than trusted from whenever
-      // it was first resolved.
-      // isUuid-filtered defensively so a malformed id here is just "not found" (falls back to
-      // unassigned, below) rather than a raw driver error from the `::uuid[]` cast reaching the
-      // global exception filter as an unhandled 500 — the same failure mode every other uuid-typed
-      // filter in this file already avoids by checking isUuid() first.
-      const createSuiteIdCandidates = new Set<string>();
-      if (batchSuiteId && isUuid(String(batchSuiteId))) createSuiteIdCandidates.add(String(batchSuiteId));
+      const rawDrafts = normalizeJsonArray(existing.generated_payload);
+      if (selectedIndexes.some(index => index >= rawDrafts.length)) throw new BadRequestException({ error: "A selected draft index is outside this proposal batch" });
+      const targetIds = Array.from(new Set(rawDrafts.filter((entry: Body) => ["update","archive"].includes(entry.opType) && isUuid(String(entry.testcaseId || ""))).map((entry: Body) => String(entry.testcaseId)))).sort();
+      if (targetIds.length) await client.query("SELECT id FROM testcases WHERE project_id=$1 AND id=ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY id FOR UPDATE", [projectId,targetIds]);
+      // The statement begins after all waits; its snapshot and digest are the same values GET rendered.
+      const reviewed = await this.readTestcaseProposal(client, projectId, taskId);
+      if (reviewed.proposal_review_revision !== revision) throw new ConflictException({ code: "PROPOSAL_REVIEW_CONFLICT", error: "The proposals, target cases or dependencies changed since review; reload and review them again" });
+      const snapshot = reviewed.proposal_snapshot as Body;
+      const selected = selectedIndexes.map(index => ({ ...snapshot.operations[index], __index: index }));
+      if (!selected.length) return { savedCount: 0, suiteId: null, testcases: [], remaining: rawDrafts.length, saveReceipt: null, replayed: false, touchedActions: [] };
+      const targetById = new Map<string,Body>(normalizeJsonArray(snapshot.targets).map((target: Body) => [String(target.testcaseId),target]));
       for (const entry of selected) {
-        if (entry.opType === "update" || entry.opType === "archive") continue;
-        const draft = entry.draft || entry;
-        if (draft.suiteId && isUuid(String(draft.suiteId))) createSuiteIdCandidates.add(String(draft.suiteId));
+        if (!["create","update","archive"].includes(entry.opType)) throw new BadRequestException({ error: "Unsupported selected testcase proposal operation" });
+        if (entry.opType === "create") continue;
+        if (entry.fields?.externalId !== undefined && this.parseRole(authority.caller_role) === "qa_engineer") throw new ForbiddenException({error:"QA Engineers cannot change a test case ID"});
+        const target = targetById.get(String(entry.testcaseId));
+        if (!target) throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", staleDraftIndexes: [entry.__index], error: "A selected target no longer exists in this project" });
+        if ((entry.targetEditRevision && entry.targetEditRevision !== target.editRevision) ||
+            (entry.targetApprovalRevision && entry.targetApprovalRevision !== target.approvalRevision)) {
+          throw new ConflictException({ code: "PROPOSAL_TARGET_CONFLICT", staleDraftIndexes: [entry.__index], error: "A selected target changed since staging; prepare a new proposal against its current revision" });
+        }
       }
-      let validSuiteIds = new Set<string>();
-      if (createSuiteIdCandidates.size) {
-        // project_id-scoped: without it, a caller supplying another project's (or tenant's) suite
-        // id would pass this check, write testcases into THIS project pointing at that foreign
-        // suite_id, and every suite-joined report/export (repositorySummary, exportTestCases,
-        // executionReport, requirementMatrix, suiteHealth, coverageBySuite, detectFlakyTests — none
-        // of which scope their suites join by project) would then render the other project's suite
-        // name inside this project's data.
-        const foundSuites = await client.query<{ id: string }>(
-          "SELECT id FROM suites WHERE id = ANY($1::uuid[]) AND project_id = $2 AND deleted_at IS NULL",
-          [Array.from(createSuiteIdCandidates), projectId]
-        );
-        validSuiteIds = new Set(foundSuites.rows.map((row) => String(row.id)));
-      }
-      const staleSuiteIds = Array.from(createSuiteIdCandidates).filter((id) => !validSuiteIds.has(id));
-      // A stale batchSuiteId falls back the same way a stale per-draft suiteId does: unassigned,
-      // never a failed batch — see below, entries fall back individually via ctx.validSuiteIds. This
-      // only affects what `events`/the response report as the batch's own suite.
-      if (batchSuiteId && !validSuiteIds.has(String(batchSuiteId))) batchSuiteId = null;
-
-      const entryCtx: ZyraSaveEntryContext = {
-        projectId,
-        uid,
-        taskId,
-        chatSessionId: existing.chat_session_id ?? null,
-        batchSuiteId,
-        jiraIssueKey,
-        linearIssueKey,
-        notionPageId,
-        ticketUrls,
-        existingLinkedByTicket,
-        linkedPositions: new Map(),
-        claimedLinkedIds: new Set(),
-        validSuiteIds
+      const resolveSuite = async (suiteId: unknown, suiteName: unknown): Promise<string | null> => {
+        if (suiteId) { await this.assertTestcaseSuites(client, projectId, [suiteId]); return String(suiteId); }
+        if (!suiteName) return null;
+        const name = String(suiteName).trim();
+        validateBoundedField(name, "Suite name", SUITE_NAME_MAX_LENGTH);
+        const found = await client.query("SELECT id FROM suites WHERE project_id=$1 AND lower(name)=lower($2) AND deleted_at IS NULL ORDER BY id LIMIT 1", [projectId,name]);
+        if (found.rows[0]) return String(found.rows[0].id);
+        const suite = await this.insertSuite(projectId, { name }, client) as Body;
+        await this.logProjectActivity(projectId,uid,"suite_created","suite",suite.id,name,{source:"testcase_proposal_review",taskId},client);
+        return String(suite.id);
       };
-      // Selected by ZYRA_SET_BASED_SAVE_ENABLED (default off — see the flag's own comment). Both
-      // implementations return the identical { created, touched, touchedActions } shape and must
-      // stay behaviorally interchangeable; the batched one only changes how genuinely-new
-      // testcases are written (one INSERT instead of N), never what gets written or in what order
-      // the response reflects it.
-      const { created, touched, touchedActions } = this.config.zyraSetBasedSaveEnabled
-        ? await this.processZyraSaveEntriesBatched(client, selected, entryCtx)
-        : await this.processZyraSaveEntriesSequential(client, selected, entryCtx);
-
-      const savedAt = new Date().toISOString();
-      // saveEventId names this one save — the ticket auto-comment keys its idempotency claim on it
-      // (see queueZyraTicketComments), so the same save can never be commented on twice.
+      // These are human-chosen, visible apply parameters, recorded verbatim in the decision receipt.
+      // No suite is created before the exact reviewed version has passed every refusal above.
+      const batchSuiteId = selected.some(entry => entry.opType === "create")
+        ? await resolveSuite(applyParameters.suiteId,applyParameters.suiteName) : null;
+      const touched: Body[] = [], created: Body[] = [];
+      const touchedActions: Array<"add" | "update" | "archive"> = [];
+      for (const entry of selected) {
+        const fields = { ...(entry.opType === "create" ? entry.draft : entry.fields) };
+        if (entry.opType === "create" || fields.suiteName !== undefined) {
+          fields.suiteId = entry.opType === "create" && (applyParameters.suiteIdProvided || applyParameters.suiteNameProvided)
+            ? batchSuiteId : await resolveSuite(fields.suiteId,fields.suiteName);
+          delete fields.suiteName;
+        }
+        await this.assertProposalReferences(client,projectId,fields);
+        let saved: Body;
+        if (entry.opType === "create") {
+          fields.status = "Draft";
+          saved = await this.insertTestCaseWithClient(client,projectId,uid,fields);
+          created.push(toCamel(saved));
+        } else {
+          const target = targetById.get(String(entry.testcaseId))!;
+          const newExternalId = await this.checkTestCaseExternalIdChange(client,projectId,entry.testcaseId,target.testcase.external_id,fields.externalId);
+          saved = await this.updateTestCaseWithClient(client,projectId,entry.testcaseId,uid,{...fields,expectedRevision:target.editRevision},newExternalId);
+        }
+        // Read after child-value/tag triggers: response and receipt name the committed native row.
+        const current = await client.query(`SELECT testcases.*, ${TESTCASE_EDIT_REVISION_SQL} AS current_edit_revision FROM testcases WHERE id=$1 AND project_id=$2`, [saved.id,projectId]);
+        const {current_edit_revision: currentEditRevision, ...nativeRow} = current.rows[0];
+        const row = toCamel(nativeRow);
+        // Multiple selected operations on one case are explicit and ordered. Every baseline
+        // was checked above; subsequent CAS advances only over our own still-locked writes.
+        targetById.set(String(saved.id), {...targetById.get(String(saved.id)),testcase:nativeRow,editRevision:currentEditRevision});
+        touched.push(row);
+        const action = entry.opType === "create" ? "add" : entry.opType === "archive" ? "archive" : "update";
+        touchedActions.push(action);
+        await this.logProjectActivity(projectId,uid,entry.opType === "create" ? "zyra_created" : entry.opType === "archive" ? "zyra_archived" : "zyra_updated","testcase",row.id,`${row.externalId} - ${row.title}`,
+          {source:"testcase_proposal_review",taskId,proposalRevision:revision,selectedIndex:entry.__index,operation:entry,provenance:existing.proposal_provenance || {provider:existing.provider,requestedBy:existing.requested_by}},client);
+      }
+      const selectedSet = new Set(selectedIndexes);
+      const remainingPayload = rawDrafts.filter((_: Body,index:number) => !selectedSet.has(index));
       const saveEventId = randomUUID();
-      const events = [{ id: saveEventId, suiteId: batchSuiteId, testcaseIds: touched.map((item) => item.id), savedAt }];
-      const saveActivity = [{ actor: "user", stage: "done", title: "Accepted and saved testcases", detail: `Saved ${touched.length} testcase(s).`, createdAt: savedAt }];
-      // Q11: recorded on the batch itself (not just swallowed) when a target suite turned out to be
-      // gone — this is a silent, non-blocking fallback everywhere else in this save, so the only
-      // place it's visible at all is this log entry.
-      if (staleSuiteIds.length) {
-        saveActivity.push({
-          actor: "system",
-          stage: "info",
-          title: "Target suite no longer available",
-          detail: `${staleSuiteIds.length} target suite(s) had been deleted since these drafts were staged. Affected new test case(s) were saved unassigned instead of failing the batch.`,
-          createdAt: savedAt
-        });
+      const receipt = { id:saveEventId,decisionKey,proposalRevision:revision,reviewerId:uid,principalKind:"human_session",
+        selectedDraftIndexes:selectedIndexes,selectedOperations:selected.map(({__index,...entry}:Body) => ({index:__index,...entry})),
+        reviewedSnapshot:snapshot,applyParameters,provenance:existing.proposal_provenance || {provider:existing.provider,requestedBy:existing.requested_by},
+        suiteId:batchSuiteId,testcaseIds:touched.map(row => row.id),testcases:touched,remaining:remainingPayload.length,savedAt:new Date().toISOString() };
+      const activity = [{actor:"user",stage:remainingPayload.length ? "in_review" : "done",title:"Applied selected testcase proposals",detail:`Applied ${touched.length} proposal(s); ${remainingPayload.length} remain unpublished.`,createdAt:receipt.savedAt,reviewerId:uid,proposalRevision:revision}];
+      await client.query(
+        "UPDATE ai_generation_requests SET generated_payload=$3::jsonb,generated_count=GREATEST(generated_count,saved_count+$5+$4),saved_count=saved_count+$5,save_events=save_events||$6::jsonb,activity_log=activity_log||$7::jsonb,task_status=$8,updated_at=now() WHERE id=$1 AND project_id=$2 AND (task_kind = 'legacy_generation_review' OR (task_kind = 'governed_proposal' AND provider = 'external_proposal'))",
+        [taskId,projectId,JSON.stringify(remainingPayload),remainingPayload.length,touched.length,JSON.stringify([receipt]),JSON.stringify(activity),remainingPayload.length ? "in_review" : "done"]);
+      await this.logProjectActivity(projectId,uid,"testcase_proposals_applied","ai_generation_request",taskId,existing.user_story,{decisionKey,proposalRevision:revision,selectedDraftIndexes:selectedIndexes,saveEventId,principalKind:"human_session"},client);
+      if (existing.chat_session_id) {
+        const session = await client.query("SELECT last_completed_plan FROM zyra_chat_sessions WHERE id=$1 FOR UPDATE", [existing.chat_session_id]);
+        const plan = session.rows[0]?.last_completed_plan || {};
+        const ids = Array.from(new Set([...normalizeJsonArray(plan.testcaseIds).map(String),...created.map(row => String(row.id))]));
+        const pending = normalizeJsonArray(plan.pendingReviewRequestIds).map(String).filter(id => remainingPayload.length || id !== taskId);
+        await client.query("UPDATE zyra_chat_sessions SET last_completed_plan=$2::jsonb WHERE id=$1", [existing.chat_session_id,JSON.stringify({...plan,testcaseIds:ids,totalCount:ids.length,pendingReviewRequestIds:pending})]);
       }
-      // Task-board batches always resolve to 'done' on any save, partial selection or not — a single
-      // generation request completes as one review, and that is unchanged here. A chat-staged batch
-      // is different: a conversation naturally continues across turns, so saving only some of a
-      // mixed create/update/archive batch leaves the rest in generated_payload, still 'in_review',
-      // for a later Save/Edit/Discard — rather than orphaning them the moment ANY draft is saved.
-      const savedIndexSet = new Set(selected.map((entry) => entry.__index));
-      const remainingPayload = drafts.filter((_: Body, index: number) => !savedIndexSet.has(index));
-
-      // This is the FIRST point a chat-staged create's id is ever real — until now it only existed
-      // as a draft inside generated_payload, which is why applyZyraChatOperations/the batch-plan loop
-      // could never populate last_completed_plan.testcaseIds themselves (see the changelog entry this
-      // shipped with: that dead code overwrote the field with an always-empty array on every create
-      // turn). `created` (not `touched`) because only a genuinely NEW row's id is news to fromLastPlan
-      // — an update/archive entry's testcaseId was already real before this save. Also drops this
-      // batch's id out of pendingReviewRequestIds once nothing of it is left staged, so
-      // zyraPendingCreateBatches stops considering it (a fresh live re-check of task_status already
-      // makes this redundant for correctness — see that method's comment — this just keeps the
-      // pointer array from accumulating fully-saved batches forever).
-      if (existing.chat_session_id && (created.length || remainingPayload.length === 0)) {
-        const planRow = await client.query("SELECT last_completed_plan FROM zyra_chat_sessions WHERE id = $1 FOR UPDATE", [existing.chat_session_id]);
-        const existingPlan = (planRow.rows[0]?.last_completed_plan as Body | undefined) || {};
-        const existingIds = normalizeJsonArray(existingPlan.testcaseIds).map(String);
-        const mergedIds = created.length
-          ? Array.from(new Set([...existingIds, ...created.map((row) => String(row.id))]))
-          : existingIds;
-        let pendingIds = normalizeJsonArray(existingPlan.pendingReviewRequestIds).map(String);
-        if (remainingPayload.length === 0) pendingIds = pendingIds.filter((id) => id !== taskId);
-        await client.query(
-          "UPDATE zyra_chat_sessions SET last_completed_plan = $2::jsonb WHERE id = $1",
-          [existing.chat_session_id, JSON.stringify({ ...existingPlan, testcaseIds: mergedIds, totalCount: mergedIds.length, pendingReviewRequestIds: pendingIds })]
-        );
-      }
-
-      if (existing.chat_session_id && remainingPayload.length > 0) {
-        await client.query(
-          `UPDATE ai_generation_requests
-           SET generated_payload = $3::jsonb, generated_count = $4, saved_count = saved_count + $5,
-               save_events = save_events || $6::jsonb, activity_log = activity_log || $7::jsonb,
-               task_status = 'in_review', updated_at = now()
-           WHERE id = $1 AND project_id = $2`,
-          [taskId, projectId, JSON.stringify(remainingPayload), remainingPayload.length, touched.length, JSON.stringify(events), JSON.stringify(saveActivity)]
-        );
-      } else {
-        await client.query(
-          `UPDATE ai_generation_requests
-           SET saved_count = saved_count + $3, save_events = save_events || $4::jsonb,
-               activity_log = activity_log || $5::jsonb, task_status = 'done', updated_at = now()
-           WHERE id = $1 AND project_id = $2`,
-          [taskId, projectId, touched.length, JSON.stringify(events), JSON.stringify(saveActivity)]
-        );
-      }
-      // touchedActions and saveEventId are consumed by zyraSave() (for the post-commit ticket
-      // auto-comment) and deleted from the result there before it reaches the HTTP response.
-      return { savedCount: touched.length, suiteId: batchSuiteId, testcases: touched, touchedActions, saveEventId, remaining: remainingPayload.length };
+      return {savedCount:touched.length,suiteId:batchSuiteId,testcases:touched,touchedActions,saveEventId,remaining:remainingPayload.length,saveReceipt:receipt,replayed:false};
     });
   }
-
   /**
    * processZyraSaveEntriesSequential and processZyraSaveEntriesBatched both implement the same
    * per-entry loop that used to live inline in zyraSaveAttempt, selected by ZYRA_SET_BASED_SAVE_ENABLED.
@@ -20074,24 +24575,21 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     return rows.map((row) => rowByExternalId.get(row.external_id)!);
   }
 
-  async zyraSave(projectId: string, userId: string | null | undefined, taskId: string, body: Body) {
+  async zyraSave(projectId: string, userId: string | null | undefined, taskId: string, body: Body, principal?: ReviewPrincipal) {
+    requireHumanReviewPrincipal(principal);
     const uid = this.requireUser(userId);
     await this.requireProjectAccess(uid, projectId);
     if (!isUuid(taskId)) throw new NotFoundException({ error: "Zyra task not found" });
-
-    // An explicitly-empty selectedDraftIndexes ("save nothing, I deselected everything") is
-    // distinct from omitting the field entirely ("save everything" — kept for back-compat with
-    // any existing caller that never sends a selection). Treating both the same used to mean a
-    // deliberate empty selection silently saved every draft in the batch.
-    const selectionProvided = Array.isArray(body.selectedDraftIndexes);
-    const selectedIndexes = selectionProvided ? normalizeJsonArray(body.selectedDraftIndexes).map(Number) : null;
-    if (selectedIndexes && selectedIndexes.length === 0) {
-      return { savedCount: 0, suiteId: body.suiteId || null, testcases: [] };
-    }
+    expectedProposalRevision(body.expectedProposalRevision);
+    const selectedIndexes = selectedProposalIndexes(body.selectedDraftIndexes);
 
     for (let attempt = 1; ; attempt++) {
       try {
         const result = await this.zyraSaveAttempt(projectId, uid, taskId, body, selectedIndexes);
+        if (result.replayed) {
+          delete (result as Body).touchedActions;
+          return result;
+        }
         // One call per whole save, not per entry — every per-entry write inside zyraSaveAttempt
         // shares that single transaction, so this only runs once the entire batch has committed.
         // Placed after the attempt succeeds (not in a finally/outside the loop), so a collision that
@@ -20106,8 +24604,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         // processor branches on job name, not this reason string) but mirrors the doc/file
         // enqueueEmbedding call sites' convention of naming what actually happened.
         const testcases = Array.isArray((result as Body)?.testcases) ? ((result as Body).testcases as Body[]) : [];
-        // touchedActions is aligned 1:1 by index with `testcases` (see
-        // processZyraSaveEntriesSequential/Batched's own comment) — internal-only, never part of
+        // touchedActions is aligned 1:1 with the exact selected native operations — internal-only,
+        // never part of
         // the HTTP response this function returns, so it's read here and stripped below rather
         // than left on `result`.
         const touchedActions = Array.isArray((result as Body)?.touchedActions) ? ((result as Body).touchedActions as Array<"add" | "update" | "archive">) : [];
@@ -20116,8 +24614,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           this.enqueueTestcaseEmbedding(projectId, String(row.id), "updated");
         });
         // Same commit-boundary discipline: one ticket comment per ticket for this whole save, over
-        // the SAME already-committed rows, however each row's action was decided (an explicit
-        // update/archive, or feature #1's similarity-redirect create->update). Never throws.
+        // the SAME already-committed rows and their explicit create/update/archive operation. Never throws.
         const saveEventId = (result as Body)?.saveEventId;
         if (saveEventId) await this.queueZyraTicketComments(projectId, uid, taskId, String(saveEventId), testcases, touchedActions);
         // The reviewer saved part or all of the batch. The requester is told unless they are the reviewer.
@@ -20129,7 +24626,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         const collided =
           (error as { code?: string })?.code === "23505" &&
           String((error as { constraint?: string })?.constraint || "") === "idx_testcases_project_external";
-        if (!collided || attempt >= 5) throw error;
+        const retryableTransaction = ["40001", "40P01"].includes(String((error as {code?:string})?.code));
+        if ((!collided && !retryableTransaction) || attempt >= 5) throw error;
       }
     }
   }
@@ -20148,7 +24646,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
 
   private async zyraMemoryText(projectId: string): Promise<string> {
     const res = await this.db.query<{ content_text: string }>(
-      "SELECT content_text FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
+      `SELECT content_text FROM knowledge_documents WHERE project_id = $1 AND title = 'Zyra AI Memory' AND is_deleted = false AND ${knowledgeDocumentAiContextSql()} ORDER BY updated_at DESC LIMIT 1`,
       [projectId]
     );
     return String(res.rows[0]?.content_text || "").slice(0, 1500);
@@ -20157,34 +24655,77 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Plain-text completion for internal note-taking (memory summarization) — unlike
   // zyraChatWithOpenAi/zyraChatWithAnthropic this does not force a JSON response shape,
   // since the caller wants a short prose/bullet answer, not a structured chat decision.
-  private async summarizeForZyraMemory(provider: string, model: string, key: Body, prompt: string): Promise<string> {
+  private async summarizeForZyraMemory(
+    provider: string,
+    model: string,
+    key: Body,
+    prompt: string,
+    traceCtx?: { projectId?: string; userId?: string | null }
+  ): Promise<string> {
+    const traceSeedBase = `zyra:memory-summary:${traceCtx?.projectId || "unknown"}:${randomUUID()}`;
+    let requestModel = model;
     try {
       if (providerWire(provider) === "anthropic") {
         const chatUrl = normalizeAnthropicMessagesUrlFor(provider, key.base_url);
         const chatHeaders = this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme);
         for (const candidate of providerModelCandidates(provider, model)) {
-          const res = await fetch(chatUrl, {
+          requestModel = candidate;
+          const res = await this.fetchAiProvider(provider, chatUrl, {
             method: "POST",
             headers: chatHeaders,
             body: JSON.stringify({ model: candidate, max_tokens: 220, messages: [{ role: "user", content: prompt }] })
           });
           if (!res.ok) continue;
-          const data = await res.json() as Body;
+          const data = await this.readAiProviderJson(provider, res);
           const text = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-          if (text) return text;
+          if (text) {
+            void recordStandaloneGeneration({
+              traceSeed: `${traceSeedBase}:${candidate}`,
+              name: "zyra.memory.summarize",
+              provider,
+              model: candidate,
+              input: { prompt },
+              output: text,
+              usage: parseProviderUsage("anthropic", data.usage),
+              metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+            });
+            return text;
+          }
         }
         return "";
       }
       const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-      const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+      const res = await this.fetchAiProvider(provider, providerChatUrl(provider, key.base_url, model), {
         method: "POST",
         headers,
         body: JSON.stringify({ model, max_tokens: 220, messages: [{ role: "user", content: prompt }] })
       });
       if (!res.ok) return "";
-      const data = await res.json() as Body;
-      return String(data.choices?.[0]?.message?.content || "").trim();
-    } catch {
+      const data = await this.readAiProviderJson(provider, res);
+      const text = String(data.choices?.[0]?.message?.content || "").trim();
+      if (text) {
+        void recordStandaloneGeneration({
+          traceSeed: `${traceSeedBase}:${model}`,
+          name: "zyra.memory.summarize",
+          provider,
+          model,
+          input: { prompt },
+          output: text,
+          usage: parseProviderUsage("openai", data.usage),
+          metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+        });
+      }
+      return text;
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.memory.summarize",
+        provider,
+        model: requestModel,
+        input: { prompt },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: String(traceCtx?.projectId || ""), userId: String(traceCtx?.userId || "") }
+      });
       return "";
     }
   }
@@ -20216,7 +24757,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       `User: ${params.userMessage}`,
       `Result: ${params.outcome}`
     ].join("\n");
-    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt))
+    const summary = (await this.summarizeForZyraMemory(params.provider, params.model, params.key, prompt, { projectId: params.projectId, userId: params.userId }))
       .split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 6).join("\n");
     const entry = summary || `- ${params.userMessage.slice(0, 200)}\n- ${params.outcome.slice(0, 200)}`;
     await this.rememberZyraMemory(params.projectId, params.userId, entry);
@@ -20227,51 +24768,69 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // read/written directly since Zyra is both its author and its only reader; it's stored
   // as a plain 'general' document (not 'ai_memory') so it never needs approval, just filed
   // under the project's AI Memory folder for visibility.
-  private async kbAiMemoryFolderId(projectId: string): Promise<string | null> {
-    const folder = await this.db.query<{ id: string }>(
+  private async kbAiMemoryFolderId(projectId: string, client?: PoolClient): Promise<string | null> {
+    const query = <T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]) =>
+      client ? client.query<T>(text, values) : this.db.query<T>(text, values);
+    // Locked recheck: a folder cascade takes the same project mutation lock before the folder
+    // update, so this cannot observe a folder that is about to disappear. A missing AI Memory
+    // folder falls back to the (undeletable) root, preserving memory availability.
+    const folder = await query<{ id: string }>(
       `SELECT kf.id FROM knowledge_folders kf
        JOIN knowledge_folders root ON kf.parent_folder_id = root.id AND root.is_root = true AND root.project_id = $1
-       WHERE kf.project_id = $1 AND kf.name = 'AI Memory' AND kf.is_deleted = false LIMIT 1`,
+       WHERE kf.project_id = $1 AND kf.name = 'AI Memory' AND kf.is_deleted = false FOR SHARE OF kf LIMIT 1`,
       [projectId]
     );
     if (folder.rows[0]?.id) return folder.rows[0].id;
-    const root = await this.db.query<{ id: string }>("SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true LIMIT 1", [projectId]);
+    const root = await query<{ id: string }>(
+      "SELECT id FROM knowledge_folders WHERE project_id = $1 AND is_root = true AND is_deleted = false LIMIT 1",
+      [projectId]
+    );
     return root.rows[0]?.id || null;
   }
 
   private async rememberZyraMemory(projectId: string, userId: string | null, entry: string) {
     const title = "Zyra AI Memory";
-    const folderId = await this.kbAiMemoryFolderId(projectId);
-    if (!folderId) return;
-
-    const existing = await this.db.query<{ id: string; content_text: string }>(
-      "SELECT id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = $2 AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
-      [projectId, title]
-    );
     const stampedEntry = `## ${new Date().toISOString()}\n${entry.trim()}`.slice(0, 2500);
-    const project = await this.db.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
-    if (existing.rows[0]) {
-      const documentId = existing.rows[0].id;
-      // Same per-document lock writeZyraMemoryEntry holds, with the text re-read under it, so an
-      // owner's correction landing mid-append is neither lost nor overwritten.
-      await this.db.transaction(async (client) => {
+    const result = await this.db.transaction(async client => {
+      // Advisory first, matching folder deletion/moves. The folder and memory document are then
+      // resolved under that lock; a concurrent delete either wins (folder gone, fall back to root)
+      // or waits and later cascades the committed memory document.
+      await this.lockSkillAssignments(client, projectId);
+      const project = await client.query<{ organization_id: string }>("SELECT organization_id FROM projects WHERE id = $1", [projectId]);
+      if (!project.rows[0]) return null;
+      const folderId = await this.kbAiMemoryFolderId(projectId, client);
+      if (!folderId) return null;
+
+      const existing = await client.query<{ id: string; content_text: string | null }>(
+        "SELECT id, content_text FROM knowledge_documents WHERE project_id = $1 AND title = $2 AND is_deleted = false ORDER BY updated_at DESC LIMIT 1",
+        [projectId, title]
+      );
+      if (existing.rows[0]) {
+        const documentId = existing.rows[0].id;
+        // Same per-document lock writeZyraMemoryEntry holds, with the text re-read under it, so an
+        // owner's correction landing mid-append is neither lost nor overwritten.
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`kb-doc-version:${documentId}`]);
-        const current = await client.query<{ content_text: string | null }>("SELECT content_text FROM knowledge_documents WHERE id = $1", [documentId]);
-        const content = [stampedEntry, String(current.rows[0]?.content_text || "")].filter(Boolean).join("\n\n").slice(0, 20000);
+        const current = await client.query<{ content_text: string | null }>("SELECT content_text FROM knowledge_documents WHERE id = $1 AND is_deleted = false", [documentId]);
+        if (!current.rows[0]) return null;
+        const content = [stampedEntry, String(current.rows[0].content_text || "")].filter(Boolean).join("\n\n").slice(0, 20000);
         await client.query(
-          "UPDATE knowledge_documents SET content_text = $2, content_html = $3, updated_at = now() WHERE id = $1",
+          "UPDATE knowledge_documents SET content_text = $2, content_html = $3, updated_at = now() WHERE id = $1 AND is_deleted = false",
           [documentId, content, `<pre>${escapeHtml(content)}</pre>`]
         );
-      });
-      this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "document", existing.rows[0].id, "updated");
-      return;
-    }
-    const inserted = await this.db.query<{ id: string }>(
-      `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_text, content_html, document_type, status, is_ai_generated, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, 'general', 'published', true, $7, $7) RETURNING id`,
-      [project.rows[0]?.organization_id, projectId, folderId, title, stampedEntry, `<pre>${escapeHtml(stampedEntry)}</pre>`, userId]
-    );
-    if (inserted.rows[0]?.id) this.enqueueEmbedding(project.rows[0]?.organization_id, projectId, "document", inserted.rows[0].id, "created");
+        return { organizationId: project.rows[0].organization_id, documentId, operation: "updated" as const };
+      }
+
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO knowledge_documents (organization_id, project_id, folder_id, title, content_text, content_html, document_type, status, is_ai_generated, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'general', 'published', true, $7, $7) RETURNING id`,
+        [project.rows[0].organization_id, projectId, folderId, title, stampedEntry, `<pre>${escapeHtml(stampedEntry)}</pre>`, userId]
+      );
+      return inserted.rows[0]?.id
+        ? { organizationId: project.rows[0].organization_id, documentId: inserted.rows[0].id, operation: "created" as const }
+        : null;
+    });
+    // External effect only after a successful commit.
+    if (result) this.enqueueEmbedding(result.organizationId, projectId, "document", result.documentId, result.operation);
   }
 
   /**
@@ -20329,9 +24888,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async knowledgeSnapshot(projectId: string, selectedItemIds: string[] = [], query = ""): Promise<Array<{ title: string; content: string; citation?: ZyraKnowledgeCitation }>> {
     const selected = Array.from(new Set(selectedItemIds.filter(Boolean)));
     const values: any[] = [projectId];
-    // Only approved AI-memory documents are trusted context; every other document type
-    // (general notes, requirement mirrors, etc.) is trusted unconditionally, same as before.
-    let filter = "project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')";
+    // AI memory requires an exact current human review. Other document types retain their
+    // existing contextual read behavior; this neither grants source authority nor resolves Skills.
+    let filter = `project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}`;
     if (selected.length) {
       values.push(selected);
       filter += ` AND (id = ANY($${values.length}::uuid[]) OR title = 'Zyra AI Memory')`;
@@ -20381,7 +24940,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
 
   private knowledgeFileFallbackContent(fileExtension: string | null, extractionStatus: string | null): string {
     const ext = fileExtension || "file";
-    if (extractionStatus === "pending") {
+    if (extractionStatus === "pending" || extractionStatus === "processing") {
       return `Uploaded file (.${ext}) — transcription is still in progress; mention it exists but do not invent its contents yet.`;
     }
     if (extractionStatus === "failed") {
@@ -20422,7 +24981,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const folderNames = foldersRes.rows.map((row) => row.name).join(", ");
     const [docsRes, filesRes] = await Promise.all([
       this.db.query(
-        `SELECT id, title, content_text FROM knowledge_documents WHERE folder_id = ANY($1::uuid[]) AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved') ORDER BY updated_at DESC LIMIT 12`,
+        `SELECT id, title, content_text FROM knowledge_documents WHERE folder_id = ANY($1::uuid[]) AND is_deleted = false AND ${knowledgeDocumentAiContextSql()} ORDER BY updated_at DESC LIMIT 12`,
         [folderIds]
       ).catch(() => ({ rows: [] as Body[] })),
       this.db.query(
@@ -20471,7 +25030,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
       `SELECT id, title, content_text
        FROM knowledge_documents
-       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+       WHERE project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}
          AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
        ORDER BY updated_at DESC
        LIMIT $2`,
@@ -20510,7 +25069,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const res = await this.db.query<{ id: string; title: string; content_text: string | null }>(
       `SELECT DISTINCT ON (upper(trim(split_part(title, ':', 1)))) id, title, content_text
        FROM knowledge_documents
-       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+       WHERE project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}
          AND upper(trim(split_part(title, ':', 1))) = ANY($2::text[])
        ORDER BY upper(trim(split_part(title, ':', 1))), updated_at DESC`,
       [projectId, keys]
@@ -20773,7 +25332,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ? this.db.query(
             `SELECT id, title, content_text FROM knowledge_documents
              WHERE project_id = $1 AND id::text = ANY($2::text[]) AND is_deleted = false
-               AND (document_type != 'ai_memory' OR status = 'approved')`,
+               AND ${knowledgeDocumentAiContextSql()}`,
             [projectId, docIds]
           ).catch(() => empty)
         : empty,
@@ -21520,20 +26079,69 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     }
   }
 
-  /** Newest first, capped at 50 — this list has never had real volume to page through, and the
-   *  dropdown it feeds (TopBar.tsx) has no pagination UI to hand a cursor to. Deliberately NOT run
-   *  through toCamel: the frontend's AppNotification type already expects the raw column names
-   *  (link_entity_type/link_entity_id) — it was written against this table's real shape before this
-   *  method existed to serve it, and matching that is what lets the existing UI start working with
-   *  no frontend change. */
-  async notificationsForUser(userId: string | null | undefined): Promise<Body[]> {
+  /** Newest first. The first page is 50; older rows are reached with the last row's `beforeId`,
+   *  so a busy inbox is no longer silently truncated. The cursor's timestamp is resolved in SQL
+   *  from the stored row: PostgreSQL keeps microseconds, but the JSON `created_at` is a JS Date at
+   *  millisecond precision, so a caller-supplied timestamp used as a cursor skips every row that
+   *  shares the boundary millisecond. The `(created_at, id)` pair is stable across ties; the
+   *  previous `created_at DESC` alone had no defined order for equal timestamps. An unknown or
+   *  foreign cursor yields an empty page rather than another user's position.
+   *
+   *  Deliberately NOT run through toCamel: the frontend's AppNotification type already expects the
+   *  raw column names (link_entity_type/link_entity_id) — it was written against this table's real
+   *  shape before this method existed to serve it, and matching that is what lets the existing UI
+   *  start working with no frontend change. */
+  async notificationsForUser(userId: string | null | undefined, query: Body = {}): Promise<Body[]> {
     const uid = this.requireSession(userId);
+    const limit = this.notificationPageLimit(query.limit);
+    const beforeId = this.notificationCursorId(query.beforeId);
     const res = await this.db.query(
-      `SELECT id, type, title, body, link_entity_type, link_entity_id, read_at, created_at
-       FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
-      [uid]
+      `WITH cursor AS MATERIALIZED (
+         SELECT created_at, id FROM notifications
+          WHERE $2::uuid IS NOT NULL AND id = $2::uuid AND user_id = $1
+       )
+       SELECT n.id, n.type, n.title, n.body, n.link_entity_type, n.link_entity_id, n.read_at, n.created_at
+       FROM notifications n LEFT JOIN cursor c ON TRUE
+       WHERE n.user_id = $1
+         AND ($2::uuid IS NULL OR (n.created_at, n.id) < (c.created_at, c.id))
+       ORDER BY n.created_at DESC, n.id DESC LIMIT $3`,
+      [uid, beforeId, limit]
     );
     return res.rows;
+  }
+
+  /** Every unread row of the caller — the badge's source of truth, independent of paging. */
+  async unreadNotificationCount(userId: string | null | undefined): Promise<{ unread: number }> {
+    const uid = this.requireSession(userId);
+    const res = await this.db.query<{ unread: number }>(
+      "SELECT COUNT(*)::int AS unread FROM notifications WHERE user_id = $1 AND read_at IS NULL",
+      [uid]
+    );
+    return { unread: Number(res.rows[0]?.unread ?? 0) };
+  }
+
+  private notificationPageLimit(raw: unknown): number {
+    if (raw === undefined) return 50;
+    // A query parser can turn `limit[]=...` into an array; refuse anything but a plain integer
+    // string rather than coercing it.
+    if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) {
+      throw new BadRequestException({ error: "limit must be an integer between 1 and 100" });
+    }
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 100) {
+      throw new BadRequestException({ error: "limit must be an integer between 1 and 100" });
+    }
+    return value;
+  }
+
+  private notificationCursorId(raw: unknown): string | null {
+    if (raw === undefined) return null;
+    // A query parser can produce arrays/objects; refuse anything but one valid id.
+    if (typeof raw !== "string" || !isUuid(raw)) {
+      throw new BadRequestException({ error: "beforeId must be a notification id" });
+    }
+    // A caller-supplied cursor is a value, never SQL; the cast in the query validates it.
+    return raw;
   }
 
   /**
@@ -22198,13 +26806,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Plain JSON-mode completion for internal tool calls that need a small, arbitrary JSON
   // shape (not the fixed Zyra chat decision schema) — used to plan the scenario todo list
   // for "all possible cases" generation without pulling in the full chat-decision prompt.
-  private async zyraJsonCompletion(provider: string, model: string, key: Body, systemPrompt: string, userPrompt: string): Promise<Body> {
+  private async zyraJsonCompletion(provider: string, model: string, key: Body, systemPrompt: string, userPrompt: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     if (providerWire(provider) === "anthropic") {
-      const res = await fetch(normalizeAnthropicMessagesUrlFor(provider, key.base_url), {
+      const requestModel = providerModelCandidates(provider, model)[0];
+      const url = normalizeAnthropicMessagesUrlFor(provider, key.base_url);
+      const request = {
         method: "POST",
         headers: this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme),
         body: JSON.stringify({
-          model: providerModelCandidates(provider, model)[0],
+          model: requestModel,
           // Sized for ZYRA_PLAN_MAX_SCENARIOS (100) short labels. At 2000, a full 100-label plan could
           // truncate mid-array, fail to parse, and silently fall back to a single batch of 10.
           max_tokens: 4000,
@@ -22212,24 +26822,23 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           messages: [{ role: "user", content: userPrompt }]
         }),
         signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-      });
+      };
+      if (attempt) attempt.model = requestModel;
+      const res = await this.fetchAiProvider(provider, url, request);
       if (!res.ok) {
-        const errBody = await res.json().catch(() => ({} as Body)) as Body;
+        const errBody = await this.readAiProviderJson(provider, res);
         const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-        throw new Error(this.describeProviderError("anthropic", res.status, rawMessage) || `Anthropic request failed: ${rawMessage}`);
+        throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson(provider, res);
       const text = normalizeJsonArray(data.content).map((item: Body) => item?.text || "").join("\n");
       const parsed = this.parseModelJson(text, []);
       if (!parsed) throw new Error("Anthropic returned no parseable JSON.");
-      const usage = data.usage || {};
-      const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-      const input = Number(usage.input_tokens || 0) + cached;
-      const output = Number(usage.output_tokens || 0);
-      return { ...parsed, __zyraUsage: { input, output, total: input + output } };
+      return { ...parsed, __zyraUsage: parseProviderUsage("anthropic", data.usage), __zyraModel: requestModel };
     }
     const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -22242,18 +26851,23 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ]
       }),
       signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await this.fetchAiProvider(provider, url, request);
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({} as Body)) as Body;
+      const errBody = await this.readAiProviderJson(provider, res);
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-      throw new Error(this.describeProviderError(String(key.provider || "openai"), res.status, rawMessage) || `OpenAI request failed: ${rawMessage}`);
+      throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
     }
-    const data = await res.json() as Body;
+    const data = await this.readAiProviderJson(provider, res);
     const content = String(data.choices?.[0]?.message?.content || "{}");
     const parsed = this.parseModelJson(content, []);
     if (!parsed) throw new Error("OpenAI returned no parseable JSON.");
-    const usage = data.usage || {};
-    return { ...parsed, __zyraUsage: { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) } };
+    return {
+      ...parsed,
+      __zyraUsage: parseProviderUsage("openai", data.usage),
+      __zyraModel: model
+    };
   }
 
   // Plans a todo list of distinct scenarios to cover for an exhaustive ("all possible cases")
@@ -22284,8 +26898,34 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       // "All – Exhaustive" run planned 49 — so the tier meant as "everything" fell well short of it.
       `Return ONLY JSON: {"scenarios": ["short scenario label", ...]}. List ${params.maxScenarios} scenarios, ordered from most to least important. This is exhaustive coverage: keep working through ${LegacyService.ZYRA_PLAN_COVERAGE_AREAS} until you reach ${params.maxScenarios}. Stop short only if the feature genuinely has no more distinct scenarios that the existing testcases do not already cover. No markdown, no commentary.`
     ].join("\n");
-    const parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt);
-    await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, parsed.__zyraUsage || {});
+    const traceSeedBase = `zyra:scenario-plan:${params.projectId}:${randomUUID()}`;
+    const attempt: ZyraProviderAttempt = {};
+    let parsed: Body;
+    try {
+      parsed = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, userPrompt, attempt);
+    } catch (err) {
+      void recordStandaloneGeneration({
+        traceSeed: traceSeedBase,
+        name: "zyra.scenario_plan",
+        provider: params.provider,
+        model: attempt.model || params.model,
+        input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+        errorMessage: err instanceof Error ? err.message : String(err),
+        metadata: { projectId: params.projectId }
+      });
+      throw err;
+    }
+    await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, parsed.__zyraModel || params.model, parsed.__zyraUsage || {});
+    void recordStandaloneGeneration({
+      traceSeed: traceSeedBase,
+      name: "zyra.scenario_plan",
+      provider: params.provider,
+      model: parsed.__zyraModel || params.model,
+      input: { system: systemPrompt, user: userPrompt, maxScenarios: params.maxScenarios },
+      output: { scenarios: normalizeJsonArray(parsed.scenarios).slice(0, 20) },
+      usage: parsed.__zyraUsage,
+      metadata: { projectId: params.projectId }
+    });
     const scenarios = LegacyService.mergeZyraScenarios([], parsed.scenarios, params.maxScenarios);
 
     // One top-up round when the first answer still stops well short of the target — models tend to
@@ -22301,11 +26941,37 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           "",
           `Return ONLY JSON: {"scenarios": [...]} with up to ${params.maxScenarios - scenarios.length} MORE distinct scenarios that neither the list above nor the existing testcases cover, ordered from most to least important. Return {"scenarios": []} if there are genuinely none left.`
         ].join("\n");
-        const more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt);
-        await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, params.model, more.__zyraUsage || {});
+        const topUpSeed = `${traceSeedBase}:topup`;
+        const topUpAttempt: ZyraProviderAttempt = {};
+        let more: Body;
+        try {
+          more = await this.zyraJsonCompletion(params.provider, params.model, params.key, systemPrompt, topUpPrompt, topUpAttempt);
+        } catch (topUpErr) {
+          void recordStandaloneGeneration({
+            traceSeed: topUpSeed,
+            name: "zyra.scenario_plan.topup",
+            provider: params.provider,
+            model: topUpAttempt.model || params.model,
+            input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+            errorMessage: topUpErr instanceof Error ? topUpErr.message : String(topUpErr),
+            metadata: { projectId: params.projectId }
+          });
+          throw topUpErr;
+        }
+        await this.recordZyraTokenUsage(params.projectId, "chat_plan", params.provider, more.__zyraModel || params.model, more.__zyraUsage || {});
+        void recordStandaloneGeneration({
+          traceSeed: topUpSeed,
+          name: "zyra.scenario_plan.topup",
+          provider: params.provider,
+          model: more.__zyraModel || params.model,
+          input: { system: systemPrompt, user: topUpPrompt, existingCount: scenarios.length, maxScenarios: params.maxScenarios },
+          output: { scenarios: normalizeJsonArray(more.scenarios).slice(0, 20) },
+          usage: more.__zyraUsage,
+          metadata: { projectId: params.projectId }
+        });
         return LegacyService.mergeZyraScenarios(scenarios, more.scenarios, params.maxScenarios);
       } catch (err) {
-        this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${err instanceof Error ? err.message : err}`);
+        this.logger.warn(`Scenario top-up failed for project ${params.projectId}, keeping the ${scenarios.length}-scenario plan: ${this.extractAiErrorMessage(err)}`);
       }
     }
     return scenarios;
@@ -22359,7 +27025,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       openAiBody.stream_options = { include_usage: true };
     }
     const headers = this.providerAuthHeaders(params.provider, params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
-    const response = await fetch(providerChatUrl(params.provider, params.baseUrl, String(openAiBody.model)), {
+    const response = await this.fetchAiProvider(params.provider, providerChatUrl(params.provider, params.baseUrl, String(openAiBody.model)), {
       method: "POST",
       headers,
       body: JSON.stringify(openAiBody),
@@ -22368,13 +27034,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const streamed = Boolean(liveFeed) && response.ok && String(response.headers.get("content-type") || "").includes("text/event-stream");
     const body = streamed
       ? await LegacyService.readOpenAiStream(response, liveFeed)
-      : await response.json().catch(() => ({} as Body)) as Body;
+      : await this.readAiProviderJson(params.provider, response);
     if (!response.ok) {
       const rawMessage = String(body.error?.message || body.error || response.statusText);
-      const friendly = this.describeProviderError(params.provider, response.status, rawMessage);
+      const friendly = LegacyService.describeProviderError(params.provider, response.status, rawMessage);
       throw new BadRequestException({
-        error: friendly || `${providerDefinition(params.provider)?.label || params.provider} testcase generation failed`,
-        detail: rawMessage,
+        error: friendly,
+        detail: friendly,
         ...(this.isProviderAuthError(response.status, rawMessage) ? { code: "ai_key_invalid" } : {})
       });
     }
@@ -22414,13 +27080,13 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   }): Promise<ZyraAiResult> {
     let lastMessage = "";
     const anthropicUrl = normalizeAnthropicMessagesUrl(params.baseUrl);
-    const anthropicHeaders = this.buildAnthropicAuthHeaders(params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
+    const anthropicHeaders = this.providerAuthHeaders(params.provider, params.apiKey, params.authHeaderName ?? null, params.authScheme ?? null);
     // A batch this size is streamed: a plain request returns no headers until it is finished, and
     // Node's fetch gives up on that after 5 minutes however long the abort signal allows.
     // …and whenever a live batch is listening (zyraDraftSink), whatever the size.
     const stream = params.input.requestedCount > LegacyService.ZYRA_STREAM_ABOVE || Boolean(zyraDraftSink());
     let maxTokens = Math.min(LegacyService.ZYRA_GEN_MAX_TOKENS, 2000 + params.input.requestedCount * 1500);
-    const send = (model: string) => fetch(anthropicUrl, {
+    const send = (model: string) => this.fetchAiProvider(params.provider, anthropicUrl, {
       method: "POST",
       headers: anthropicHeaders,
       body: JSON.stringify({
@@ -22454,7 +27120,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // The streamed answer comes back shaped like the plain one, so everything below reads both alike.
     // Each attempt gets its own live parser (zyraLiveDraftFeed), so a retried request starts clean.
     const readBody = async (response: Response): Promise<Body> =>
-      response.ok && stream ? LegacyService.readAnthropicStream(response, zyraLiveDraftFeed()) : (await response.json().catch(() => ({} as Body))) as Body;
+      response.ok && stream ? LegacyService.readAnthropicStream(response, zyraLiveDraftFeed()) : await this.readAiProviderJson(params.provider, response);
     for (const model of providerModelCandidates(params.provider, params.model)) {
       let response = await send(model);
       let body = await readBody(response);
@@ -22468,11 +27134,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       }
       if (!response.ok) {
         const rawMessage = String(body.error?.message || body.error || response.statusText);
-        const friendly = this.describeProviderError("anthropic", response.status, rawMessage);
-        lastMessage = friendly || rawMessage;
+        const friendly = LegacyService.describeProviderError("anthropic", response.status, rawMessage);
+        lastMessage = friendly;
         // Auth/permission failures are not model-specific — stop trying candidates and surface a clear message.
         if (this.isProviderAuthError(response.status, rawMessage)) {
-          throw new BadRequestException({ error: lastMessage, detail: rawMessage, code: "ai_key_invalid" });
+          throw new BadRequestException({ error: lastMessage, detail: lastMessage, code: "ai_key_invalid" });
         }
         if (!/model|not.?found|invalid/i.test(rawMessage)) break;
         continue;
@@ -22497,7 +27163,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         requestId: response.headers.get("request-id") || undefined
       };
     }
-    throw new BadRequestException({ error: "Claude testcase generation failed", detail: lastMessage || "No compatible Claude model was accepted." });
+    throw new BadRequestException({ error: lastMessage || "Claude testcase generation failed", detail: lastMessage || "No compatible Claude model was accepted." });
   }
 
   private generateZyraDrafts(input: {
@@ -22564,7 +27230,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     return `I checked ${signals || "the submitted story"} and planned coverage across happy path, negative, boundary, permission, data-state, and traceability risks before drafting the testcases.`;
   }
 
-  private async zyraChatWithOpenAi(key: Body, model: string, context: string, message: string): Promise<Body> {
+  private async zyraChatWithOpenAi(key: Body, model: string, context: string, message: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     const body = {
       model,
       response_format: { type: "json_object" },
@@ -22575,37 +27241,37 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     };
     const provider = String(key.provider || "openai").toLowerCase();
     const headers = this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme);
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await this.fetchAiProvider(provider, url, request);
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({} as Body)) as Body;
+      const errBody = await this.readAiProviderJson(provider, res);
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-      throw new Error(this.describeProviderError(String(key.provider || "openai"), res.status, rawMessage) || `OpenAI chat failed: ${rawMessage}`);
+      throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
     }
-    const data = await res.json() as Body;
+    const data = await this.readAiProviderJson(provider, res);
     const content = String(data.choices?.[0]?.message?.content || "{}");
-    // Real provider usage, not the estimateTokens() guess callers used to fall back to — this was
-    // sitting right here in the response and being thrown away.
-    const usage = data.usage || {};
-    const zyraUsage = { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) };
+    const zyraUsage = parseProviderUsage("openai", data.usage);
     const parsed = this.parseModelJson(content);
     // __rawCompletion: the literal, unparsed provider text — never derived from `parsed`/`content`
     // downstream, so a trace can show exactly what the provider sent even when parsing recovered
     // (or salvaged) something usable from it. See recordGeneration's rawOutput field.
-    if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __rawCompletion: content };
+    if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __zyraModel: model, __rawCompletion: content };
     // AI returned prose instead of JSON — surface it as a plain answer so the
     // user sees the actual message rather than a SyntaxError string.
-    return { reply: content.trim().slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __rawCompletion: content };
+    return { reply: content.trim().slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __zyraModel: model, __rawCompletion: content };
   }
 
-  private async zyraChatWithAnthropic(key: Body, model: string, context: string, message: string): Promise<Body> {
+  private async zyraChatWithAnthropic(key: Body, model: string, context: string, message: string, attempt?: ZyraProviderAttempt): Promise<Body> {
     let lastStatus = "";
     const chatUrl = normalizeAnthropicMessagesUrl(key.base_url);
-    const chatHeaders = this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme);
+    const chatHeaders = this.providerAuthHeaders("anthropic", key.api_key, key.auth_header_name, key.auth_scheme);
     for (const candidate of providerModelCandidates(String(key.provider || "anthropic"), model)) {
       const body = {
         model: candidate,
@@ -22631,17 +27297,19 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           { role: "user", content: message }
         ]
       };
-      const res = await fetch(chatUrl, {
+      const request = {
         method: "POST",
         headers: chatHeaders,
         body: JSON.stringify(body),
         signal: LegacyService.zyraProviderSignal(LegacyService.ZYRA_ROUTER_TIMEOUT_MS)
-      });
+      };
+      if (attempt) attempt.model = candidate;
+      const res = await this.fetchAiProvider("anthropic", chatUrl, request);
       if (!res.ok) {
-        const data = await res.json().catch(() => ({} as Body)) as Body;
+        const data = await this.readAiProviderJson("anthropic", res);
         const rawStatus = String(data.error?.message || data.error || res.status);
-        const friendly = this.describeProviderError("anthropic", res.status, rawStatus);
-        lastStatus = friendly || rawStatus;
+        const friendly = LegacyService.describeProviderError("anthropic", res.status, rawStatus);
+        lastStatus = friendly;
         // Auth/permission failures won't be fixed by another model candidate — fail fast and clearly.
         if (this.isProviderAuthError(res.status, rawStatus)) {
           throw new Error(lastStatus);
@@ -22649,20 +27317,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         if (!/model|not.?found|invalid/i.test(rawStatus)) break;
         continue;
       }
-      const data = await res.json() as Body;
+      const data = await this.readAiProviderJson("anthropic", res);
       const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-      // Real provider usage, not the estimateTokens() guess callers used to fall back to — this was
-      // sitting right here in the response and being thrown away.
-      const usage = data.usage || {};
-      const cached = Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-      const zyraUsage = { input: Number(usage.input_tokens || 0) + cached, output: Number(usage.output_tokens || 0), total: 0 };
-      zyraUsage.total = zyraUsage.input + zyraUsage.output;
+      const zyraUsage = parseProviderUsage("anthropic", data.usage);
       const parsed = this.parseModelJson(rawText || "{}");
       // __rawCompletion — see the identical comment in zyraChatWithOpenAi above.
-      if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __rawCompletion: rawText };
+      if (parsed) return { ...parsed, __zyraUsage: zyraUsage, __zyraModel: candidate, __rawCompletion: rawText };
       // AI returned prose instead of JSON — surface it as a plain answer so the
       // user sees the actual message rather than a SyntaxError string.
-      return { reply: rawText.slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __rawCompletion: rawText };
+      return { reply: rawText.slice(0, 5000), action: "answer", actionType: "answer", operations: [], testcases: [], __zyraUsage: zyraUsage, __zyraModel: candidate, __rawCompletion: rawText };
     }
     throw new Error(`Claude chat failed: ${lastStatus || "No compatible model was accepted."}`);
   }
@@ -22753,6 +27416,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           `SELECT id, title, content_text, upper(trim(split_part(title, ':', 1))) AS key
            FROM knowledge_documents
            WHERE project_id = $1 AND is_deleted = false AND upper(trim(split_part(title, ':', 1))) = ANY($2::text[])
+             AND ${knowledgeDocumentAiContextSql()}
            ORDER BY updated_at DESC`,
           [params.projectId, keys]
         );
@@ -22762,8 +27426,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
           if (byKey.has(row.key)) return; // most recently updated wins for a duplicated key
           byKey.set(row.key, { title: row.title, content: focused[i] ?? "", citation: { sourceType: "document", sourceId: row.id } });
         });
-      } catch (err) {
-        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}: ${err instanceof Error ? err.message : err}`);
+      } catch {
+        this.logger.warn(`Update drafting: requirement lookup failed for project ${params.projectId}.`);
       }
       return byKey;
     };
@@ -22773,8 +27437,8 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       let retrieved: typeof params.sources.knowledge = [];
       try {
         retrieved = (await this.zyraTaskKnowledge(params.projectId, [], [query])).knowledge;
-      } catch (err) {
-        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only: ${err instanceof Error ? err.message : err}`);
+      } catch {
+        this.logger.warn(`Update drafting: knowledge retrieval failed for project ${params.projectId}, using the turn's sources only.`);
       }
       const requirements = await requirementDocs(batch);
       const seen = new Set<string>();
@@ -22824,10 +27488,11 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         "",
         this.zyraStaticSourcePrompt({ ...sources, linear: [] } as unknown as ZyraGenerationInput)
       ].join("\n");
+      const attempt: ZyraProviderAttempt = {};
       try {
-        const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000));
-        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, params.model, usage);
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
+        const { parsed, usage, rawText } = await this.zyraAuthorJson(params.key, params.provider, params.model, system, user, Math.min(16000, 2000 + batch.length * 2000), attempt);
+        await this.recordZyraTokenUsage(params.projectId, "chat_generate", params.provider, attempt.model || params.model, usage || {});
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: attempt.model || params.model, input: { cases: cases.length, sourcesShown }, output: parsed, rawOutput: parsed ? undefined : rawText, usage });
         const byId = new Map<string, Body>();
         for (const entry of normalizeJsonArray(parsed?.updates)) {
           if (entry && typeof entry === "object" && entry.externalId) byId.set(String(entry.externalId).toUpperCase(), entry);
@@ -22852,7 +27517,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
       } catch (err) {
         const reason = this.isZyraTimeoutError(err) ? "drafting it timed out" : `drafting it failed (${this.extractAiErrorMessage(err)})`;
-        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
+        recordGeneration(params.trace, { name: "update_authoring", provider: params.provider, model: attempt.model || params.model, input: { cases: cases.length, sourcesShown }, errorMessage: reason });
         for (const { op, row } of batch) op.__authoringError = `${row.externalId}: ${reason}, so nothing was staged for it — ask again to retry.`;
       }
     };
@@ -22876,14 +27541,15 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * One JSON completion with the generation budget (ZYRA_GENERATE_TIMEOUT_MS, caller-chosen
    * max_tokens) — the router helpers above are pinned to the router's 60s/4096-token budget.
    */
-  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number): Promise<{ parsed: Body | null; usage: { input: number; output: number; total: number }; rawText: string }> {
+  private async zyraAuthorJson(key: Body, provider: string, model: string, system: string, user: string, maxTokens: number, attempt?: ZyraProviderAttempt): Promise<{ parsed: Body | null; usage: ProviderUsage | undefined; rawText: string }> {
     const signal = () => LegacyService.zyraProviderSignal(LegacyService.ZYRA_GENERATE_TIMEOUT_MS);
     if (providerWire(provider) === "anthropic") {
       let lastStatus = "";
       for (const candidate of providerModelCandidates(String(key.provider || "anthropic"), model)) {
-        const res = await fetch(normalizeAnthropicMessagesUrl(key.base_url), {
+        const url = normalizeAnthropicMessagesUrl(key.base_url);
+        const request = {
           method: "POST",
-          headers: this.buildAnthropicAuthHeaders(key.api_key, key.auth_header_name, key.auth_scheme),
+          headers: this.providerAuthHeaders(provider, key.api_key, key.auth_header_name, key.auth_scheme),
           body: JSON.stringify({
             model: candidate,
             max_tokens: maxTokens,
@@ -22891,41 +27557,42 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
             messages: [{ role: "user", content: user }]
           }),
           signal: signal()
-        });
+        };
+        if (attempt) attempt.model = candidate;
+        const res = await this.fetchAiProvider(provider, url, request);
         if (!res.ok) {
-          const data = await res.json().catch(() => ({} as Body)) as Body;
+          const data = await this.readAiProviderJson(provider, res);
           const rawStatus = String(data.error?.message || data.error || res.status);
-          lastStatus = this.describeProviderError("anthropic", res.status, rawStatus) || rawStatus;
+          lastStatus = LegacyService.describeProviderError(provider, res.status, rawStatus);
           if (this.isProviderAuthError(res.status, rawStatus)) throw new Error(lastStatus);
           if (!/model|not.?found|invalid/i.test(rawStatus)) break;
           continue;
         }
-        const data = await res.json() as Body;
+        const data = await this.readAiProviderJson(provider, res);
         const rawText = normalizeJsonArray(data.content).map((item) => item?.text || "").join("\n").trim();
-        const usage = data.usage || {};
-        const input = Number(usage.input_tokens || 0) + Number(usage.cache_read_input_tokens || 0) + Number(usage.cache_creation_input_tokens || 0);
-        const output = Number(usage.output_tokens || 0);
-        return { parsed: this.parseModelJson(rawText || "{}"), usage: { input, output, total: input + output }, rawText };
+        return { parsed: this.parseModelJson(rawText || "{}"), usage: parseProviderUsage("anthropic", data.usage), rawText };
       }
       throw new Error(`Claude update drafting failed: ${lastStatus || "No compatible model was accepted."}`);
     }
-    const res = await fetch(providerChatUrl(provider, key.base_url, model), {
+    const url = providerChatUrl(provider, key.base_url, model);
+    const request = {
       method: "POST",
       headers: this.providerAuthHeaders(provider, String(key.api_key || ""), key.auth_header_name, key.auth_scheme),
       body: JSON.stringify({ model, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
       signal: signal()
-    });
+    };
+    if (attempt) attempt.model = model;
+    const res = await this.fetchAiProvider(provider, url, request);
     if (!res.ok) {
-      const errBody = await res.json().catch(() => ({} as Body)) as Body;
+      const errBody = await this.readAiProviderJson(provider, res);
       const rawMessage = String(errBody.error?.message || errBody.error || res.status);
-      throw new Error(this.describeProviderError(provider, res.status, rawMessage) || `Update drafting failed: ${rawMessage}`);
+      throw new Error(LegacyService.describeProviderError(provider, res.status, rawMessage));
     }
-    const data = await res.json() as Body;
+    const data = await this.readAiProviderJson(provider, res);
     const rawText = String(data.choices?.[0]?.message?.content || "{}");
-    const usage = data.usage || {};
     return {
       parsed: this.parseModelJson(rawText),
-      usage: { input: Number(usage.prompt_tokens || 0), output: Number(usage.completion_tokens || 0), total: Number(usage.total_tokens || 0) },
+      usage: parseProviderUsage("openai", data.usage),
       rawText
     };
   }
@@ -22978,7 +27645,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       .filter((op) => {
         if (op.type === "create") return !!op.draft;
         if (op.type === "create_suite") return !!op.suiteName;
-        if (op.type === "move_to_suite") return (!!op.suiteName || !!op.suiteId) && (op.allExisting || op.fromLastPlan || !!op.externalIds?.length || !!op.testcaseIds?.length);
+        // The project-scoped resolver already accepts scalar IDs as well as lists; do not drop them here.
+        if (op.type === "move_to_suite") return (!!op.suiteName || !!op.suiteId) &&
+          (op.allExisting || op.fromLastPlan || !!op.externalIds?.length || !!op.testcaseIds?.length || !!op.testcaseId?.trim() || !!op.externalId?.trim());
         // An archive may name a SET (every existing testcase, or several ids) as well as one case —
         // a confirmed "delete all the test cases" arrives as allExisting:true, and dropping it here
         // is what left the confirmation with nothing to stage. applyZyraChatOperations expands it.
@@ -23054,7 +27723,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // matter less here, but they are kept correct anyway.
   private detectZyraChatIntent(message: string): ZyraChatIntent {
     const lower = message.toLowerCase();
-    const jiraWords = /\b(jira|ticket|tickets|story|stories|issue|issues)\b/.test(lower);
     const testcaseWords = /\b(testcase|test case|testcases|test cases|case|cases|coverage)\b/.test(lower);
     const createWords = /\b(creat|generat|draft|prepar|author)\w*\b|\b(add|adds|added|adding|write|writes|writing|wrote|make|makes|making|new)\b/.test(lower);
     const updateWords = /\b(updat|chang|revis|edit|modif|improv)\w*\b|\b(mark|marks|marked)\b/.test(lower);
@@ -23555,7 +28223,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     let buffer = "";
     let text = "";
     let usage: Body = {};
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    for await (const chunk of LegacyService.providerStreamChunks("openai", response)) {
       buffer += decoder.decode(chunk, { stream: true });
       let newline: number;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -23564,7 +28232,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         if (!line.startsWith("data:") || line === "data: [DONE]") continue;
         let event: Body;
         try { event = JSON.parse(line.slice(5)) as Body; } catch { continue; }
-        if (event.error) throw new Error(String(event.error?.message || "The AI provider's stream failed."));
+        if (event.error) throw new Error(LegacyService.describeProviderError("openai", 0, String(event.error?.message || event.error?.type || "")));
         const delta = String(event.choices?.[0]?.delta?.content || "");
         if (delta) {
           text += delta;
@@ -23581,7 +28249,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     let buffer = "";
     let text = "";
     const usage: Body = {};
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+    for await (const chunk of LegacyService.providerStreamChunks("anthropic", response)) {
       buffer += decoder.decode(chunk, { stream: true });
       let newline: number;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -23597,7 +28265,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         }
         else if (event.type === "message_start") Object.assign(usage, event.message?.usage || {});
         else if (event.type === "message_delta") Object.assign(usage, event.usage || {});
-        else if (event.type === "error") throw new Error(String(event.error?.message || "The AI provider's stream failed."));
+        else if (event.type === "error") throw new Error(LegacyService.describeProviderError("anthropic", 0, String(event.error?.message || event.error?.type || "")));
       }
     }
     return { content: [{ type: "text", text }], usage };
@@ -23629,7 +28297,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Never true for a rejection that came from the provider itself (a 4xx/5xx, malformed JSON) — those
   // already carry their own message and go through the normal failure path.
   private isZyraTimeoutError(err: unknown): boolean {
-    return err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    return isAiProviderTimeout(err);
   }
 
   // The English classification decides; a Russian session gets the same entry from ZYRA_RU.failure.
@@ -23883,12 +28551,12 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // updated" or "TC-4 will be archived" is not a persistence claim just because the bare word
   // "updated"/"archived" appears near a testcase token.
   // Same noun-first addition as ZYRA_COMPLETION_CLAIM above, restricted to this regex's own
-  // (narrower, "moved" excluded — a real move writes immediately, see the call site) verb list, and
+  // persistence-only verb list (including moves, which now also remain proposals), and
   // the same review-driven tightening (10-char window, no comma/semicolon crossing, and the narrower
   // relative-clause-only "was"/"were" exclusion, NOT a bare one — see ZYRA_COMPLETION_CLAIM's own
   // comment for why a bare exclusion silently regressed the original bug this whole guard exists for).
   private static readonly ZYRA_PERSISTED_CLAIM =
-    /\b(?<!\b(?:being|getting|will\s+be|would\s+be|should\s+be|could\s+be|can\s+be|must\s+be|to\s+be|not\s+yet)\s)(created|added|saved|archived|updated|deleted|removed)\b[^.!?\n]{0,80}\b(test\s?cases?|tc-\d|suite|repository)\b|\b(test\s?cases?|suite)\b[^.!?\n]{0,80}\b(have|has|were|was)\s+been\s+(created|added|saved|archived|updated|removed)\b|\b(test\s?cases?|suite)\b[^.!?\n,;]{0,10}\b(?<!\b(?:being|getting|will\s+be|would\s+be|should\s+be|could\s+be|can\s+be|must\s+be|to\s+be|not\s+yet)\s)(?<!\b(?:that|which|who)\s(?:was|were)\s)(?<!\b(?:that|which|who)\s(?:was|were)\s\w{1,12}\s)(created|added|saved|archived|updated|deleted|removed)\b/i;
+    /\b(?<!\b(?:being|getting|will\s+be|would\s+be|should\s+be|could\s+be|can\s+be|must\s+be|to\s+be|not\s+yet)\s)(created|added|saved|archived|updated|deleted|removed|moved|assigned)\b[^.!?\n]{0,80}\b(test\s?cases?|tc-\d|suite|repository)\b|\b(test\s?cases?|suite)\b[^.!?\n]{0,80}\b(have|has|were|was)\s+been\s+(created|added|saved|archived|updated|removed|moved|assigned)\b|\b(test\s?cases?|suite)\b[^.!?\n,;]{0,10}\b(?<!\b(?:being|getting|will\s+be|would\s+be|should\s+be|could\s+be|can\s+be|must\s+be|to\s+be|not\s+yet)\s)(?<!\b(?:that|which|who)\s(?:was|were)\s)(?<!\b(?:that|which|who)\s(?:was|were)\s\w{1,12}\s)(created|added|saved|archived|updated|deleted|removed|moved|assigned)\b/i;
 
   /*
    * A Russian session's reply is checked against BOTH languages: the Russian claim pattern for the
@@ -23897,7 +28565,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    */
   private zyraFalseCompletionBannerRu(reply: string, salvaged: boolean, englishPattern: RegExp): string {
     const folded = foldRu(reply);
-    if (!englishPattern.test(reply) && !ZYRA_RU_COMPLETION_CLAIM.test(folded)) return "";
+    const russianPattern = englishPattern === LegacyService.ZYRA_TESTCASE_ONLY_COMPLETION_CLAIM
+      ? ZYRA_RU_TESTCASE_ONLY_COMPLETION_CLAIM : ZYRA_RU_COMPLETION_CLAIM;
+    if (!englishPattern.test(reply) && !russianPattern.test(folded)) return "";
     if (!salvaged && (LegacyService.ZYRA_ALREADY_DISCLOSED.test(reply) || ZYRA_RU_ALREADY_DISCLOSED.test(folded))) return "";
     return ZYRA_RU.falseClaimBanner;
   }
@@ -23907,10 +28577,10 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       const folded = foldRu(reply);
       const claims = LegacyService.ZYRA_PERSISTED_CLAIM.test(reply) || ZYRA_RU_COMPLETION_CLAIM.test(folded);
       const disclosed = LegacyService.ZYRA_ALREADY_DISCLOSED.test(reply) || ZYRA_RU_ALREADY_DISCLOSED.test(folded);
-      return claims && !disclosed ? ZYRA_RU.falseClaimBanner : "";
+      return claims && !disclosed ? "Изменения подготовлены для проверки и ещё не применены. Проверьте точные предложения, выберите нужные и сохраните их в панели проверки." : "";
     }
     if (!LegacyService.ZYRA_PERSISTED_CLAIM.test(reply) || LegacyService.ZYRA_ALREADY_DISCLOSED.test(reply)) return "";
-    return "⚠️ **Sorry! Nothing was saved.** Anything described below as created, saved or archived was not carried out — I only described it.\n\nAsk me to go ahead and I'll make the change and show you the affected test cases.";
+    return "⚠️ **The proposed changes have not been applied.** Review the exact proposals, select the changes you want, and Save them in the review panel.";
   }
 
   private reconcileZyraReply(decision: ZyraChatDecision, applied: ZyraAppliedOperations): string {
@@ -23924,6 +28594,29 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         ? `\n\n⚠️ ${String(archiveFailure.detail)}`
         : "";
     const moveSuffix = this.zyraMoveBreakdownSuffix(applied.moveBreakdown) + archivedSuffix;
+    const ru = zyraReplyLanguage() === "ru";
+    // Pending proposals, including drafts assigned to a suite before a later operation fails,
+    // still need the same review guidance; a completed move alone must not receive it.
+    const proposedCount = (applied.proposedCount ?? applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length);
+    const reviewHint = proposedCount > 0 && ru
+      ? ZYRA_RU.reviewHint(proposedCount)
+      : proposedCount > 0
+      ? `\n\n📝 ${proposedCount} of them ${proposedCount === 1 ? "is" : "are"} staged for your review — open the review panel to select, edit, or discard, then Save to add ${proposedCount === 1 ? "it" : "them"} to the repository. Nothing has been written to the repository yet.`
+      : "";
+    if (applied.activity.some((entry) => entry.title === "Could not create suite")) {
+      const refusal = ru
+        ? "Создание набора требует действия человека. В этом сообщении наборы не созданы. Создайте набор в репозитории тест-кейсов или выберите новый набор при сохранении точных проверенных предложений."
+        : "Suite creation requires a human editing action. No suites were created in this chat turn. Create a suite in the testcase repository, or choose a new suite while saving exact reviewed case proposals.";
+      return refusal + reviewHint + moveSuffix;
+    }
+    // Suite assignment also writes independently; a caught error is neither a missing target nor
+    // proof of rollback. Keep completed moves and any still-pending review guidance alongside it.
+    if (decision.operations.length && decision.operations.every((op) => op.type === "create_suite" || op.type === "move_to_suite") &&
+        applied.activity.some((entry) => entry.title === "An operation failed unexpectedly" || entry.title === "Could not move testcases")) {
+      const warning = ru ? ZYRA_RU.suiteOperationError
+        : "⚠️ Suite operations reported an error. Do not treat the response below as confirmation that every operation completed. Any changes already applied were kept; check the activity log before retrying.";
+      return warning + "\n\n" + decision.reply + reviewHint + moveSuffix;
+    }
     /*
      * An `answer` turn used to return its reply unchecked, on the reasoning that an answer changes
      * nothing so there is nothing to reconcile. That is exactly backwards: an answer changes nothing,
@@ -23938,7 +28631,12 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
      * The correction goes FIRST, before the model's prose, so the two are read in the right order.
      */
     if (decision.actionType === "answer") {
-      const banner = !applied.testcases.length && !applied.liveSavedCount ? this.zyraFalseCompletionBanner(decision.reply, decision.__salvaged) : "";
+      // In "view/find saved test cases", saved modifies an existing-case reference, not a write.
+      // Mask only that token for claim detection, keeping the guard's bounded text windows intact.
+      // Other claims in the same answer are still checked; the persisted prose stays untouched.
+      const claimText = decision.reply.replace(/(\b(?:view|find)\s+)(saved)(?=\s+test\s?cases?\b)/gi,
+        (_match: string, prefix: string, adjective: string) => prefix + " ".repeat(adjective.length));
+      const banner = !applied.testcases.length && !applied.liveSavedCount ? this.zyraFalseCompletionBanner(claimText, decision.__salvaged) : "";
       return banner ? [banner, "", decision.reply].join("\n") + moveSuffix : decision.reply + moveSuffix;
     }
     // Creating an empty suite touches no testcases and is still a complete success — but the reply
@@ -23955,7 +28653,6 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     const requested = decision.operations.filter((op) => op.type !== "create_suite").length;
     const appliedCount = applied.testcases.length + (applied.liveSavedCount ?? 0);
 
-    const ru = zyraReplyLanguage() === "ru";
     // Every update named an existing test case but none of them would change anything (see
     // applyZyraChatOperations) — a different situation from "those test cases don't exist", so it
     // gets its own wording rather than the not-found one below.
@@ -23987,21 +28684,9 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       ].join("\n") + moveSuffix;
     }
 
-    // create/update/archive no longer write straight to the repository — they're staged for review
-    // (see applyZyraChatOperations), so a reply claiming "created"/"saved"/"archived" past tense is
-    // no longer accurate even when every requested operation produced a row. Appended after the
-    // model's own prose rather than replacing it, so the reply keeps whatever specifics it named.
-    const proposedCount = applied.testcases.filter((tc) => typeof tc.action === "string" && tc.action.startsWith("proposed-")).length;
-    const reviewHint = proposedCount > 0 && ru
-      ? ZYRA_RU.reviewHint(proposedCount)
-      : proposedCount > 0
-      ? `\n\n📝 ${proposedCount} of them ${proposedCount === 1 ? "is" : "are"} staged for your review — open the review panel to select, edit, or discard, then Save to add ${proposedCount === 1 ? "it" : "them"} to the repository. Nothing has been written to the repository yet.`
-      : "";
-
-    // Gated on proposedCount, not just the reply text: move_to_suite/create_suite write immediately
-    // (applied.testcases rows carry a real id, no "proposed-" action), so a reply claiming "saved"/
-    // "moved" there is true and must pass through untouched — only a turn with something actually
-    // still staged can make the reply's completion claim false. And zyraPersistedClaimBanner, not
+    // Gated on proposedCount, not just the reply text: create/update/archive/move remain staged;
+    // a standalone create_suite can still be a real native suite operation. Only a turn with
+    // persisted proposals needs the persistence-claim correction. Use zyraPersistedClaimBanner, not
     // zyraFalseCompletionBanner, because a staged turn legitimately says "drafted"/"staged" — see
     // that method's own comment for why the two banners can't share one regex.
     const banner = proposedCount > 0 ? this.zyraPersistedClaimBanner(decision.reply) : "";
@@ -24186,7 +28871,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private static readonly ZYRA_TICKET_DOCS_SQL = `
     SELECT DISTINCT ON (upper(trim(split_part(title, ':', 1)))) id, title, content_text, upper(trim(split_part(title, ':', 1))) AS ticket_key
     FROM knowledge_documents
-    WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+    WHERE project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}
       AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
       AND ($2::text[] IS NULL OR upper(trim(split_part(title, ':', 1))) = ANY($2::text[]))
     ORDER BY upper(trim(split_part(title, ':', 1))), updated_at DESC`;
@@ -24207,7 +28892,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async zyraTicketDocumentCount(projectId: string): Promise<number> {
     const res = await this.db.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM knowledge_documents
-       WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+       WHERE project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}
          AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'`,
       [projectId]
     );
@@ -24245,6 +28930,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
         `SELECT DISTINCT upper(split_part(trim(split_part(title, ':', 1)), '-', 1)) AS prefix
          FROM knowledge_documents
          WHERE project_id = $1 AND is_deleted = false AND title ~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+\\s*:'
+           AND ${knowledgeDocumentAiContextSql()}
            AND upper(split_part(trim(split_part(title, ':', 1)), '-', 1)) = ANY($2::text[])`,
         [projectId, prefixes]
       );
@@ -24495,7 +29181,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   private async projectSuiteSummaries(projectId: string): Promise<Array<{ id: string; name: string; testCaseCount: number }>> {
     const suites = await this.db.query(
       `SELECT s.id, s.name, COUNT(t.id)::int AS test_case_count
-       FROM suites s LEFT JOIN testcases t ON t.suite_id = s.id AND t.deleted_at IS NULL AND COALESCE(t.status,'') <> 'Archived'
+       FROM suites s LEFT JOIN testcases t ON t.suite_id = s.id AND t.project_id = s.project_id AND t.deleted_at IS NULL AND COALESCE(t.status,'') <> 'Archived'
        WHERE s.project_id = $1 AND s.deleted_at IS NULL
        GROUP BY s.id, s.name
        ORDER BY s.position, s.name
@@ -24522,7 +29208,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
       this.db.query(
         `SELECT title
          FROM knowledge_documents
-         WHERE project_id = $1 AND is_deleted = false AND (document_type != 'ai_memory' OR status = 'approved')
+         WHERE project_id = $1 AND is_deleted = false AND ${knowledgeDocumentAiContextSql()}
          ORDER BY updated_at DESC
          LIMIT 12`,
         [projectId]
@@ -24720,15 +29406,18 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
     // to drop silently, staging an update whose rewritten values had all been lost. Known spellings
     // are folded onto the real key first; a key already given in its canonical form wins.
     const stepAliases = new Set(["steps", "testSteps", "stepList"]);
-    const normalized: Body = {};
+    // A Map, not an object: the key names are derived from model output, and a Map has no prototype
+    // for a "__proto__" key to reach. Values are read back only by the fixed allowlist below.
+    const normalized = new Map<string, unknown>();
     for (const [rawKey, value] of Object.entries(fields || {})) {
       const camel = rawKey.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
       const key = stepAliases.has(camel) ? "stepsJson" : camel;
-      if (!(key in normalized) || rawKey === key) normalized[key] = value;
+      if (!normalized.has(key) || rawKey === key) normalized.set(key, value);
     }
     const cleaned: Body = {};
     for (const key of allowed) {
-      if (normalized[key] !== undefined && normalized[key] !== null) cleaned[key] = normalized[key];
+      const value = normalized.get(key);
+      if (value !== undefined && value !== null) cleaned[key] = value;
     }
     if (cleaned.stepsJson) cleaned.stepsJson = this.safeSteps(cleaned.stepsJson);
     return cleaned;
@@ -24804,6 +29493,7 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
   // Extracted so the Zyra review-batch save can run several update/archive proposals atomically
   // with each other (and with any creates in the same batch) against one shared client.
   private async patchTestCaseFromZyraWithClient(client: PoolClient, testcaseId: string, actorId: string | null, fields: Body) {
+    assertNotGenericApproval(fields.status);
     const sets: string[] = [];
     const values: any[] = [testcaseId];
     for (const [key, column] of LegacyService.ZYRA_PATCH_FIELD_COLUMNS) {
@@ -24912,14 +29602,58 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * site already gets right) is returned completely untouched — no risk of regressing it.
    */
   private async formatAiTask(row: Body): Promise<Body> {
-    const item = toCamel(row as QueryResultRow);
-    const rawDrafts = normalizeJsonArray(row.generated_payload);
-    item.drafts = await Promise.all(rawDrafts.map((entry: Body) => this.normalizeAiTaskDraftEntry(entry)));
+    const item = this.taskRowForRead(row);
+    const snapshot = row.proposal_snapshot as Body | undefined;
+    const rawDrafts = normalizeJsonArray(snapshot?.operations || row.generated_payload);
+    // Work Package A Slice 1 keeps its typed requirement/link entries in the same reviewed
+    // payload as the case drafts. They are surfaced separately so the existing case-draft
+    // renderer never mistakes them for testcase cards.
+    const bundleEntries = rawDrafts.filter((entry: Body) => REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")));
+    const managedEntries = rawDrafts.filter((entry: Body) => String(entry?.opType || "") === MANAGED_DOCUMENT_OP_TYPE);
+    const caseEntries = rawDrafts.filter((entry: Body) =>
+      !REQUIREMENT_BUNDLE_OPERATION_KINDS.has(String(entry?.opType || "")) && String(entry?.opType || "") !== MANAGED_DOCUMENT_OP_TYPE);
+    item.drafts = await Promise.all(caseEntries.map((entry: Body) => this.normalizeAiTaskDraftEntry(entry, snapshot?.targets)));
+    if (bundleEntries.length) {
+      item.requirementBundle = bundleEntries;
+      item.skillContext = row.skill_context && Object.keys(row.skill_context).length
+        ? row.skill_context
+        : bundleEntries.find((entry: Body) => entry.skillContext)?.skillContext || REQUIREMENT_SKILL_CONTEXT;
+    }
+    if (managedEntries.length && process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1") {
+      item.managedDocumentProposalEntries = managedEntries;
+      item.skillContext = row.skill_context && Object.keys(row.skill_context).length ? row.skill_context : null;
+    }
+    if (this.isRequirementBundleTask(row)) {
+      item.requirementDecision = this.requirementDecisionReceipt(row);
+    }
+    const managedPreview = (row.provider !== "external_document_proposal" && managedEntries.length === 0) || process.env.TESBO_PROPOSAL_REVIEW_PREVIEW_ENABLED === "1";
+    if (snapshot && managedPreview) {
+      item.proposalSnapshot = snapshot;
+      item.proposalRevision = row.proposal_review_revision;
+      delete item.proposalReviewRevision;
+    }
+    if (!managedPreview) {
+      // The dedicated document-proposal surface (and staging itself) is disabled. The generic read
+      // must not become a side door to the unpublished governed content, its apply receipts or
+      // pinned Skill basis.
+      delete item.generatedPayload;
+      delete item.proposalSnapshot;
+      delete item.proposalRevision;
+      delete item.proposalReviewRevision;
+      delete item.saveEvents;
+      delete item.skillContext;
+      delete item.proposalProvenance;
+      delete item.proposalRequestKey;
+      delete item.proposalRequestDigest;
+      // The staging entry embeds the pinned Skill context, so the timeline is a side door too.
+      delete item.activityLog;
+      delete item.sourceSummary;
+    }
     item.jiraIssueKeys = normalizeJsonArray(row.jira_issue_keys);
     item.linearIssueKeys = normalizeJsonArray(row.linear_issue_keys);
     item.notionPageIds = normalizeJsonArray(row.notion_page_ids);
-    item.sources = normalizeJsonArray(row.source_summary);
-    item.activities = normalizeJsonArray(row.activity_log);
+    item.sources = managedPreview ? normalizeJsonArray(row.source_summary) : [];
+    item.activities = managedPreview ? normalizeJsonArray(row.activity_log) : [];
     // A Russian task's timeline and sources are rendered in Russian; the stored English is untouched
     // (see zyra-task-activity-ru.ts). Every other task is returned exactly as before.
     if (row.language === "ru") {
@@ -24952,17 +29686,25 @@ Plan scenarios for ${key} only — every other ticket in this request is planned
    * already does today. Not fixed here — reusing the existing formula, not improving on it, is what
    * was asked.
    */
-  private async normalizeAiTaskDraftEntry(entry: Body): Promise<Body> {
+  private async normalizeAiTaskDraftEntry(entry: Body, reviewTargets?: Body[]): Promise<Body> {
     if (!entry || typeof entry !== "object") return entry;
     const opType = entry.opType as string | undefined;
     if (!opType) return entry; // task-board's own flat shape — every existing render site already handles this correctly, untouched
-    if (opType === "create") return this.chatDraftRow(entry.draft || {}, "proposed-create", entry.reason);
+    if (opType === "create") {
+      const metadata = entry.reviewMetadata || {};
+      const rendered = this.chatDraftRow({ ...(entry.draft || {}), ...(Array.isArray(metadata.techniques) ? { techniques: metadata.techniques } : {}) }, "proposed-create", entry.reason);
+      return Array.isArray(metadata.tags) ? { ...rendered, tags: metadata.tags } : rendered;
+    }
     if (opType !== "update" && opType !== "archive") return entry; // an opType this function doesn't recognize — don't guess, pass through as-is
 
     const action = opType === "archive" ? "proposed-archive" : "proposed-update";
     let current: Body | null = null;
     try {
-      current = await this.getTestCase(String(entry.testcaseId || ""));
+      current = reviewTargets ? (() => {
+        const target = reviewTargets.find(item => item.testcaseId === entry.testcaseId);
+        if (!target) throw new NotFoundException({error:"Target no longer exists"});
+        return toCamel(target.testcase);
+      })() : await this.getTestCase(String(entry.testcaseId || ""));
     } catch {
       // Deleted (soft-delete, getTestCase's own filter) or never a real id — either way there is no
       // current row to preview. Still return an identifiable row rather than a blank one: the

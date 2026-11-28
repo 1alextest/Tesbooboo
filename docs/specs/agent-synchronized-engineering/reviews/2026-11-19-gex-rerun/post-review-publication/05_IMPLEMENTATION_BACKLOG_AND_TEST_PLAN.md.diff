@@ -1,0 +1,29 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # Implementation Backlog, Engineering Tasks and QA Acceptance Plan
+ 
+-**Document ID:** TESBO-PLAN-005 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** plan plus scoped implementation receipts; unverified backlog/QA entries remain NOT RUN; NOT FROZEN.
++**Document ID:** TESBO-PLAN-005 | **Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** plan plus scoped implementation receipts; unverified backlog/QA entries remain NOT RUN; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ **Repository:** `1alextest/Tesbooboo`, feature branch first, never direct Railway production promotion.  
+ **Execution tool:** engineer/coding agent may be OpenCode; this plan does **not** replace the separate OpenCode+Chrome MCP QA execution workflow.
+@@ -2028,3 +2028,18 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++Extend GA-AC-01–05 in canonical 05. All application outcomes below are expected, NOT RUN.
++
++| Check | Fixture and expected result |
++| --- | --- |
++| GA-AC-01 | DMIS synthetic posting cases: approval-only, old build, same build wrong actor/data/state/path all remain unverified. Matching FAIL is verified/unmet. Matching PASS is verified/met absent contrary evidence. Both orders, delayed arrival and simultaneous FAIL/PASS yield verified/mixed with native triage and original receipts intact. Authorized correction has its own audit. Commit barrier: exact simultaneous retry gives one native receipt/effect, changed payload conflicts, precommit revocation yields zero effects. Assert no implicit run/impact changes. |
++| GA-AC-02 | Golden mixed project: A modeled PASS plus equivalent approved policy, B unmapped policy verified FAIL, C model obligation with no run, D unresolved governing conflict. Before withdrawal: 3 known eligible, 2 verified, 1 met, 1 conflict outside known denominator; scope incomplete. Withdrawal produces 4 known eligible (A model and A policy distinct; policy has no applicable execution), 2 verified, 1 met, 1 conflict; historical snapshot retains prior counts. |
++| GA-AC-03 | Compare absent/private worlds and include a permitted control reader who can actually see the difference. Hidden-only rebuild leaves cursor continuation, status, freshness and detail unchanged for restricted reader. An authorized visible change follows refresh/history contract. Revoke during queued AI and during native storage read; reject late delivery and reuse. |
++| GA-AC-04 | Independently declared downstream consumer silently omitted by extractor must yield limited/unknown; genuine unaffected control with valid bounded frontier witness permits scoped no impact. Include backdated authority correction and recorded vs recomputed historical modes. Retain FR-124 comparative controls. |
++| GA-AC-05 | Same binding, stale worker finishes after newer cursor/profile published. Assert no regression across list/count/detail and continued authorized history. Freeze head to test stall deadline, bounded retry/escalation and convergence. Include missed event, backlog and AI-only outage. |
++
++Keep rendered Before/After, authorized role journeys, keyboard/mobile/AT, Green coverage dispositions and Graph/White closeout separate. Pin source and build when executing. Record operational envelope and owner approval before rollout.

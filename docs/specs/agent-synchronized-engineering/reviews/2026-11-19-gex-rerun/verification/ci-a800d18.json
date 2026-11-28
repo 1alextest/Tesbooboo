@@ -1,0 +1,64 @@
+{
+  "observed_at_utc": "2026-11-20 05:53:28 UTC",
+  "document_head": "a800d18a39595a160211c6c1a7b2366ecc8ae325",
+  "development_sha": "6897f989b055a955280f810c7daace86f74057fa",
+  "workflows": [
+    {
+      "id": 44682615323,
+      "name": "Repository secret guard",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615323"
+    },
+    {
+      "id": 44682615299,
+      "name": "CI hygiene",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615299"
+    },
+    {
+      "id": 44682615304,
+      "name": "Free repository security",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615304"
+    },
+    {
+      "id": 44682615327,
+      "name": "Mutation effectiveness",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615327"
+    },
+    {
+      "id": 44682615413,
+      "name": "Behavioral quality",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615413"
+    },
+    {
+      "id": 44682615324,
+      "name": "Security analysis",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615324"
+    },
+    {
+      "id": 44682615363,
+      "name": "Core code quality",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615363"
+    },
+    {
+      "id": 44682615424,
+      "name": "Smoke and supply-chain security",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/1alextest/Tesbooboo/actions/runs/44682615424"
+    }
+  ],
+  "limits": "Actual incoming-branch statuses only, not final delivery tree, proposed product tests, deployment, or classification of the earlier one-match failure."
+}

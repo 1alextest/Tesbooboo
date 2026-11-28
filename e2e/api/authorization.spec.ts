@@ -328,6 +328,54 @@ test.describe("test executions", () => {
 });
 
 test.describe("bugs", () => {
+  test("bug creation refuses anonymous/nonmembers without changing linked results, but permits the member", async ({ request }) => {
+    const marker = `E2E Bug Create Authorization ${Date.now()}`;
+    const bugIds: string[] = [];
+    let testcaseId = "";
+    let cycleId = "";
+    try {
+      const testcaseResponse = await request.post(`/api/projects/${ctxA.projectId}/testcases`, { data: { title: marker } });
+      expect(testcaseResponse.ok(), await testcaseResponse.text()).toBeTruthy();
+      testcaseId = (await testcaseResponse.json()).id;
+      const cycleResponse = await request.post(`/api/projects/${ctxA.projectId}/cycles`, { data: { name: marker } });
+      expect(cycleResponse.ok(), await cycleResponse.text()).toBeTruthy();
+      cycleId = (await cycleResponse.json()).id;
+      const attached = await request.post(`/api/cycles/${cycleId}/testcases`, { data: { testcaseIds: [testcaseId] } });
+      expect(attached.ok(), await attached.text()).toBeTruthy();
+      const list = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      const execution = (list.list ?? list)[0];
+      expect(execution).toBeTruthy();
+      const passed = await request.patch(`/api/cycles/${cycleId}/executions/${execution.id}`, { data: { status: "Passed" } });
+      expect(passed.ok(), await passed.text()).toBeTruthy();
+      const before = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      const links = [{ testcaseId, cycleId, executionId: execution.id }];
+      for (const [label, client] of [["anonymous", anon], ["nonmember", asB]] as const) {
+        const response = await client.post(`/api/projects/${ctxA.projectId}/bugs`, {
+          data: { title: `${marker} ${label}`, links }, failOnStatusCode: false
+        });
+        const body = await response.json();
+        if (body.id) bugIds.push(body.id); // Cleanup even if a regression wrongly accepts the request.
+        expect(REFUSED, `${label}: ${JSON.stringify(body)}`).toContain(response.status());
+        expect(await (await request.get(`/api/cycles/${cycleId}/executions`)).json()).toEqual(before);
+        const bugs = await (await request.get(`/api/projects/${ctxA.projectId}/bugs`)).json();
+        expect(bugs.filter((bug: { title: string }) => bug.title.startsWith(marker))).toHaveLength(0);
+      }
+      const response = await request.post(`/api/projects/${ctxA.projectId}/bugs`, {
+        data: { title: `${marker} authorized`, links }
+      });
+      const created = await response.json();
+      if (created.id) bugIds.push(created.id);
+      expect(response.ok(), JSON.stringify(created)).toBeTruthy();
+      expect(created.links).toEqual(expect.arrayContaining([expect.objectContaining(links[0])]));
+      const after = await (await request.get(`/api/cycles/${cycleId}/executions`)).json();
+      expect((after.list ?? after)[0].status).toBe("Failed");
+    } finally {
+      for (const id of bugIds) await request.delete(`/api/bugs/${id}`, { failOnStatusCode: false });
+      if (cycleId) await request.delete(`/api/cycles/${cycleId}`, { failOnStatusCode: false });
+      if (testcaseId) await request.delete(`/api/projects/${ctxA.projectId}/testcases/${testcaseId}`, { failOnStatusCode: false });
+    }
+  });
+
   test("a different account can read, update, and delete another project's bug by ID", { tag: '@tesbo.testId("TES-TC-36")' }, async ({ request }) => {
     // KNOWN GAP: getBug/updateBug/deleteBug (legacy.service.ts:2044-2096) don't even call
     // requireUser — no session and no project-membership check.

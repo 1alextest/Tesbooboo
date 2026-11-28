@@ -1,0 +1,60 @@
+{
+  "basis": "Actual root read-only comparison after final v16 review inputs and Graph receipt were frozen; White notified to retain its exact target",
+  "current_observed_library_version": 17,
+  "current_observed_revision": "1.4.37",
+  "backing_file_id": "file_00000000c2a481f5bc9b699e6920d695",
+  "published37_archive_sha256": "1ed8afd0a978ab9b257c10d61549f6085c7f1f593713a26b0ae56a4540562848",
+  "reviewed36_archive_sha256": "406d5da0eb7f4d4a6fc062407f2d3affa7ec540d2e8572678e457f8847a7de33",
+  "reviewed_manifest_sha256": "9dba403c3bb129ce5a5fcab4064a6afccdc669e588ba983e124680bbcf4e7062",
+  "members": [
+    {
+      "path": "00_README.md",
+      "reviewed36_sha256": "4cd678749336b2d737528204ea6fa2ee304c30922563b581b9a9f44ea0802844",
+      "published37_sha256": "11b13253ae857c17ebfb3ba940757a616e0a9a902e8b767e74609e0f3a64e446",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "01_PRODUCT_REQUIREMENTS.md",
+      "reviewed36_sha256": "a1c1b80dc18c42b6b293a13fb47fdf6941cd96f1d92439b423433bad58f86d49",
+      "published37_sha256": "fb62ba97dfefc96b4f121a534744e8c9735ba1158f5fbacc4ee3bbc0d4ded1b1",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "02_WORKFLOW_AND_UX_SPEC.md",
+      "reviewed36_sha256": "e5217299f269dabc65eb6f3ac321502e9bccaaf24e023ace85691b8615af36a3",
+      "published37_sha256": "8f791e6ac643ff8c2686577b48fbe640ddacb03473789e7672bf8c389a2c2bd7",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "03_TECHNICAL_DESIGN.md",
+      "reviewed36_sha256": "7742fce2c1c5fdc7261da512b439d1dfeb588f21bcf7a2de6fbdb8a0d2cf2afc",
+      "published37_sha256": "d06cde915dcc2d268d68c913278248190560b90136de7da223b8bfc65e1333ef",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "04_MCP_API_CONTRACTS.md",
+      "reviewed36_sha256": "97e31e99b094b3b0e0016f64265ef46be22840528e295f09b2ac17ea82c87e69",
+      "published37_sha256": "21d4f5300ed9f9aff427c7c1293fc956c23c343f99bfc1bed5e25f406e0f737d",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "reviewed36_sha256": "96cc95771e5de762e324248d4612ec70cea4739190ed89c274a18e469be61efc",
+      "published37_sha256": "affe294c0aa55b89cb17d09abdcff923124a0a1ef1d3f18dbcd3a3997f778935",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "reviewed36_sha256": "664bb9cebcc1b9323c05b9bb1d90d1e8b2ef17170edc4d7d823c99fc4cd07365",
+      "published37_sha256": "d283804d17b70337f6386f25879146fe42569f59737629f64b37f4ab6abb7a82",
+      "reviewed_body_preserved_after_exact_header_change": true
+    },
+    {
+      "path": "07_UI_DESIGN_TASKS.md",
+      "reviewed36_sha256": "29d3c612783e2a42ed833f039c170a0e0cc0e788ca22a2775e58fa4f8304a9f7",
+      "published37_sha256": "cc7c525d400a94c55a1524159c5fb2fc93e9e000bb2d1343f568f68050e10d3f",
+      "reviewed_body_preserved_after_exact_header_change": true
+    }
+  ],
+  "limit": "Preservation check only. New material37 clauses do not inherit this run\u2019s full specialist, Graph or White approval. No canonical overwrite or invented current-source/runtime result."
+}

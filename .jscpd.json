@@ -1,0 +1,20 @@
+{
+  "path": ["."],
+  "pattern": "{Tesbo-Backend-Nest/src,Tesbo-Frontend/app,Tesbo-Frontend/components,Tesbo-Frontend/lib,sdk/playwright-reporter/src}/**/*.{ts,tsx}",
+  "format": ["typescript", "tsx"],
+  "minTokens": 100,
+  "minLines": 20,
+  "maxSize": "20mb",
+  "mode": "mild",
+  "ignore": [
+    "**/*.{spec,test}.{ts,tsx}",
+    "**/*.d.ts",
+    "**/test-helpers/**",
+    "**/fixtures/**",
+    "**/node_modules/**"
+  ],
+  "gitignore": true,
+  "reporters": ["json"],
+  "output": "reports/quality/duplication",
+  "failOnEmpty": true
+}

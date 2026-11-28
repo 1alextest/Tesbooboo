@@ -1,3 +1,4 @@
+import { createTestcaseFixtureResponse } from "../utils/testcase-approval";
 import path from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import {
@@ -184,7 +185,7 @@ test.describe("traceability priority and status labels", () => {
     const stamp = Date.now();
     const caseIds: string[] = [];
     for (const [i, priority] of ["P2", "Medium"].entries()) {
-      const res = await api.post(`/api/projects/${projectId}/testcases`, {
+      const res = await createTestcaseFixtureResponse(api, `/api/projects/${projectId}/testcases`, {
         data: { title: `E2E Trace Label ${i} ${stamp}`, priority, status: "Approved" },
       });
       caseIds.push((await res.json()).id);

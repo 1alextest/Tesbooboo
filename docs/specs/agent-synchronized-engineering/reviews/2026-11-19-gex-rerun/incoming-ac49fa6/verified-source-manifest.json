@@ -1,0 +1,54 @@
+{
+  "repository": "1alextest/Tesbooboo",
+  "commit": "ac49fa64d87723c9c1be4491a6fe06c7672e3af6",
+  "files": [
+    {
+      "path": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "sha": "3655003fdec743f93bbd011166da174eff804e6e",
+      "sha256": "9ebba70f961f14bfe91e80a340d93d6729d20c6935187a9b3114217bc257e012",
+      "bytes": 38287
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/README.md",
+      "sha": "a89d8f566134804ce0456421209b4efdf7a5a1db",
+      "sha256": "62e6e115f5f93f299a42de0c8201c74d112c6412aeeaf223d51351f0de65d2cf",
+      "bytes": 38282
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/design.md",
+      "sha": "1be2fc4dcc8af2a6e5cda89a1eab68ac9707857c",
+      "sha256": "35147b7c30757e304ca849d5ca1a3af0ef0b6d117779a9cbd94f883f34e5e8ea",
+      "bytes": 131273
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "sha": "d8a509f48fceeb5768fe46e4afde521d79ed98df",
+      "sha256": "5c7f1749fd3e4f14b93df3b4afdcd193f3cb3af1446011411f3ded64879f4c61",
+      "bytes": 99686
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "sha": "4b62c3f53107dfc15a8a604e1ba9eb0f78fdaadd",
+      "sha256": "abacf0e73c7b9f56730cd6b5e83f8b5b98311bdac0d3a541d592e8098f200477",
+      "bytes": 88012
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-gex-integration-gate.md",
+      "sha": "11b8a375e00f062af851c9f4489500e73386cf8b",
+      "sha256": "b334269318fafc523c8f7804644a4c1ac1a5e1255e19bd0d1d91b59e423e6377",
+      "bytes": 12360
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/reviews/2026-11-19-skills-portability.md",
+      "sha": "6d4057279a7f43074b0def5691cf0e0eba3008bd",
+      "sha256": "155b231324c42d964f424d89875300bc6562313c59990f1c6e1cde8f4a4f92f3",
+      "bytes": 25453
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "sha": "356a3643a697e8bc27d310a99d17ac68d7c2b0c7",
+      "sha256": "d5088978f6e5439801a7d477b62196c293d317e79a609ac60678fc64c13d300d",
+      "bytes": 64130
+    }
+  ]
+}

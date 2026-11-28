@@ -34,7 +34,13 @@ process.env.SECRETS_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 type Body = Record<string, any>;
 
 function makeLegacy(findSimilarTestcases: jest.Mock, dbQuery: jest.Mock): LegacyService {
-  const db = { query: dbQuery } as unknown as DatabaseService;
+  const db = {
+    query: dbQuery,
+    // Zyra's memory write now runs in one transaction; these tests only exercise the drafting
+    // path, so an empty transactional client is enough to let the fire-and-forget memory call end.
+    transaction: jest.fn(async (callback: (client: { query: () => Promise<{ rows: unknown[] }> }) => Promise<unknown>) =>
+      callback({ query: () => Promise.resolve({ rows: [] }) }))
+  } as unknown as DatabaseService;
   const ragRetrieval = { findSimilarTestcases } as unknown as RagRetrievalService;
   const requestCache = new RequestCacheService({} as unknown as AppConfigService);
   const suitesCache = new SuitesCacheService({} as unknown as Redis, {} as unknown as AppConfigService);
@@ -377,7 +383,7 @@ describe("generateZyraChatTestcasesWithAi — create-path wiring", () => {
       if (String(sql).includes("EXISTS") && String(sql).includes("testcase_embeddings")) return Promise.resolve({ rows: [{ exists: true }] });
       if (String(sql).includes("SELECT id, external_id, title FROM testcases")) return Promise.resolve({ rows: [{ id: "tc-1", external_id: "EAD-12", title: "Session expiry blocks login" }] });
       if (String(sql).includes("SELECT id FROM testcases")) return Promise.resolve({ rows: [{ id: "tc-1" }] }); // findProjectTestcase
-      if (String(sql).includes("SELECT * FROM testcases")) return Promise.resolve({ rows: [{ id: "tc-1", external_id: "EAD-12", title: "Session expiry blocks login", status: "Approved" }] }); // getTestCase
+      if (String(sql).includes("AS edit_revision") && String(sql).includes("FROM testcases WHERE id =")) return Promise.resolve({ rows: [{ id: "tc-1", external_id: "EAD-12", title: "Session expiry blocks login", status: "Approved", edit_revision: "a".repeat(64) }] }); // getTestCase's row + revision read
       if (String(sql).includes("INSERT INTO ai_generation_requests")) return Promise.resolve({ rows: [{ id: "review-1" }] });
       return Promise.resolve({ rows: [] });
     });

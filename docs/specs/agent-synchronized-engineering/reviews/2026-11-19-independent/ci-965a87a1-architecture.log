@@ -1,0 +1,1070 @@
+﻿2026-11-20T03:27:25.2782119Z Current runner version: '2.338.2'
+2026-11-20T03:27:25.2801519Z ##[group]Runner Image Provisioner
+2026-11-20T03:27:25.2802108Z Hosted Compute Agent
+2026-11-20T03:27:25.2802544Z Version: 20261111.635
+2026-11-20T03:27:25.2802931Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed
+2026-11-20T03:27:25.2803352Z Build Date: 2026-11-11T01:49:01Z
+2026-11-20T03:27:25.2803843Z Worker ID: {ed38f0e7-b196-4746-afc7-362225421820}
+2026-11-20T03:27:25.2804259Z Region: centralus
+2026-11-20T03:27:25.2804617Z Cloud: Azure
+2026-11-20T03:27:25.2804958Z ##[endgroup]
+2026-11-20T03:27:25.2805716Z ##[group]Operating System
+2026-11-20T03:27:25.2806184Z Ubuntu
+2026-11-20T03:27:25.2806505Z 24.04.5
+2026-11-20T03:27:25.2806846Z LTS
+2026-11-20T03:27:25.2807175Z ##[endgroup]
+2026-11-20T03:27:25.2807513Z ##[group]Runner Image
+2026-11-20T03:27:25.2807961Z Image: ubuntu-24.04
+2026-11-20T03:27:25.2808305Z Version: 20261116.376.1
+2026-11-20T03:27:25.2809123Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261116.376/images/ubuntu/Ubuntu2404-Readme.md
+2026-11-20T03:27:25.2810363Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261116.376
+2026-11-20T03:27:25.2810958Z ##[endgroup]
+2026-11-20T03:27:25.2811638Z ##[group]GITHUB_TOKEN Permissions
+2026-11-20T03:27:25.2812934Z Contents: read
+2026-11-20T03:27:25.2813284Z Metadata: read
+2026-11-20T03:27:25.2813650Z ##[endgroup]
+2026-11-20T03:27:25.2815430Z Secret source: Actions
+2026-11-20T03:27:25.2815971Z Cache mode: write
+2026-11-20T03:27:25.2816472Z Prepare workflow directory
+2026-11-20T03:27:25.4074742Z Prepare all required actions
+2026-11-20T03:27:25.4109745Z Getting action download info
+2026-11-20T03:27:25.6248406Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-20T03:27:25.7530040Z Download action repository 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-11-20T03:27:25.8861756Z Download action repository 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-11-20T03:27:26.2029482Z Complete job name: architecture-quality
+2026-11-20T03:27:26.4117106Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-11-20T03:27:26.4117698Z with:
+2026-11-20T03:27:26.4117942Z   persist-credentials: false
+2026-11-20T03:27:26.4118215Z   fetch-depth: 0
+2026-11-20T03:27:26.4118464Z   repository: 1alextest/Tesbooboo
+2026-11-20T03:27:26.4120805Z   token: ***
+2026-11-20T03:27:26.4121034Z   ssh-strict: true
+2026-11-20T03:27:26.4121271Z   ssh-user: git
+2026-11-20T03:27:26.4121498Z   clean: true
+2026-11-20T03:27:26.4121740Z   sparse-checkout-cone-mode: true
+2026-11-20T03:27:26.4122024Z   fetch-tags: false
+2026-11-20T03:27:26.4122268Z   show-progress: true
+2026-11-20T03:27:26.4122513Z   lfs: false
+2026-11-20T03:27:26.4122742Z   submodules: false
+2026-11-20T03:27:26.4122983Z   set-safe-directory: true
+2026-11-20T03:27:26.4123335Z   allow-unsafe-pr-checkout: false
+2026-11-20T03:27:26.4123727Z env:
+2026-11-20T03:27:26.4124002Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:26.4124345Z ##[endgroup]
+2026-11-20T03:27:26.6082028Z Syncing repository: 1alextest/Tesbooboo
+2026-11-20T03:27:26.6083446Z ##[group]Getting Git version info
+2026-11-20T03:27:26.6084017Z Working directory is '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:26.6084834Z [command]/usr/bin/git version
+2026-11-20T03:27:26.6150694Z git version 2.56.1
+2026-11-20T03:27:26.6166154Z ##[endgroup]
+2026-11-20T03:27:26.6178127Z Temporarily overriding HOME='/home/runner/work/_temp/bedd23a2-396a-4b2e-8ded-b6325979ea1c' before making global git config changes
+2026-11-20T03:27:26.6179475Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:27:26.6182220Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:26.6231412Z Deleting the contents of '/home/runner/work/Tesbooboo/Tesbooboo'
+2026-11-20T03:27:26.6243248Z ##[group]Initializing the repository
+2026-11-20T03:27:26.6243903Z [command]/usr/bin/git init /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:26.6339528Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-20T03:27:26.6340410Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-20T03:27:26.6341350Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-20T03:27:26.6342125Z hint: call:
+2026-11-20T03:27:26.6342562Z hint:
+2026-11-20T03:27:26.6343028Z hint: 	git config --global init.defaultBranch <name>
+2026-11-20T03:27:26.6343545Z hint:
+2026-11-20T03:27:26.6344021Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-20T03:27:26.6344818Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-20T03:27:26.6345422Z hint:
+2026-11-20T03:27:26.6345766Z hint: 	git branch -m <name>
+2026-11-20T03:27:26.6346186Z hint:
+2026-11-20T03:27:26.6346713Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-20T03:27:26.6347603Z Initialized empty Git repository in /home/runner/work/Tesbooboo/Tesbooboo/.git/
+2026-11-20T03:27:26.6358290Z [command]/usr/bin/git remote add origin https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:26.6407831Z ##[endgroup]
+2026-11-20T03:27:26.6408542Z ##[group]Disabling automatic garbage collection
+2026-11-20T03:27:26.6410777Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-20T03:27:26.6443677Z ##[endgroup]
+2026-11-20T03:27:26.6444337Z ##[group]Setting up auth
+2026-11-20T03:27:26.6450168Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:26.6491501Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:26.6831260Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:26.6869201Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:26.7067064Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:26.7106774Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:26.7307223Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-20T03:27:26.7392190Z ##[endgroup]
+2026-11-20T03:27:26.7392690Z ##[group]Fetching the repository
+2026-11-20T03:27:26.7403747Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/* +e49fab4df4043b621b7007e97d8646743f441b6b:refs/remotes/pull/167/merge
+2026-11-20T03:27:28.6836896Z From https://github.com/1alextest/Tesbooboo
+2026-11-20T03:27:28.6842296Z  * [new branch]        chore/architecture-impact-quality        -> origin/chore/architecture-impact-quality
+2026-11-20T03:27:28.6844480Z  * [new branch]        chore/langfuse-model-pricing-docs-and-lint-cleanup -> origin/chore/langfuse-model-pricing-docs-and-lint-cleanup
+2026-11-20T03:27:28.6846336Z  * [new branch]        chore/remove-scheduled-run-ui            -> origin/chore/remove-scheduled-run-ui
+2026-11-20T03:27:28.6847988Z  * [new branch]        chore/required-suite-execution           -> origin/chore/required-suite-execution
+2026-11-20T03:27:28.6849541Z  * [new branch]        ci/impact-build-config                   -> origin/ci/impact-build-config
+2026-11-20T03:27:28.6850887Z  * [new branch]        ci/migrator-url-validation               -> origin/ci/migrator-url-validation
+2026-11-20T03:27:28.6852300Z  * [new branch]        ci/pr4-reconciled-20261020               -> origin/ci/pr4-reconciled-20261020
+2026-11-20T03:27:28.6853920Z  * [new branch]        ci/pr5-reconciled-20261020               -> origin/ci/pr5-reconciled-20261020
+2026-11-20T03:27:28.6855506Z  * [new branch]        ci/review-board-runtime-evidence         -> origin/ci/review-board-runtime-evidence
+2026-11-20T03:27:28.6857020Z  * [new branch]        ci/root-audit-exception                  -> origin/ci/root-audit-exception
+2026-11-20T03:27:28.6858439Z  * [new branch]        development                              -> origin/development
+2026-11-20T03:27:28.6860346Z  * [new branch]        docs/gae-eight-spec-reconciliation-20261113 -> origin/docs/gae-eight-spec-reconciliation-20261113
+2026-11-20T03:27:28.6862558Z  * [new branch]        docs/gex-unified-graph-extension-20261119 -> origin/docs/gex-unified-graph-extension-20261119
+2026-11-20T03:27:28.6864444Z  * [new branch]        docs/inventory-truth-pass                -> origin/docs/inventory-truth-pass
+2026-11-20T03:27:28.6866165Z  * [new branch]        docs/mbt-model-studio-spec-20261115      -> origin/docs/mbt-model-studio-spec-20261115
+2026-11-20T03:27:28.6867920Z  * [new branch]        docs/mcp-coverage-description            -> origin/docs/mcp-coverage-description
+2026-11-20T03:27:28.6869891Z  * [new branch]        docs/qa-specs-product-direction-20261028 -> origin/docs/qa-specs-product-direction-20261028
+2026-11-20T03:27:28.6871948Z  * [new branch]        docs/session-distillation-ai-roadmap-20261028 -> origin/docs/session-distillation-ai-roadmap-20261028
+2026-11-20T03:27:28.6873824Z  * [new branch]        docs/status-and-compat-decisions         -> origin/docs/status-and-compat-decisions
+2026-11-20T03:27:28.6875436Z  * [new branch]        docs/truth-pass-schedules-mcp            -> origin/docs/truth-pass-schedules-mcp
+2026-11-20T03:27:28.6876787Z  * [new branch]        feat/kb-trash                            -> origin/feat/kb-trash
+2026-11-20T03:27:28.6878732Z  * [new branch]        feat/mbt-native-draft-preview-20261115   -> origin/feat/mbt-native-draft-preview-20261115
+2026-11-20T03:27:28.6880917Z  * [new branch]        feat/mcp-deploy-check-catalog-fingerprint -> origin/feat/mcp-deploy-check-catalog-fingerprint
+2026-11-20T03:27:28.6882968Z  * [new branch]        feat/mcp-governed-runs-and-provenance    -> origin/feat/mcp-governed-runs-and-provenance
+2026-11-20T03:27:28.6884661Z  * [new branch]        feat/mcp-model-authoring                 -> origin/feat/mcp-model-authoring
+2026-11-20T03:27:28.6886251Z  * [new branch]        feat/model-case-context-20261116         -> origin/feat/model-case-context-20261116
+2026-11-20T03:27:28.6888025Z  * [new branch]        feat/model-draft-graph-viewer-20261116   -> origin/feat/model-draft-graph-viewer-20261116
+2026-11-20T03:27:28.6889860Z  * [new branch]        feat/model-studio-archive                -> origin/feat/model-studio-archive
+2026-11-20T03:27:28.6891519Z  * [new branch]        feat/model-studio-authoring              -> origin/feat/model-studio-authoring
+2026-11-20T03:27:28.6893303Z  * [new branch]        feat/model-studio-governed-cases         -> origin/feat/model-studio-governed-cases
+2026-11-20T03:27:28.6894983Z  * [new branch]        feat/model-studio-governed-runs          -> origin/feat/model-studio-governed-runs
+2026-11-20T03:27:28.6896954Z  * [new branch]        feat/qa-mcp-lifecycle-provenance-20261116 -> origin/feat/qa-mcp-lifecycle-provenance-20261116
+2026-11-20T03:27:28.6898679Z  * [new branch]        feat/run-bulk-status                     -> origin/feat/run-bulk-status
+2026-11-20T03:27:28.6900312Z  * [new branch]        feat/schedule-edit-run-now               -> origin/feat/schedule-edit-run-now
+2026-11-20T03:27:28.6901826Z  * [new branch]        feat/schedule-local-time                 -> origin/feat/schedule-local-time
+2026-11-20T03:27:28.6903544Z  * [new branch]        feat/scheduled-runs                      -> origin/feat/scheduled-runs
+2026-11-20T03:27:28.6905223Z  * [new branch]        feat/studio-generated-cases-and-kb-title -> origin/feat/studio-generated-cases-and-kb-title
+2026-11-20T03:27:28.6907909Z  * [new branch]        feat/t455-source-cache-graph-projection-20261114 -> origin/feat/t455-source-cache-graph-projection-20261114
+2026-11-20T03:27:28.6910151Z  * [new branch]        feat/t455-source-declarations-20261115   -> origin/feat/t455-source-declarations-20261115
+2026-11-20T03:27:28.6912204Z  * [new branch]        feat/t456-native-qa-verification-gaps-20261115 -> origin/feat/t456-native-qa-verification-gaps-20261115
+2026-11-20T03:27:28.6914135Z  * [new branch]        fix/admin-customer-summary               -> origin/fix/admin-customer-summary
+2026-11-20T03:27:28.6916034Z  * [new branch]        fix/approved-only-native-run-cases-20261115 -> origin/fix/approved-only-native-run-cases-20261115
+2026-11-20T03:27:28.6918134Z  * [new branch]        fix/aser-governed-workflow-20261118      -> origin/fix/aser-governed-workflow-20261118
+2026-11-20T03:27:28.6920055Z  * [new branch]        fix/aser-governed-workflow-rebased       -> origin/fix/aser-governed-workflow-rebased
+2026-11-20T03:27:28.6922027Z  * [new branch]        fix/atomic-bulk-execution-workflows-20261112 -> origin/fix/atomic-bulk-execution-workflows-20261112
+2026-11-20T03:27:28.6924151Z  * [new branch]        fix/automation-close-result-atomicity-20261020 -> origin/fix/automation-close-result-atomicity-20261020
+2026-11-20T03:27:28.6926446Z  * [new branch]        fix/backend-development-dependency-security-20261112 -> origin/fix/backend-development-dependency-security-20261112
+2026-11-20T03:27:28.6928548Z  * [new branch]        fix/build-provenance-railway-first       -> origin/fix/build-provenance-railway-first
+2026-11-20T03:27:28.6930457Z  * [new branch]        fix/cycle-report-summary-20261117        -> origin/fix/cycle-report-summary-20261117
+2026-11-20T03:27:28.6932070Z  * [new branch]        fix/from-cases-seeds-cases               -> origin/fix/from-cases-seeds-cases
+2026-11-20T03:27:28.6933829Z  * [new branch]        fix/integration-plan-gate-auth-url-20261117 -> origin/fix/integration-plan-gate-auth-url-20261117
+2026-11-20T03:27:28.6935821Z  * [new branch]        fix/manual-integration-sync-plan-gate    -> origin/fix/manual-integration-sync-plan-gate
+2026-11-20T03:27:28.6937886Z  * [new branch]        fix/mcp-authoring-schema-parity-20261117 -> origin/fix/mcp-authoring-schema-parity-20261117
+2026-11-20T03:27:28.6939885Z  * [new branch]        fix/mcp-project-lock-parity-20261113     -> origin/fix/mcp-project-lock-parity-20261113
+2026-11-20T03:27:28.6941650Z  * [new branch]        fix/model-studio-digest-inputs           -> origin/fix/model-studio-digest-inputs
+2026-11-20T03:27:28.6943601Z  * [new branch]        fix/native-run-approved-case-boundary-20261115 -> origin/fix/native-run-approved-case-boundary-20261115
+2026-11-20T03:27:28.6945829Z  * [new branch]        fix/notif-ui-11-project-key-url          -> origin/fix/notif-ui-11-project-key-url
+2026-11-20T03:27:28.6947449Z  * [new branch]        fix/notif-ui-11-project-segment          -> origin/fix/notif-ui-11-project-segment
+2026-11-20T03:27:28.6949181Z  * [new branch]        fix/notion-ci-regressions-20261020       -> origin/fix/notion-ci-regressions-20261020
+2026-11-20T03:27:28.6951252Z  * [new branch]        fix/phase1-atomic-automation-closure-20261021 -> origin/fix/phase1-atomic-automation-closure-20261021
+2026-11-20T03:27:28.6953259Z  * [new branch]        fix/phase1-browser-mutation-retry-20261112 -> origin/fix/phase1-browser-mutation-retry-20261112
+2026-11-20T03:27:28.6955366Z  * [new branch]        fix/phase1-bug-link-finalized-run-20261022 -> origin/fix/phase1-bug-link-finalized-run-20261022
+2026-11-20T03:27:28.6957338Z  * [new branch]        fix/phase1-bug-links-finalized-runs-20261022 -> origin/fix/phase1-bug-links-finalized-runs-20261022
+2026-11-20T03:27:28.6959514Z  * [new branch]        fix/phase1-history-import-finalization-20261022 -> origin/fix/phase1-history-import-finalization-20261022
+2026-11-20T03:27:28.6961338Z  * [new branch]        fix/platform-admin-owner-gate            -> origin/fix/platform-admin-owner-gate
+2026-11-20T03:27:28.6962918Z  * [new branch]        fix/pr7-rebased-20261020                 -> origin/fix/pr7-rebased-20261020
+2026-11-20T03:27:28.6964411Z  * [new branch]        fix/reporter-retry-final-counts          -> origin/fix/reporter-retry-final-counts
+2026-11-20T03:27:28.6966072Z  * [new branch]        fix/reports-soft-deleted-executions      -> origin/fix/reports-soft-deleted-executions
+2026-11-20T03:27:28.6968121Z  * [new branch]        fix/requirement-matrix-bug-links         -> origin/fix/requirement-matrix-bug-links
+2026-11-20T03:27:28.6970462Z  * [new branch]        fix/shared-approved-run-case-boundary-20261115 -> origin/fix/shared-approved-run-case-boundary-20261115
+2026-11-20T03:27:28.6972356Z  * [new branch]        fix/t457-approved-run-case-guard-20261115 -> origin/fix/t457-approved-run-case-guard-20261115
+2026-11-20T03:27:28.6973952Z  * [new branch]        fix/tai-duplicate-test-id                -> origin/fix/tai-duplicate-test-id
+2026-11-20T03:27:28.6975563Z  * [new branch]        fix/zyra-suite-failure-feedback-20261114 -> origin/fix/zyra-suite-failure-feedback-20261114
+2026-11-20T03:27:28.6976984Z  * [new branch]        main                                     -> origin/main
+2026-11-20T03:27:28.6978264Z  * [new branch]        proof/case-read-before-20261116          -> origin/proof/case-read-before-20261116
+2026-11-20T03:27:28.6979964Z  * [new branch]        security/codeql-alert-backlog            -> origin/security/codeql-alert-backlog
+2026-11-20T03:27:28.6981483Z  * [new branch]        security/last-two-alerts                 -> origin/security/last-two-alerts
+2026-11-20T03:27:28.6983034Z  * [new branch]        security/remaining-alert-sources         -> origin/security/remaining-alert-sources
+2026-11-20T03:27:28.6984882Z  * [new branch]        test/phase1-execution-attribution-db-20261020 -> origin/test/phase1-execution-attribution-db-20261020
+2026-11-20T03:27:28.6986724Z  * [new branch]        test/phase1-exit-assessment-20261112     -> origin/test/phase1-exit-assessment-20261112
+2026-11-20T03:27:28.6988555Z  * [new branch]        test/phase1-history-import-rollback-20261111 -> origin/test/phase1-history-import-rollback-20261111
+2026-11-20T03:27:28.6990968Z  * [new branch]        test/t455-source-projection-regression-sensitivity-20261114 -> origin/test/t455-source-projection-regression-sensitivity-20261114
+2026-11-20T03:27:28.6992787Z  * [new ref]           e49fab4df4043b621b7007e97d8646743f441b6b -> pull/167/merge
+2026-11-20T03:27:28.6995192Z ##[endgroup]
+2026-11-20T03:27:28.6996046Z ##[group]Determining the checkout info
+2026-11-20T03:27:28.6997020Z ##[endgroup]
+2026-11-20T03:27:28.6997577Z [command]/usr/bin/git sparse-checkout disable
+2026-11-20T03:27:28.6999406Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-20T03:27:28.7001376Z ##[group]Checking out the ref
+2026-11-20T03:27:28.7002229Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/167/merge
+2026-11-20T03:27:28.8069761Z Note: switching to 'refs/remotes/pull/167/merge'.
+2026-11-20T03:27:28.8070496Z
+2026-11-20T03:27:28.8070962Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-11-20T03:27:28.8072054Z changes and commit them, and you can discard any commits you make in this
+2026-11-20T03:27:28.8073100Z state without impacting any branches by switching back to a branch.
+2026-11-20T03:27:28.8073714Z
+2026-11-20T03:27:28.8074119Z If you want to create a new branch to retain commits you create, you may
+2026-11-20T03:27:28.8075106Z do so (now or later) by using -c with the switch command. Example:
+2026-11-20T03:27:28.8075674Z
+2026-11-20T03:27:28.8075904Z   git switch -c <new-branch-name>
+2026-11-20T03:27:28.8076280Z
+2026-11-20T03:27:28.8076496Z Or undo this operation with:
+2026-11-20T03:27:28.8076838Z
+2026-11-20T03:27:28.8077024Z   git switch -
+2026-11-20T03:27:28.8077279Z
+2026-11-20T03:27:28.8077741Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-11-20T03:27:28.8078409Z
+2026-11-20T03:27:28.8079139Z HEAD is now at e49fab4d Merge 965a87a13d2669354598f8d4b912f36fdb148867 into 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:28.8088498Z ##[endgroup]
+2026-11-20T03:27:28.8135149Z [command]/usr/bin/git log -1 --format=%H
+2026-11-20T03:27:28.8167387Z e49fab4df4043b621b7007e97d8646743f441b6b
+2026-11-20T03:27:28.8176162Z ##[group]Removing auth
+2026-11-20T03:27:28.8179450Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:28.8215079Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:28.8408447Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:28.8440326Z http.https://github.com/.extraheader
+2026-11-20T03:27:28.8448075Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-20T03:27:28.8488666Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:28.8680803Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:28.8716114Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:28.8903292Z ##[endgroup]
+2026-11-20T03:27:29.0328183Z ##[group]Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+2026-11-20T03:27:29.0329003Z with:
+2026-11-20T03:27:29.0329491Z   node-version: 22
+2026-11-20T03:27:29.0329913Z   cache: npm
+2026-11-20T03:27:29.0330399Z   cache-dependency-path: package-lock.json
+2026-11-20T03:27:29.0330984Z   always-auth: false
+2026-11-20T03:27:29.0331438Z   check-latest: false
+2026-11-20T03:27:29.0336018Z   token: ***
+2026-11-20T03:27:29.0336420Z env:
+2026-11-20T03:27:29.0336933Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:29.0337605Z ##[endgroup]
+2026-11-20T03:27:29.1372605Z Found in cache @ /opt/hostedtoolcache/node/22.23.5/x64
+2026-11-20T03:27:29.1375484Z (node:2207) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:27:29.1377406Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:27:29.1378570Z ##[group]Environment details
+2026-11-20T03:27:29.4106042Z node: v22.23.5
+2026-11-20T03:27:29.4106431Z npm: 10.9.9
+2026-11-20T03:27:29.4106667Z yarn: 1.22.22
+2026-11-20T03:27:29.4107358Z ##[endgroup]
+2026-11-20T03:27:29.4118524Z [command]/opt/hostedtoolcache/node/22.23.5/x64/bin/npm config get cache
+2026-11-20T03:27:29.4973623Z /home/runner/.npm
+2026-11-20T03:27:29.6577843Z Cache hit for: node-cache-Linux-x64-npm-ae1fa1ee70b687f601318db8d9d82031386ee5d2df3f7af68f55fe690c8dde96
+2026-11-20T03:27:29.6655723Z (node:2207) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-20T03:27:30.3719643Z Received 29175906 of 29175906 (100.0%), 50.9 MBs/sec
+2026-11-20T03:27:30.3720083Z Cache Size: ~28 MB (29175906 B)
+2026-11-20T03:27:30.3737919Z [command]/usr/bin/tar -xf /home/runner/work/_temp/2d4b4e82-bb91-46c9-9d2a-21c1176f476d/cache.tzst -P -C /home/runner/work/Tesbooboo/Tesbooboo --use-compress-program unzstd
+2026-11-20T03:27:30.4170130Z Cache restored successfully
+2026-11-20T03:27:30.4186509Z Cache restored from key: node-cache-Linux-x64-npm-ae1fa1ee70b687f601318db8d9d82031386ee5d2df3f7af68f55fe690c8dde96
+2026-11-20T03:27:30.4976039Z ##[group]Run npm ci --ignore-scripts
+2026-11-20T03:27:30.4976387Z [36;1mnpm ci --ignore-scripts[0m
+2026-11-20T03:27:30.5000970Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:30.5001158Z env:
+2026-11-20T03:27:30.5001328Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:30.5001741Z ##[endgroup]
+2026-11-20T03:27:31.5193391Z
+2026-11-20T03:27:31.5199888Z added 49 packages, and audited 50 packages in 980ms
+2026-11-20T03:27:31.5200143Z
+2026-11-20T03:27:31.5200279Z 13 packages are looking for funding
+2026-11-20T03:27:31.5200461Z   run `npm fund` for details
+2026-11-20T03:27:31.5200771Z
+2026-11-20T03:27:31.5201211Z found 0 vulnerabilities
+2026-11-20T03:27:31.5756901Z ##[group]Run node scripts/audit-gate.mjs --dir . --scope root
+2026-11-20T03:27:31.5757223Z [36;1mnode scripts/audit-gate.mjs --dir . --scope root[0m
+2026-11-20T03:27:31.5774189Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:31.5774358Z env:
+2026-11-20T03:27:31.5774522Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:31.5774703Z ##[endgroup]
+2026-11-20T03:27:31.9111169Z audit gate (root): 0 high/critical advisories, 0 allowed by exception
+2026-11-20T03:27:31.9292889Z ##[group]Run npm run test:quality
+2026-11-20T03:27:31.9293083Z [36;1mnpm run test:quality[0m
+2026-11-20T03:27:31.9309201Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:31.9309489Z env:
+2026-11-20T03:27:31.9309645Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:31.9309828Z ##[endgroup]
+2026-11-20T03:27:31.9959432Z
+2026-11-20T03:27:31.9960102Z > test:quality
+2026-11-20T03:27:31.9961265Z > node --test scripts/audit-gate.test.mjs scripts/check-architecture.test.mjs scripts/check-quality-policy.test.mjs scripts/check-migrations.test.mjs scripts/test-impact.test.mjs scripts/check-duplication.test.mjs
+2026-11-20T03:27:31.9961970Z
+2026-11-20T03:27:32.0340910Z TAP version 13
+2026-11-20T03:27:32.0702909Z # Subtest: reads GHSA ids from advisory urls
+2026-11-20T03:27:32.0738182Z ok 1 - reads GHSA ids from advisory urls
+2026-11-20T03:27:32.0739110Z   ---
+2026-11-20T03:27:32.0780334Z   duration_ms: 0.854672
+2026-11-20T03:27:32.0810088Z   type: 'test'
+2026-11-20T03:27:32.0810648Z   ...
+2026-11-20T03:27:32.0840489Z # Subtest: counts an advisory once even when several packages reference it
+2026-11-20T03:27:32.0870496Z ok 2 - counts an advisory once even when several packages reference it
+2026-11-20T03:27:32.0900003Z   ---
+2026-11-20T03:27:32.0900491Z   duration_ms: 0.219018
+2026-11-20T03:27:32.0910385Z   type: 'test'
+2026-11-20T03:27:32.0910791Z   ...
+2026-11-20T03:27:32.0911267Z # Subtest: fails a high advisory with no exception
+2026-11-20T03:27:32.0911805Z ok 3 - fails a high advisory with no exception
+2026-11-20T03:27:32.0912283Z   ---
+2026-11-20T03:27:32.0912665Z   duration_ms: 0.280911
+2026-11-20T03:27:32.0913087Z   type: 'test'
+2026-11-20T03:27:32.0913403Z   ...
+2026-11-20T03:27:32.0913896Z # Subtest: allows exactly the matching, unexpired exception and reports it
+2026-11-20T03:27:32.0914537Z ok 4 - allows exactly the matching, unexpired exception and reports it
+2026-11-20T03:27:32.0914984Z   ---
+2026-11-20T03:27:32.0915303Z   duration_ms: 0.39363
+2026-11-20T03:27:32.0915673Z   type: 'test'
+2026-11-20T03:27:32.0915998Z   ...
+2026-11-20T03:27:32.0916389Z # Subtest: fails when the exception has expired
+2026-11-20T03:27:32.0916965Z ok 5 - fails when the exception has expired
+2026-11-20T03:27:32.0917350Z   ---
+2026-11-20T03:27:32.0917678Z   duration_ms: 0.149655
+2026-11-20T03:27:32.0918006Z   type: 'test'
+2026-11-20T03:27:32.0918302Z   ...
+2026-11-20T03:27:32.0918714Z # Subtest: fails a stale exception that no advisory matches
+2026-11-20T03:27:32.0919388Z ok 6 - fails a stale exception that no advisory matches
+2026-11-20T03:27:32.0919792Z   ---
+2026-11-20T03:27:32.0920106Z   duration_ms: 0.132068
+2026-11-20T03:27:32.0920560Z   type: 'test'
+2026-11-20T03:27:32.0920888Z   ...
+2026-11-20T03:27:32.0921339Z # Subtest: keeps failing a different advisory on the same package
+2026-11-20T03:27:32.0921890Z ok 7 - keeps failing a different advisory on the same package
+2026-11-20T03:27:32.0922306Z   ---
+2026-11-20T03:27:32.0922610Z   duration_ms: 0.111207
+2026-11-20T03:27:32.0922948Z   type: 'test'
+2026-11-20T03:27:32.0923249Z   ...
+2026-11-20T03:27:32.0923667Z # Subtest: does not fail on moderate or low advisories
+2026-11-20T03:27:32.0924495Z ok 8 - does not fail on moderate or low advisories
+2026-11-20T03:27:32.0924897Z   ---
+2026-11-20T03:27:32.0925202Z   duration_ms: 0.104006
+2026-11-20T03:27:32.0925537Z   type: 'test'
+2026-11-20T03:27:32.0925854Z   ...
+2026-11-20T03:27:32.0926268Z # Subtest: applies an exception only in the trees it names
+2026-11-20T03:27:32.0926793Z ok 9 - applies an exception only in the trees it names
+2026-11-20T03:27:32.0927211Z   ---
+2026-11-20T03:27:32.0927526Z   duration_ms: 0.236464
+2026-11-20T03:27:32.0927850Z   type: 'test'
+2026-11-20T03:27:32.0928151Z   ...
+2026-11-20T03:27:32.0928568Z # Subtest: does not apply an exception that names no scopes
+2026-11-20T03:27:32.0929099Z ok 10 - does not apply an exception that names no scopes
+2026-11-20T03:27:32.0929787Z   ---
+2026-11-20T03:27:32.0930102Z   duration_ms: 1.096354
+2026-11-20T03:27:32.0930692Z   type: 'test'
+2026-11-20T03:27:32.0931014Z   ...
+2026-11-20T03:27:32.0931495Z # Subtest: a malformed expiry is treated as expired rather than trusted
+2026-11-20T03:27:32.0932130Z ok 11 - a malformed expiry is treated as expired rather than trusted
+2026-11-20T03:27:32.0932573Z   ---
+2026-11-20T03:27:32.0932879Z   duration_ms: 0.155153
+2026-11-20T03:27:32.0933209Z   type: 'test'
+2026-11-20T03:27:32.0933530Z   ...
+2026-11-20T03:27:32.0933960Z # Subtest: an audit that failed to run never reads as clean
+2026-11-20T03:27:32.0934740Z ok 12 - an audit that failed to run never reads as clean
+2026-11-20T03:27:32.0935195Z   ---
+2026-11-20T03:27:32.0935510Z   duration_ms: 0.867522
+2026-11-20T03:27:32.0935852Z   type: 'test'
+2026-11-20T03:27:32.0936176Z   ...
+2026-11-20T03:27:32.7500483Z # Subtest: actual dependency parser resolves aliases, types, re-exports and literal loads before enforcing boundaries
+2026-11-20T03:27:32.7501360Z     # Subtest: alias and relative route imports hit the same architectural boundary
+2026-11-20T03:27:32.7502021Z     ok 1 - alias and relative route imports hit the same architectural boundary
+2026-11-20T03:27:32.7502446Z       ---
+2026-11-20T03:27:32.7539094Z       duration_ms: 0.634682
+2026-11-20T03:27:32.7539580Z       type: 'test'
+2026-11-20T03:27:32.7560092Z       ...
+2026-11-20T03:27:32.7560950Z     # Subtest: type-only dependencies and re-exports cannot escape package/infrastructure rules
+2026-11-20T03:27:32.7561726Z     ok 2 - type-only dependencies and re-exports cannot escape package/infrastructure rules
+2026-11-20T03:27:32.7562271Z       ---
+2026-11-20T03:27:32.7562578Z       duration_ms: 0.151597
+2026-11-20T03:27:32.7562910Z       type: 'test'
+2026-11-20T03:27:32.7563216Z       ...
+2026-11-20T03:27:32.7563702Z     # Subtest: import-equals/CommonJS and dynamic imports are analyzed, not grep-matched
+2026-11-20T03:27:32.7564345Z     ok 3 - import-equals/CommonJS and dynamic imports are analyzed, not grep-matched
+2026-11-20T03:27:32.7564815Z       ---
+2026-11-20T03:27:32.7565145Z       duration_ms: 0.165178
+2026-11-20T03:27:32.7565461Z       type: 'test'
+2026-11-20T03:27:32.7565758Z       ...
+2026-11-20T03:27:32.7566146Z     # Subtest: UI primitives and upward library imports are constrained
+2026-11-20T03:27:32.7566689Z     ok 4 - UI primitives and upward library imports are constrained
+2026-11-20T03:27:32.7567077Z       ---
+2026-11-20T03:27:32.7567358Z       duration_ms: 0.085218
+2026-11-20T03:27:32.7567671Z       type: 'test'
+2026-11-20T03:27:32.7567942Z       ...
+2026-11-20T03:27:32.7568353Z     # Subtest: exact existing exceptions do not grant whole-directory exemptions
+2026-11-20T03:27:32.7568927Z     ok 5 - exact existing exceptions do not grant whole-directory exemptions
+2026-11-20T03:27:32.7569503Z       ---
+2026-11-20T03:27:32.7569794Z       duration_ms: 0.137035
+2026-11-20T03:27:32.7570315Z       type: 'test'
+2026-11-20T03:27:32.7589896Z       ...
+2026-11-20T03:27:32.7600149Z     # Subtest: neutral helpers and test-to-test imports remain legitimate reuse
+2026-11-20T03:27:32.7603858Z     ok 6 - neutral helpers and test-to-test imports remain legitimate reuse
+2026-11-20T03:27:32.7604412Z       ---
+2026-11-20T03:27:32.7604802Z       duration_ms: 0.114232
+2026-11-20T03:27:32.7605720Z       type: 'test'
+2026-11-20T03:27:32.7606090Z       ...
+2026-11-20T03:27:32.7606636Z     # Subtest: unresolved local imports fail, comments/string content create no fake edges
+2026-11-20T03:27:32.7607432Z     ok 7 - unresolved local imports fail, comments/string content create no fake edges
+2026-11-20T03:27:32.7608049Z       ---
+2026-11-20T03:27:32.7608423Z       duration_ms: 0.098338
+2026-11-20T03:27:32.7608814Z       type: 'test'
+2026-11-20T03:27:32.7609153Z       ...
+2026-11-20T03:27:32.7609866Z     # Subtest: report screens and their forbidden imports remain part of the analyzed system
+2026-11-20T03:27:32.7610669Z     ok 8 - report screens and their forbidden imports remain part of the analyzed system
+2026-11-20T03:27:32.7611241Z       ---
+2026-11-20T03:27:32.7611600Z       duration_ms: 0.163465
+2026-11-20T03:27:32.7612293Z       type: 'test'
+2026-11-20T03:27:32.7612631Z       ...
+2026-11-20T03:27:32.7613301Z     # Subtest: each project's declared aliases resolve and missing aliases cannot become external npm leaves
+2026-11-20T03:27:32.7614309Z     ok 9 - each project's declared aliases resolve and missing aliases cannot become external npm leaves
+2026-11-20T03:27:32.7614967Z       ---
+2026-11-20T03:27:32.7615339Z       duration_ms: 0.216195
+2026-11-20T03:27:32.7615722Z       type: 'test'
+2026-11-20T03:27:32.7616025Z       ...
+2026-11-20T03:27:32.7616555Z     # Subtest: SDK production cannot depend on unpublished test-only package scripts
+2026-11-20T03:27:32.7617354Z     ok 10 - SDK production cannot depend on unpublished test-only package scripts
+2026-11-20T03:27:32.7617945Z       ---
+2026-11-20T03:27:32.7618290Z       duration_ms: 0.194983
+2026-11-20T03:27:32.7618676Z       type: 'test'
+2026-11-20T03:27:32.7619043Z       ...
+2026-11-20T03:27:32.7620308Z     # Subtest: merged graphs retain authoritative outgoing edges and rebuild reverse metadata across project order
+2026-11-20T03:27:32.7621825Z     ok 11 - merged graphs retain authoritative outgoing edges and rebuild reverse metadata across project order
+2026-11-20T03:27:32.7622660Z       ---
+2026-11-20T03:27:32.7622986Z       duration_ms: 0.111127
+2026-11-20T03:27:32.7623356Z       type: 'test'
+2026-11-20T03:27:32.7623622Z       ...
+2026-11-20T03:27:32.7623901Z     1..11
+2026-11-20T03:27:32.7624804Z ok 13 - actual dependency parser resolves aliases, types, re-exports and literal loads before enforcing boundaries
+2026-11-20T03:27:32.7625438Z   ---
+2026-11-20T03:27:32.7625683Z   duration_ms: 313.458078
+2026-11-20T03:27:32.7625986Z   type: 'test'
+2026-11-20T03:27:32.7626203Z   ...
+2026-11-20T03:27:32.7626615Z # Subtest: an empty architectural analysis cannot produce a green result
+2026-11-20T03:27:32.7627181Z ok 14 - an empty architectural analysis cannot produce a green result
+2026-11-20T03:27:32.7627519Z   ---
+2026-11-20T03:27:32.7627712Z   duration_ms: 0.532839
+2026-11-20T03:27:32.7627962Z   type: 'test'
+2026-11-20T03:27:32.7628184Z   ...
+2026-11-20T03:27:32.7869423Z # Subtest: real clone detector tolerates existing debt but rejects a new third occurrence
+2026-11-20T03:27:32.7870284Z ok 15 - real clone detector tolerates existing debt but rejects a new third occurrence
+2026-11-20T03:27:32.7870621Z   ---
+2026-11-20T03:27:32.7870820Z   duration_ms: 204.055721
+2026-11-20T03:27:32.7871084Z   type: 'test'
+2026-11-20T03:27:32.7871268Z   ...
+2026-11-20T03:27:34.2934374Z # Subtest: pure validators allow unchanged manifests and contiguous append-only additions
+2026-11-20T03:27:34.2935359Z ok 16 - pure validators allow unchanged manifests and contiguous append-only additions
+2026-11-20T03:27:34.2935968Z   ---
+2026-11-20T03:27:34.2936349Z   duration_ms: 2.182685
+2026-11-20T03:27:34.2936682Z   type: 'test'
+2026-11-20T03:27:34.2936991Z   ...
+2026-11-20T03:27:34.2937499Z # Subtest: checksums canonicalize only CRLF, retaining every other byte
+2026-11-20T03:27:34.2938183Z ok 17 - checksums canonicalize only CRLF, retaining every other byte
+2026-11-20T03:27:34.2938631Z   ---
+2026-11-20T03:27:34.2938940Z   duration_ms: 0.498638
+2026-11-20T03:27:34.2939894Z   type: 'test'
+2026-11-20T03:27:34.2940192Z   ...
+2026-11-20T03:27:34.2940721Z # Subtest: pure validators reject empty selections and malformed file metadata
+2026-11-20T03:27:34.2970372Z ok 18 - pure validators reject empty selections and malformed file metadata
+2026-11-20T03:27:34.3000015Z   ---
+2026-11-20T03:27:34.3023495Z   duration_ms: 0.301052
+2026-11-20T03:27:34.3024045Z   type: 'test'
+2026-11-20T03:27:34.3024379Z   ...
+2026-11-20T03:27:34.3025080Z # Subtest: pure validators reject malformed manifest metadata instead of treating it as an empty baseline
+2026-11-20T03:27:34.3026076Z ok 19 - pure validators reject malformed manifest metadata instead of treating it as an empty baseline
+2026-11-20T03:27:34.3026654Z   ---
+2026-11-20T03:27:34.3026973Z   duration_ms: 1.095153
+2026-11-20T03:27:34.3027311Z   type: 'test'
+2026-11-20T03:27:34.3028088Z   ...
+2026-11-20T03:27:34.3028672Z # Subtest: pure validators detect changed, missing and renamed historical entries
+2026-11-20T03:27:34.3029549Z ok 20 - pure validators detect changed, missing and renamed historical entries
+2026-11-20T03:27:34.3030176Z   ---
+2026-11-20T03:27:34.3030487Z   duration_ms: 0.362343
+2026-11-20T03:27:34.3030838Z   type: 'test'
+2026-11-20T03:27:34.3031132Z   ...
+2026-11-20T03:27:34.3031770Z # Subtest: CLI validates without a base and accepts append-only additions from a path with spaces
+2026-11-20T03:27:34.3032637Z ok 21 - CLI validates without a base and accepts append-only additions from a path with spaces
+2026-11-20T03:27:34.3033166Z   ---
+2026-11-20T03:27:34.3033475Z   duration_ms: 119.973618
+2026-11-20T03:27:34.3033817Z   type: 'test'
+2026-11-20T03:27:34.3034114Z   ...
+2026-11-20T03:27:34.3034635Z # Subtest: CLI rejects edits to existing migrations, including whitespace-only edits
+2026-11-20T03:27:34.3035145Z     # Subtest: "SELECT 99;\\n"
+2026-11-20T03:27:34.3035489Z     ok 1 - "SELECT 99;\\n"
+2026-11-20T03:27:34.3035785Z       ---
+2026-11-20T03:27:34.3036056Z       duration_ms: 83.910106
+2026-11-20T03:27:34.3036360Z       type: 'test'
+2026-11-20T03:27:34.3036644Z       ...
+2026-11-20T03:27:34.3036927Z     # Subtest: "SELECT 1;\\n "
+2026-11-20T03:27:34.3037263Z     ok 2 - "SELECT 1;\\n "
+2026-11-20T03:27:34.3037580Z       ---
+2026-11-20T03:27:34.3037876Z       duration_ms: 81.462724
+2026-11-20T03:27:34.3038224Z       type: 'test'
+2026-11-20T03:27:34.3038541Z       ...
+2026-11-20T03:27:34.3038826Z     1..2
+2026-11-20T03:27:34.3039475Z ok 22 - CLI rejects edits to existing migrations, including whitespace-only edits
+2026-11-20T03:27:34.3040128Z   ---
+2026-11-20T03:27:34.3040450Z   duration_ms: 166.191549
+2026-11-20T03:27:34.3040779Z   type: 'test'
+2026-11-20T03:27:34.3041072Z   ...
+2026-11-20T03:27:34.3041655Z # Subtest: CLI rejects deletion of the last existing migration even with a valid remaining sequence
+2026-11-20T03:27:34.3042508Z ok 23 - CLI rejects deletion of the last existing migration even with a valid remaining sequence
+2026-11-20T03:27:34.3043084Z   ---
+2026-11-20T03:27:34.3043432Z   duration_ms: 77.253582
+2026-11-20T03:27:34.3043822Z   type: 'test'
+2026-11-20T03:27:34.3044154Z   ...
+2026-11-20T03:27:34.3044749Z # Subtest: CLI rejects renaming an existing migration without a version gap
+2026-11-20T03:27:34.3045470Z ok 24 - CLI rejects renaming an existing migration without a version gap
+2026-11-20T03:27:34.3045979Z   ---
+2026-11-20T03:27:34.3046304Z   duration_ms: 117.423441
+2026-11-20T03:27:34.3046677Z   type: 'test'
+2026-11-20T03:27:34.3047015Z   ...
+2026-11-20T03:27:34.3047647Z # Subtest: CLI rejects renumbering existing migrations even when the final sequence is contiguous
+2026-11-20T03:27:34.3048491Z ok 25 - CLI rejects renumbering existing migrations even when the final sequence is contiguous
+2026-11-20T03:27:34.3049052Z   ---
+2026-11-20T03:27:34.3049452Z   duration_ms: 102.380235
+2026-11-20T03:27:34.3049769Z   type: 'test'
+2026-11-20T03:27:34.3050054Z   ...
+2026-11-20T03:27:34.3050518Z # Subtest: CLI rejects duplicate, gapped, malformed and empty migrations
+2026-11-20T03:27:34.3051045Z     # Subtest: duplicate
+2026-11-20T03:27:34.3051690Z     ok 1 - duplicate
+2026-11-20T03:27:34.3052035Z       ---
+2026-11-20T03:27:34.3052373Z       duration_ms: 72.147981
+2026-11-20T03:27:34.3052734Z       type: 'test'
+2026-11-20T03:27:34.3053036Z       ...
+2026-11-20T03:27:34.3090029Z     # Subtest: gap
+2026-11-20T03:27:34.3106637Z     ok 2 - gap
+2026-11-20T03:27:34.3114873Z       ---
+2026-11-20T03:27:34.3115277Z       duration_ms: 57.32101
+2026-11-20T03:27:34.3115734Z       type: 'test'
+2026-11-20T03:27:34.3116050Z       ...
+2026-11-20T03:27:34.3116345Z     # Subtest: malformed
+2026-11-20T03:27:34.3116710Z     ok 3 - malformed
+2026-11-20T03:27:34.3117015Z       ---
+2026-11-20T03:27:34.3117310Z       duration_ms: 55.127099
+2026-11-20T03:27:34.3117645Z       type: 'test'
+2026-11-20T03:27:34.3119534Z       ...
+2026-11-20T03:27:34.3119903Z     # Subtest: unsafe version
+2026-11-20T03:27:34.3120665Z     ok 4 - unsafe version
+2026-11-20T03:27:34.3120994Z       ---
+2026-11-20T03:27:34.3121282Z       duration_ms: 49.00312
+2026-11-20T03:27:34.3121625Z       type: 'test'
+2026-11-20T03:27:34.3121912Z       ...
+2026-11-20T03:27:34.3122197Z     # Subtest: zero bytes
+2026-11-20T03:27:34.3122526Z     ok 5 - zero bytes
+2026-11-20T03:27:34.3122835Z       ---
+2026-11-20T03:27:34.3123124Z       duration_ms: 50.878464
+2026-11-20T03:27:34.3123489Z       type: 'test'
+2026-11-20T03:27:34.3123773Z       ...
+2026-11-20T03:27:34.3124073Z     # Subtest: whitespace
+2026-11-20T03:27:34.3124406Z     ok 6 - whitespace
+2026-11-20T03:27:34.3124706Z       ---
+2026-11-20T03:27:34.3125008Z       duration_ms: 49.716673
+2026-11-20T03:27:34.3125330Z       type: 'test'
+2026-11-20T03:27:34.3125613Z       ...
+2026-11-20T03:27:34.3125890Z     1..6
+2026-11-20T03:27:34.3126329Z ok 26 - CLI rejects duplicate, gapped, malformed and empty migrations
+2026-11-20T03:27:34.3126781Z   ---
+2026-11-20T03:27:34.3127092Z   duration_ms: 335.178973
+2026-11-20T03:27:34.3127427Z   type: 'test'
+2026-11-20T03:27:34.3127713Z   ...
+2026-11-20T03:27:34.3128277Z # Subtest: CLI rejects missing, empty and invalid base arguments without executing shell syntax
+2026-11-20T03:27:34.3128779Z     # Subtest: ["--base"]
+2026-11-20T03:27:34.3129074Z     ok 1 - ["--base"]
+2026-11-20T03:27:34.3129519Z       ---
+2026-11-20T03:27:34.3129811Z       duration_ms: 42.575479
+2026-11-20T03:27:34.3130138Z       type: 'test'
+2026-11-20T03:27:34.3130418Z       ...
+2026-11-20T03:27:34.3130637Z     # Subtest: ["--base",""]
+2026-11-20T03:27:34.3130871Z     ok 2 - ["--base",""]
+2026-11-20T03:27:34.3131088Z       ---
+2026-11-20T03:27:34.3131296Z       duration_ms: 41.718312
+2026-11-20T03:27:34.3131523Z       type: 'test'
+2026-11-20T03:27:34.3131730Z       ...
+2026-11-20T03:27:34.3132056Z     # Subtest: ["--base","   "]
+2026-11-20T03:27:34.3132438Z     ok 3 - ["--base","   "]
+2026-11-20T03:27:34.3132661Z       ---
+2026-11-20T03:27:34.3132866Z       duration_ms: 43.355349
+2026-11-20T03:27:34.3133100Z       type: 'test'
+2026-11-20T03:27:34.3133307Z       ...
+2026-11-20T03:27:34.3133530Z     # Subtest: ["--base","missing-ref"]
+2026-11-20T03:27:34.3133801Z     ok 4 - ["--base","missing-ref"]
+2026-11-20T03:27:34.3134037Z       ---
+2026-11-20T03:27:34.3134246Z       duration_ms: 51.302921
+2026-11-20T03:27:34.3134475Z       type: 'test'
+2026-11-20T03:27:34.3134685Z       ...
+2026-11-20T03:27:34.3134906Z     # Subtest: ["--base","--help"]
+2026-11-20T03:27:34.3135160Z     ok 5 - ["--base","--help"]
+2026-11-20T03:27:34.3135387Z       ---
+2026-11-20T03:27:34.3135731Z       duration_ms: 54.538415
+2026-11-20T03:27:34.3135959Z       type: 'test'
+2026-11-20T03:27:34.3136164Z       ...
+2026-11-20T03:27:34.3136398Z     # Subtest: ["--base","HEAD; touch injected"]
+2026-11-20T03:27:34.3136681Z     ok 6 - ["--base","HEAD; touch injected"]
+2026-11-20T03:27:34.3136951Z       ---
+2026-11-20T03:27:34.3137155Z       duration_ms: 55.763313
+2026-11-20T03:27:34.3137383Z       type: 'test'
+2026-11-20T03:27:34.3137596Z       ...
+2026-11-20T03:27:34.3137843Z     # Subtest: ["--base","HEAD & type nul > injected"]
+2026-11-20T03:27:34.3138144Z     ok 7 - ["--base","HEAD & type nul > injected"]
+2026-11-20T03:27:34.3138688Z       ---
+2026-11-20T03:27:34.3138892Z       duration_ms: 49.697162
+2026-11-20T03:27:34.3139119Z       type: 'test'
+2026-11-20T03:27:34.3139517Z       ...
+2026-11-20T03:27:34.3139827Z     # Subtest: ["--base","HEAD","--base","HEAD"]
+2026-11-20T03:27:34.3140145Z     ok 8 - ["--base","HEAD","--base","HEAD"]
+2026-11-20T03:27:34.3140371Z       ---
+2026-11-20T03:27:34.3140540Z       duration_ms: 41.744623
+2026-11-20T03:27:34.3140742Z       type: 'test'
+2026-11-20T03:27:34.3140875Z       ...
+2026-11-20T03:27:34.3141003Z     # Subtest: ["--allow-edits"]
+2026-11-20T03:27:34.3141151Z     ok 9 - ["--allow-edits"]
+2026-11-20T03:27:34.3141284Z       ---
+2026-11-20T03:27:34.3141391Z       duration_ms: 41.831682
+2026-11-20T03:27:34.3141521Z       type: 'test'
+2026-11-20T03:27:34.3141657Z       ...
+2026-11-20T03:27:34.3141919Z     1..9
+2026-11-20T03:27:34.3142174Z ok 27 - CLI rejects missing, empty and invalid base arguments without executing shell syntax
+2026-11-20T03:27:34.3142414Z   ---
+2026-11-20T03:27:34.3142528Z   duration_ms: 423.912795
+2026-11-20T03:27:34.3142660Z   type: 'test'
+2026-11-20T03:27:34.3142776Z   ...
+2026-11-20T03:27:34.3142956Z # Subtest: CLI requires a commit ref, not a tree or blob
+2026-11-20T03:27:34.3143206Z ok 28 - CLI requires a commit ref, not a tree or blob
+2026-11-20T03:27:34.3143370Z   ---
+2026-11-20T03:27:34.3143481Z   duration_ms: 98.14361
+2026-11-20T03:27:34.3143605Z   type: 'test'
+2026-11-20T03:27:34.3143713Z   ...
+2026-11-20T03:27:34.3143884Z # Subtest: CLI rejects an empty current SQL selection
+2026-11-20T03:27:34.3144099Z ok 29 - CLI rejects an empty current SQL selection
+2026-11-20T03:27:34.3144258Z   ---
+2026-11-20T03:27:34.3144366Z   duration_ms: 46.828087
+2026-11-20T03:27:34.3144512Z   type: 'test'
+2026-11-20T03:27:34.3144619Z   ...
+2026-11-20T03:27:34.3144851Z # Subtest: CLI rejects an empty base selection instead of accepting any current history
+2026-11-20T03:27:34.3145269Z ok 30 - CLI rejects an empty base selection instead of accepting any current history
+2026-11-20T03:27:34.3145543Z   ---
+2026-11-20T03:27:34.3145655Z   duration_ms: 55.739326
+2026-11-20T03:27:34.3145781Z   type: 'test'
+2026-11-20T03:27:34.3145888Z   ...
+2026-11-20T03:27:34.3146110Z # Subtest: CLI validates the historical selection as well as the current selection
+2026-11-20T03:27:34.3146370Z     # Subtest: ["V1_initial.sql","V3_gap.sql"]
+2026-11-20T03:27:34.3146556Z     ok 1 - ["V1_initial.sql","V3_gap.sql"]
+2026-11-20T03:27:34.3146704Z       ---
+2026-11-20T03:27:34.3146819Z       duration_ms: 62.603013
+2026-11-20T03:27:34.3146953Z       type: 'test'
+2026-11-20T03:27:34.3147064Z       ...
+2026-11-20T03:27:34.3147195Z     # Subtest: ["V1_bad-name.sql"]
+2026-11-20T03:27:34.3147356Z     ok 2 - ["V1_bad-name.sql"]
+2026-11-20T03:27:34.3147487Z       ---
+2026-11-20T03:27:34.3147600Z       duration_ms: 60.462463
+2026-11-20T03:27:34.3147733Z       type: 'test'
+2026-11-20T03:27:34.3147844Z       ...
+2026-11-20T03:27:34.3147968Z     # Subtest: ["V1_initial.sql"]
+2026-11-20T03:27:34.3148121Z     ok 3 - ["V1_initial.sql"]
+2026-11-20T03:27:34.3148253Z       ---
+2026-11-20T03:27:34.3148363Z       duration_ms: 56.865245
+2026-11-20T03:27:34.3148494Z       type: 'test'
+2026-11-20T03:27:34.3148606Z       ...
+2026-11-20T03:27:34.3148709Z     1..3
+2026-11-20T03:27:34.3148922Z ok 31 - CLI validates the historical selection as well as the current selection
+2026-11-20T03:27:34.3149132Z   ---
+2026-11-20T03:27:34.3149368Z   duration_ms: 180.453576
+2026-11-20T03:27:34.3149514Z   type: 'test'
+2026-11-20T03:27:34.3149626Z   ...
+2026-11-20T03:27:34.3149882Z # Subtest: CLI accepts Git LF blobs checked out with Windows CRLF, but still rejects a real edit
+2026-11-20T03:27:34.3150273Z ok 32 - CLI accepts Git LF blobs checked out with Windows CRLF, but still rejects a real edit
+2026-11-20T03:27:34.3150511Z   ---
+2026-11-20T03:27:34.3150623Z   duration_ms: 135.360389
+2026-11-20T03:27:34.3150755Z   type: 'test'
+2026-11-20T03:27:34.3150873Z   ...
+2026-11-20T03:27:34.3151050Z # Subtest: CLI canonicalizes CRLF in historical blobs too
+2026-11-20T03:27:34.3151412Z ok 33 - CLI canonicalizes CRLF in historical blobs too
+2026-11-20T03:27:34.3151576Z   ---
+2026-11-20T03:27:34.3151687Z   duration_ms: 52.758334
+2026-11-20T03:27:34.3151813Z   type: 'test'
+2026-11-20T03:27:34.3151924Z   ...
+2026-11-20T03:27:34.3152166Z # Subtest: CLI preserves non-UTF-8 blob bytes while canonicalizing newlines
+2026-11-20T03:27:34.3152477Z ok 34 - CLI preserves non-UTF-8 blob bytes while canonicalizing newlines
+2026-11-20T03:27:34.3152686Z   ---
+2026-11-20T03:27:34.3152801Z   duration_ms: 90.621396
+2026-11-20T03:27:34.3152930Z   type: 'test'
+2026-11-20T03:27:34.3153045Z   ...
+2026-11-20T03:27:34.3153249Z # Subtest: CLI rejects non-regular SQL entries in the current selection
+2026-11-20T03:27:34.3153557Z ok 35 - CLI rejects non-regular SQL entries in the current selection
+2026-11-20T03:27:34.3153843Z   ---
+2026-11-20T03:27:34.3153955Z   duration_ms: 46.431543
+2026-11-20T03:27:34.3154088Z   type: 'test'
+2026-11-20T03:27:34.3154199Z   ...
+2026-11-20T03:27:34.3154442Z # Subtest: CLI rejects malformed base file metadata (a symlink blob) without following it
+2026-11-20T03:27:34.3154802Z ok 36 - CLI rejects malformed base file metadata (a symlink blob) without following it
+2026-11-20T03:27:34.3155037Z   ---
+2026-11-20T03:27:34.3155146Z   duration_ms: 67.849983
+2026-11-20T03:27:34.3155275Z   type: 'test'
+2026-11-20T03:27:34.3155391Z   ...
+2026-11-20T03:27:34.3155631Z # Subtest: importing helpers has no CLI output, validation or exit-code side effects
+2026-11-20T03:27:34.3155973Z ok 37 - importing helpers has no CLI output, validation or exit-code side effects
+2026-11-20T03:27:34.3156186Z   ---
+2026-11-20T03:27:34.3156293Z   duration_ms: 39.439875
+2026-11-20T03:27:34.3156420Z   type: 'test'
+2026-11-20T03:27:34.3156538Z   ...
+2026-11-20T03:27:34.3157419Z # Subtest: lint allowances may shrink or retire but may not grow or move to another file/rule
+2026-11-20T03:27:34.3157911Z ok 38 - lint allowances may shrink or retire but may not grow or move to another file/rule
+2026-11-20T03:27:34.3158231Z   ---
+2026-11-20T03:27:34.3158400Z   duration_ms: 1.96633
+2026-11-20T03:27:34.3158533Z   type: 'test'
+2026-11-20T03:27:34.3158684Z   ...
+2026-11-20T03:27:34.3158974Z # Subtest: invalid and zero allowances cannot silently disable a quality check
+2026-11-20T03:27:34.3159496Z ok 39 - invalid and zero allowances cannot silently disable a quality check
+2026-11-20T03:27:34.3159775Z   ---
+2026-11-20T03:27:34.3159955Z   duration_ms: 0.16652
+2026-11-20T03:27:34.3160102Z   type: 'test'
+2026-11-20T03:27:34.3160264Z   ...
+2026-11-20T03:27:34.3160673Z # Subtest: a first baseline is held to structural checks, not the predecessor comparison it cannot have
+2026-11-20T03:27:34.3161143Z ok 40 - a first baseline is held to structural checks, not the predecessor comparison it cannot have
+2026-11-20T03:27:34.3161412Z   ---
+2026-11-20T03:27:34.3161535Z   duration_ms: 0.19374
+2026-11-20T03:27:34.3161669Z   type: 'test'
+2026-11-20T03:27:34.3161784Z   ...
+2026-11-20T03:27:34.3162021Z # Subtest: all gates share a verified base and NUL-safe tracked-change inventory
+2026-11-20T03:27:34.3162361Z ok 41 - all gates share a verified base and NUL-safe tracked-change inventory
+2026-11-20T03:27:34.3162569Z   ---
+2026-11-20T03:27:34.3162683Z   duration_ms: 93.876388
+2026-11-20T03:27:34.3162814Z   type: 'test'
+2026-11-20T03:27:34.3162927Z   ...
+2026-11-20T03:27:34.3163420Z # Subtest: missing history, option-like refs and malformed refs fail rather than return a green empty plan
+2026-11-20T03:27:34.3164032Z ok 42 - missing history, option-like refs and malformed refs fail rather than return a green empty plan
+2026-11-20T03:27:34.3164358Z   ---
+2026-11-20T03:27:34.3164479Z   duration_ms: 2.508233
+2026-11-20T03:27:34.3164675Z   type: 'test'
+2026-11-20T03:27:34.3164851Z   ...
+2026-11-20T03:27:34.3165354Z # Subtest: all configured spec/workflow/check evidence is checked in and exists, without reading its contents
+2026-11-20T03:27:34.3166123Z ok 43 - all configured spec/workflow/check evidence is checked in and exists, without reading its contents
+2026-11-20T03:27:34.3166848Z   ---
+2026-11-20T03:27:34.3167029Z   duration_ms: 9.136927
+2026-11-20T03:27:34.3167234Z   type: 'test'
+2026-11-20T03:27:34.3167413Z   ...
+2026-11-20T03:27:34.3167841Z # Subtest: normalizes Windows separators and ./ while preserving spaces and literal Next segments
+2026-11-20T03:27:34.3168529Z ok 44 - normalizes Windows separators and ./ while preserving spaces and literal Next segments
+2026-11-20T03:27:34.3168934Z   ---
+2026-11-20T03:27:34.3169125Z   duration_ms: 0.434622
+2026-11-20T03:27:34.3169502Z   type: 'test'
+2026-11-20T03:27:34.3169686Z   ...
+2026-11-20T03:27:34.3170897Z # Subtest: rejects empty, escaping, absolute, drive, NUL and control-containing repository paths
+2026-11-20T03:27:34.3171547Z ok 45 - rejects empty, escaping, absolute, drive, NUL and control-containing repository paths
+2026-11-20T03:27:34.3172127Z   ---
+2026-11-20T03:27:34.3172304Z   duration_ms: 0.448863
+2026-11-20T03:27:34.3172513Z   type: 'test'
+2026-11-20T03:27:34.3172698Z   ...
+2026-11-20T03:27:34.3173207Z # Subtest: multi-area changes accumulate owners/checks/API/UI/regression without duplicate spec files
+2026-11-20T03:27:34.3173995Z ok 46 - multi-area changes accumulate owners/checks/API/UI/regression without duplicate spec files
+2026-11-20T03:27:34.3174459Z   ---
+2026-11-20T03:27:34.3174649Z   duration_ms: 18.91878
+2026-11-20T03:27:34.3174869Z   type: 'test'
+2026-11-20T03:27:34.3175063Z   ...
+2026-11-20T03:27:34.3175461Z # Subtest: shared legacy service is explicitly broad, never a Zyra-only selection
+2026-11-20T03:27:34.3176035Z ok 47 - shared legacy service is explicitly broad, never a Zyra-only selection
+2026-11-20T03:27:34.3176433Z   ---
+2026-11-20T03:27:34.3187798Z   duration_ms: 6.881803
+2026-11-20T03:27:34.3188099Z   type: 'test'
+2026-11-20T03:27:34.3188263Z   ...
+2026-11-20T03:27:34.3188541Z # Subtest: new auth/session/tenant role files add shared isolation and billing coverage
+2026-11-20T03:27:34.3188901Z ok 48 - new auth/session/tenant role files add shared isolation and billing coverage
+2026-11-20T03:27:34.3189131Z   ---
+2026-11-20T03:27:34.3189780Z   duration_ms: 18.122096
+2026-11-20T03:27:34.3190009Z   type: 'test'
+2026-11-20T03:27:34.3190185Z   ...
+2026-11-20T03:27:34.3190658Z # Subtest: entitlement/write-lock additions retain CLAUDE Test Plans but select real billing lifecycle too
+2026-11-20T03:27:34.3191271Z ok 49 - entitlement/write-lock additions retain CLAUDE Test Plans but select real billing lifecycle too
+2026-11-20T03:27:34.3191536Z   ---
+2026-11-20T03:27:34.3191651Z   duration_ms: 12.770207
+2026-11-20T03:27:34.3191787Z   type: 'test'
+2026-11-20T03:27:34.3191900Z   ...
+2026-11-20T03:27:34.3192171Z # Subtest: migrations and shared frontend API/providers select cross-system consumers additively
+2026-11-20T03:27:34.3192588Z ok 50 - migrations and shared frontend API/providers select cross-system consumers additively
+2026-11-20T03:27:34.3192828Z   ---
+2026-11-20T03:27:34.3192942Z   duration_ms: 29.880124
+2026-11-20T03:27:34.3193071Z   type: 'test'
+2026-11-20T03:27:34.3193188Z   ...
+2026-11-20T03:27:34.3193456Z # Subtest: workers, MCP, SDK, reports and current-development graph/model paths have real mappings
+2026-11-20T03:27:34.3193848Z ok 51 - workers, MCP, SDK, reports and current-development graph/model paths have real mappings
+2026-11-20T03:27:34.3194087Z   ---
+2026-11-20T03:27:34.3194201Z   duration_ms: 61.926178
+2026-11-20T03:27:34.3194329Z   type: 'test'
+2026-11-20T03:27:34.3194439Z   ...
+2026-11-20T03:27:34.3194686Z # Subtest: Review Board selections require its runtime checks without a standing evidence gap
+2026-11-20T03:27:34.3195060Z ok 52 - Review Board selections require its runtime checks without a standing evidence gap
+2026-11-20T03:27:34.3195289Z   ---
+2026-11-20T03:27:34.3195399Z   duration_ms: 6.69296
+2026-11-20T03:27:34.3195529Z   type: 'test'
+2026-11-20T03:27:34.3195641Z   ...
+2026-11-20T03:27:34.3195888Z # Subtest: unknown product paths fail review even if a shared-risk pattern adds many tests
+2026-11-20T03:27:34.3196250Z ok 53 - unknown product paths fail review even if a shared-risk pattern adds many tests
+2026-11-20T03:27:34.3196867Z   ---
+2026-11-20T03:27:34.3197027Z   duration_ms: 22.80425
+2026-11-20T03:27:34.3197219Z   type: 'test'
+2026-11-20T03:27:34.3197381Z   ...
+2026-11-20T03:27:34.3197749Z # Subtest: zero selection cannot pass for an unknown or a mapped-but-uncovered product path
+2026-11-20T03:27:34.3198314Z ok 54 - zero selection cannot pass for an unknown or a mapped-but-uncovered product path
+2026-11-20T03:27:34.3198655Z   ---
+2026-11-20T03:27:34.3198820Z   duration_ms: 14.579642
+2026-11-20T03:27:34.3199008Z   type: 'test'
+2026-11-20T03:27:34.3199172Z   ...
+2026-11-20T03:27:34.3199761Z # Subtest: a verified empty Git comparison is no-changes, never zero-test product coverage or an explicit-input bypass
+2026-11-20T03:27:34.3200567Z ok 55 - a verified empty Git comparison is no-changes, never zero-test product coverage or an explicit-input bypass
+2026-11-20T03:27:34.3200846Z   ---
+2026-11-20T03:27:34.3200962Z   duration_ms: 11.626161
+2026-11-20T03:27:34.3201096Z   type: 'test'
+2026-11-20T03:27:34.3201213Z   ...
+2026-11-20T03:27:34.3201521Z # Subtest: docs/tools/test-only inputs yield explicit non-product evidence, not a zero-test green product verdict
+2026-11-20T03:27:34.3202060Z ok 56 - docs/tools/test-only inputs yield explicit non-product evidence, not a zero-test green product verdict
+2026-11-20T03:27:34.3202354Z   ---
+2026-11-20T03:27:34.3202480Z   duration_ms: 21.235396
+2026-11-20T03:27:34.3202632Z   type: 'test'
+2026-11-20T03:27:34.3202766Z   ...
+2026-11-20T03:27:34.3203116Z # Subtest: shared E2E setup/utils/fixtures/config/dependency edits widen impact instead of masquerading as test-only
+2026-11-20T03:27:34.3203725Z ok 57 - shared E2E setup/utils/fixtures/config/dependency edits widen impact instead of masquerading as test-only
+2026-11-20T03:27:34.3204027Z   ---
+2026-11-20T03:27:34.3204142Z   duration_ms: 70.095132
+2026-11-20T03:27:34.3204296Z   type: 'test'
+2026-11-20T03:27:34.3204410Z   ...
+2026-11-20T03:27:34.3204717Z # Subtest: SDK test/helper/packed-consumer edits are non-product with SDK checks, even without graph nodes
+2026-11-20T03:27:34.3205191Z ok 58 - SDK test/helper/packed-consumer edits are non-product with SDK checks, even without graph nodes
+2026-11-20T03:27:34.3205462Z   ---
+2026-11-20T03:27:34.3205590Z   duration_ms: 12.415755
+2026-11-20T03:27:34.3205736Z   type: 'test'
+2026-11-20T03:27:34.3205848Z   ...
+2026-11-20T03:27:34.3206189Z # Subtest: tooling requires the current architecture-quality job and current check descriptions include new contracts
+2026-11-20T03:27:34.3206689Z ok 59 - tooling requires the current architecture-quality job and current check descriptions include new contracts
+2026-11-20T03:27:34.3206993Z   ---
+2026-11-20T03:27:34.3207138Z   duration_ms: 11.091809
+2026-11-20T03:27:34.3207273Z   type: 'test'
+2026-11-20T03:27:34.3207403Z   ...
+2026-11-20T03:27:34.3207717Z # Subtest: dependency graph uses resolved aliases, reverse TRANSITIVE consumers, cycles and multiple owners
+2026-11-20T03:27:34.3208186Z ok 60 - dependency graph uses resolved aliases, reverse TRANSITIVE consumers, cycles and multiple owners
+2026-11-20T03:27:34.3208464Z   ---
+2026-11-20T03:27:34.3208591Z   duration_ms: 10.861744
+2026-11-20T03:27:34.3208735Z   type: 'test'
+2026-11-20T03:27:34.3208855Z   ...
+2026-11-20T03:27:34.3209196Z # Subtest: dependency-cruiser external package leaf records may be unresolved/duplicated without hiding internal aliases
+2026-11-20T03:27:34.3209884Z ok 61 - dependency-cruiser external package leaf records may be unresolved/duplicated without hiding internal aliases
+2026-11-20T03:27:34.3210181Z   ---
+2026-11-20T03:27:34.3210308Z   duration_ms: 0.659409
+2026-11-20T03:27:34.3210437Z   type: 'test'
+2026-11-20T03:27:34.3210565Z   ...
+2026-11-20T03:27:34.3210837Z # Subtest: resolved declared backend aliases retain normal reverse transitive consumer edges
+2026-11-20T03:27:34.3211248Z ok 62 - resolved declared backend aliases retain normal reverse transitive consumer edges
+2026-11-20T03:27:34.3211496Z   ---
+2026-11-20T03:27:34.3211731Z   duration_ms: 7.263005
+2026-11-20T03:27:34.3211876Z   type: 'test'
+2026-11-20T03:27:34.3211991Z   ...
+2026-11-20T03:27:34.3212289Z # Subtest: unresolved imports matching the source project's declared aliases cannot masquerade as npm leaves
+2026-11-20T03:27:34.3212751Z ok 63 - unresolved imports matching the source project's declared aliases cannot masquerade as npm leaves
+2026-11-20T03:27:34.3213008Z   ---
+2026-11-20T03:27:34.3213114Z   duration_ms: 0.636975
+2026-11-20T03:27:34.3213258Z   type: 'test'
+2026-11-20T03:27:34.3213388Z   ...
+2026-11-20T03:27:34.3213669Z # Subtest: declared aliases are source-project-scoped; the same name remains a legitimate npm leaf elsewhere
+2026-11-20T03:27:34.3214120Z ok 64 - declared aliases are source-project-scoped; the same name remains a legitimate npm leaf elsewhere
+2026-11-20T03:27:34.3214379Z   ---
+2026-11-20T03:27:34.3214587Z   duration_ms: 0.310266
+2026-11-20T03:27:34.3214774Z   type: 'test'
+2026-11-20T03:27:34.3214937Z   ...
+2026-11-20T03:27:34.3215416Z # Subtest: optional graph alias metadata accepts empty declarations and rejects malformed types, roots and patterns
+2026-11-20T03:27:34.3216189Z ok 65 - optional graph alias metadata accepts empty declarations and rejects malformed types, roots and patterns
+2026-11-20T03:27:34.3216615Z   ---
+2026-11-20T03:27:34.3216729Z   duration_ms: 0.405588
+2026-11-20T03:27:34.3216853Z   type: 'test'
+2026-11-20T03:27:34.3216966Z   ...
+2026-11-20T03:27:34.3217194Z # Subtest: graph closure does not hide an unknown changed owner or unknown consumer
+2026-11-20T03:27:34.3217519Z ok 66 - graph closure does not hide an unknown changed owner or unknown consumer
+2026-11-20T03:27:34.3217721Z   ---
+2026-11-20T03:27:34.3217833Z   duration_ms: 10.332069
+2026-11-20T03:27:34.3217958Z   type: 'test'
+2026-11-20T03:27:34.3218067Z   ...
+2026-11-20T03:27:34.3218305Z # Subtest: a passive bootstrap graph consumer is not a direct global configuration edit
+2026-11-20T03:27:34.3218653Z ok 67 - a passive bootstrap graph consumer is not a direct global configuration edit
+2026-11-20T03:27:34.3218871Z   ---
+2026-11-20T03:27:34.3218979Z   duration_ms: 10.486171
+2026-11-20T03:27:34.3219109Z   type: 'test'
+2026-11-20T03:27:34.3219219Z   ...
+2026-11-20T03:27:34.3220552Z # Subtest: missing changed graph nodes are incomplete evidence, including deleted modules
+2026-11-20T03:27:34.3220966Z ok 68 - missing changed graph nodes are incomplete evidence, including deleted modules
+2026-11-20T03:27:34.3221251Z   ---
+2026-11-20T03:27:34.3221363Z   duration_ms: 3.518819
+2026-11-20T03:27:34.3221493Z   type: 'test'
+2026-11-20T03:27:34.3221604Z   ...
+2026-11-20T03:27:34.3221864Z # Subtest: malformed, empty, duplicate, absolute, unresolved and missing-resolved graphs fail closed
+2026-11-20T03:27:34.3222261Z ok 69 - malformed, empty, duplicate, absolute, unresolved and missing-resolved graphs fail closed
+2026-11-20T03:27:34.3222507Z   ---
+2026-11-20T03:27:34.3222615Z   duration_ms: 0.316054
+2026-11-20T03:27:34.3222741Z   type: 'test'
+2026-11-20T03:27:34.3222853Z   ...
+2026-11-20T03:27:34.3223136Z # Subtest: invalid config version, typo, unknown domain/check, stale and sensitive spec mappings fail closed
+2026-11-20T03:27:34.3223562Z ok 70 - invalid config version, typo, unknown domain/check, stale and sensitive spec mappings fail closed
+2026-11-20T03:27:34.3223815Z   ---
+2026-11-20T03:27:34.3223921Z   duration_ms: 11.018288
+2026-11-20T03:27:34.3224046Z   type: 'test'
+2026-11-20T03:27:34.3224156Z   ...
+2026-11-20T03:27:34.3224422Z # Subtest: stable output ignores input/rule/module/dependency order and deduplicates normalized paths
+2026-11-20T03:27:34.3224831Z ok 71 - stable output ignores input/rule/module/dependency order and deduplicates normalized paths
+2026-11-20T03:27:34.3225079Z   ---
+2026-11-20T03:27:34.3225197Z   duration_ms: 16.089096
+2026-11-20T03:27:34.3225326Z   type: 'test'
+2026-11-20T03:27:34.3225437Z   ...
+2026-11-20T03:27:34.3225724Z # Subtest: Markdown includes rationale, checks, changed paths, consumers, limitations and truthful static counts
+2026-11-20T03:27:34.3226280Z ok 72 - Markdown includes rationale, checks, changed paths, consumers, limitations and truthful static counts
+2026-11-20T03:27:34.3226541Z   ---
+2026-11-20T03:27:34.3226650Z   duration_ms: 6.043316
+2026-11-20T03:27:34.3226776Z   type: 'test'
+2026-11-20T03:27:34.3226888Z   ...
+2026-11-20T03:27:34.3227121Z # Subtest: NUL Git paths preserve deletion/rename sides and filenames containing spaces
+2026-11-20T03:27:34.3227462Z ok 73 - NUL Git paths preserve deletion/rename sides and filenames containing spaces
+2026-11-20T03:27:34.3227679Z   ---
+2026-11-20T03:27:34.3227785Z   duration_ms: 0.167682
+2026-11-20T03:27:34.3227909Z   type: 'test'
+2026-11-20T03:27:34.3228022Z   ...
+2026-11-20T03:27:34.3228308Z # Subtest: Git base selection delegates refs/diffs to the shared safe Git owner and keeps deletion/rename paths
+2026-11-20T03:27:34.3228823Z ok 74 - Git base selection delegates refs/diffs to the shared safe Git owner and keeps deletion/rename paths
+2026-11-20T03:27:34.3229074Z   ---
+2026-11-20T03:27:34.3229185Z   duration_ms: 11.263316
+2026-11-20T03:27:34.3229497Z   type: 'test'
+2026-11-20T03:27:34.3229607Z   ...
+2026-11-20T03:27:34.3229828Z # Subtest: Git base missing/invalid refs and malformed shared-owner results fail
+2026-11-20T03:27:34.3230141Z ok 75 - Git base missing/invalid refs and malformed shared-owner results fail
+2026-11-20T03:27:34.3230340Z   ---
+2026-11-20T03:27:34.3230450Z   duration_ms: 0.355473
+2026-11-20T03:27:34.3230575Z   type: 'test'
+2026-11-20T03:27:34.3230683Z   ...
+2026-11-20T03:27:34.3230962Z # Subtest: CLI argument validation disallows implicit empty selection, ambiguous sources and unknown flags
+2026-11-20T03:27:34.3231385Z ok 76 - CLI argument validation disallows implicit empty selection, ambiguous sources and unknown flags
+2026-11-20T03:27:34.3231630Z   ---
+2026-11-20T03:27:34.3231740Z   duration_ms: 0.185067
+2026-11-20T03:27:34.3231865Z   type: 'test'
+2026-11-20T03:27:34.3231975Z   ...
+2026-11-20T03:27:34.3232192Z # Subtest: CLI dry run emits a truthful plan without collection or fixture imports
+2026-11-20T03:27:34.3232512Z ok 77 - CLI dry run emits a truthful plan without collection or fixture imports
+2026-11-20T03:27:34.3232715Z   ---
+2026-11-20T03:27:34.3232822Z   duration_ms: 56.60241
+2026-11-20T03:27:34.3232948Z   type: 'test'
+2026-11-20T03:27:34.3233058Z   ...
+2026-11-20T03:27:34.3233314Z # Subtest: CLI unknown product path, missing input/ref/config/graph and malformed graph fail closed
+2026-11-20T03:27:34.3233704Z ok 78 - CLI unknown product path, missing input/ref/config/graph and malformed graph fail closed
+2026-11-20T03:27:34.3233935Z   ---
+2026-11-20T03:27:34.3234045Z   duration_ms: 281.650105
+2026-11-20T03:27:34.3234178Z   type: 'test'
+2026-11-20T03:27:34.3234287Z   ...
+2026-11-20T03:27:34.3234600Z # Subtest: CLI reports no-changes for an actual verified clean --base HEAD comparison, while missing/invalid refs still fail
+2026-11-20T03:27:34.3235079Z ok 79 - CLI reports no-changes for an actual verified clean --base HEAD comparison, while missing/invalid refs still fail
+2026-11-20T03:27:34.3235354Z   ---
+2026-11-20T03:27:34.3235463Z   duration_ms: 229.012198
+2026-11-20T03:27:34.3235593Z   type: 'test'
+2026-11-20T03:27:34.3235708Z   ...
+2026-11-20T03:27:34.3235980Z # Subtest: CLI writes JSON/Markdown artifacts only when requested and refuses overwriting existing files
+2026-11-20T03:27:34.3236396Z ok 80 - CLI writes JSON/Markdown artifacts only when requested and refuses overwriting existing files
+2026-11-20T03:27:34.3236642Z   ---
+2026-11-20T03:27:34.3236749Z   duration_ms: 191.744973
+2026-11-20T03:27:34.3236876Z   type: 'test'
+2026-11-20T03:27:34.3236988Z   ...
+2026-11-20T03:27:34.3237249Z # Subtest: CLI accepts the optional graph and never reads .auth/env as graph or config input
+2026-11-20T03:27:34.3237612Z ok 81 - CLI accepts the optional graph and never reads .auth/env as graph or config input
+2026-11-20T03:27:34.3237840Z   ---
+2026-11-20T03:27:34.3237947Z   duration_ms: 212.674312
+2026-11-20T03:27:34.3238072Z   type: 'test'
+2026-11-20T03:27:34.3238181Z   ...
+2026-11-20T03:27:34.3238602Z # Subtest: ESM import is side-effect-free outside any repository; imports are builtins and the canonical safe Git helper only
+2026-11-20T03:27:34.3239091Z ok 82 - ESM import is side-effect-free outside any repository; imports are builtins and the canonical safe Git helper only
+2026-11-20T03:27:34.3239504Z   ---
+2026-11-20T03:27:34.3239616Z   duration_ms: 27.109967
+2026-11-20T03:27:34.3239744Z   type: 'test'
+2026-11-20T03:27:34.3239852Z   ...
+2026-11-20T03:27:34.3240048Z # Subtest: runCli can be embedded without touching process exit state
+2026-11-20T03:27:34.3240322Z ok 83 - runCli can be embedded without touching process exit state
+2026-11-20T03:27:34.3240507Z   ---
+2026-11-20T03:27:34.3240617Z   duration_ms: 0.333691
+2026-11-20T03:27:34.3240740Z   type: 'test'
+2026-11-20T03:27:34.3240847Z   ...
+2026-11-20T03:27:34.3240947Z 1..83
+2026-11-20T03:27:34.3241156Z # tests 114
+2026-11-20T03:27:34.3241273Z # suites 0
+2026-11-20T03:27:34.3241379Z # pass 114
+2026-11-20T03:27:34.3241489Z # fail 0
+2026-11-20T03:27:34.3241600Z # cancelled 0
+2026-11-20T03:27:34.3241714Z # skipped 0
+2026-11-20T03:27:34.3241820Z # todo 0
+2026-11-20T03:27:34.3241940Z # duration_ms 2296.229645
+2026-11-20T03:27:34.3439948Z ##[group]Run npm run quality:architecture
+2026-11-20T03:27:34.3440171Z [36;1mnpm run quality:architecture[0m
+2026-11-20T03:27:34.3456413Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:34.3456571Z env:
+2026-11-20T03:27:34.3456723Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:34.3456908Z ##[endgroup]
+2026-11-20T03:27:34.4079212Z
+2026-11-20T03:27:34.4079969Z > quality:architecture
+2026-11-20T03:27:34.4080385Z > node scripts/check-architecture.mjs
+2026-11-20T03:27:34.4080576Z
+2026-11-20T03:27:36.7973067Z Architecture: 780 modules analyzed; 0 forbidden edges. Graph is static evidence, not runtime verification.
+2026-11-20T03:27:36.8729986Z ##[group]Run node scripts/check-quality-policy.mjs --base "$QUALITY_BASE_REF"
+2026-11-20T03:27:36.8730313Z [36;1mnode scripts/check-quality-policy.mjs --base "$QUALITY_BASE_REF"[0m
+2026-11-20T03:27:36.8746011Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:36.8746152Z env:
+2026-11-20T03:27:36.8746301Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:36.8746483Z ##[endgroup]
+2026-11-20T03:27:36.9668158Z Quality policy: 0 baseline expansions/invalid entries; 0 policy changes require review.
+2026-11-20T03:27:36.9836396Z ##[group]Run npm run quality:duplication -- --base "$QUALITY_BASE_REF"
+2026-11-20T03:27:36.9836687Z [36;1mnpm run quality:duplication -- --base "$QUALITY_BASE_REF"[0m
+2026-11-20T03:27:36.9852784Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:36.9852927Z env:
+2026-11-20T03:27:36.9853082Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:36.9853262Z ##[endgroup]
+2026-11-20T03:27:37.0622966Z
+2026-11-20T03:27:37.0623429Z > quality:duplication
+2026-11-20T03:27:37.0623800Z > node scripts/check-duplication.mjs --base 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:37.0624000Z
+2026-11-20T03:27:37.5580207Z Using config from .jscpd.json
+2026-11-20T03:27:37.5581147Z Duplication: 356 files; 9 total clones; 0 new. Existing clones are visible debt, not verified reuse.
+2026-11-20T03:27:37.5828457Z ##[group]Run npm run quality:impact -- --base "$QUALITY_BASE_REF" --graph reports/quality/dependencies.json --output reports/quality/impact.json
+2026-11-20T03:27:37.5829024Z [36;1mnpm run quality:impact -- --base "$QUALITY_BASE_REF" --graph reports/quality/dependencies.json --output reports/quality/impact.json[0m
+2026-11-20T03:27:37.5845593Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:37.5845744Z env:
+2026-11-20T03:27:37.5845894Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:37.5846077Z ##[endgroup]
+2026-11-20T03:27:37.6487552Z
+2026-11-20T03:27:37.6488065Z > quality:impact
+2026-11-20T03:27:37.6488752Z > node scripts/test-impact.mjs --base 6897f989b055a955280f810c7daace86f74057fa --graph reports/quality/dependencies.json --output reports/quality/impact.json
+2026-11-20T03:27:37.6489538Z
+2026-11-20T03:27:38.2773928Z ##[group]Run node --input-type=module <<'NODE'
+2026-11-20T03:27:38.2774189Z [36;1mnode --input-type=module <<'NODE'[0m
+2026-11-20T03:27:38.2774357Z [36;1mimport fs from "node:fs";[0m
+2026-11-20T03:27:38.2774560Z [36;1mimport { formatMarkdown } from "./scripts/test-impact.mjs";[0m
+2026-11-20T03:27:38.2774901Z [36;1mconst summary = formatMarkdown(JSON.parse(fs.readFileSync("reports/quality/impact.json", "utf8")));[0m
+2026-11-20T03:27:38.2775249Z [36;1mfs.writeFileSync("reports/quality/impact.md", summary);[0m
+2026-11-20T03:27:38.2775581Z [36;1mfs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);[0m
+2026-11-20T03:27:38.2775789Z [36;1mNODE[0m
+2026-11-20T03:27:38.2792447Z shell: /usr/bin/bash -e {0}
+2026-11-20T03:27:38.2792602Z env:
+2026-11-20T03:27:38.2792766Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:38.2792962Z ##[endgroup]
+2026-11-20T03:27:38.3680449Z ##[group]Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+2026-11-20T03:27:38.3680686Z with:
+2026-11-20T03:27:38.3680815Z   name: architecture-impact-evidence
+2026-11-20T03:27:38.3680968Z   if-no-files-found: error
+2026-11-20T03:27:38.3681097Z   retention-days: 14
+2026-11-20T03:27:38.3681220Z   path: reports/quality/
+2026-11-20T03:27:38.3681349Z   compression-level: 6
+2026-11-20T03:27:38.3681472Z   overwrite: false
+2026-11-20T03:27:38.3681591Z   include-hidden-files: false
+2026-11-20T03:27:38.3681720Z env:
+2026-11-20T03:27:38.3681856Z   QUALITY_BASE_REF: 6897f989b055a955280f810c7daace86f74057fa
+2026-11-20T03:27:38.3682028Z ##[endgroup]
+2026-11-20T03:27:38.4822977Z (node:3351) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:27:38.4823433Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:27:38.4849390Z With the provided path, there will be 5 files uploaded
+2026-11-20T03:27:38.4853290Z Artifact name is valid!
+2026-11-20T03:27:38.4853814Z Root directory input is valid!
+2026-11-20T03:27:38.7544883Z Beginning upload of artifact content to blob storage
+2026-11-20T03:27:38.7860847Z (node:3351) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-11-20T03:27:39.0424143Z Uploaded bytes 108516
+2026-11-20T03:27:39.0891789Z Finished uploading artifact content to blob storage!
+2026-11-20T03:27:39.0892549Z SHA256 digest of uploaded artifact zip is 7e94735f78c3a389d23168182a93d239ca33d1fb9a7f33037e5c6ccbcda3d90b
+2026-11-20T03:27:39.0893461Z Finalizing artifact upload
+2026-11-20T03:27:39.4405332Z Artifact architecture-impact-evidence.zip successfully finalized. Artifact ID 14598377171
+2026-11-20T03:27:39.4405938Z Artifact architecture-impact-evidence has been successfully uploaded! Final size is 108516 bytes. Artifact ID is 14598377171
+2026-11-20T03:27:39.4411230Z Artifact download URL: https://github.com/1alextest/Tesbooboo/actions/runs/44667829422/artifacts/14598377171
+2026-11-20T03:27:39.4881085Z Post job cleanup.
+2026-11-20T03:27:39.5740686Z (node:3364) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-20T03:27:39.5741164Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-20T03:27:39.5743104Z Cache hit occurred on the primary key node-cache-Linux-x64-npm-ae1fa1ee70b687f601318db8d9d82031386ee5d2df3f7af68f55fe690c8dde96, not saving cache.
+2026-11-20T03:27:39.6331379Z Post job cleanup.
+2026-11-20T03:27:39.6937839Z [command]/usr/bin/git version
+2026-11-20T03:27:39.7004324Z git version 2.56.1
+2026-11-20T03:27:39.7031745Z Temporarily overriding HOME='/home/runner/work/_temp/1fd746f6-cc4e-455a-9401-006c3fef74b2' before making global git config changes
+2026-11-20T03:27:39.7032874Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-20T03:27:39.7035952Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Tesbooboo/Tesbooboo
+2026-11-20T03:27:39.7077326Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-20T03:27:39.7115121Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-20T03:27:39.7361415Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-20T03:27:39.7390225Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-20T03:27:39.7616014Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-20T03:27:39.7658752Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-20T03:27:39.7996552Z Cleaning up orphan processes
+2026-11-20T03:27:39.8315675Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020, actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

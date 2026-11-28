@@ -1,0 +1,108 @@
+# Trusted main-only bridge: a human/agent can prepare code, but only the narrowly
+# scoped installed GitHub App creates the reviewable, signed draft PR.
+# Install on the protected default branch only after normal independent review.
+name: Tesbo agent PR handoff
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Existing candidate branch, e.g. agent-candidate/feature-name
+        required: true
+        type: string
+      source_sha:
+        description: Exact forty-character candidate HEAD (no symbolic refs)
+        required: true
+        type: string
+      base_sha:
+        description: Exact current development HEAD before publication
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tesbo-agent-pr-${{ github.repository }}-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish-signed-draft:
+    name: publish-signed-draft
+    if: github.repository == '1alextest/Tesbooboo' && github.ref == 'refs/heads/main' && github.actor == '1alextest'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # The executable validator is always checked out from the trusted default main.
+      - name: Checkout trusted publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      # Only Git objects are read from development and candidate; no candidate
+      # script, dependency installer, test command or Git hook is executed.
+      - name: Fetch candidate as inert source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: development
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate exact HEADs, scope and stage equal tree
+        id: handoff
+        working-directory: candidate
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node ../trusted/scripts/agent-pr-handoff.mjs
+
+      # The write token does not exist until the untrusted candidate has passed
+      # all source/base/security guards. No admin, actions or checks permission.
+      - name: Obtain one-repository GitHub App token
+        id: bot
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc
+        with:
+          client-id: ${{ vars.TESBO_AGENT_PR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TESBO_AGENT_PR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Publish bot-authored signed draft PR
+        id: publish
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
+        with:
+          token: ${{ steps.bot.outputs.token }}
+          path: candidate
+          base: development
+          branch: ${{ steps.handoff.outputs.bot_branch }}
+          sign-commits: true
+          draft: true
+          delete-branch: false
+          commit-message: "chore(agent): publish exact candidate ${{ steps.handoff.outputs.source_sha }}"
+          title: "agent: review ${{ steps.handoff.outputs.source_branch }}"
+          body: |
+            ## Source and human authority
+            This is a GitHub-App-authored draft from a previously staged, **unexecuted** candidate snapshot.
+            - Source branch: ${{ steps.handoff.outputs.source_branch }}
+            - Pinned source HEAD: ${{ steps.handoff.outputs.source_sha }}
+            - Pinned development base: ${{ steps.handoff.outputs.base_sha }}
+            - Changed files: ${{ steps.handoff.outputs.file_count }}
+
+            The publisher must preserve the candidate tree exactly, sign the new bot commit and
+            prove native GitHub author/committer identity. The original candidate branch stays unchanged.
+            This publication is **not** a test result, Tesbo native-record synchronization, or
+            independent/White assurance approval. Existing PR CI, project evidence, and the
+            repository owner's own human review are still required. Never self-approve or auto-merge.
+
+      - name: Verify native bot identity, signature and exact PR HEAD
+        env:
+          APP_TOKEN: ${{ steps.bot.outputs.token }}
+          APP_SLUG: ${{ steps.bot.outputs.app-slug }}
+          PR_NUMBER: ${{ steps.publish.outputs.pull-request-number }}
+          SOURCE_SHA: ${{ steps.handoff.outputs.source_sha }}
+          BOT_BRANCH: ${{ steps.handoff.outputs.bot_branch }}
+          EXPECTED_TREE_SHA: ${{ steps.handoff.outputs.tree_sha }}
+        run: node trusted/scripts/agent-pr-verify-publication.mjs

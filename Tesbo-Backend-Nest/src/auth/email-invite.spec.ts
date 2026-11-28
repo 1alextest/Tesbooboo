@@ -1,6 +1,7 @@
 import { EmailService } from "./email.service";
 import { AppConfigService } from "../config/app-config.service";
 import { EmailDeliveryPolicy } from "../config/email-delivery.policy";
+import { EmailOutboxService } from "./email-outbox.service";
 
 /**
  * EmailService.sendInvite builds the accept-invite email and (when delivery is permitted) posts it to
@@ -20,7 +21,8 @@ function makeService(configOverrides: Partial<Record<string, unknown>> = {}) {
     emailDeliveryMode: "live",
     ...configOverrides
   } as unknown as AppConfigService;
-  return new EmailService(config, new EmailDeliveryPolicy(config));
+  const outbox = new EmailOutboxService(config);
+  return { svc: new EmailService(config, new EmailDeliveryPolicy(config), outbox), outbox };
 }
 
 describe("EmailService.sendInvite", () => {
@@ -36,20 +38,23 @@ describe("EmailService.sendInvite", () => {
     logSpy.mockRestore();
   });
 
-  it("logs the accept link instead of sending mail when no Postmark token is configured", async () => {
+  it("records the accept link in the outbox instead of sending mail when no Postmark token is configured", async () => {
     global.fetch = jest.fn();
-    const svc = makeService({ postmarkApiToken: "" });
+    const { svc, outbox } = makeService({ postmarkApiToken: "", emailDeliveryMode: "log", emailOutboxEnabled: true });
 
     await svc.sendInvite("bob@example.com", "Alice", "qa_engineer", "Acme Corp", "raw-token-123", [], "https://app.tesbo.io");
 
     expect(global.fetch).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("https://app.tesbo.io/invite/raw-token-123"));
+    expect(logSpy).toHaveBeenCalledWith("[email] communication not posted (log mode)");
+    const recorded = outbox.list("bob@example.com");
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].text).toContain("https://app.tesbo.io/invite/raw-token-123");
   });
 
   it("posts to Postmark with the accept URL, role label, and project names when a token is configured", async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, text: jest.fn() });
     global.fetch = fetchMock as unknown as typeof fetch;
-    const svc = makeService({ postmarkApiToken: "pm-token", postmarkFromEmail: "noreply@tesbo.io" });
+    const { svc } = makeService({ postmarkApiToken: "pm-token", postmarkFromEmail: "noreply@tesbo.io" });
 
     await svc.sendInvite(
       "bob@example.com",
@@ -78,7 +83,7 @@ describe("EmailService.sendInvite", () => {
   it("labels any non-manager role as 'QA Engineer'", async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, text: jest.fn() });
     global.fetch = fetchMock as unknown as typeof fetch;
-    const svc = makeService({ postmarkApiToken: "pm-token" });
+    const { svc } = makeService({ postmarkApiToken: "pm-token" });
 
     await svc.sendInvite("bob@example.com", "Alice", "qa_engineer", "Acme Corp", "raw-token", [], "https://app.tesbo.io");
 
@@ -89,7 +94,7 @@ describe("EmailService.sendInvite", () => {
   it("throws when Postmark rejects the request, surfacing the status and body", async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 422, text: jest.fn().mockResolvedValue("Invalid From address") });
     global.fetch = fetchMock as unknown as typeof fetch;
-    const svc = makeService({ postmarkApiToken: "pm-token" });
+    const { svc } = makeService({ postmarkApiToken: "pm-token" });
 
     await expect(
       svc.sendInvite("bob@example.com", "Alice", "qa_engineer", "Acme Corp", "raw-token", [], "https://app.tesbo.io")
@@ -112,7 +117,8 @@ describe("EmailService in log mode (the default: local, CI, e2e)", () => {
       postmarkApiToken: "pm-token",
       postmarkFromEmail: "noreply@tesbo.io",
       otpExpiryMinutes: 10,
-      emailDeliveryMode: "log"
+      emailDeliveryMode: "log",
+      emailOutboxEnabled: true
     } as unknown as AppConfigService;
     // First call is the server-type probe, every later one is a send.
     const fetchMock = jest
@@ -120,7 +126,8 @@ describe("EmailService in log mode (the default: local, CI, e2e)", () => {
       .mockResolvedValueOnce({ ok: true, json: jest.fn().mockResolvedValue({ DeliveryType: serverDeliveryType }) })
       .mockResolvedValue({ ok: true, text: jest.fn() });
     global.fetch = fetchMock as unknown as typeof fetch;
-    return { svc: new EmailService(config, new EmailDeliveryPolicy(config)), fetchMock };
+    const outbox = new EmailOutboxService(config);
+    return { svc: new EmailService(config, new EmailDeliveryPolicy(config), outbox), outbox, fetchMock };
   }
 
   function sends(fetchMock: jest.Mock) {
@@ -138,18 +145,19 @@ describe("EmailService in log mode (the default: local, CI, e2e)", () => {
     errorSpy.mockRestore();
   });
 
-  it("prints the OTP and never emails it, even with a sandbox server available", async () => {
-    const { svc, fetchMock } = makeLogModeService("Sandbox");
+  it("records the OTP in the outbox and never emails it, even with a sandbox server available", async () => {
+    const { svc, outbox, fetchMock } = makeLogModeService("Sandbox");
 
     await svc.sendOtp("bob@example.com", "123456");
 
-    // Verbatim format — e2e/global-setup.ts scrapes this exact line out of the container log.
-    expect(logSpy).toHaveBeenCalledWith("OTP for bob@example.com: 123456");
+    // The log line carries the kind and outcome only — never the code.
+    expect(logSpy).toHaveBeenCalledWith("[email] otp not posted (log mode)");
+    expect(outbox.list("bob@example.com")[0]?.text).toContain("verification code is 123456");
     expect(fetchMock).not.toHaveBeenCalled(); // not even the probe: the answer can't change the outcome
   });
 
-  it("replays an invite through the sandbox server and still logs the accept link", async () => {
-    const { svc, fetchMock } = makeLogModeService("Sandbox");
+  it("replays an invite through the sandbox server and records the accept link", async () => {
+    const { svc, outbox, fetchMock } = makeLogModeService("Sandbox");
 
     await svc.sendInvite("bob@example.com", "Alice", "manager", "Acme Corp", "raw-token-123", [], "https://app.tesbo.io");
 
@@ -158,28 +166,32 @@ describe("EmailService in log mode (the default: local, CI, e2e)", () => {
     expect(sends(fetchMock)).toHaveLength(1);
     const body = JSON.parse(sends(fetchMock)[0][1].body);
     expect(body.TextBody).toContain("https://app.tesbo.io/invite/raw-token-123");
-    // Logged too: with nothing delivered, the log is the only place the link exists.
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("https://app.tesbo.io/invite/raw-token-123"));
+    // The link the invitee needs is recorded for the suite; the log does not carry it.
+    expect(outbox.list("bob@example.com")[0]?.text).toContain("https://app.tesbo.io/invite/raw-token-123");
+    expect(logSpy).toHaveBeenCalledWith("[email] communication posted (sandbox)");
   });
 
   it("sends nothing at all when the configured token turns out to be a LIVE server", async () => {
-    const { svc, fetchMock } = makeLogModeService("Live");
+    const { svc, outbox, fetchMock } = makeLogModeService("Live");
 
     await svc.sendInvite("bob@example.com", "Alice", "manager", "Acme Corp", "raw-token-123", [], "https://app.tesbo.io");
 
     expect(sends(fetchMock)).toHaveLength(0);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Blocking delivery"));
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("https://app.tesbo.io/invite/raw-token-123"));
+    expect(outbox.list("bob@example.com")[0]?.text).toContain("https://app.tesbo.io/invite/raw-token-123");
+    expect(logSpy).toHaveBeenCalledWith("[email] communication not posted (log mode)");
   });
 
   it("blocks billing email against a live server too, without failing the operation behind it", async () => {
-    const { svc, fetchMock } = makeLogModeService("Live");
+    const { svc, outbox, fetchMock } = makeLogModeService("Live");
 
     // Billing mail is best-effort by design: it fires from Stripe webhooks and upload paths, where a
     // mail problem must not turn a paid invoice into a failed webhook Stripe then retries.
     await svc.sendPaymentFailed("owner@example.com", "Acme Corp", "https://app.tesbo.io/settings", 30);
 
     expect(sends(fetchMock)).toHaveLength(0);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("[PAYMENT FAILED] owner@example.com"));
+    expect(outbox.list("owner@example.com")).toHaveLength(1);
+    // Outcome only — the recipient and the billing URL stay out of the log.
+    expect(logSpy).toHaveBeenCalledWith("[email] communication not posted (log mode)");
   });
 });

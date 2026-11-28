@@ -8,6 +8,16 @@
 > roadmap: the "Features & actions" bullets under each module are written at the granularity of
 > individual test cases, and every section also calls out concrete **edge cases worth testing**.
 
+> **2026-11-11 source recheck:** the original inventory below is historical and
+> contains stale implementation claims. See Appendix E for the bounded Phase 1
+> recheck, PR #25 findings, missing-specification evidence and verification limits.
+> This supplement does not certify the rest of the inventory as current.
+
+> **Current exit decision pack:** Appendix E, **F.1** reconciles owner-merged
+> #36–#43 against the historical F1–F9 assessment. F.0 adopts the conditional-exit
+> framework only. Neither this inventory nor a green CI badge is Phase 1 sign-off
+> or authorization to implement the incomplete Phase 2 specification package.
+
 ## How this document is organized
 
 Nine modules, roughly in the order a user would encounter them:
@@ -93,7 +103,7 @@ Config defaults referenced below (from `Tesbo-Backend-Nest/src/config/app-config
   1. Primary: reads `tesbo_session` cookie, resolves to a `userId` via `sessions.token_hash` lookup (only if `expires_at > now()`); expired/unknown token → `req.userId = null` (not an error — downstream handlers 401/403 as needed).
   2. Secondary (only if no cookie session resolved): parses `Authorization: Bearer <token>`, authenticates against `api_tokens.token_hash` (SHA-256) via `ApiTokenService.authenticate`; on match sets `req.userId` to the token's owning user and `req.apiToken = { tokenId, userId, projectId, scopes }`. Unknown/blank bearer token → falls through as unauthenticated.
   - Practical effect: a request bearing *both* a valid session cookie and a bearer token is treated as the cookie user (cookie wins).
-- **API token (project-scoped machine credential)** — backend-only today (`ApiTokenService`, routes `GET/POST /api/projects/:id/apikeys`, `DELETE /api/projects/:id/apikeys/:keyId`); no frontend UI currently calls these (`lib/api.ts` has no wrapper — confirmed by repo-wide search). Documented here for API-level test coverage:
+- **API token (project-scoped machine credential)** — `ApiTokenService`, routes `GET/POST /api/projects/:id/apikeys`, `DELETE /api/projects/:id/apikeys/:keyId`, and **Project settings → API & MCP** token/connection UI (inventory reconciled 2026-11-12; the earlier backend-only description was stale):
   - Token format: `tsbo_` prefix + 24 random bytes hex; only a SHA-256 hex hash is ever persisted; raw token is returned exactly once, at creation, and is unrecoverable afterward.
   - Scopes: `read`, `write` (comma-stored); invalid/unrecognized scope strings are filtered out; if nothing valid remains, defaults to **both** `read` and `write`.
   - Create requires `name`; 400 if blank. Requires the caller to be a project member (`requireProjectAccess`) of their currently-active workspace's project.
@@ -614,7 +624,7 @@ them a revocable, project-scoped credential instead of sharing a user's session.
 - **Create key** (`POST /api/projects/:id/apikeys` → `createApiKey`): requires `name` (400 if blank); `scopes` optional, normalized to a set of `read`/`write` values (anything invalid is filtered out; if nothing valid remains, defaults to **both** `read` and `write`). Token format: `tsbo_` + 24 random bytes hex; only the SHA-256 hash is persisted (`token_hash`), raw token returned exactly once in the response body. Gated by `requireProjectAccess`, i.e. **any project member** (not just owner/manager) can mint a key.
 - **Revoke key** (`DELETE /api/projects/:id/apikeys/:keyId` → `revokeApiKey`): deletes by `id + project_id`; 404 if not found/already revoked/belongs to a different project. Gated by `requireProjectAccess`.
 - **Authentication path**: `AuthMiddleware` checks bearer tokens against `ApiTokenService.authenticate()` (SHA-256 lookup) only when there's no valid session cookie; on success it stamps `last_used_at` (best-effort, doesn't block the request on failure) and attaches `{tokenId, userId, projectId, scopes}` to the request.
-- **No frontend UI exists for this feature at all** — grepping the entire `Tesbo-Frontend` tree finds zero references to `apikeys`/`createApiKey`/`listApiKeys`/`revokeApiKey`. This is a **backend-only / API-only feature today**; the only way to test it is directly against the REST API (curl/Postman) or once an MCP client consumes it. Worth flagging to QA as "no UI to verify visually — API-level testing only for now."
+- **Frontend onboarding exists:** **Project settings → API & MCP** links to the token page, which lists masked tokens, creates named read/write-scoped tokens, reveals the secret once, revokes tokens and provides CLI/JSON/curl/PowerShell connection snippets. The UI exposes create/revoke to owners/managers; the existing REST service still gates by membership, not that UI role restriction. This batch does not introduce a new credential-issuance policy.
 - Edge cases to test:
   - Create a key with no `scopes` → should default to `["read","write"]`.
   - Create a key with garbage scopes (e.g. `["admin"]`) → should fall back to default read+write (since nothing valid survives the filter).
@@ -624,7 +634,7 @@ them a revocable, project-scoped credential instead of sharing a user's session.
 
 **Key files:**
 - Backend: `legacy.controller.ts:216-229`, `legacy.service.ts:304-326` (thin wrapper), `Tesbo-Backend-Nest/src/auth/api-token.service.ts` (token issuance/hash/validation), `Tesbo-Backend-Nest/src/auth/auth.middleware.ts` (bearer auth path), migration `V*_api_tokens_webhooks.sql`.
-- Frontend: none (feature has no UI as of this writing).
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/settings/api-tokens/page.tsx`, settings `page.tsx`, and `lib/api.ts` (`listApiKeys`, `createApiKey`, `revokeApiKey`, `getMcpUrl`).
 
 ---
 
@@ -702,9 +712,9 @@ across test plans, cycles/runs, and reporting.
   | `priority` (P0-P3, default P2) | Yes | Yes | No DB CHECK constraint — any string is technically insertable via direct API call, bypassing the fixed P0-P3 dropdown |
   | `severity` | **No** | Yes | API/import-only — no manual form field |
   | `type` (Functional/Regression/Smoke/.../Security, default Functional) | Yes | Yes | No DB CHECK constraint, arbitrary values possible via API |
-  | `status` (Draft/In Review/Approved/Deprecated/Archived, default Draft) | Yes | Yes | No DB CHECK constraint |
+  | `status` (Draft/In Review/Approved/Deprecated/Archived, default Draft) | Yes | Yes | No DB CHECK constraint. An `Uncertain` case status was considered and **not adopted**: a case status expresses authored intent, and outcome uncertainty belongs to execution results, not to the case. |
   | `component` | **No** | Yes | API/import-only |
-  | `estimatedDuration` | Yes (form field exists) | Yes (mappable in import UI) | **Dead field end-to-end**: DB column exists (`estimated_duration VARCHAR(64)`), but `createTestCase`/`updateTestCase` in `legacy.service.ts` never include it in the INSERT/UPDATE column list, so anything typed here is silently discarded and never persisted, and the import flow's own `createTestCase()` call in `ImportTestCasesModal.tsx` also drops it from the payload. **High-value, easy-to-demonstrate bug for QA.** |
+  | `estimatedDuration` | Yes (form field) | Yes (mappable in import UI) | **Persisted end to end**: the create/update writers include `estimated_duration` in their INSERT/UPDATE column lists, the import modal maps and sends it, and the MCP authoring schemas advertise it. (It was previously a dead field; the earlier note is superseded.) |
   | `attachments` | Yes, labeled **"Notes"** (free text) | **No** (not in `IMPORTABLE_FIELDS`) | Despite the name/DB column (`TEXT`), this is used purely as a free-text notes box in the UI, not file attachments (there is a separate, unrelated `attachments` *table* for entity file metadata that this feature does not use) |
   | `automationStatus`, `automationRepo`, `automationPath`, `automationTestName`, `automationFramework` | **No** | **No** | API/MCP-only fields, no UI anywhere in this scope to set them |
   | `automationTags` | **No** (read-only chip display in the repository table only) | **No** | Comma-split and rendered as small tags under the title in `RepositoryTestCaseTable`; nothing lets a user set/edit it manually |
@@ -950,6 +960,7 @@ the underlying test case library evolves.
 - List runs (`GET /api/projects/:projectId/cycles`) — summary stat tiles (Total Runs / In Progress / Pass Rate / Open Failures), status filter chips (All/Planning/In Progress/Completed), sort (Newest/Oldest/Name/Status).
 - Create run (`POST /api/projects/:projectId/cycles`) — Name (required), Description, **Environment (required, dropdown sourced from Project Settings' `testRunEnvironments`; create button disabled and a warning shown if none configured)**, Build Version (free text).
   - **`from-plan`** (`POST /api/projects/:projectId/cycles/from-plan`) and **`from-cases`** (`POST /api/projects/:projectId/cycles/from-cases`) are distinct routes but both are wired to the *exact same* `createCycle()` service method — there is no server-side behavioral difference between "plain create," "from a plan," and "from selected cases." `from-cases` has **no frontend caller anywhere** in the codebase; it's reachable only via direct API/automation and, if invoked with `testcaseIds` in the body, silently ignores them (no cases get attached) since `createCycle` never reads that field.
+    - **Updated 2026-11-18 (superseded):** `from-cases` now delegates to `createCycleFromCasesForUser`, which uses the atomic Approved-only writer and attaches the supplied cases, returning `requested`/`added`/`skipped` alongside the run; a Draft case refuses the request with 409 and no run. `from-plan` remains link-only. See `e2e/api/cycles.spec.ts` TES-TC-173/TES-TC-3042 and docs/automation-integration-plan.md trap 3.
 - Edit run (`PATCH /api/cycles/:cycleId`) — name/description/environment (required)/build version. Also used internally for plan linking (`planId`/`clearPlan`) and status transitions.
 - Delete run (`DELETE /api/cycles/:cycleId`) — confirm dialog warns "This will remove all associated test case executions. This action cannot be undone." Matches schema: `cycle_items` cascades from `cycles` (`ON DELETE CASCADE`), and `executions` cascades from `cycle_items` — a hard, unrecoverable delete of every execution result, attachment reference, and defect link tied to the run.
 - **Run status lifecycle** — manual, button-driven, not automatically derived from completion %:
@@ -959,7 +970,7 @@ the underlying test case library evolves.
   - The inline per-execution status dropdown only renders while the run is `In Progress`; in `Planning`/`Completed` the row shows a read-only status chip. **This gating is client-side only** — `PATCH /api/cycles/:cycleId/executions/:executionId` has no server-side check on the parent run's status, so a direct API call can still update execution results on a `Planning` or `Completed` run.
   - **Add Test Cases** button is hidden once `Completed`; **Remove case** action is likewise hidden once `Completed` (both client-side only — same caveat as above for the underlying endpoints).
 - **Add Test Cases picker** (`POST /api/cycles/:cycleId/testcases`) — modal with search/priority/type/suite/status filters over the full project repository.
-  - **Only test cases with status "Approved" are selectable** (checkbox disabled + row dimmed + tooltip "Only Approved test cases can be added to a test run..." for Draft/In Review/other statuses) — enforced client-side only; nothing stops adding a non-Approved case via direct `POST` to the endpoint.
+  - **Only test cases with status "Approved" are selectable** (checkbox disabled + row dimmed + tooltip "Only Approved test cases can be added to a test run..." for Draft/In Review/other statuses) — the picker already enforces this in the UI; the native `addCycleTestCases` transaction now also enforces Approved status on **new** associations at the database boundary, including direct `POST`, with a 409 for an active non-Approved selection. Existing attached cases remain historical/idempotent even if later demoted.
   - Already-included cases (by `testcaseId`) are excluded from the picker list entirely.
   - Adding a case creates both a `cycle_items` row (snapshotting the current title) **and** a paired `executions` row defaulted to `Untested`, in the same request.
 - **Remove case from run** (`DELETE /api/cycles/:cycleId/testcases/:testcaseId`) — hard-deletes the `cycle_items` row, which cascades to hard-delete its `executions` row too (bypassing the soft-delete columns `deleted_at`/`deleted_by` added for executions in `V60`) — i.e. removing a case from a run **permanently and irreversibly destroys that case's execution history for this run** (status, actual result, defect key/URL), not a soft-delete/archive.
@@ -973,10 +984,10 @@ the underlying test case library evolves.
 - Create a run, immediately delete it while its "Add Test Cases" modal is still open in another tab — verify the add-cases call fails gracefully (FK cascade already removed the cycle).
 - Reopen a `Completed` run, verify `endedAt`-driven duration display doesn't misbehave (moot today since `endedAt` is never set by this module).
 - Add the same test case to a run twice in rapid succession (double-click) — `cycle_items` has no explicit unique constraint on `(cycle_id, testcase_id)` visible in the base migration (only `ON CONFLICT DO NOTHING` is used when the *execution* insert races, implying reliance on some uniqueness — verify whether a duplicate `cycle_items` row can be created, producing two execution rows for one case in the same run).
-- Call `POST /cycles/from-cases` directly with a `testcaseIds` array (as its name implies) — confirm it creates an **empty** run, silently dropping the cases; this is a real trap for anyone integrating against the documented-sounding route name.
+- Call `POST /cycles/from-cases` directly with a `testcaseIds` array (as its name implies) — this used to create an **empty** run, silently dropping the cases. **Updated 2026-11-18:** it now seeds them atomically and reports `requested`/`added`/`skipped`; cover Approved seeding, Draft refusal (409, no run) and unresolvable ids counted as skipped instead.
 - No auth/ownership check on `getCycle`/`listCycles`/`updateCycle`/`deleteCycle`/`addCycleTestCases`/`removeCycleTestCase` — same platform-wide IDOR gap as Plans (see Cross-Cutting section).
 - No activity-log entries for run create/update/delete/case-add/case-remove — only execution status changes and attachment uploads are journaled.
-- `GET /api/cycles/:cycleId/report/summary` (`cycleSummary()` in the controller) is a **hard-coded stub** returning `{ total: 0, passed: 0, failed: 0, blocked: 0, skipped: 0, untested: 0 }` regardless of the actual cycle — unused by the frontend (which computes its own stats client-side from `/executions`), but any external integration calling it will get permanently-zero data.
+- `GET /api/cycles/:cycleId/report/summary` returns the run's real status buckets, using the same `EXECUTION_BUCKET_COUNTS` definition as the project overview; a foreign or nonexistent run is a 404. (It previously returned a hard-coded all-zero object.)
 
 **Key files:**
 - Backend: `legacy.controller.ts` L348–392 (`/cycles` list/create/from-plan/from-cases, `/cycles/:cycleId` get/update/delete, `/testcases` add/remove), L568–575 (`/export/csv`), L587–590 (`/report/summary` stub); `legacy.service.ts` L1676–1790 (`listCycles`, `createCycle`, `getCycle`, `updateCycle`, `deleteCycle`, `addCycleTestCases`, `removeCycleTestCase`).
@@ -1008,12 +1019,14 @@ by whom, and what happened — the atomic unit all run/plan progress rollups are
 - **Auto bug-filing on Failed**: changing status to `Failed` (via inline dropdown or the detail panel) automatically opens the "File a bug" dialog, pre-filled with a "Failed: <test case title>" draft title; the tester can create a new bug (optionally routed to Jira/Linear/self-logged/Tesbo-native, with file or BetterBugs evidence) or link the execution to an already-existing bug (`addBugLink`) instead of creating a duplicate. Can be skipped.
 - **"Log bug" row action** — available on every row regardless of current status (magnifier/bug icon), not just after a Failed transition.
 - **Assignee** — `assigneeId` is part of the execution record and is **displayed** (avatar + name) in both the table row and the detail drawer, but there is **no UI control anywhere to set or change it**. `updateExecution()`'s payload type supports `assigneeId`, yet neither the inline-status handler nor the drawer's Save handler ever sends it. In practice, an execution can only ever be assigned via a direct API call (or some other, out-of-scope, automation path) — there is no manual "assign to teammate" workflow in the product today.
+  - **Updated 2026-11-19 (superseded):** the detail drawer has an `Assigned to` select — including a disabled option for an assignee who is no longer a member, so a Save cannot silently clear a real assignment — and the run table's multi-selection offers **Assign to**. Both path through `updateExecution` / `bulk-assign`. The paragraph above is the historical audit.
 - **Evidence attachments** — `POST /api/cycles/:cycleId/executions/:executionId/attachments` (multipart, up to 10 files, size-limited by `MAX_UPLOAD_SIZE`/50MB default) and `GET .../attachments` are fully implemented backend features (stores to `attachments` table with `entity_type='execution'`, logs a `execution_evidence_uploaded` activity entry) but have **zero frontend callers** — no `lib/api.ts` wrapper function exists for them and no component references them. Execution-level evidence upload/download is effectively a backend-only, UI-inaccessible feature today (bug evidence upload is the analogous feature that *does* have full UI, via the "File a bug" dialog).
+  - **Updated 2026-11-19 (superseded):** `ExecutionEvidencePanel` renders upload, grouped screenshots/video/traces/logs, download and inline viewing in both the run detail drawer and the standalone execute page, with a per-row evidence count. The paragraph above is the historical audit.
 - **Test case fallback rendering**: title falls back `snapshot_title → 'Untitled test case'`; if the underlying test case has since been archived/soft-deleted (`testcases.deleted_at`), the executions query's `LEFT JOIN ... AND t.deleted_at IS NULL` means priority/type/description/steps/etc. all render blank (`—`) even though the execution row itself still exists and is fully editable.
 - Tabs on the run detail table: All / Passed / Failed / Blocked / Skipped / Pending (Pending buckets both `Untested` and `Retest`), each with a live count badge; free-text search by title/external ID; client-side pagination (10/page).
 
 **Edge cases / validation worth testing:**
-- PATCH an execution's status to an arbitrary non-enum string via direct API (e.g. `"WontFix"`) — persists with no server-side validation; confirm how the UI renders an unrecognized status (falls through to the default/neutral tone).
+- PATCH an execution's status to an arbitrary non-enum string via direct API (e.g. `"WontFix"`) — persists with no server-side validation; confirm how the UI renders an unrecognized status (falls through to the default/neutral tone). **Updated 2026-11-19:** `updateExecution` now refuses a value outside `EXECUTION_STATUSES` with 400, and the automation ingest maps `pass|fail|skip` to the canonical values at its boundary, so this no longer persists.
 - Update an execution on a run that is `Planning` or `Completed` via direct API — succeeds despite the UI hiding the control, since there is no server-side run-status gate.
 - Set `assigneeId` via direct API to a user who has since been removed from the project/workspace — the UI's `memberNames` lookup (built from current project members) would silently show "Unassigned" instead of erroring, since it can't resolve the stale ID.
 - Mark Failed → open bug dialog → close/skip without filing — execution stays `Failed` with no bug link; re-opening later and clicking "Log bug" should still work.
@@ -1032,68 +1045,113 @@ by whom, and what happened — the atomic unit all run/plan progress rollups are
 
 ### Bulk Execution Actions
 
-**What it is:** Two REST routes intended for bulk-assigning executions to a user and bulk-setting
-execution status across multiple executions at once.
+**What it is:** Two REST routes that apply one change across a selection of a run's executions —
+assigning an owner and setting a status.
 
-**Use cases (intended, not delivered):**
-- A test lead wants to assign all "Untested" cases in a run to two testers in one action.
-- A tester wants to mark 20 already-verified-fixed cases as "Passed" in one batch instead of one at a time.
+> **Superseded snapshot (audited before implementation, updated 2026-11-18).** The audit originally
+> recorded both routes as empty controller stubs (`bulkAssign() {}` / `bulkStatus() {}`) with no
+> frontend caller or selection UI. Both are implemented now; the original findings are kept below
+> only as history.
 
-**Problem it solves:** Nothing today — see below.
+**How it works today:**
+- `POST /api/cycles/:cycleId/executions/bulk-assign` and `.../bulk-status` resolve the selection,
+  lock the run and the selected executions in one transaction (`writeBulkExecutions`), and write
+  through the same `writeExecution` path as the single-execution PATCH. A status batch also emits
+  one summary notification per assignee instead of one per case; Failed/Blocked keep their
+  per-case matrix notices.
+- Bulk status validates the status against the canonical list and refuses an unknown value at the
+  edge (400, not a Postgres CHECK violation). Bulk assign refuses a non-member assignee and keeps
+  a status-only PATCH from clearing an assignee set this way.
+- Completed automated runs are sealed: the shared writer's `assertAutomatedRunWritable` refuses
+  the batch rather than letting a selection rewrite a finished robot run.
+- Frontend: the run detail table's multi-selection bar offers **Remove from run**, **Assign to** and
+  **Set status**. Set status requires an explicit choice before it can submit, shows the server's
+  refusal in the dialog, and clears the selection only after the batch succeeds. The bar is absent
+  on a Completed run, matching the hidden selection checkboxes.
 
-**Features & actions:**
-- `POST /api/cycles/:cycleId/executions/bulk-assign` — controller handler is a **completely empty method body** (`bulkAssign() {}`), with no parameters bound at all (not even `@Body()`); it returns `undefined` (HTTP 200 with an empty response) no matter what is sent.
-- `POST /api/cycles/:cycleId/executions/bulk-status` — identical situation (`bulkStatus() {}`).
-- **No frontend caller exists for either route** — no function in `lib/api.ts`, no component references `bulk-assign`/`bulk-status` anywhere in the frontend tree. There is also no bulk-selection UI (checkboxes, "select all," a bulk action bar) anywhere on the run detail execution table — the checkbox/multi-select pattern that exists for bulk test-case operations (status/suite/priority/owner and delete) on the **Test Cases** repository page has no equivalent on the **Test Executions** table.
-- Net effect: this is a fully unimplemented feature end-to-end (no UI, no backend logic, no persistence) — currently indistinguishable from a no-op API if called directly.
-
-**Edge cases / validation worth testing:**
-- Confirm both routes currently return 200/empty for literally any payload (including malformed JSON, missing `cycleId`, or a `cycleId` that doesn't exist) — there is no validation to trigger a 4xx.
-- Regression-test that whenever this is implemented, it gets standard coverage: assigning to a user not on the project, assigning to an empty list, bulk-status to an invalid status string, bulk actions on a `Completed` run, and permission gating consistent with the single-execution update path.
+**Coverage:** `e2e/api/execution-ops.spec.ts` EXO-A-01…06 and EXO-A-08/09 cover the boundary
+(partial selection, unknown status, non-member assignee, cross-tenant/no-session refusal, assignee
+preservation); `e2e/ui/cycles.spec.ts` covers the run-table control, its failure path and the
+Completed-run absence. Both run in the "Verify bulk execution actions from the run table" CI step.
 
 **Key files:**
-- Backend: `legacy.controller.ts` L419–423 (`bulkAssign`, `bulkStatus` — both empty stub bodies). No corresponding methods exist in `legacy.service.ts`.
-- Frontend: none (no caller, no bulk UI on `Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx`).
+- Backend: `legacy.controller.ts` (`bulkAssign`, `bulkStatus`), `legacy.service.ts`
+  (`writeBulkExecutions`, `bulkUpdateExecutionStatus`, `bulkAssignExecutions`, `writeExecution`).
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/[cycleId]/page.tsx`,
+  `Tesbo-Frontend/lib/api.ts` (`bulkAssignExecutions`, `bulkUpdateExecutionStatus`).
 
 ---
 
 ### Recurring Run Scheduling
 
-**What it is:** A dedicated "Schedule Test Run" page where a user can define a one-time or
-recurring reminder/trigger tied to a specific run, with a fully-designed backing DB table
-(`cycle_run_schedules`) — but the controller endpoints backing it are **disconnected stubs that
-never touch that table.**
+**What it is:** Per-project run schedules stored in `cycle_run_schedules`. A due schedule creates a
+new Test Run (a `cycles` row) cloned from the run it points at, with that run's Approved cases, so
+each occurrence keeps its own results instead of overwriting the scheduled run's executions.
 
-**Use cases (intended by the schema/UI, not actually delivered):**
-- Schedule a nightly smoke-test run reminder every 1440 minutes (24h).
+**Use cases:**
+- Run a nightly smoke suite at 09:00 in the team's own timezone (and it stays 09:00 across DST).
+- Run on chosen weekdays at a fixed local time.
+- Run a fixed-interval schedule every 1440 minutes (an absolute interval, not a wall clock).
 - Schedule a one-time run for a specific release date/time in a given timezone.
-- Disable a schedule temporarily without deleting it; see when it last ran and whether it errored.
+- Disable a schedule temporarily without deleting it; see the last outcome and any error.
 
-**Problem it solves:** Nothing today in production — the feature is fully modeled in the database
-and fully built in the UI, but the API layer connecting them is stubbed out, so **nothing persists**.
+**How it works:**
+- `GET /api/projects/:projectId/cycles/schedules` lists the project's schedules with the scheduled
+  run's name, next/last fire time, last status and last error.
+- `POST` and `PATCH` validate a bounded name, a Test Run from the same project, `scheduleType`
+  (`one_time` | `recurring` | `daily` | `weekly`), an IANA timezone, a future one-time `runAt`, a
+  recurring interval of 1–525600 minutes, and — for local rules — a `localTime` in `HH:MM` plus, for
+  weekly, one or more days (`0`=Sunday .. `6`=Saturday). A one-time schedule that already fired has
+  `nextRunAt: null`; editing its name cannot make it due again. `DELETE` removes the schedule.
+- `daily`/`weekly` are true local wall-clock rules: the next instant is computed in the schedule's
+  timezone, so it follows DST instead of drifting by an hour. A local time that does not exist on the
+  spring-forward day is skipped to the next allowed day; an ambiguous fall-back time fires once.
+- The worker (`SchedulesService`) sweeps every 30 seconds by default. Claiming is one statement that
+  marks the row running **and** advances `next_run_at` (`FOR UPDATE SKIP LOCKED`), so a crash cannot
+  fire the same occurrence twice. Fixed-interval and one-time rows advance in that statement; local
+  rules park a guard window there and write the computed local instant after the attempt, so a crash
+  can delay the next run but cannot double-fire it. A claim older than 15 minutes is recovered with
+  an error and, for local rules, the next occurrence recomputed.
+  A one-time schedule disables itself after firing; every other type continues; a failure records
+  `lastStatus: "error"` and `lastError`.
+- Firing creates a Test Run named `<run> — scheduled <UTC instant>` through the same Approved-only
+  case writer as every other run-creation path. The scheduled run's own executions are never
+  modified.
+- Routes are project-authorized; `PATCH`/`DELETE` resolve the schedule's own project from the row, so
+  a non-member holding a real id is refused. `PATCH` applies only the fields supplied: renaming a
+  schedule does not shift its cadence.
+- `POST /api/cycles/schedules/:scheduleId/run` creates a Test Run immediately. It uses the same
+  `is_running` claim as the worker (so both cannot create the same occurrence), respects the project
+  write lock, and does **not** move `next_run_at` or disable a one-time schedule.
+- Environment: `SCHEDULES_WORKER_DISABLED=1` disables the worker; `SCHEDULE_SWEEP_INTERVAL_MS`
+  changes the sweep interval.
 
-**Features & actions (as built in the UI, none of which actually work end-to-end):**
-- Schedule form: Name, Test Run (dropdown of the project's runs), Schedule Type (One-time / Recurring), Timezone (free text, default `"UTC"`), and conditionally either "Run At" (datetime-local) or "Interval Minutes" (numeric, default `1440`).
-- Schedule list table: Name, Run, Type ("One-time" or "Every {n}m"), Next Run, Last Status, Enable/Disable toggle, Delete — plus a `lastError` message shown under the row if present.
-- **Backend reality**:
-  - `GET /api/projects/:projectId/cycles/schedules` → `schedules() { return []; }` — **always returns an empty array**, ignoring `projectId` entirely.
-  - `POST /api/projects/:projectId/cycles/schedules` → `createSchedule(@Body() body) { return { id: "local-schedule", ...body }; }` — returns a fake object with a **hard-coded, non-unique id `"local-schedule"`** and never writes to the database. The UI's "New Schedule" form will appear to succeed (the promise resolves) and then immediately call `load()`, which re-fetches the (always-empty) list — **so a freshly created schedule vanishes from the table the instant it's created.**
-  - `PATCH /api/cycles/schedules/:scheduleId` → `updateSchedule() {}` and `DELETE /api/cycles/schedules/:scheduleId` → `deleteSchedule() {}` — both are literal no-ops (empty method bodies, no params bound), returning 200/empty regardless of input.
-  - The real table backing this, `cycle_run_schedules`, has non-trivial, correctly-designed constraints that nothing ever exercises: `schedule_type IN ('one_time','recurring')`, and a `CHECK` requiring `run_at IS NOT NULL` for one-time schedules and `interval_minutes IS NOT NULL AND interval_minutes > 0` for recurring ones. There is also no scheduler/cron worker anywhere in the backend that would actually *execute* a due schedule even if rows existed.
-- Net effect: this entire feature (nightly/one-time run scheduling) is **non-functional** in the current codebase — worth explicit regression coverage confirming it stays visibly broken (or is fixed) rather than silently trusted.
+**Known limits:** `recurring` remains an absolute minute interval (no wall-clock anchor); use
+`daily`/`weekly` when local time matters. Occurrences missed while the backend was down are not
+replayed one by one: a due row fires once on recovery and then continues from its rule. A local time
+in a DST gap is skipped that day rather than shifted.
 
-**Edge cases / validation worth testing:**
-- Create a schedule, confirm it disappears from the list on next load (documenting the current broken state) — this should be the primary regression test until the feature is wired up.
-- Submit the create form with `scheduleType="recurring"` and `intervalMinutes=0` or negative — client `<input min={1}>` discourages it, but nothing server-side would reject it today anyway since the endpoint ignores the body.
-- Submit `scheduleType="one_time"` with no `runAt` — client has `required` on the datetime input; verify behavior of `new Date("").toISOString()` (produces `Invalid Date` → `"Invalid Date"` string) if a user bypasses the required attribute.
-- Toggle Enable/Disable and Delete on a schedule — both currently no-ops; confirm the UI doesn't falsely indicate success (it calls `load()` after, so the empty list will make the row disappear either way, masking the fact the underlying action did nothing).
-- Once implemented: verify a schedule's `cycleId` pointing at a deleted run is handled (FK is `ON DELETE CASCADE` at the DB level, so the schedule row would vanish with the run — confirm the "no scheduler" gap doesn't turn into a crash when a worker is eventually added).
+**Coverage:** `e2e/api/execution-ops.spec.ts` EXO-A-07/08 (create/update/delete), EXO-A-08b (the worker
+fires a due schedule and creates the cloned run), EXO-A-14/15/16 (daily/weekly storage and validation),
+EXO-A-17 (a fired daily schedule re-arms at its local time and stays enabled), EXO-A-09
+(authorization), EXO-A-10/11/12/13 (validation), plus `e2e/ui/cycles.spec.ts` for the form (including
+the daily rule) and `SWP-06` for the screen opening. Unit tests pin the timezone/DST rule itself.
+
+**Edge cases worth testing when it changes:**
+- recurring with `intervalMinutes` at 0, negative, fractional or above the cap;
+- a schedule pointing at a run that is then hard-deleted (the FK cascades) or soft-deleted (the
+  worker skips it and the list marks `cycleAvailable: false`);
+- two workers racing the same due schedule (the claim statement is the guarantee);
+- a one-time schedule submitted with a past or malformed `runAt` (refused, nothing stored).
 
 **Key files:**
-- Backend: `legacy.controller.ts` L430–444 (`schedules`, `createSchedule`, `updateSchedule`, `deleteSchedule` — all stubs).
-- Schema (unused): `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql` (`cycle_run_schedules` table, full constraint set).
-- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/schedule/page.tsx` (complete CRUD UI against the stub endpoints).
-- API client: `lib/api.ts` L1524–1546 (`TestRunSchedule` type), L1612–1651 (`listTestRunSchedules`, `createTestRunSchedule`, `updateTestRunSchedule`, `deleteTestRunSchedule`).
+- Backend: `Tesbo-Backend-Nest/src/schedules/` (`schedules.service.ts` with the worker and validated
+  writers, `local-time.ts` for the timezone/DST rule, `schedules.controller.ts`,
+  `schedules.module.ts`), plus `LegacyService.createCycleFromScheduledRun`.
+- Schema: `Tesbo-Backend-Nest/migrations/V21_cycle_run_schedules.sql` (the table) and
+  `V152_schedule_local_time.sql` (local rule columns and constraints).
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/cycles/schedule/page.tsx`, its client functions
+  in `lib/api.ts`, and the Schedule action on the test-runs page.
 
 ---
 
@@ -1117,6 +1175,7 @@ full authenticated app.
 - Warning copy in the modal: "This link is publicly accessible. Anyone with it can view the test run results, execution statuses, and test case details."
 - **Public viewer page** (`/share/:token`, no auth) — fetches `GET /api/public/shared-runs/:token` (run header: name/description/status/environment/build/created/started/ended) and `GET /api/public/shared-runs/:token/executions` (full execution list) in parallel.
   - Renders: run title + status badge, 5 metric cards (Total/Passed/Failed/Skipped/Pending — note Blocked is *not* one of the metric cards even though it's tracked and shown in the donut chart), an SVG donut chart, and a table of Test Case ID / Title / Priority / Type / Status.
+    - **Updated 2026-11-19 (superseded):** the run report's metric cards now include **Blocked**, as does the shared run report.
   - Any failure (disabled share, unknown token) shows a generic "Link Not Available" screen — no distinction in the UI between "token never existed" and "sharing was turned off," which matches the backend (`publicCycle`/`publicCycleExecutions` both throw the same `NotFoundException({ error: "Shared run not found" })` for either case, via `WHERE share_token = $1 AND share_enabled = true`).
 - **Access control note — the public executions endpoint returns materially more data than the public page renders.** `getPublicSharedExecutions`/`publicCycleExecutions` calls the *exact same* `executions()` query used inside the authenticated app, which includes `assigneeId`, `actualResult`, `executedAt`, `defectKey`, `defectUrl`, `description`, `preconditions`, `postconditions`, `steps`, `testData`, `automationStatus`, `automationTags` — none of that is filtered or redacted before being returned to an anonymous caller. The rendered `/share/:token` page only displays ID/title/priority/type/status, but anyone can call the JSON endpoint directly (e.g. via curl/devtools network tab) and read the full actual-result text, defect key/URL, assignee's raw user ID, and complete test steps/preconditions/test data for every case in the run. This is a meaningful over-exposure risk for any org that considers actual-result notes or defect links sensitive, since the sharing UI's copy ("view...execution statuses and test case details") doesn't disclose that defect/assignee/full-step data is also reachable.
 - `publicCycle()` similarly returns the *entire* `cycles` row (`SELECT *`) including `project_id`, `plan_id`, `owner_id` (raw UUIDs) — internal identifiers leaked to an anonymous caller, beyond what the public page renders.
@@ -1239,7 +1298,7 @@ requiring a full external issue tracker.
 
 **Features & actions:**
 - Create a bug (`POST /api/projects/:projectId/bugs`): title (required; server defaults to `"Untitled bug"` if blank/omitted — the *frontend* blocks empty titles, the API does not), description, severity, links array (see Bug Linking section), `externalUrl`/`integrationProvider`/`integrationIssueKey` (external-tracker reference), `betterbugsUrl` (evidence link). `reported_by` is set to the authenticated caller automatically (or the API token's owning user for MCP calls); `status` defaults to `"Open"`.
-- List bugs for a project (`GET /api/projects/:projectId/bugs`), newest first; supports optional `status` and `cycleId` query filters server-side — **note: no frontend caller ever passes these**, so they are only reachable via direct API/MCP use, not through the UI.
+- List bugs for a project (`GET /api/projects/:projectId/bugs`), newest first; supports optional `status` and `cycleId` query filters server-side — **note: no frontend caller ever passes these**, so they are only reachable via direct API/MCP use, not through the UI. **Updated 2026-11-19:** the run detail drawer and the standalone execute page now pass `testcaseId` + `cycleId` when reading an execution's linked bugs; the Bugs page still filters its already-loaded list client-side, and `status` is still not sent by any caller.
 - Get a single bug (`GET /api/bugs/:bugId`) — returns the bug plus its resolved `links` (with joined test case/run titles) and `attachments`.
 - Update a bug (`PATCH /api/bugs/:bugId`) — partial update of title/description/status/severity/externalUrl/integrationProvider/integrationIssueKey/betterbugsUrl/links.
 - Delete a bug (`DELETE /api/bugs/:bugId`) — hard delete, no confirmation server-side (UI has a confirm modal).
@@ -1251,7 +1310,7 @@ requiring a full external issue tracker.
 - Creating a bug with an empty/whitespace-only title via direct API call (bypassing the frontend's disabled-button guard) — the bug is created titled `"Untitled bug"` rather than being rejected.
 - Sending an invalid `severity` value (e.g. `"Urgent"`) directly to the API — this is **not validated in the service layer**, so it fails at the DB CHECK constraint and surfaces as an unhandled 500-style DB error rather than a clean validation message.
 - Setting `status` to an arbitrary string (e.g. `"Won't Fix"`) via direct API/PATCH — accepted silently (no DB constraint), but then the bug **disappears from every Kanban column** (columns are hard-coded to the 4 known statuses) and cannot be selected via the List-view status filter dropdown (also hard-coded to the 4 values); it only remains visible under "All Statuses" in list view.
-- **Clearing a previously-set field never works**: `updateBug` builds its SQL with `COALESCE($n, column)` and the controller/service pass `body.field || null` for `description`, `externalUrl`, `integrationProvider`, `integrationIssueKey`, and `betterbugsUrl`. Sending an empty string (or explicit `null`) for any of these is indistinguishable from "not provided," so `COALESCE` keeps the **old** value. Concretely: editing a bug, blanking out the Description textarea, and saving does **not** clear the description — the previous text persists. Same for unlinking an external ticket URL or switching evidence mode away from BetterBugs (see Evidence section) — these fields can only ever be overwritten with another non-empty value, never cleared.
+- **Historical clear defect, repaired in the bug-edit integrity batch below:** `updateBug` formerly collapsed null/empty metadata into omission through `body.field || null` and `COALESCE`. Description, external URL/provider/key and BetterBugs URL now use presence-aware SQL writes: omission preserves the live column, explicit null/empty clears the named field, and explicit text replaces it. Complete external unlinking requires all three external association fields explicitly; they remain independently editable.
 - Deleting a bug does **not** clean up its attachments: `deleteBug` only issues `DELETE FROM bugs WHERE id = $1`. The generic `attachments` table has no FK to `bugs` (it's a polymorphic `entity_type`/`entity_id` pair), so rows referencing the deleted bug — and the underlying files in storage — are orphaned indefinitely (storage leak). Worth testing explicitly: create a bug, attach a file, delete the bug, confirm the file/row still exist.
 - No role/permission gating on any bug endpoint: the controller methods for get/update/delete/link/attachment routes never call the app's `requireUser`-style check and there is no project-membership check either (confirmed no `@UseGuards`/role decorators on these routes, and `AuthMiddleware` only *resolves* `req.userId`, it never blocks the request). Any caller who can reach the API and knows/guesses a `bugId` (or `attachmentId`) — regardless of which project or organization they belong to — can view, edit, delete it, or add/remove its links and attachments. Worth testing as an authorization/IDOR case: user from Project B (or an unauthenticated request, since `userId` can be `null`) hitting `GET/PATCH/DELETE /api/bugs/:bugId` for a bug in Project A.
 - Deleting a **test case** that is hard-deleted (e.g. via "delete suite → delete test cases" bulk mode) cascades and removes the corresponding `bug_links` row entirely (`ON DELETE CASCADE` on `testcase_id`). Deleting a **test run (cycle)** instead just nulls out that link's `cycle_id`/`execution_id` (`ON DELETE SET NULL`) — the bug stays linked to the test case but loses which run/execution surfaced it. Both are worth testing explicitly, since the resulting bug-link states differ.
@@ -1384,7 +1443,7 @@ without requiring every team to use the same evidence-capture tool.
 - No MIME/extension restriction — uploading an executable, script, or disguised file type is accepted and later served back with its original client-supplied content-type; worth a security-review pass even though this isn't unique to bugs (attachments table is shared/generic).
 - Downloading/deleting an attachment whose underlying storage object was removed out-of-band (e.g. bucket lifecycle rule, manual deletion) → `getBugAttachmentAccess` explicitly checks `storage.exists()` first and returns 404 `"File content is not available"` rather than silently failing or serving a corrupt response.
 - Deleting the **only** attachment on a bug, or the only "evidence" of any kind — no warning; the bug just reverts to showing no evidence.
-- Switching evidence mode from **BetterBugs Link** back to **Files** and uploading new files does **not** clear the previously-set `betterbugsUrl` on save (same root cause as the "fields can't be cleared" gap in the CRUD section: the edit form sends `betterbugsUrl: undefined` when mode is Files, which is dropped from the JSON body entirely, so `COALESCE` preserves the old value). Net effect: the bug detail view's evidence block checks `betterbugsUrl` truthiness **before** attachments, so it will keep showing the stale BetterBugs link and never show the newly-uploaded files, even though the UI now displays them in the edit modal. This is a concrete, high-value test case.
+- **Historical evidence-mode defect, repaired below:** deliberate switching from BetterBugs Link to Files now sends `betterbugsUrl: null`, exposing retained attachments in the detail view. Untouched evidence controls omit the URL, so stale forms cannot replay it over another writer. Switching modes does not delete existing files.
 - Deleting a bug entirely orphans its attachment rows/files (see CRUD section) — no cascade delete exists for the generic `attachments` table.
 
 **Key files:**
@@ -1422,7 +1481,7 @@ where the real defect lives.
 
 **Edge cases / validation gaps worth testing:**
 - Pasting a non-URL string into the self-logged URL field — only browser-native `type="url"` validation applies; no server-side URL validation exists (`externalUrl` is stored as-is).
-- Switching from "myself"/Jira back to "Log into Tesbo" on an existing bug does not clear `externalUrl`/`integrationProvider` server-side (same `COALESCE`-preservation gap noted earlier) — the ticket reference silently persists and keeps showing in the bug detail view even though the UI implies it was removed.
+- **Historical tracking-mode defect, repaired below:** deliberate switching from "myself"/Jira to "Log into Tesbo" now explicitly clears external URL/provider/key. Untouched or disconnected tracking controls omit those fields instead of silently clearing or replaying them.
 - Choosing "Other" as the self-logged system with a Jira/Linear-style URL — `integrationProvider` is stored as `null` in this case (only `"JIRA"`/`"LINEAR"` are ever sent), so the detail view falls back to the generic "Bug Link" label even if the URL is actually a Jira/Linear link.
 - No indication anywhere that this reference is a point-in-time snapshot — if the external ticket's status/title changes later, Tesbo has no way of knowing (this is a manual link only, not a synced one, unlike the separate Jira/Linear integration module).
 
@@ -1535,9 +1594,9 @@ same project-scoped API token system used elsewhere in the platform.
 
 Scope covered: workspace-wide dashboard, project-level dashboard, the six-tab Reports & Insights
 page (Overview, Execution Report, Traceability, Repository, AI Insights, Trends), the cross-source
-Ticket/Requirements summary, the project Activity feed, and the (unimplemented) Notifications
-feature. All backend logic lives in the "legacy" module — there is no separate reports/analytics
-service or controller.
+Ticket/Requirements summary, the project Activity feed, and Notifications (implemented since this
+audit — see the superseded snapshot in that section). All backend logic lives in the "legacy"
+module — there is no separate reports/analytics service or controller.
 
 ---
 
@@ -2195,6 +2254,11 @@ entity types, without needing to check each entity's own edit history separately
 
 ### Notifications
 
+> **Superseded snapshot (updated 2026-11-19):** notifications are implemented — a `notifications`
+> table, a paginated `GET /api/notifications` with unread counts and cursor paging,
+> `POST /api/notifications/:id/read` and mark-all-read, and a TopBar bell with a badge and dropdown.
+> The audit text below records the original state and is kept as history.
+
 **What it is:** A notification bell icon in the global top bar — currently **entirely
 unimplemented** on both backend and frontend. This is a stub/placeholder feature, not a working
 one, and should be treated as such in test planning.
@@ -2533,6 +2597,29 @@ reviewScript() {
 
 ---
 
+### Zyra capability reconciliation — Tesbo assurance finding (2026-11-14)
+
+**Status:** source-inspected Tesbo-specific review receipt, **not** a ninth canonical specification, implementation approval, independent assurance-team pass or deployed acceptance. This entry records Tesbo's own product finding in its existing feature/QA roadmap. The reusable cross-application *review method* is separately being proposed in [Nesberry assurance-method PR #4462](https://github.com/NesberryEnterprise/Nesberry/pull/4462); that external PR does not implement a Tesbo feature or confer Tesbo release authority.
+
+**Observed current owners:**
+- `Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/page.tsx` already hosts project-scoped Zyra chat sessions and imports the existing `ZyraChatReviewPanel`, citations and shared application APIs.
+- `Tesbo-Frontend/app/(app)/projects/[id]/agents/zyra/settings/page.tsx` already has provider/model-connection testing, `ZyraCapabilities`, and testcase-generation range choices. A visible/enabled switch is **not** proof of all downstream action-level permissions or effective execution.
+- `Tesbo-Backend-Nest/migrations/V89_zyra_chat_review.sql` links chat messages/sessions to the existing `ai_generation_requests` staging and review owner. It is not a justification for a second Copilot, second proposal store or a new test-case approval authority.
+- Existing Requirements, Test Cases, Suites, Runs/Results, Bugs, Knowledge Base, Activity, Notifications and Zyra remain the product owners for their present records/workflows. Source links and AI assertions do not automatically establish validated requirement coverage, executed testing or approved publication.
+
+**Recorded failure of the earlier review process:** a broader/new native "Copilot" was discussed without a per-user-job comparison to the reachable, configured Zyra UI/API paths and observable persistence/review effects. Existing reuse principles were mentioned, but no complete capability-equivalence evidence receipt was applied. This is a review-execution and evidence gap; it is **not** proof that independently invoked Blue/Red/Green/White reviewers ran and failed. Reuse/extend Zyra; first prove the smallest genuinely missing behavior such as durable cross-client project Sessions, external execution handoff, versioned review or requirements/coverage impact, as separately approved.
+
+**Test candidates / unanswered product questions (NOT RUN by this documentation update):**
+1. Under real project roles/capability settings, distinguish chat suite operations that write immediately from test-case drafts awaiting selected human approval. Test direct API and UI paths, historical writes and denied publication; do not infer parity from V89 alone.
+2. Check whether a purely informational/no-op Zyra answer incorrectly displays a "Nothing was saved" warning; classify it as a potential UX defect only after an actual reproduction.
+3. Demonstrate that "All/Exhaustive" is a generation quantity/strategy setting, **not** evidence of complete requirements, journey or negative-path coverage. Test missing-oracle and zero-linked-case conditions.
+4. Independently verify model/agent configuration versus effective authorized tools, correct scoped source retrieval, real save/undo/retry, and persisted results. An enabled toggle or model narrative is not a verdict.
+5. Before adding graph-driven QA notifications, reuse the existing `integration-sync.processor.ts` requirement-change recipient lookup and `legacy/notification-writer.ts` delivery policy. Their deduplicated messages are not a versioned change ledger, and swallowed notification failures are not guaranteed delivery.
+
+**Gates and ownership:** record exact repository SHA, user job, configuration/role, original source paths, actual execution/captured evidence tier, missing behavior, alternatives and a reuse/extend/new/unknown disposition in this existing review/feature context. Keep the existing F1–F9 / D1–D6 / E1–E7 register authoritative for cross-cutting unresolved security, audit and release gates. The approved eight-file v1.4.21 ZIP and contents must be independently verified and reconciled before accepting any requirement, authority, approval-policy or graph-scope change. A single assistant applying multiple named lenses is a desk review, not independent specialist-team certification.
+
+---
+
 ## Section G: Knowledge Base Module
 
 Scope: project-scoped Knowledge Base v2 (folders, documents, files, search, versioning, AI-memory
@@ -2641,6 +2728,10 @@ both humans and the AI assistant can read, without needing an external documenta
 - Full-text search vector (`search_vector`, tsvector) is auto-maintained by a Postgres trigger combining `title` (weight A) + `content_text` (weight B) on every insert/update — used by both keyword search and RAG's FTS leg.
 - Jira ticket mirroring: a background sync job upserts Jira issues into the KB as `general` documents (not `ai_memory`) tagged with `source_provider='jira'`/`source_external_id`, filed into the project's "Requirements" folder if one exists (falls back to the root folder if not — relevant given new projects don't get default subfolders, see Folders section).
 - Restore-version and AI-memory approval are covered in their own sections below.
+
+**Title validation:** a document title can be neither emptied nor whitespace-only. The editor refuses
+to schedule or perform any save with a blank title (autosave, manual save and retries share the
+guard), shows an inline error, and restores the last valid title on blur. KBU-25/26 pin it.
 
 **Key files:**
 - Backend controller: `legacy.controller.ts` lines 818–891 (list/create/versions/restore-version/approve/reject/get/move/restore/duplicate/update/delete)
@@ -3012,9 +3103,9 @@ rows in an existing deployment are preserved rather than destroyed.
   `connectedProjects` (every Tesbo project currently mapped to this connection, with name/key).
   Not owner-gated.
 
-**Known gap worth testing:** `planLimits.assertIntegrationAllowed` runs in the *callback* but not in
-*auth-url*, so a workspace whose plan disallows integrations can click Connect, complete the
-provider's consent screen, and only then be rejected. Fail-late rather than fail-fast.
+**Plan gate:** `planLimits.assertIntegrationAllowed` now runs in both *auth-url* and the *callback*.
+Previously only the callback checked it, so a workspace whose plan disallowed an integration could
+click Connect, complete the provider's consent screen, and only then be rejected.
 
 **Key files:**
 - Backend controller: `Tesbo-Backend-Nest/src/legacy/legacy.controller.ts`
@@ -3352,8 +3443,8 @@ duplicate bug filing.
 - **Access gating**
   - Entire `/admin` area is client-gated: `AdminLayout` calls `authMe()` and redirects to `/projects` unless `isPlatformAdmin` is true on the session (`GET /api/auth/me`).
   - Every backend admin route independently re-checks membership in `platform_admins` (`requirePlatformAdmin` in `legacy.service.ts`, and `SuperAdminService.isPlatformAdmin` for the health controller) — the frontend gate is not the only line of defense.
-  - Two internal roles exist on `platform_admins.role`: `owner` and `admin`. Only `owner` can add/remove other admins; a plain `admin` can view but not manage (`AdminsTab.tsx` gates the add-form and remove-button on `role === "owner"`, but this is a UI-only check — worth testing that the backend also rejects a non-owner `admin` calling POST/DELETE `/api/admin/admins`, since `addAdmin`/`deleteAdmin` in `legacy.service.ts` only call `requirePlatformAdmin`, not an owner-specific check).
-  - `deleteAdmin` guards `role <> 'owner'` in its SQL `WHERE` clause, so an owner row can never be deleted through this endpoint (test: attempt to delete the seed owner and confirm no-op / still present).
+  - Two internal roles exist on `platform_admins.role`: `owner` and `admin`. Only `owner` can add/remove other admins. The backend enforces this with `requirePlatformAdminOwner` in `legacy.service.ts`; a plain `admin` can view but a POST/DELETE to `/api/admin/admins` is a 403. The UI gate on `role === "owner"` is a second line of defence, not the only one.
+  - `addAdmin` never demotes an existing owner (its `ON CONFLICT` update preserves `owner`), and `deleteAdmin` refuses an owner row with a 403 and a missing/malformed id with 404.
 - **System Health page** (`/admin`, default landing page)
   - Fetches `GET /api/admin/system/health`: reports database status + latency + latest applied migration filename, and email provider (Postmark) "configured" vs "not_configured" state. Overall `status` is `"degraded"` if any service reports an error.
   - Manual "Refresh" button and an "Auto-refresh (30s)" checkbox that polls on an interval.
@@ -3362,12 +3453,12 @@ duplicate bug filing.
 - **Deployment branding editor** (embedded in the same System Health page — see Platform Branding section below for the underlying feature; the admin page is one of its two write surfaces along with... actually its only write surface).
 - **Manage Admins page** (`/admin/admins` in the sidebar, but that route itself immediately client-redirects to `/settings?tab=admins` — the actual UI lives in the workspace Settings modal/tab, rendered by `AdminsTab.tsx`)
   - List all platform admins: name/avatar initials, email, role badge (`owner` vs `admin`), who granted them access and when (`GET /api/admin/admins`).
-  - Add a platform admin by email (owner-only in the UI): the target user must already have a Tesbo account — `addAdmin` calls `upsertUser(email)` and then inserts/upgrades a `platform_admins` row (`ON CONFLICT (user_id) DO UPDATE SET role = 'admin'`), so re-adding an existing admin is idempotent and does not create a duplicate row. Test: adding an email with no existing user account — does `upsertUser` create a stub user, and can that user actually authenticate afterward?
+  - Add a platform admin by email (owner-only, enforced server-side): the target user must already have a Tesbo account — `addAdmin` calls `upsertUser(email)` and then inserts/upgrades a `platform_admins` row, so re-adding an existing admin is idempotent and does not create a duplicate row. An existing `owner` role is preserved, never demoted. Test: adding an email with no existing user account — does `upsertUser` create a stub user, and can that user actually authenticate afterward?
   - Remove a platform admin (owner-only in the UI, and owner rows are protected server-side as noted above).
   - Empty state ("No platform admins configured") when the list is empty.
 - **Customers overview (backend-only, currently unreachable from the UI)**
   - `GET /api/admin/customers` returns, per organization across the whole platform: id, name, slug, created_at, member count, project count, test case count, automated-test count and coverage %, and last-activity timestamp — plus a `summary` block (totals). This is a genuine cross-tenant query (`FROM organizations o LEFT JOIN organization_members ... LEFT JOIN projects ... LEFT JOIN testcases`).
-  - **Gap worth flagging to QA:** there is no `/admin/customers` (or similarly named) page in the frontend, no nav item in `AdminSidebar.tsx`, and no `lib/api.ts` client function calling this route at all. The endpoint is fully implemented and platform-admin-gated but currently dead from a user-journey standpoint — it can only be exercised via a direct authenticated HTTP call. Also note the `summary` block in the service code looks partially unfinished: `totalMembers` and `totalAutomated` are hardcoded to `0` and `overallAutomationCoverage` to `0` regardless of actual data, which would fail any assertion expecting real aggregate numbers there.
+  - **Gap worth flagging to QA:** there is no `/admin/customers` (or similarly named) page in the frontend, no nav item in `AdminSidebar.tsx`, and no `lib/api.ts` client function calling this route at all. The endpoint is fully implemented and platform-admin-gated but currently dead from a user-journey standpoint — it can only be exercised via a direct authenticated HTTP call. The `summary` block is derived from the same per-organization rows it returns (`totalOrganizations`, member/project/case/automated totals, and overall automation coverage), so it cannot disagree with them or fabricate zeros.
 - **Sidebar/session**
   - `AdminSidebar.tsx` shows a "Platform Admin" badge, links to System Health and Manage Admins, a collapse/expand toggle, "Back to Workspace" (→ `/projects`), and Log out.
 
@@ -3421,7 +3512,7 @@ duplicate bug filing.
 **Problem it solves (intended):** Gives CI-driven automated test output a home in Tesbo distinct from manually-tracked test cases/cycles/executions, so "was last night's Playwright run green" is answerable without a separate CI dashboard.
 
 **Features & actions:**
-- **Implemented today (backend stubs, all under `/api/projects/:projectId/tesbo-reports/...`, no auth/param validation, no DB queries):**
+- **Implemented today (authenticated project reads under `/api/projects/:projectId/tesbo-reports/...`, no DB queries, retained as a compatibility surface):**
   - `GET /runs` → always returns `[]`
   - `GET /specs` → always returns `[]`
   - `GET /tests` → always returns `[]`
@@ -3463,27 +3554,28 @@ duplicate bug filing.
 
 **Problem it solves:** Gives AI agents and other machine clients a safe, auditable, protocol-standard way to interact with a specific Tesbo project's data — writes are clearly attributed to a dedicated "tesbo-mcp" actor (distinct from human and other-agent activity in audit history), and a token can never act outside its own project no matter what the client requests.
 
+**Current publication and consent boundary (18 November 2026 implementation follow-up):** External MCP starts disabled and requires an owner/manager's named grant for the actual token credential. Machine ownership by an administrator does not authorize human review or access-control edits. Current native case/run approval, Bug evidence integrity and exact KB review are described in the existing ASER implementation plan and assurance record. Prior F3/F5 and 50/53/58-tool evidence below retains its original date and scope: direct bulk testcase publication and automatic Bug-to-result failure are superseded by this implementation; execution-reporting bulk semantics remain independent. Runtime acceptance is recorded against the implementation PR, not inferred from the older receipts.
+
 **Features & actions:**
 - **Transport & auth**
-  - Single endpoint: `POST /api/projects/:projectId/mcp`, body is JSON-RPC 2.0 (`{jsonrpc:"2.0", id, method, params}`).
+  - Project endpoint: `POST /api/projects/:projectId/mcp`, plus token-project alias `POST /api/mcp`; body is JSON-RPC 2.0 (`{jsonrpc:"2.0", id, method, params}`).
   - Requires `Authorization: Bearer <token>` resolved to an API token principal by `AuthMiddleware`; a browser session (cookie-based) is explicitly rejected with `401 MCP requires a valid API token` — MCP is a machine-only surface, never usable from a logged-in browser tab directly.
   - **Project-scope enforcement:** the token's own `projectId` (baked in at token creation) must equal the `:projectId` in the URL, or the call fails with JSON-RPC error code `-32001` (`ProjectScopeDenied`) — even if a caller correctly guesses/knows another project's id, a token literally cannot act outside the project it was minted for. Tested explicitly: token with no project scope at all is also rejected.
   - **Tool-scope enforcement:** each tool declares `requiredScope: "read"` or `"write"`; the token must carry that scope (tokens can hold `read`, `write`, or both) or the call fails with code `-32002` (`ScopeDenied`), naming the missing scope in the error message.
 - **Protocol methods** (`tools/list`, `tools/call`, `initialize`, `ping`)
-  - `initialize` → returns protocol version `2024-11-05`, server name `tesbo-mcp`, version `0.1.0`, and capabilities (`tools.listChanged: false`, i.e. the tool list is static and won't push change notifications).
+  - `initialize` → supports `2025-06-18` and `2024-11-05` (the latter is the fallback), server name `tesbo-mcp`, version `0.1.0+<deploy>.<tool-fingerprint>`, and capabilities (`tools.listChanged: false`). Returns `mcp-session-id`; stale schema sessions get HTTP 404 and must reinitialize. Initialized notifications get 202; GET/DELETE get 405 (no SSE/session termination).
   - `ping` → empty result, for client keep-alive/liveness checks.
-  - `tools/list` → returns every registered tool's `name`, `description`, and JSON-Schema `inputSchema` (8 tools today — full list below).
+  - `tools/list` → returns the current named grant's permitted tool names, descriptions and JSON Schemas. The publication/consent implementation has **46 default tools** (22 read, 24 write), or **49** (24 read, 25 write) only when the default-off proposal-review preview is explicitly enabled; both counts include the approval-gated `run_behavior_model` tool. Thirteen retired direct testcase/suite publishers remain in the source registry but are hidden from discovery, including `create_suite` and `update_suite`. Scope and tool allowlists can narrow either catalog. The session fingerprint hashes the exact permitted catalog; a grant/catalog change requires reinitialization. Earlier 50/53/58 inventories below are historical snapshots, not the current contract. `scripts/mcp-deploy-check.mjs` validates discovery and its fingerprint; `REQUIRE_PROPOSAL_PREVIEW=1` additionally requires the preview schema.
   - `tools/call` → dispatches to the named tool with `arguments`; unknown tool name → `MethodNotFound` (-32601); on success wraps the JSON-stringified result as an MCP `content: [{type:"text", text}]` part with `isError:false`; on a handler exception, maps the underlying error (e.g. a `BadRequestException`'s message) onto a `ToolExecutionError` (-32003) rather than leaking a raw 500.
   - Malformed request (missing/wrong `jsonrpc` version, non-string `method`) → `InvalidRequest` (-32600); the request `id` is always echoed back on error responses (including `null` if none was sent), per JSON-RPC spec.
-- **The 8 exposed tools** (each is a thin wrapper over an existing `LegacyService` method, so MCP reuses the exact same code paths/validation as the REST API):
-  1. `list_projects` (read) — returns the single project the token is scoped to (never a cross-project list, since tokens are project-bound).
-  2. `list_testcases` (read) — filters: `suiteId`, `status`, `priority`, `type`, `automationStatus`, `jiraIssueKey`, `search`, `limit` (up to 500), `offset`.
-  3. `create_testcase` (write) — required `title`; optional `suiteId`, `description`, `preconditions`, `steps[]`, `testData`, `priority`, `severity`, `type`, `automationStatus`, `component`, `status`. Missing/blank title → tool execution error before hitting the service. Attributed to the `tesbo-mcp` agent actor.
-  4. `create_suite` (write) — required `name`; optional `parentId` (nest under another suite), `position`.
-  5. `create_cycle_from_plan` (write) — required `name`; optional `planId` (seed from an existing plan), `description`, `environment`, `buildVersion`, `releaseName`.
-  6. `record_execution_result` (write) — required `executionId`, `status`; optional `actualResult`, `defectKey`, `defectUrl`. **Extra project-scope check inside the handler itself**: looks up the execution's owning project via `executions → cycle_items → cycles` and rejects with `ProjectScopeDenied` if it belongs to a different project than the token, or `ToolExecutionError` ("Execution not found") if the execution id doesn't exist at all — this closes the gap where an execution *id* alone wouldn't otherwise prove project ownership. Attributed to the `tesbo-mcp` agent actor.
-  7. `create_bug` (write) — required `title`; optional `description`, `status`, `externalUrl`, `links[]` (`{testcaseId, cycleId, executionId}`). Attributed to the token's **human owner** (`reported_by` column references `users(id)`, not the agent actor) — i.e. bugs filed via MCP show up as reported by the person who created the token, not by "tesbo-mcp".
-  8. `get_requirement_matrix` (read) — full traceability matrix for the project: every test case with its runs, latest execution status, and any linked bugs.
+- **Exposed registry** (thin adapters over the existing services, not independent product workflows):
+  - Project: `list_projects`.
+  - Test cases: `list_testcases`, `get_testcase`, `get_testcase_bugs`, `get_testcase_executions`. The eleven former direct testcase publishers (including bulk, requirement-link and suite-clone publication) are absent from discovery; cached calls receive `HUMAN_PUBLICATION_REQUIRED` without mutation. The optional `stage_testcase_changes`, `list_testcase_proposals`, and `get_testcase_proposal_task` preview uses the existing unpublished task owner. It cannot approve or publish cases.
+  - Suites: `list_suites` and `get_suite`. Suite creation/editing requires a trusted human session at the native owner; cached machine `create_suite`/`update_suite` calls and bearer REST creation refuse without mutation. Human selected proposal application uses the private native insertion seam within its transaction after exact review. A standalone Zyra suite-create command remains unpublished and explains the human editing action.
+  - Runs/results: `list_test_cycles`, `get_test_cycle`, `create_cycle_from_plan`, `create_cycle_from_testcases`, `record_execution_result`, `list_executions`, `get_execution`, `update_execution_result`, `bulk_record_execution_results`, `get_test_execution_summary`.
+  - Bugs/traceability: `list_bugs`, `get_bug`, `create_bug`, `update_bug`, `link_testcase_to_bug`, `unlink_testcase_from_bug`, `get_requirement_matrix`.
+  - Knowledge Base: `search_knowledge_base`, `list_knowledge_documents`, `get_knowledge_document`, `create_knowledge_document`, `update_knowledge_document`, `move_knowledge_document`, `archive_knowledge_document`, `restore_knowledge_document`, `list_knowledge_folders`, `get_knowledge_folder`, `create_knowledge_folder`, `update_knowledge_folder`, `move_knowledge_folder`.
+  - Official testcase publication records the actual human session reviewer; the proposal retains the machine producer, credential and transport provenance. Suite access checks, bug reporters, execution results and ordinary KB writes retain their existing user-FK behavior without acquiring human review authority. Execution-reporting bulk tools retain indexed outcomes; retired bulk testcase publishers do not remain an alternative publication route.
 - **Actor attribution model:** only write tools resolve/attach an actor id (reads never touch actor columns); the "tesbo-mcp" agent actor id is looked up once from `actors ⋈ agents` (seeded migration V65) and cached for the life of the process.
 - **Edge cases validated by the existing test suite** (`mcp.service.spec.ts`) worth including in a manual QA pass too: non-2.0 payload rejected; unknown method/tool rejected; read tool works with read-only token but write tool is blocked for a read-only token; a client-supplied project id in tool arguments is ignored in favor of the token's own project; underlying service exceptions are mapped to a clean tool error rather than crashing the RPC call.
 
@@ -3491,13 +3583,13 @@ duplicate bug filing.
   - Tokens live in an `api_tokens` table, always project-scoped (not workspace-wide), created via `POST /api/projects/:id/apikeys` (name + optional `scopes` array, defaults to `["read","write"]` if none/invalid given), listed via `GET /api/projects/:id/apikeys` (returns only a masked `tsbo_…<last6ofhash>` prefix, never the secret again), revoked via `DELETE /api/projects/:id/apikeys/:keyId`.
   - Raw token format: `tsbo_` + 24 random bytes (hex); only a SHA-256 hash is ever stored; the raw value is returned exactly once at creation time and is unrecoverable afterward — losing it means issuing a new token.
   - `last_used_at` is stamped best-effort on every successful authentication (used for both REST bearer-auth and MCP).
-  - **Notable gap:** there is no frontend UI anywhere in `Tesbo-Frontend` for creating, listing, or revoking these project API tokens (confirmed via full-tree search — no page/component references `apikeys`). The entire token lifecycle, and therefore the entire MCP onboarding flow, is currently API-only: a developer would need to call `POST /api/projects/:id/apikeys` directly (e.g. via curl/Postman while authenticated with a normal browser session) to obtain a token before an MCP client could ever connect. This should be flagged as a UX/testability gap — QA cannot exercise the "connect an MCP client" journey through the product UI today.
+  - **Existing UI:** **Project settings → API & MCP** offers named token creation, Read/Write selection, one-time reveal, masked listing and revocation, plus connection snippets. A freshly revealed token remains in snippets until reload; clear/reload or mask secrets before captures. Building/testing this flow does not establish a deployed endpoint or a connection from an owner's external client.
 
 **Key files:**
-- Backend (MCP protocol): `Tesbo-Backend-Nest/src/mcp/mcp.controller.ts` (`POST /api/projects/:projectId/mcp`), `Tesbo-Backend-Nest/src/mcp/mcp.service.ts` (JSON-RPC engine: `handleRequest`, `dispatch`, `callTool`), `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts` (the 8-tool registry), `Tesbo-Backend-Nest/src/mcp/mcp.types.ts` (protocol types, error codes), `Tesbo-Backend-Nest/src/mcp/mcp.module.ts`
+- Backend (MCP protocol): `Tesbo-Backend-Nest/src/mcp/mcp.controller.ts` (scoped endpoint and alias), `Tesbo-Backend-Nest/src/mcp/mcp.service.ts` (JSON-RPC engine, scope/membership checks, fingerprint sessions), `Tesbo-Backend-Nest/src/mcp/mcp.tools.ts` (50-tool registry), `Tesbo-Backend-Nest/src/mcp/mcp.types.ts` (protocol types, error codes), `Tesbo-Backend-Nest/src/mcp/mcp.module.ts`
 - Backend tests: `Tesbo-Backend-Nest/src/mcp/mcp.service.spec.ts`
 - Backend (token issuance, shared with REST bearer auth): `Tesbo-Backend-Nest/src/auth/api-token.service.ts` (`ApiTokenService` — `issueToken`, `listTokens`, `revokeToken`, `authenticate`), routes in `Tesbo-Backend-Nest/src/legacy/legacy.controller.ts` (~lines 216–229: `GET/POST /api/projects/:id/apikeys`, `DELETE /api/projects/:id/apikeys/:keyId`), handlers in `Tesbo-Backend-Nest/src/legacy/legacy.service.ts` (`listApiKeys`, `createApiKey`, `revokeApiKey`, ~lines 308–326), `Tesbo-Backend-Nest/src/auth/auth.middleware.ts` (bearer-token resolution)
-- Frontend: none — no page/component manages API tokens or MCP connections today
+- Frontend: `Tesbo-Frontend/app/(app)/projects/[id]/settings/api-tokens/page.tsx`, settings `page.tsx`, `Tesbo-Frontend/lib/api.ts`.
 
 ---
 
@@ -3577,10 +3669,10 @@ not a full test suite.
 |---|---|
 | **Bulk Execution Actions** (`bulk-assign`, `bulk-status`) | Controller methods are literally empty (`{}`); no frontend caller, no bulk-select UI on the executions table at all. |
 | **Recurring Run Scheduling** (`/cycles/schedules`) | Full DB schema + full frontend CRUD UI exist, but all four backend endpoints are disconnected stubs — a created schedule vanishes from the list instantly; no scheduler/worker exists to execute one even if it persisted. |
-| **Notifications** (bell icon) | `GET /api/notifications` hardcodes `[]`; mark-as-read is a no-op; the bell icon has no handler, no badge, no dropdown. |
+| **Notifications** (bell icon) | `GET /api/notifications` hardcodes `[]`; mark-as-read is a no-op; the bell icon has no handler, no badge, no dropdown. **Updated 2026-11-19:** implemented — paging, unread counts, per-item and mark-all read, and a working TopBar dropdown. |
 | **AI Script Review** (`/ai/review-script`) | Hardcoded `{status:"passed", summary:"", categories:[], validatedSteps:[]}` for any input; no frontend caller. |
 | **Tesbo Reports** (automated CI test-run ingestion, `/tesbo-reports/*`) | Six GET stubs return empty/static payloads; the frontend has a fully-typed client for ~20 more endpoints (ingestion, alerts, sharing, settings) that **no page or component calls** — the feature is unreachable from the UI in either direction. |
-| **`cycles/:cycleId/report/summary`** | Hardcoded all-zero response regardless of the real cycle; superseded by the Execution Report tab. |
+| **`cycles/:cycleId/report/summary`** | Real per-run status buckets from the shared execution-count definition; 404 for a foreign/missing run. |
 | **Knowledge Base v1** (`/knowledge-base/:itemId` legacy flat endpoints) | Superseded by the v2 folders/documents/files model; kept only for rollback safety; no frontend usage. |
 | **`POST /onboarding/org-and-project`** | Implemented backend + API client wrapper, but no UI calls it. |
 | **`generateAiTestCases()` / AI Generation History browsing** | Backend routes work, but no current screen calls the standalone generator or a history browser — the only path users actually take is via Zyra Tasks. |
@@ -3596,13 +3688,14 @@ exact code. Good first candidates for a bug-bash or a "does this still repro" re
    picker (both in the Failed-execution dialog and the standalone Bugs page) is displayed on
    screen but never sent in the `createBug`/`updateBug` payload (`integrationIssueKey` is
    hard-coded `null`). File a bug, pick a ticket, save, reopen — the ticket reference is missing.
-2. **Fields can never be cleared once set** (bug description, external URL, integration
-   provider/key, BetterBugs URL): `updateBug` uses `COALESCE(newValue, oldValue)` with
-   `body.field || null`, so an empty string is indistinguishable from "not provided" and the old
-   value always survives.
-3. **Suite rename silently promotes a child suite to root.** `updateSuite`'s `parentId` is *not*
-   `COALESCE`d — it's always overwritten to `body.parentId ?? null`. The rename UI only sends
-   `{name}`, so renaming a nested (child) suite unexpectedly moves it to the top level.
+2. **Historical bug metadata clear defect, repaired in the bug-edit integrity batch below.**
+   Description, external URL/provider/key and BetterBugs URL now distinguish omitted values
+   from explicit null/empty at SQL write time. Existing UI controls send deliberate clears
+   and omit untouched/disconnected metadata instead of replaying stale values.
+3. **Historical suite rename defect, repaired in the repository partial-edit batch below.**
+   The original writer cleared an omitted `parentId`; later UI/MCP read-and-resend workarounds
+   could replay a stale parent. The writer now preserves omission at SQL write time; explicit
+   `null` still moves to root. Rename sends only text and refreshes the authoritative hierarchy.
 4. **`estimatedDuration` is a dead field end-to-end** — present in the DB, the manual test-case
    form, and the import mapping UI, but dropped by both `createTestCase`/`updateTestCase` and the
    import payload. Anything typed there is silently discarded.
@@ -3646,3 +3739,3234 @@ exact code. Good first candidates for a bug-bash or a "does this still repro" re
    The PAT auth path no longer exists, so the old PAT-vs-OAuth divergence matrix is obsolete.
 7. **Explicitly deprioritize** everything in section B until product decides whether to build,
    finish, or remove them — cover with a single "stays a stub" smoke test each instead.
+
+### E. Phase 1 assurance recheck — 2026-11-11
+
+Scope: `development` at `c567612`, PR [#25](https://github.com/1alextest/Tesbooboo/pull/25)
+at `c5577fa`, and the follow-up changes on that PR. Source evidence is not runtime
+proof. The named `Tesbo_Existing_Application_Baseline_v1.0.md` was not found in
+available Git refs. `origin/docs/qa-specs-product-direction-20261028` at `d96f24e`
+contains the proposed roadmap index and implementation brief, but not their full
+referenced specification package; that branch is unmerged. Do not create a competing
+baseline or claim the complete roadmap is recovered. Recover/reconcile those sources
+before selecting a later product phase.
+
+Verified existing protections: `LegacyService.lockActiveCycle` and
+`assertAutomatedRunWritable` serialize historical imports and manual mutations with
+automation closure. `DatabaseService.transaction` uses real BEGIN/COMMIT/ROLLBACK;
+`automation-closure.db.spec.ts` exercises migrated PostgreSQL via the existing
+`database-integrity` CI job. Authorization/scope and several other claims in the
+original inventory have changed since its initial audit.
+
+#### PR #25: confirmed failures and bounded repair
+
+- The no-write regex classified the actual `SELECT ... FOR UPDATE` lock as DML.
+  The test now admits direct SELECT reads (including locking reads), rejects DML
+  and `WITH`-prefixed writes, and fails closed on unsupported leading commands.
+  This is a test-local assertion over the importer's single-statement queries,
+  **not** a general SQL parser or a database rollback guarantee. Controls include
+  direct UPDATE/INSERT/DELETE/TRUNCATE/MERGE, upsert, the importer's SELECT-CTE/main
+  UPDATE shape, data-modifying CTEs, mixed case, whitespace and locking SELECT.
+- Mutation CI installed unpinned Stryker after `npm ci`; Docker executed `npm update`
+  after its successful locked install. Both re-resolved Langfuse's broad exporter
+  peer to `0.301.1` (API `^1.10.0`), conflicting with the existing API/SDK graph.
+  The repair locks Stryker, OCR data and the compatible tracing graph, moves image
+  security overrides into the manifest/lock, and removes build-time graph refreshes.
+- Targeted compatible security updates preserve patched body-parser/glob and update
+  Multer, compression, proxy-addr, grpc-js, xmldom and brace-expansion in the lock.
+  Initial production audit: 18 findings (8 high, 1 critical, 9 moderate). After the
+  lock update: 14 moderate, **0 high/critical**. Remaining findings involve NestJS /
+  file-type, archiver/glob/minimatch, qs and ExcelJS/uuid dependency families. These
+  remain open; no ignore entry, severity suppression or gate reduction is introduced.
+  Audit counts are time-sensitive and do not establish a clean image scan.
+
+Local verification of the repair (Windows, Node `24.14.0`, npm `11.9.0`): clean
+development `npm ci --ignore-scripts` and isolated production `npm ci --omit=dev`
+succeed; relevant peer trees pass `npm ls`; locked OCR gzip decompresses correctly.
+Typecheck and build pass; the frozen lint baseline reports 9 existing errors,
+2 warnings and **0 new errors**. Backend coverage run: **80 suites / 1,631 tests
+passed, 6 suites / 112 tests skipped** without their external/DB configuration
+(1,743 tests total). Mutation score: **77.51%**, unchanged scope/threshold. Node 22,
+migrated PostgreSQL, browser smoke and container/Trivy results must be verified on
+the latest PR head in CI; local skips do not satisfy those gates.
+
+**Follow-up evidence, PR [#26](https://github.com/1alextest/Tesbooboo/pull/26),
+head `8388650`:** its existing
+[database-integrity job](https://github.com/1alextest/Tesbooboo/actions/runs/43102901520/job/130798649950)
+passed on PostgreSQL 16.15 / Node 22.23.4 after all 144 production migrations,
+their idempotency re-run and integrity probes. All 4 DB suites / 15 tests passed,
+including the new rollback-after-write case. The server log records rejection of
+U+0000 in the result JSONB query; the test requires the preceding real run UPDATE
+and pending changed values, unchanged persisted rows afterward, and a valid retry.
+This is evidence for that bounded failure stage, not rollback after every later
+result/snapshot write, HTTP authorization, real audit delivery or product release.
+The test remains on an unmerged follow-up branch, not in `development` yet.
+
+**CI evidence handling:** during the 2026-11-11 Actions outage, GitHub created
+eight workflow records for #25 without jobs/check runs. An empty Checks list is
+not success. After GitHub reported recovery, the old records still returned
+contradictory queue/cancel/rerun responses while new PR jobs executed. Compare the
+exact head SHA, actual job steps/logs and official service status; retain the
+evidence and do not keep retrying inconsistent control APIs, post fake checks,
+weaken gates or merge on an empty check set. The documentation update records
+the new PostgreSQL result without relabeling #25's unexecuted checks as passes.
+
+#### Adjacent findings and follow-up gates
+
+| Finding / evidence | Impact and severity | Root cause / proposed remediation | Relationship and disposition |
+|---|---|---|---|
+| At the historical integrated baseline, `LegacyService.failLinkedExecutions`, called by `createBug` / `addBugLink`, updated verdict, time and performer. | High: association alone can rewrite independent execution evidence. | The earlier assertion here of a superseding user-selected bounded policy has no attributable approval artifact and is withdrawn. Canonical v1.4.28 README lines 301/303/329/339 require association/result separation for all executions. | PR #167 removes the automatic result side effect and retains explicit observed-result writing; exact-head runtime acceptance is recorded in the integration closure record. Full direct/side classification and reviewed historical correction remain separate gates. |
+| At the integration baseline, no history-import test fails after a completed database write. `e2e/api/cycles.spec.ts` invalid-row case fails during validation. | High assurance gap at that baseline. | Extend `automation-closure.db.spec.ts` with a real late PostgreSQL failure, prove earlier writes occurred, and compare persisted run/results/snapshots plus successful follow-up. | PR #26 implements and passes this bounded scenario on disposable migrated PostgreSQL; integration/review and later-stage coverage remain outstanding. |
+| `deleteCycle`, testcase external-ID renaming, project-member removal and sharing can change closed-run records/metadata. REST/MCP bulk updates commit per item. | Policy-dependent integrity/atomicity risks; not all are defects. | Inventory deletion vs result immutability, snapshot identity, assignment cleanup, publication, and partial-batch semantics; preserve existing behavior until policy is approved. | Mutation-path assurance; deferred classification and coverage. |
+| At the baseline, nested execution PATCH does not pass URL `cycleId` into `updateExecution`; reporter `onEnd` logs closure after a caught close error. | Medium: misleading parent context / false success reporting. | Validate parent-child relationship and report close failures truthfully; add transport/reporter regressions. | Execution context reproduced and repaired in PR #31 below, pending integration/review; reporter close-failure handling remains separate. |
+| `ProjectWriteLockGuard` matches project-prefixed REST paths; legacy cycle URLs and `/api/mcp` alias are outside that matcher. | Potential plan-enforcement inconsistency; finalization protections are separate. | Verify all transports against the same entitlement policy before choosing a shared enforcement point. | Side finding; deferred, not a proven authorization exploit. |
+| `development` ruleset reports an empty required-status-check list and zero required approvals. | Medium governance gap: green checks/review are not presently enforced by that ruleset. | Owner to configure required checks and review policy; continue requiring green checks and human approval operationally. | Verified via GitHub rules API; no settings changed. |
+| Root `CLAUDE.md` describes a shared/macOS stack, whereas current CI provisions disposable PostgreSQL and this workstation is Windows with no Docker CLI. | Verification/environment mismatch; local DB/image/E2E execution cannot be claimed. | Use existing isolated CI, retain its gates, and explicitly report skipped local DB tests. | Infrastructure limitation, not permission to target a shared DB or weaken tests. |
+| The restored Stryker run reports 131 killed, 37 surviving and 1 uncovered mutant in `external-url.util.ts` (77.51%). | Medium assurance gap, not proof that each survivor is a production defect. | Triage equivalent mutants versus missing boundary/credential/address tests in a separate test-strengthening change. | Existing bounded mutation gate passes unchanged (break score 50); survivors are not suppressed. |
+| At the pre-fix baseline, `createBug` and its REST controller omit user/project membership checks; identity middleware and the no-token branch of `ApiTokenRestGuard` do not require authentication. | High authorization risk. A real Nest controller/service harness returned 201 for anonymous and nonmember principals before the fix; identities/DB were simulated, not a production or PostgreSQL exploit. | The focused follow-up invokes existing user/project authorization before bug validation, target resolution or writes. The nullable-user MCP rationale is stale relative to current member-bound MCP. | PR #28 owner-merged with fresh database/session/token/MCP evidence below; not claimed resolved by verdict-preservation tests or a full authorization audit. |
+| `addBugLink` does not sanitize targets; create/update sanitize component IDs independently, not the complete testcase/run/execution chain. | High cross-project/relationship-integrity risk, source-confirmed. Independent foreign keys prove existence, not ownership. | Validate the complete authoritative chain, active parents/membership and historical-link edit semantics across create/add/replace, with rejection before unintended writes. | Separate relationship repair/release blocker. Checking the effective persisted execution binding in the verdict helper is NOT a full repair. |
+
+#### Integrated rollback evidence and historical bug-link follow-up
+
+**20 November authority reconciliation:** this section preserves the historical implementation and
+test evidence below. Its earlier claim of a newer user approval for automatic manual/open-run
+failure was not substantiated. The governing canonical association-versus-outcome rule was already
+explicit; implementation history is not authority to supersede it. At PR #167 head `3ebda243`,
+`createBug` and `addBugLink` preserve the entire execution record, and the native explicit result
+writer remains the observed-result owner. The full execution page shows retained links at every
+status. See [the current integration record](specs/agent-synchronized-engineering/reviews/2026-11-19-integration-closure.md)
+for the source, test and unresolved-correction boundaries. The paragraph below describes the old
+bounded implementation, not a current policy or release claim.
+
+PR [#26](https://github.com/1alextest/Tesbooboo/pull/26) passed **22/22 checks** at
+`9a3c869`; the owner merged it into `development` as `236ace7` on 2026-11-11.
+The [fresh database job](https://github.com/1alextest/Tesbooboo/actions/runs/43107473025/job/130814458229)
+passed **4 suites / 15 tests without skips**, after 144 migrations, the idempotency
+re-run and integrity probes. Its server log confirms the intended U+0000 JSONB
+failure. Backend quality separately passed 1,631 tests with 113 external/DB tests
+skipped; those skips are not database proof. Post-refresh local verification
+timeouts remain timeouts, despite successful isolated CI. No deployment is claimed.
+
+The historical bounded fix retained valid associations and finalized verdicts through parent-first
+ordered locking and active result/binding re-read. Sealed runs produced no result mutation or
+fabricated result event. Manual/open automation auto-failure and already-Failed no-churn behavior
+remained in that implementation. The run drawer/full execution page refreshed the saved verdict;
+sealed automation could display retained associations on Passed results. The automatic side effect
+was subsequently removed in the PR #167 correction identified above.
+
+Verification plan: extend the existing migrated PostgreSQL closure suite for both
+callers, Passed/Failed and completed/incomplete closes, manual/open controls,
+duplicate transitions and both race orders with observed real database lock waits.
+Extend owning API/UI specs and the existing disposable CI smoke test for genuine
+authenticated API/browser readback and reload. At follow-up head `aabbdf5`, the
+[migrated PostgreSQL job](https://github.com/1alextest/Tesbooboo/actions/runs/43111730436/job/130829208662)
+passed **all 4 suites / 26 tests without skips**, including both observed lock-wait
+race orders. The initial new browser smoke test stopped during bootstrap because
+its synthetic password exceeded the existing 16-character maximum; no new bug-link
+browser flow ran. The test credential is corrected without changing product policy
+or assertions; fresh-head CI/browser verification remains required. The general shared-stack API/UI
+suites still require their authorized environment/run; bounded CI smoke is not a
+claim that every impacted journey passed.
+
+The callers still commit associations before the result side effect. Unexpected
+postcommit errors/lost acknowledgements and create retry duplication are not made
+atomic/idempotent by this fix. Concurrent unlink/replace is not serialized by the
+cycle lock alone. Complete tuple validation, creation authorization, publication,
+snapshot-ID rename and administrative assignment/deletion policy remain distinct
+follow-ups; no full immutable-attempt/correction model is introduced here.
+
+#### Current development reconciliation and bug-create authorization slice
+
+The owner merged PR [#27](https://github.com/1alextest/Tesbooboo/pull/27) into
+`development` as `cd1b476` on 2026-11-11 at 23:06:38 UTC. Its final head
+`cee51c9` passed **22/22 checks**:
+[4 PostgreSQL suites / 26 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43115204734/job/130841292034)
+and [3 real API/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43115204720/job/130841292525).
+The browser oracles explicitly require retained Bug Key/Title fields to be visible
+and the correct verdict to persist before/after reload on both existing execution
+surfaces. Earlier fixture/selector failures were corrected without changing product
+policy or weakening assertions; they remain historical failures. This is bounded
+assurance, not independent baseline exploit reproduction, whole impacted-suite
+execution, a release deployment or Phase 1 signoff.
+
+The next focused branch reuses `requireUser` / `requireProjectAccess` at the start
+of `createBug`, including its active-workspace, membership and unarchived-project
+rules. REST and current member-owned MCP use this one writer. No UI, endpoint,
+role policy, authentication system, schema, dependency or CI threshold changes.
+Existing canonical anonymous 400 / inaccessible-project 404 behavior is retained;
+this is not a global HTTP-status cleanup.
+
+Regressions extend the existing HTTP integration, migrated PostgreSQL closure,
+API authorization and disposable smoke owners. The HTTP harness first demonstrated
+the baseline's anonymous/nonmember 201 and missing browser membership check, then
+tests refusal before link reads, ID allocation or mutation. Database cases exercise
+real membership/workspace queries and compare full bug/link/run/execution state.
+The isolated smoke uses genuine browser login, opaque tokens and MCP, including
+revocation, wrong workspace, archived project, invalid/read tokens and authorized
+controls. These added database/real-session tests are **not passes until fresh CI
+actually executes them**; local DB skips and mocked HTTP persistence are not proof.
+
+Scope limits: authorized-request membership revocation racing an already completed
+access check is not made transactionally linearizable here. Existing token-usage
+stamps and workspace self-healing may write authentication/context metadata;
+"no effects on rejection" refers to the asserted Bugs/links/Run/membership snapshot/
+execution domain state, not a promise that all database writes are prohibited.
+Complete relationship validation, add/replace-link concurrency, unsafe mutation
+retry and unexpected postcommit errors remain separately owned blockers.
+
+#### Integrated #28 evidence and strict relationship-validation slice
+
+The owner merged PR [#28](https://github.com/1alextest/Tesbooboo/pull/28) into
+`development` as `aa665f4` on 2026-11-11 at 23:46:43 UTC. Final head `255f132`
+passed **23/23 checks**, including
+[4 PostgreSQL suites / 27 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43119287273/job/130855305201),
+[5 authorization suites / 205 tests](https://github.com/1alextest/Tesbooboo/actions/runs/43119287409/job/130855305062)
+and [3 real session/token/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43119288432/job/130855308634).
+Backend quality passed 1,645 tests, with 125 external/DB tests skipped in that
+separate job. No agent merge, deployment, complete authorization certification or
+Phase 1 completion is implied.
+
+For the next bounded relationship repair, the user explicitly selected **atomic
+rejection** of malformed, missing, foreign-project or mismatched **new/changed**
+bug-link targets. This deliberately supersedes create/edit's stale-ID-dropping
+contract; the existing API tests are updated to assert whole-request rejection,
+not removed. It does not change #27's separate policy: a valid association to a
+finalized automated run succeeds without altering its verdict.
+
+The shared `LegacyService` writer parses/normalizes/deduplicates link tuples and
+validates project ownership, live new targets, testcase/run membership and actual
+execution parents. Create and edit commit metadata and relationships together;
+add/replace/unlink serialize on the bug row. Owned run locks precede testcase,
+membership and execution locks, then the bug lock and fresh existing-link read.
+This prevents stale historical exemptions and avoids the bug -> run -> execution
+-> bug lock cycle with manual edits and project-member cleanup. Execution KEY SHARE
+is deliberate: administrative non-key assignment updates remain compatible.
+
+An exact unchanged, locally owned, consistent historical tuple can retain deleted
+targets and its original link row/ID/timestamp during ordinary metadata edits.
+Foreign/mismatched historical tuples are not exempt, a supplied link ID grants
+nothing, and removal does not authorize later re-adding deleted targets. Existing
+partial associations and empty link arrays remain supported; add-link still needs
+testcaseId or cycleId. MCP retains its additional project-bound ownership checks,
+including live-target checks for its dedicated link tool; its descriptions now
+state strict rejection and sealed-verdict behavior truthfully. No new UI, endpoint,
+schema, dependency, workflow or relaxed CI/security gate is introduced.
+
+Verification owners: the new parser/chain unit spec, existing authorization/finalization
+and MCP specs, existing migrated PostgreSQL closure suite, `e2e/api/bugs.spec.ts`
+and the guarded disposable `e2e/ci-smoke.spec.ts`. Database cases compare full
+bug/link/run/membership/execution rows after rejected create/add/edit, test both
+deletion orderings, nullable-key concurrency, opposite multi-run order, stale
+historical unlink and the actual three-writer interaction. The edit rollback
+observer forwards real driver queries, observes completed metadata UPDATE and
+link INSERT plus their pending values, then causes native SQLSTATE `22012` with
+`SELECT 1 / 0`; it requires complete persisted rollback, no success events, released
+clients and a valid retry. Mocked persistence and local skipped DB tests do not
+satisfy any of those database assertions.
+
+Local initial verification: backend/E2E typechecks and full-emission backend
+compilation passed; frozen lint has 9 existing errors / 2 warnings / **0 new errors**.
+The initial selected unit/HTTP/MCP/finalization run passed **4 suites / 191 tests**,
+with its unconfigured DB suite skipped. The later full local coverage run passed
+**82 suites / 1,672 tests**, with **6 suites / 139 external-or-DB tests skipped**.
+At PR [#29](https://github.com/1alextest/Tesbooboo/pull/29) head `52233fe`, the
+[real database job](https://github.com/1alextest/Tesbooboo/actions/runs/43127489133/job/130883161533)
+passed **4 suites / 41 tests without skips**, including the new rollback and lock
+regressions. The server records the intended division-by-zero SQL failure.
+The [first smoke run](https://github.com/1alextest/Tesbooboo/actions/runs/43127489093/job/130883161190)
+failed before the browser association flows: its new test expected a target 404
+on flat bug routes where tokens are intentionally refused with 403. The test now
+requires that exact earlier guard rejection; session REST and MCP exercise the
+edit/add validator, while token REST exercises project-prefixed create validation.
+No token permission or guard is broadened. Additional individually inactive target
+controls are added. At head `2db62aa`, **23/23 checks passed**:
+[4 migrated PostgreSQL suites / 45 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43128186395/job/130885496211),
+[3 real REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128186408/job/130885496010)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128186371/job/130885495824)
+(143 external/DB skips in that separate quality job, not database proof). The
+database job again applied all 144 migrations, proved idempotency/integrity and
+logged the intended late division-by-zero error. The smoke retained all prior
+authorization and sealed-result UI/readback/reload assertions while adding strict
+relationship refusals and valid historical edits. Its four saved Passed/Failed
+drawer/full-page screenshots were inspected; viewport images show the expected
+verdicts, with lower bug fields partly below the captured viewport. Their values
+and visibility are asserted separately in Playwright. Page exceptions were absent;
+backend warnings concern deliberately unconfigured embeddings keys, not permission
+to provision a paid service. This evidence applies to this bounded change; any
+later PR head still requires its own checks and human review. No merge/deployment
+or Phase 1 completion is claimed.
+Full impacted shared-stack API/UI execution and independent original-baseline
+runtime reproduction/review remain outstanding.
+
+**Scoped open security finding:** preexisting invalid `bug_links` rows can still
+resolve foreign testcase titles/external IDs and run names through `bugSelect`'s
+unrestricted metadata joins. This is source-confirmed, not a reproduced production
+disclosure. The write validator prevents new invalid associations; it does **not**
+repair, hide, migrate or delete existing records. Read-path ownership filtering,
+an inventory of invalid rows and an owner-approved, history-preserving remediation
+are a separate high-priority Phase 1 release blocker. Do not silently purge history
+or claim this write PR closes it. Unexpected postcommit auto-failure/event errors,
+lost-ack retries and transactional authorization revocation remain out of scope.
+
+#### Independent execution URL-parent validation follow-up
+
+The owner merged PR [#30](https://github.com/1alextest/Tesbooboo/pull/30) as
+`ec4803f` on 2026-11-12 at 03:09:47 UTC. Final head `8675c02` passed **22 triggered
+checks**, including [47 real PostgreSQL tests](https://github.com/1alextest/Tesbooboo/actions/runs/43132335865/job/130899239287)
+and the [3-test REST/MCP/browser smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43132335833/job/130899239536).
+It scopes foreign linked display metadata without rewriting records. The independent
+execution-context branch initially started from `9a91878`; the owner merge then
+made its test-only PR #31 conflict, so GitHub created no CI checks/workflows for
+that head. An empty check list is not success. Approved `origin/development` at
+`ec4803f` is merged into the branch, preserving both test helpers and both evidence
+sections. No owner-approved change is discarded or automatically merged to the
+base branch by the agent. Fresh combined-baseline CI remains required.
+
+Source finding: the nested PATCH route contains `:cycleId`, but the controller
+passes only execution ID, actor and body to `updateExecution`. The canonical
+service checks the execution's actual project and locks its actual run, but never
+compares that run with the URL parent. This is a run-context integrity finding,
+not proof that existing actual-project authorization can be bypassed.
+
+The first regression-only commit checks actual controller/service HTTP wiring
+with synthetic principals/persistence, migrated-PostgreSQL service calls with
+wrong/unknown/malformed context and unchanged full run/item/execution rows, and
+the guarded real-session smoke using another local run, another project's run,
+unknown and malformed URL IDs. A body `cycleId` must not override the URL. Positive
+controls retain matching-run metadata attribution/status edits, uppercase UUIDs,
+existing unscoped MCP calls, anonymous refusal and the flat-route token boundary.
+The owning shared API execution spec is extended as well; full shared-stack
+execution remains pending. The local real Nest controller/service harness returned
+200 for all three wrong/unknown/malformed URL-parent cases (3 new failures,
+10 passes); its principals/persistence are simulated and its 6 DB skips are not
+database evidence. At combined-baseline head `8ee3cda`,
+[migrated PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43147876666/job/130949857526)
+reproduced all three context refusals resolving instead of rejecting (3 failures,
+48 passes, 51 total without skips).
+[Real-session smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43147876702/job/130949857480)
+returned 200 for the first wrong local-run URL and independently read back the
+persisted Blocked verdict, submitted notes and acting performer. It stopped there;
+later foreign/unknown/malformed and browser flows are not baseline passes.
+[Authorization HTTP CI](https://github.com/1alextest/Tesbooboo/actions/runs/43147876544/job/130949856569)
+also reproduced the three 200 responses (207 other tests passed). This is actual
+disposable DB/session evidence, not a production or cross-project-access exploit.
+
+The bounded implementation forwards the URL parent as service context, rejects a
+malformed/mismatched parent before writes, and binds the transactional UPDATE to
+active membership in the parent run already locked by the existing finalization
+guard. It refuses a zero-row UPDATE before any success event. Additional real SQL
+fixtures change membership/binding after the initial read to verify the UPDATE's
+predicate independently of the early guard; those tests use completed fixture
+writes inside the existing rolled-back test transaction, **not** concurrent-client
+evidence, a supported reparent API, or a new rollback-after-write guarantee.
+Local repair verification passes typecheck, full-emission backend compilation,
+frozen lint (0 new errors) and 6 targeted suites / 216 tests; 8 unconfigured DB
+tests are skipped, not passes. At repaired head `ae38a0e`, **23/23 checks passed**:
+[4 PostgreSQL suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43149343074/job/130954564723),
+[5 authorization suites / 210 tests](https://github.com/1alextest/Tesbooboo/actions/runs/43149343070/job/130954564508),
+[3 real REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43149343116/job/130954564787)
+and [1,683 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43149343128/job/130954564768)
+(151 external/DB skips in that separate job, not database evidence). The database
+job ran all 144 migrations, idempotency and integrity probes. The unchanged
+baseline refusals, added late-binding SQL controls, genuine wrong-URL state-equality
+matrix, matching-run metadata/status/MCP controls and inherited #28–#30
+authorization/link/historical/finalization/browser/reload assertions passed.
+Four saved sealed-result screenshots were inspected; lower fields remain partly
+outside the captured viewport, with values/visibility separately asserted by
+Playwright. No page exceptions; backend warnings are deliberately unconfigured
+embeddings keys, not a reason to provision paid services. Later documentation-only
+heads still require fresh checks and human review. This is not Phase 1/release
+signoff or proof that every remaining mutation path has been audited.
+Preserve attribution, manual/open-run behavior, closed-automation refusal,
+MCP project/scope checks and bulk per-item semantics. No new result correction,
+history cleanup, role/permission expansion, schema or deployment is authorized.
+
+#### Integrated #29 and foreign bug-link metadata read follow-up
+
+The owner merged PR [#29](https://github.com/1alextest/Tesbooboo/pull/29) into
+`development` as `9a91878` on 2026-11-12 at 00:50:14 UTC. Final head `81f086b`
+passed **23/23 checks**, including
+[4 PostgreSQL suites / 45 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43128868691/job/130887761079),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128868620/job/130887760617)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43128868634/job/130887761264)
+(143 external/DB skips in that separate job). It prevents new invalid association
+writes; it does not fix the preexisting-data read disclosure described above.
+
+The next focused branch first adds regressions against this merged baseline,
+before changing production code: scoped fixture SQL creates preexisting invalid
+links, real PostgreSQL detail/list reads must not resolve foreign testcase titles,
+external IDs or run names, and the existing disposable smoke exercises session
+detail/list, token list and MCP get/list/testcase-bugs with genuine authentication.
+The smoke removes the reader's foreign-project membership and requires direct
+session/token refusal as controls. Both active and deleted foreign targets are
+covered, alongside local readable links. These are synthetic fixtures on a
+disposable installation, **not** a production disclosure or a new-writer bypass.
+At test-only head `a82e97f`, [migrated PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43131096298/job/130895136488)
+failed exactly the two new active/deleted foreign-title assertions (45 prior tests
+passed; 47 total, no skips). [Real HTTP smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43131096173/job/130895135986)
+also failed on returned foreign title, external ID and run name after direct foreign
+project reads were denied. All eight session/token/MCP responses were collected
+before the first metadata assertion failed; that is not a claim that each response
+was individually asserted before the failure. Browser association flows later in
+that smoke did not execute and are not counted as passes at the baseline.
+
+The repair adds project predicates to the two canonical metadata joins, with the
+baseline assertions unchanged. At PR [#30](https://github.com/1alextest/Tesbooboo/pull/30)
+head `ad45693`, **22/22 triggered checks passed**:
+[4 migrated PostgreSQL suites / 47 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43131687944/job/130897095911),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43131687918/job/130897094755)
+and [1,677 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43131687915/job/130897095283)
+(145 external/DB skips in that separate quality job). All 144 migrations,
+idempotency and integrity probes ran. Both baseline-failing tests and the full
+eight-response read matrix now pass for active/deleted foreign targets, retaining
+the reference rows and proving persisted domain-state equality. Existing local
+deleted-history edits and all four sealed drawer/full-page association/reload
+journeys also pass. The four saved screenshots were inspected; existing viewport
+clipping of lower fields remains, with visibility/values separately asserted.
+The standalone authorization workflow was not triggered because no path in its
+existing auth/MCP/app-module filter changed; it is not counted as a fresh pass.
+The ordinary backend/contracts jobs still ran their owning auth/MCP regressions.
+Local repair verification passed backend typecheck, full-emission compilation,
+frozen lint (0 new errors) and 200 selected unit/HTTP/MCP/finalization tests; its
+42 skipped DB tests are not the database evidence above. Later heads still require
+fresh checks and human review; no merge, deployment or Phase 1 signoff is claimed.
+The repair retains every
+stored link row and its IDs/timestamps, while joining display metadata only within
+the bug's project. Do not omit links, clear IDs, write data on reads or silently
+repair a historical association. Valid local deleted history keeps its existing
+display and edit behavior. Persisted foreign IDs, invalid chain remediation and
+the main edit form's refusal to resubmit invalid legacy tuples remain separate
+contract/data decisions; this change does not claim to quarantine all invalid
+relationships or repair every report/legacy convenience-column read.
+
+#### Integrated #31 and truthful reporter closure follow-up
+
+The owner merged PR [#31](https://github.com/1alextest/Tesbooboo/pull/31) as
+`71cfd3f` on 2026-11-12 at 12:06:56 UTC. Final head `e40135f` passed **23/23 checks**:
+[4 PostgreSQL suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43150114718/job/130957037454),
+[5 authorization suites / 210 tests](https://github.com/1alextest/Tesbooboo/actions/runs/43150114606/job/130957036709),
+[3 genuine REST/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43150114731/job/130957037601)
+and [1,683 backend tests](https://github.com/1alextest/Tesbooboo/actions/runs/43150114726/job/130957037681)
+(151 external/DB skips in that separate job). Wrong URL parents reject without
+execution mutation; this is not whole mutation-path or release signoff.
+
+The next bounded finding is in the existing Playwright SDK: `onEnd` prints a
+confirmed `closed` line even when `TesboClient.closeRun` returns `ok: false`.
+Its generic JSON-success cast can also accept an empty/wrong-run acknowledgement,
+and an already-closed response can describe a different final status from the
+one just requested. Native HTTP/Playwright regressions below reproduce these
+observations; a `null` acknowledgement also throws from the reporter.
+
+The existing non-fatal ingest policy stays intact: no reporter-side mutation of
+the customer's suite exit code. Failures, timeouts and lost acknowledgements must
+report closure as **unconfirmed**, not assert either closed or still open. Local
+counts and warning diagnostics remain visible. A valid close acknowledgement must
+identify the requested run and match the existing response shape; optional server
+status/idempotency fields are interpreted truthfully without requiring them from
+older minimal responses. No backend closure, permissions, retry policy, result
+model, SDK version or publication is changed by this follow-up.
+
+Regressions extend the owning SDK `index.test.ts` with native loopback HTTP and
+real Playwright CLI child processes using the production reporter build. The
+HTTP server is a controlled fixture, **not PostgreSQL or a production Tesbo API**.
+CLI passing/failing exit-code controls prove pipeline behavior, while lifecycle
+controls cover interrupted/incomplete requests, transient retry success, bad
+acknowledgements, mismatch and missing-result diagnostics. The existing SDK job's
+production build is moved before tests: its old order also let existing bin tests
+return early when `dist` was absent. No command, assertion, scope or threshold is
+removed; this establishes the test prerequisite rather than weakening a gate.
+The initial local baseline was 129 tests / 108 passed / 21 failed / 0 skipped:
+19 reporter regressions and two separate Windows POSIX-permission failures. The
+expanded frozen baseline is **141 tests / 110 passed / 31 failed / 0 skipped**:
+**29 reporter failures** plus the same two permission assertions (`0666` observed
+versus `0600` and initial `0644` expected). Neither assertion is weakened/skipped.
+Actual production-build CLI processes retain 0/1 on denied/lost acknowledgements,
+but `null` makes a passing suite exit **1** via an uncaught `mismatch` access.
+Success, older minimal acknowledgements, acknowledged incomplete closes, retry
+success and mismatch controls pass on the baseline. Nullable historical statuses
+are covered and must not be rejected or described as completed. Frozen dependency
+installation, SDK build/typecheck and whitespace checks passed locally.
+
+Regression-only head `352bb38` was pushed as draft PR
+[#32](https://github.com/1alextest/Tesbooboo/pull/32) before changing production code.
+The [isolated Linux SDK baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43218381737/job/131183354082)
+reproduced **141 tests / 112 passed / 29 failed / 0 skipped**, including the real
+CLI passing-suite exit-1 defect on `null`; both strict permission tests passed on
+Linux. The other 21 triggered checks passed. This baseline is intentionally red,
+not a completed repair or a waiver of that SDK gate.
+
+The bounded repair validates only `closeRun` acknowledgements: exact requested
+run, nullable/well-formed numeric mismatch pairs, optional boolean `alreadyClosed`
+and optional `completed`/`incomplete`/historical-null `closeStatus`. Older minimal
+`{ runId, mismatch: null }` remains valid. Invalid successful acknowledgements are
+counted once and logged without their response body or an extra close replay;
+generic request parsing and transient retries are unchanged. `onEnd` branches on
+the result, preserves local diagnostics and prints supplied server status rather
+than substituting requested status. Missing already-closed and explicit-null
+statuses say `status not reported`. README semantics now distinguish requested
+closure from confirmation without changing startup or non-fatal ingest policy.
+
+The repaired initial local run was **141 tests / 139 passed / 2 failed / 0 skipped**,
+with all 29 reporter regressions fixed and only the unchanged Windows permission
+failures remaining. Two additional controls exercise one-count/no-replay invalid
+acknowledgements with three configured attempts and native multipart quota
+diagnostics/evidence-before-close ordering. One intervening expanded full-suite
+run exceeded its 120-second shell limit; it is not counted as a pass. The completed
+expanded rerun was **143 tests / 141 passed / 2 failed / 0 skipped**, with both extra
+controls and all six production-build passing/failing CLI processes passing;
+only the same Windows permission assertions failed.
+
+Implementation head `9386c12` passed **22/22 triggered checks**:
+
+- [SDK typecheck, production compilation and 143/143 tests, zero skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986644/job/131188861006),
+  including all six real CLI 0/1 controls, both strict Linux permission tests,
+  nullable historical status, retry, diagnostics and no-replay controls.
+- [Migrated PostgreSQL: 4 existing suites / 53 tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754607).
+- [Existing real API/MCP/browser smoke: 3 passed](https://github.com/1alextest/Tesbooboo/actions/runs/43219986574/job/131188753560).
+- [Existing backend quality: 1,683 passed / 151 external/DB skips](https://github.com/1alextest/Tesbooboo/actions/runs/43219986644/job/131188860358).
+  The separate [API/MCP contract job](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754105)
+  passed 206 tests with 8 skips; the [transactional unit job](https://github.com/1alextest/Tesbooboo/actions/runs/43219986568/job/131188754583)
+  passed 72 with 90 DB skips. Those skips are not silently counted as passes;
+  native DB and smoke jobs above supply their own bounded evidence.
+
+The new SDK fixture tests do not prove PostgreSQL persistence, backend close
+races, browser rendering, the entire supported Playwright version range,
+shared-stack release safety or independent human review. The unchanged native
+DB/browser suites are separate evidence, not a relabeling of the SDK fixtures.
+Full existing checks must also be fresh on any later documentation-only head
+before review. Phase 1 remains open; no merge, publication or deployment occurred.
+
+#### Integrated #32 and historical-import text / later-write rollback slice
+
+The owner merged PR [#32](https://github.com/1alextest/Tesbooboo/pull/32) as
+`27173f0` on 2026-11-12 at 13:01:34 UTC. Final head `80ec90c` passed **22/22
+triggered checks**, including [143 SDK tests without skips](https://github.com/1alextest/Tesbooboo/actions/runs/43220931436/job/131191951029),
+[53 migrated PostgreSQL tests](https://github.com/1alextest/Tesbooboo/actions/runs/43220931518/job/131191952015)
+and [3 real API/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43220931505/job/131191951828).
+This integrates truthful reporter close outcomes; the two unchanged local Windows
+permission failures and broader Phase 1 / human release-review gates remain open.
+
+The next bounded slice reuses `LegacyService.historyText`, the existing history
+import owners and the current disposable database/smoke jobs. U+0000 is accepted
+by the current validator, although PostgreSQL cannot store it in text/JSONB.
+The earlier #26 rollback proof already observed native JSONB rejection after a
+completed run write; it did not provide a field-specific 400 or cover completed
+execution/snapshot rollback stages. No unmerged commits were found on the two
+existing history-import/finalization branches before selecting this follow-up.
+
+Regressions enumerate six result/nested text locations and run tags, require
+whole-request rejection before the import transaction, and compare independent
+persisted run/results/snapshots/audit/attachments state in native PostgreSQL and
+genuine authenticated HTTP. Positive controls retain valid Unicode/emoji, literal
+`\\u0000` text, null/omitted fields, text limits, tag deduplication, replay, manual
+closed imports, open automation and finalized-automation refusal. Existing owner
+and access boundaries stay unchanged; plan-guard consistency remains separate.
+
+The original rollback oracle deliberately used invalid U+0000 text. Rejecting
+that text earlier must not turn rollback assurance into validation-only coverage.
+The replacement parameterized oracle forwards actual production run, execution
+and snapshot UPDATEs, observes the changed pending rows on that same connection,
+then issues a native `SELECT 1 / 0` at each completed stage. It retains production
+BEGIN/ROLLBACK/release, independent-client state equality and a valid single-pool
+retry. This is explicit deterministic fault injection, not a natural production
+failure or concurrency claim; it strengthens stage coverage without weakening the
+no-prefix/rollback assertions or changing the transaction implementation.
+
+Local regression-only execution: **25 tests / 18 passed / 7 failed**, the seven
+intended U+0000 validation refusals; the persistence in that unit fixture is
+mocked, not database evidence. An earlier 120-second test command timed out and
+is not counted as a pass. Backend and E2E typechecks passed. Canonical history
+import test collection failed because `e2e/.auth/context.json` is absent; its zero
+collected tests are not a pass. No session state was fabricated and no shared
+database was targeted.
+
+Regression-only PR [#33](https://github.com/1alextest/Tesbooboo/pull/33) head
+`852d45e` left production code unchanged. Its
+[migrated PostgreSQL baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995109/job/131209202943)
+ran **62 tests / 55 passed / 7 failed / no skips**: all seven new cases preserved
+independently read domain state, then failed because they received native database
+errors rather than `BadRequestException`. All three completed-write rollback,
+release and valid-retry stage controls passed already, proving existing atomicity
+at those stages rather than inventing a transaction defect. Server logs show the
+intended invalid UTF8/Unicode errors and injected division-by-zero faults.
+[Genuine HTTP baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995124/job/131209204306)
+returned 500 for the first bad tag after persisted-state equality passed. Its two
+earlier smoke tests passed; later text cases, positive controls and browser flows
+did not execute and are not counted as baseline passes. The
+[backend baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43225995154/job/131209203076)
+passed 1,684 tests, failed the seven expected unit cases and skipped 160 external/DB
+tests. All other 19 triggered checks passed; this intentionally red baseline does
+not waive any gate.
+
+The bounded production repair adds the U+0000 refusal to the existing shared
+`historyText` validator and reuses it for indexed run tags. It neither rewrites
+text nor changes limits, normalization, authorization, finalization, SQL, locking
+or transaction boundaries. Local repaired owner suite: **25/25 passed**. Backend
+production build and frozen lint passed (9 known errors, 2 warnings, **0 new
+errors**); the initial lint command used the wrong working directory and failed
+before analysis, then the canonical backend-directory invocation ran successfully.
+Implementation head `5d10bba` passed **22/22 triggered checks**:
+
+- [Migrated PostgreSQL: 4 suites / **62 tests**, no skips](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794633).
+  All seven field-specific refusals and independent state-equality cases pass;
+  all three completed-write fault/rollback/release/retry controls still pass.
+- [Genuine API/MCP/browser smoke: **3 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43227049177/job/131212794398).
+  All seven HTTP refusals, nonmember/anonymous controls, Unicode/emoji/literal
+  escape round-trip, replay, null clearing, manual-completed and open-automation
+  imports, sealed refusal and inherited four drawer/full-page browser journeys
+  executed. These are the disposable CI smoke assertions, not the full canonical
+  shared-stack `cycles.spec.ts` suite or a new independent visual review.
+- [Backend quality: **1,691 passed / 160 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43227049555/job/131212795501).
+  Separate [API/MCP contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794637)
+  passed 206 / skipped 8; [transactional unit regressions](https://github.com/1alextest/Tesbooboo/actions/runs/43227049427/job/131212794252)
+  passed 72 / skipped 90 DB tests. These skips are not relabeled as database passes.
+
+The standalone authorization workflow did not trigger for this slice's paths;
+its prior results are not counted as a fresh check. Native DB/smoke evidence is
+distinct from unit mocks and the unexecuted shared-stack selection. A later
+documentation-only head still requires fresh applicable checks and human review.
+No shared database, schema, UI, dependency, retention/deletion, bulk atomicity,
+publication or deployment change is authorized by this slice. Unpaired-surrogate
+validation and other mutation/postcommit/contract decisions are separate; this is
+not full import certification or Phase 1 completion.
+
+#### Integrated #33 and browser mutation replay follow-up
+
+The owner merged PR [#33](https://github.com/1alextest/Tesbooboo/pull/33) as
+`d2c2ea6` on 2026-11-12 at 13:39:49 UTC. Final head `20b9fd4` passed **22/22
+triggered checks**, including [62 native PostgreSQL tests](https://github.com/1alextest/Tesbooboo/actions/runs/43227925620/job/131215871447),
+[3 genuine API/MCP/browser smoke tests](https://github.com/1alextest/Tesbooboo/actions/runs/43227925632/job/131215871546)
+and [1,691 backend passes / 160 external/DB skips](https://github.com/1alextest/Tesbooboo/actions/runs/43227925773/job/131215871388).
+Full shared-stack import coverage and the remaining Phase 1 gates are not closed
+by that owner merge.
+
+The next focused finding is in `Tesbo-Frontend/lib/api.ts`:
+`fetchWithNetworkErrorMessage` automatically repeats a fetch after any recognized
+network error, including POST/PUT/PATCH/DELETE and multipart comment/KB uploads.
+Its source comment assumes the first request never reached the server. A browser
+network error cannot establish that: a response can be lost after a committed
+write. Backend create/notification ambiguity and full idempotency remain separate;
+this slice must not change transaction policy or silently claim a failed write
+was rolled back. No open PR or unmerged matching retry branch was found first.
+
+The planned repair confines the existing one retry to GET/HEAD. Ambiguous mutation
+network/abort errors must instead say **request outcome unconfirmed**, acknowledge
+possible application and advise checking current state before another attempt.
+Preserve existing HTTP errors/successes, bounded read retries, GET in-flight
+collapse, credentials/body handling and the UI's existing error/draft controls.
+No new option silently treats a mutation or an idempotency-looking header as safe.
+
+Regressions extend the existing smoke owner, not a new test project. A native
+ephemeral HTTP fixture exercises the production helper source under Playwright:
+five JSON method forms, multipart comment/KB callers, applied-before-abort,
+GET/HEAD retry, exhausted reads, pre-aborted reads, GET dedup/freshness, HTTP
+403/503 and empty-success controls. A narrow adapter translates Node's native
+socket-loss `fetch failed` into the browser's `Failed to fetch`; requests and
+response loss are real, but fixture application counts are **not PostgreSQL** and
+this source-level test is **not the served browser bundle**. Local configuration
+uses unreachable loopback app URL placeholders only for the transport-only grep;
+those app tests are not selected and no shared service/session is fabricated.
+
+The genuine CI browser scenario dispatches the real dialog's create request to
+Nest, holds its successful response after a DB read confirms one committed bug,
+then drops only the acknowledgement. After the UI settles, an independent DB
+read must show exactly one bug/one dispatched POST, the sealed run/results must
+remain unchanged, and the dialog must retain its draft with truthful uncertainty.
+Reload must recover the actual association without a second save. The canonical
+`e2e/ui/bugs.spec.ts` also gains this failure path on its existing report surface.
+The original four sealed browser journeys and earlier auth/relationship/import
+controls remain intact. Native source and real browser/PostgreSQL evidence are
+kept separate. The frozen local native selection is **one failed Playwright test
+with 27 failed soft assertions**, not 27 test cases: all five JSON method forms
+and both multipart callers sent two requests/applied twice to the fixture and
+returned success; applied-before-abort suggested retry instead of uncertainty.
+Read/body/HTTP controls executed and passed. An initial lowercase PATCH fixture
+was rejected by Node before dispatch and was corrected to standards-normalized
+lowercase POST without relaxing assertions. The canonical lost-ack and neighboring
+attachment batch/retry selection collected **3 tests**; collection is not execution.
+Frontend and E2E typechecks passed on the full frozen regression selection.
+Regression-only PR [#34](https://github.com/1alextest/Tesbooboo/pull/34) head
+`6e32834` left production code unchanged. Its [isolated smoke baseline](https://github.com/1alextest/Tesbooboo/actions/runs/43241463990/job/131262682558)
+ran **2 passed / 2 failed**: the real browser created **two persisted bugs from
+one save / two dispatched POSTs** after first independently confirming one
+committed bug before response loss; the separate native transport matrix failed
+its 27 intended soft assertions. Later error/draft/reload and original four
+browser journeys did not execute after that genuine duplicate assertion failed,
+so they are not baseline passes. Other **21 triggered checks passed**, including
+the existing database gate; the red smoke gate is not waived.
+
+The production repair now permits the existing one network retry only for
+GET/HEAD. Other recognized network/abort failures produce the unconfirmed-outcome
+warning without automatic replay. Ordinary HTTP and non-network errors, request
+methods/bodies/credentials, deduplication and UI components are unchanged; the
+incorrect delivery/body assumptions in the helper's comment are removed. Local
+repaired transport selection: **1 passed** on installed Node **22.23.1**, with
+all seven lost-response mutation forms and other controls executed. Two Node
+24.14.0 Windows runs reported the test passed/exit 0 but printed a native libuv
+`UV_HANDLE_CLOSING` teardown assertion; they are not clean runtime evidence. No
+tests were skipped/weakened and the global Node version was not switched to hide
+it. Frontend typecheck and frozen lint passed (13 known errors / 10 warnings /
+**0 new errors**).
+
+Implementation head `6fac1ae` passed **22/22 triggered checks**:
+
+- [Existing smoke job: **4 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43242700248/job/131267116592)
+  means **3 genuine app/API/MCP/browser tests plus 1 native source/transport
+  matrix**, not four browser/PostgreSQL tests. The real served bundle made one
+  POST, persisted one bug, preserved the sealed run/results, retained the draft
+  and unconfirmed-outcome message, and recovered the association on reload.
+  Original auth/relationship/import controls and four sealed UI journeys passed.
+- [Migrated PostgreSQL: **4 suites / 62 tests**, no skips](https://github.com/1alextest/Tesbooboo/actions/runs/43242699669/job/131267115045).
+- [Backend quality: **1,691 passed / 160 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43242700182/job/131267116745).
+  Separate [API/MCP contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43242699669/job/131267114937)
+  passed 206 / skipped 8; [transactional unit regressions](https://github.com/1alextest/Tesbooboo/actions/runs/43242699669/job/131267114329)
+  passed 72 / skipped 90 DB tests. Skips are not counted as native DB proof.
+- [Frontend lint/typecheck/production build passed](https://github.com/1alextest/Tesbooboo/actions/runs/43242700182/job/131267116507).
+  The standalone authorization workflow did not trigger for these paths and is
+  not represented as a fresh pass.
+
+The baseline screenshot was inspected and visibly shows two same-title bug
+associations after the dialog closed. All five repaired screenshots were also
+inspected: the new warning is readable and its draft remains, while expected
+sealed verdict styling persists. Some lower fields/buttons remain outside the
+captured viewport; their values/enabled state have separate automated assertions,
+not a claim that every control appears in the screenshot. No page exceptions
+were reported by the owning smoke assertion. These are automated CI browser
+captures plus agent inspection, **not independent human review** or every browser
+engine/full shared-stack suite. Any later documentation-only head still needs
+fresh applicable checks before review. Backend idempotency, manual re-submit
+duplication, postcommit policy, raw fetch upload paths and response-body parsing
+errors remain separate; no SDK retry policy, schema, deployment or Phase 1
+signoff is changed.
+
+Remaining mutation inventory is not a list of automatically approved removals:
+
+| Existing writer | Source-grounded boundary / remaining decision |
+|---|---|
+| `deleteCycle` | Its first parent UPDATE serializes the transactional soft-delete cascade, but finalized runs are not rejected. Decide deletion/retention policy separately from verdict immutability. |
+| `updateTestCase` external-ID rename | Rewrites all matching `cycle_items.snapshot_external_id`, including historical rows, without cycle finalization checks. Decide historical identity versus current-case renaming and verify exports/readback. |
+| `removeProjectMember` | Atomically clears execution assignments across the project, including closed runs, without cycle locks. Administrative cleanup versus sealed metadata needs explicit classification. |
+| REST/MCP bulk execution changes | Existing shared per-item guards protect each write, but a later rejection/concurrent close can leave a committed prefix. Whole-request atomicity and truthful partial-batch responses remain distinct work. |
+| REST/MCP permission and plan boundaries | Current member/scope checks are reusable, not a substitute for full parent-child validation. Legacy cycle URLs and MCP aliases require the same entitlement-policy audit; no bypass is declared runtime-reproduced here. |
+| Historical imports | This slice adds early U+0000 validation and verified native fault/rollback controls after completed run, execution and snapshot writes. Other invalid Unicode, commit-acknowledgement ambiguity and full shared-stack import/permission coverage remain separate; the three staged SQL faults are not universal rollback or concurrency proof. |
+
+The full canonical eight-file package and
+`Tesbo_Existing_Application_Baseline_v1.0.md` are still unavailable in inspected
+refs. The unmerged index/brief is not authority to invent the missing requirements
+or declare Phase 2 ready. No additional QA specification or competing baseline is
+created by this assurance ledger.
+
+Next product work remains conditional on Phase 1 gates and recovery of the canonical
+specifications. Existing Zyra chat/staged drafts, MCP and reporter ingestion are
+reusable implementation, **not** proof of the proposed immutable approval/apply,
+external client execution/evidence loop or unified Copilot contract.
+
+### F.0 Owner decision — conditional Phase 1 exit framework (2026-11-12)
+
+**Decision recorded:** The owner selected a **conditional Phase 1 exit**: resolve verified
+approval-blocking issues, explicitly record lower-risk follow-ups, and then proceed
+under an **approved** Phase 2 roadmap. This approves the **decision framework only**;
+it does not itself certify Phase 1, waive a finding, approve a particular residual
+risk, authorize destructive data cleanup, or approve a Phase 2 specification.
+
+**Finite application and exit gates:**
+
+1. Reconcile the latest `development` commits and relevant PR evidence against
+   the bounded Phase 1 integrity selection below; update superseded F1–F9
+   observations (especially the already merged bulk and dependency fixes) before
+   making a current-risk judgment. A historical finding is not automatically live.
+2. For each remaining finding, document the violated or applicable acceptance
+   contract, reproducibility, evidence, impact, likelihood basis, severity,
+   owner, proposed remedy, and disposition. No unverified assumption becomes a
+   confirmed defect; no missing test becomes a pass.
+3. **Block exit** on a verified unresolved critical/high authorization,
+   cross-project isolation, immutable-finalized-evidence, destructive integrity,
+   or unacceptable unintended-write violation of an approved contract; also on
+   failure of the selected mandatory integration/CI checks. Resolve by reviewed
+   PRs with fresh verification, or obtain an explicit owner decision where the
+   contract itself is genuinely unsettled. Do not silently downgrade severity.
+4. **Defer only with explicit disposition:** moderate/low issues and nonblocking
+   enhancements may move to a prioritized follow-up backlog with accountable
+   owner, impact, conditions for escalation, and review trigger. Deferral is not
+   risk acceptance; acceptance requires separately recorded owner approval.
+5. Require a connected regression across the selected REST/MCP/browser/SDK and
+   PostgreSQL paths, current-head required CI, independent human review, and a
+   dated Phase 1 exit checklist noting unsupported shared-stack/deployment scope.
+6. Recover/reconcile original approved canonical requirements and baseline before
+   authorizing substantive Phase 2 implementation. Missing eight-file specs or
+   baseline must be recorded as missing, **not fabricated**. Proposed roadmap,
+   priorities, requirement links and acceptance criteria require owner approval.
+
+**Next execution order:** reconcile already merged scoped integrity work (including
+#42), refresh F1–F9 against merged code, resolve
+verified blockers, obtain an explicit Phase 1 exit/sign-off decision, then
+approve and implement the first Phase 2 slice via normal reviewed PRs.
+Do not keep Phase 1 open merely because a new moderate improvement is possible.
+
+### F.1 Current conditional-exit reconciliation — through owner-merged #55
+
+**Decision status: `CONDITIONAL_EXIT_NOT_ESTABLISHED`.** This is the finite
+evidence/decision register requested by F.0, not a new specification, risk waiver,
+independent review, or another feature-hardening programme. The historical F
+assessment below remains an as-of-#35 receipt; use this section for current
+dispositions. The owner selected **Phase 1 gate reconciliation** as the next
+bounded task, not another product repair, publication-policy amendment or exit
+approval. No fresh production exploit, live-data inventory or shared-stack UAT
+was run for this reconciliation; existing CI artifacts and selected source owners
+were re-read. No product, schema, workflow, retry or test selection is changed.
+
+**Reconciled source:** `development@80cf4c220e752b2cd58d2ab76fb5e8f07b5a4661`,
+owner-merged #55 at **2026-11-13 16:13:57 UTC / 11:13:57 Jamaica**. Its product
+tree is identical to tested PR head `e51b39443b9825511b8764cc579fac8dc0c29a30`.
+This refresh supersedes #44's through-#43 register, not F.0's owner-selected
+framework or the historical F assessment below. Owner merge is not independent
+security review, a residual-risk disposition or Phase 1/2 sign-off.
+
+#### Verified progress, without combining different test populations
+
+The latest inspected **functional** receipt is
+[#55, head `e51b39443b9825511b8764cc579fac8dc0c29a30`](https://github.com/1alextest/Tesbooboo/pull/55#issuecomment-6856714088).
+It retains the earlier closure, bug-edit, document, REST/MCP and reporter
+contracts alongside the added repository/Plan/Suite journeys. Exact job counts,
+skips, separately dispatched authorization checks, inspected captures and failure
+trails stay in that PR receipt, not an evidence-only follow-up commit. Different
+job populations overlap and must not be summed as unique coverage.
+
+Merged-head `80cf4c2` also completed its triggered workflows successfully. The
+existing [native PostgreSQL/API/concurrency run](https://github.com/1alextest/Tesbooboo/actions/runs/43460624478),
+[core quality run](https://github.com/1alextest/Tesbooboo/actions/runs/43460624331)
+and [production browser run](https://github.com/1alextest/Tesbooboo/actions/runs/43460624116)
+were checked, and the actual embedded browser report was decoded. This is
+artifact review, not a new deployed execution or independent review. Native
+collaborator stubs, unexecuted DB-dependent selections in other jobs, viewport
+limits, external embeddings/tracker connectivity and an owner's actual external
+client remain distinct limitations. Documentation-head checks are a separate
+receipt and cannot retroactively supply deployment or reviewer approval.
+
+| Merged batch | Current accomplishment | What it does not establish |
+|---|---|---|
+| #36 | Whole-selection REST bulk status/assignment transaction, native late-fault rollback and connected UI controls | Universal command deduplication or durable postcommit effects |
+| #37–#38, #40 | Frontend production/development and backend development high/critical dependency repairs, enforcing gates and workflow/toolchain regressions | Zero moderate/low findings, independent provenance review or release approval |
+| #39 | Document/version atomicity, fresh locked policy/readback, per-editor save/restore/navigation ordering | Global cross-tab/user CAS, guaranteed delivery after browser shutdown |
+| #41 | SQL-time testcase suite/owner and suite-parent omission preservation; real UI token → cookie-free MCP discovery/write/refusal/revoke | Deployment or certification of an owner's external client |
+| #42 | Bug null/empty/set versus omission semantics; deliberate UI clears; locked before/after attribution across shared REST/MCP writer | Atomic/durable audit delivery, broader finding classification or immutable correction model |
+| #43 | Owner-selected conditional-exit framework and finite escalation rule | Actual exit, acceptance of a particular residual finding or approval of a Phase 2 slice |
+| #44 | Existing F1–F9/D1–D6/E1–E7 reconciliation through #43 | Signed decisions or authority to keep adding moderate improvements indefinitely |
+| #45 | Review Board distinguishes insufficient/no-data/failed analyses and actual project/filter context | A new approval engine, validated external similarity quality or complete coverage |
+| #46–#47 | Safer existing token defaults; OpenCode setup; bounded read-only connection diagnostics, recovery and cleanup | Project/client consent policy, locked-project parity, deployed external-client acceptance or publication authority |
+| #48 | Same-project Plan/Run/Suite/Case lineage at shared writers and truthful empty-Run presentation | Cleanup of historical inconsistent rows or a version-pinned manifest system |
+| #50, #52–#54 | SQL-time testcase bulk project scope, access-before-parsing, project-isolated Suite subtree deletion/counts, and shared transactional active-Suite validation/deletion ordering | SDK command deduplication, historical cleanup, all hierarchy/cycle races or a new entitlement policy |
+| #55 | Existing repository dialogs/handlers catch refusals, retain input, retire confirmed submissions before refresh, reuse warning/reload and inline Retry, and give truthful subtree/history guidance | Server-side lost-COMMIT resolution, durable audit/effect delivery, shared-stack UAT or human approval |
+| #49, #51 | Eight-source GAE reconciliation retained under `docs/reviews/` as noncanonical review material | Approved raw eight-file replacement, a living baseline, automatic publication or a second Copilot/review system |
+
+#### Current F1–F9 register
+
+`RESOLVED_SCOPED` closes only the named observed defect. `COVERED_SCOPED` retains
+the mandatory contract/regressions, not a universal guarantee. `DECISION_REQUIRED`
+is not acceptance or deferral. `DEFER_PROPOSED` requires a separately recorded
+owner decision before leaving the exit checklist. No production fault frequency
+was measured. Accountable **roles below are proposed; named assignees and dates
+have not been appointed**.
+
+| ID | Applicable contract and present evidence | Impact / likelihood basis | Current disposition and proposed accountable role |
+|---|---|---|---|
+| F1 | Automation seal remains `source === "automation" && closed_at != null`; native closure/retry/evidence races and reporter→DB→MCP→browser checks remain selected. Manual completed runs stay correctable. | High if sealed verdict/evidence changes; covered negative controls pass. Legacy attempt/shard delivery outside those controls remains unverified. | **COVERED_SCOPED**. Backend/SDK maintainer retains tests; no new attempt/shard coordinator authorized. |
+| F2 | Browser automatic mutation replay repaired in #34; unchanged transport controls reran through #55. #55 also removes the submitted bulk dialog/selection after confirmed success and uses existing read-only recovery. `sdk/playwright-reporter/src/client.ts` still retries writes, including evidence POSTs; keyed creates/indexed results have specific protection, not all uploads/unkeyed creates. | Moderate under transient response loss/retry; duplicate submissions/evidence possible. Conditional mechanism, not measured production prevalence. A successful-write/failed-read UI exercise is not a lost mutation-response experiment. | Browser part **RESOLVED_SCOPED**; SDK **DEFER_PROPOSED**, subject to owner disposition. Retain the existing client/reporter contract; no second retry/deduplication system or unapproved transport-policy change. |
+| F3 | `DatabaseService.transaction` cannot roll back a successful COMMIT. Retained native closure-suite tests demonstrate persisted bug/link creation plus explicit-resubmission duplicates after controlled postcommit/ACK faults. `logProjectActivity` still swallows logging failures. #42 fixes snapshots, #54 adds transactional Suite checks and #55 distinguishes confirmed writes from failed follow-up reads; none resolves general postcommit uncertainty/delivery. | Moderate, potentially high for consequential bulk/effect loss: committed data can accompany an error; audit/effect delivery can fail. Native faults occur after actual COMMIT, not a real network cut. #55's controlled post-write GET failure does not establish lost-ACK reconciliation. | **DECISION_REQUIRED**. Product + backend/release owner defines acceptable reconciliation and critical-audit guarantees, then chooses a named repair, bounded follow-up or further evidence. No implicit exactly-once/outbox commitment or acceptance. |
+| F4 | `LegacyService.writeBulkExecutions` now owns one transaction and parent lock for the entire REST selection. Native later-item failures require full rollback; real UI refusal/success controls run in smoke. | Historical committed-prefix defect was reproducible; the original characterization is superseded by #36's rollback oracle. Postcommit delivery still belongs to F3. | **RESOLVED_SCOPED** by #36. Do not schedule the same atomicity repair again or substitute MCP's different contract. Proposed backend/QA owners retain the regression. |
+| F5 | `bulk_record_execution_results` and `bulk_create_testcases` retain explicit indexed per-item outcomes through their shared authorized writers; connected mixed manual/sealed controls pass. | Low residual for the selected contract; an item failure intentionally does not roll back successful siblings. | **COVERED_SCOPED**, intentional semantics, not the F4 defect. Proposed MCP maintainer preserves scope/sealing and truthful outcomes. |
+| F6 | New/changed bug tuples and display joins remain project-scoped; exact existing deleted-local associations may be retained. #48–#54 add scoped Plan/Run lineage, bulk access/SQL scope and shared active-Suite validation/deletion isolation, with native and real REST/MCP/browser controls. These repair their named paths, not historical data. | High if foreign metadata leaks; retained scoped controls pass. Synthetic inconsistent fixtures establish isolation behavior, not prevalence or meaning of invalid live rows. No authorized live inventory/cleanup was performed. | Bug isolation **COVERED_SCOPED**; named #48/#50/#52–#54 repairs **RESOLVED_SCOPED**; historical-data **DECISION_REQUIRED**. Data owner names environment, read-only authority, snapshot and privacy limits before inventory or explicitly dispositions the unknown. Do not duplicate merged repairs or delete/reassociate data. |
+| F7 | `deleteCycle` still soft-deletes transactionally; testcase ID rename still rewrites `cycle_items.snapshot_external_id`; member removal still clears historical execution assignments without a finalized-run exclusion. #52/#55 preserve Suite-deletion history and correct UI guidance, not these administrative policies. | Moderate source-confirmed history effects; not a newly demonstrated unauthorized verdict mutation. Soft deletion/history retention is not physical erasure or a restore feature. Actual retention/correction obligations remain unsettled. | **DECISION_REQUIRED**. Product/data owner chooses historical identity, deletion visibility and assignment-retention policy. No historical rewrite/cleanup, restore system or correction/attempt infrastructure is authorized by this reconciliation. |
+| F8a | After #56 the owner approved exactly eight public Run fields and preservation of the existing token lifecycle. #57 reproduces the whole-row response before replacing it with an explicit projection in `publicCycle`; the existing six-field public execution projection, authenticated Run and page layout are unchanged. | The overbroad response is reproduced on disposable native/HTTP fixtures, not a live-data inventory. Only the approved fields are intentionally published; their user-authored contents still need publication care. Tokens remain reusable after disable/re-enable, not rotated. | **REPAIR_SCOPED_TO_APPROVED_ALLOWLIST** in #57, pending its exact-head verification and human review; not overall F8 closure or independent security classification. Broader revocation/publication acceptance and F8b remain **DECISION_REQUIRED before exit**. |
+| F8b | After reviewing the existing contract, the owner approved MCP-only parity in #58. Real HTTP/migrated PostgreSQL reproduces blocked project-prefixed discovery and a persisted locked-project Suite write through `/api/mcp`. The shared MCP dispatcher now applies the existing plan check to write-scoped tools after authorization; the global guard delegates only the exact MCP endpoint to it. | A reproduced entitlement-contract violation on disposable fixtures, not unauthorized cross-project access or measured production prevalence. Both transports reuse the existing 20-read/30-write registry classification, plan/grace/cache semantics and human archive escape. Legacy REST aliases remain outside this repair. | **REPAIR_SCOPED_TO_APPROVED_MCP_CONTRACT** in #58, pending exact-head verification and human review. Broader REST entitlement parity, residual F8 classification, independent review and exit remain open; no billing/retention/credential policy or moderate-risk acceptance is inferred. |
+| F9 | Merged #55 Linux artifacts/logs still report zero critical/high: backend all-tree **29 moderate/10 low**, production **14 moderate**; frontend all-tree **16 moderate/1 low**, production **7 moderate/1 low**; production E2E/SDK zero reported. Frozen lint remains backend **9 errors/2 warnings**, frontend **13 errors/10 warnings**, zero new errors. | Original critical/high findings repaired by #37–#38/#40. Unchanged lower-severity counts do not show acceptance or zero risk; scanner entries are not distinct exploits. A successful production-audit collection job alone is not a waiver or enforcing vulnerability gate. | Original high/critical entries **RESOLVED_SCOPED**; moderate/low, provenance and lint follow-ups **DEFER_PROPOSED**, not accepted. Dependency/security owner must separately record applicability, named maintainer, review date and escalation trigger; retain existing enforcing gates and raw reports. |
+
+Selected source owners re-read for this reconciliation:
+[`legacy.service.ts`](../Tesbo-Backend-Nest/src/legacy/legacy.service.ts)
+(`publicCycle`, `writeBulkExecutions`, `removeProjectMember`, `deleteCycle`,
+testcase snapshot-ID update, `updateBug`, `logProjectActivity`),
+[`automation-closure.db.spec.ts`](../Tesbo-Backend-Nest/src/automation/automation-closure.db.spec.ts),
+[`database.service.ts`](../Tesbo-Backend-Nest/src/database/database.service.ts),
+[`mcp.tools.ts`](../Tesbo-Backend-Nest/src/mcp/mcp.tools.ts),
+[`mcp.controller.ts`](../Tesbo-Backend-Nest/src/mcp/mcp.controller.ts),
+[`project-write-lock.guard.ts`](../Tesbo-Backend-Nest/src/plan-limits/project-write-lock.guard.ts),
+[`client.ts`](../sdk/playwright-reporter/src/client.ts), the existing repository
+page/helpers and workflow selections. This is not a fresh all-method security
+audit. Existing records, shared writers, history/audit, Zyra review, KB, MCP and
+reporter remain the owners; no parallel governance, Copilot, approval or evidence
+system is created to fill an unsigned gate.
+
+**Authorized D2/F8a increment after #56:** the owner explicitly selected
+**Restrict public fields**, acknowledging the narrower anonymous API payload.
+The approved Run fields are exactly `name`, `status`, `description`,
+`environment`, `buildVersion`, `createdAt`, `startedAt`, `endedAt`. Public Run
+`id`, project/owner/Plan IDs, sharing settings/token and internal automation/
+history metadata are intentionally excluded, even if another client previously
+consumed them. EXO-A-11 now compares all eight values with the authenticated Run
+instead of expecting a public `id`; the authenticated identity check remains.
+No new endpoint, component, sharing system, schema or token-policy change is
+introduced. Existing selected native and reporter/manual-Run browser fixtures
+cover the projection, nullable values, stored-state read-only behavior and
+unavailable links; final exact-head results belong in #57 comments/metadata,
+not an evidence-only commit. This authorization does not approve overall F8,
+entitlement parity, deployed acceptance, risk acceptance or Phase 1 exit.
+
+**Authorized D2/F8b increment after #57:** the owner first selected contract
+review, then explicitly approved **Approve repair** for MCP-only parity. Both
+existing MCP routes must retain discovery and the existing read-scoped tools;
+write-scoped tools must consult the existing `PlanLimitsService` before actor/
+handler work, including partial batches, clones, archive/restore and no-op writes.
+Genuine plan refusal uses the existing HTTP 201 / JSON-RPC `-32003` envelope with
+the read-only explanation; an infrastructure fault is not relabeled as a plan
+denial. Project/membership/token scope precedence, session recovery,
+notifications and authenticated method-not-allowed handling remain intact.
+
+This reuses the full reviewed 50-tool registry, shared writers and existing
+selected native Plan/Run fixture rather than another permission or billing
+system. Refusals preserve tool/business rows and their history, **not all
+metadata**: existing token usage, workspace-pointer self-healing, activity
+tracking, billing notice/audit and expired-override retirement are retained.
+The existing 45-second entitlement cache and canonical invalidation remain
+unchanged; Redis/email test collaborators are not real Redis-expiry or external
+delivery proof. #58's comments/metadata own exact-head execution receipts.
+Legacy REST parity, telemetry redesign, billing-rule changes, deployment and
+overall F8/Phase 1 approval are explicitly excluded.
+
+**Authorized D2/F8b REST increment after #58:** following the selected review of
+all 28 Plan/Run aliases, the owner asked to continue development under the proposed
+bounded contract in #60. It selects 15 implemented mutations, retains 11 GETs and
+leaves the two authenticated schedule mutation stubs at 501 (later implemented —
+see "Recurring Run Scheduling"). Existing resource/
+workspace/membership checks and history-import role permission precede entitlement;
+authorized locked writes return ordinary HTTP 403 `{ error }` before action
+validation, transactions or multipart processing. Infrastructure faults are not
+relabeled as plan refusals. This deliberately makes lock refusal precede malformed
+action bodies and finalized-Run conflicts, not the earlier general body parser.
+
+Only exact boolean `enabled: false` may disable Run sharing while locked. Every
+other value is write-gated; existing token mint/reuse and public projections stay
+unchanged. Reuse `PlanLimitsService`, its rank/grace/admin-expiry/cache behavior,
+the existing native fixture and shared writers; do not gate read-access helpers or
+add a second policy system. Project archive remains the capacity escape; Run
+deletion does not free a project slot. Business/history/file refusal invariants do
+not prohibit existing billing/authentication metadata effects, and REST 403s retain
+their existing non-activity semantics.
+
+The only selected UI repair is error presentation and draft/state recovery on the
+existing Plan list/detail, Run lifecycle and full-page execution surfaces. Browser
+injected refusals establish UI behavior, not native entitlement proof. Native
+HTTP/PostgreSQL execution, persisted snapshots and storage non-invocation own that
+proof. #60 comments/metadata own failing-first and final exact-head receipts, not
+evidence-only commits. Broader aliases, sharing-policy redesign, reporter/MCP
+contracts, telemetry, retention, deployment, independent review and overall F8 or
+Phase 1 exit remain outside this increment and open where already recorded.
+
+#### Finite owner/reviewer action list and stopping rule
+
+| Decision | Required record, owner and proposed review trigger |
+|---|---|
+| D1 — confirm selection | Product/release owner confirms the bounded F scope, mandatory integration checks, supported environment and explicit non-goals. F.0's framework adoption is not an unsigned checklist silently becoming signed. |
+| D2 — F8 publication/entitlement | The exact public Run allowlist/token preservation in #57 and MCP-only read/write/denial/metadata contract in #58 are owner-approved as bounded increments (above). Residual publication/revocation and broader REST entitlement parity still require owner classification and independent review. D2/F8 remains open before exit; neither scoped repair is overall security approval or acceptance of an unresolved high/critical violation. |
+| D3 — uncertainty and historical policy | Product/backend/data owners choose a named fix, explicitly scoped follow-up or bounded further evidence for F3/F6/F7: postcommit/delivery guarantees, historical identity/assignment/deletion policy and invalid-row inventory. For F6, name environment, read-only authority, privacy limits and snapshot first; start with aggregates. No destructive cleanup or invented retention/restore contract. |
+| D4 — proposed follow-ups | Owner separately dispositions F2/F9, appoints named maintainers and a review date. Proposed triggers: confirmed duplicate/effect-loss incident, expanded SDK/runtime contract, new high/critical advisory, relevant dependency upgrade, or before the next release using the affected path. Without names/date/decision these remain open, not accepted backlog items. |
+| D5 — independent review and exit | Name an independent human security/release reviewer, review scope and evidence; disposition their findings and record a dated owner exit decision with remaining supported/unsupported environments. No such signed receipt was provided to this reconciliation; out-of-band review is not presumed absent or complete. Agent source review, CI and owner merge do not satisfy it. |
+| D6 — Phase 2 authority | Supply the matching approved raw eight-file package and single living baseline; reconcile requirement statuses and approve one exact increment with acceptance, exclusions and existing-module owners. Resolve P-07/FR-033 before any automatic publication. Indexed review text and a general request to continue are not an approved amendment or feature scope. |
+
+**Required handoff is finite:** record the decisions above against their existing
+IDs with named accountable people, dates and evidence. D1/D2/D3/D4/D5/D6 are
+**still open** here; no box is checked on the owner's behalf. This document does
+not appoint reviewers, accept a risk, silently defer a finding or amend publication
+authority. If a decision needs more evidence, name its exact question, authorized
+environment and stopping condition rather than launching another open-ended audit.
+
+**No indefinite expansion:** this reconciliation selects no new general hardening
+project. Preserve the current mandatory regressions. Reopen implementation only
+for a verified blocking contract violation, a failed selected required check, or
+an explicitly approved next scope. A new moderate opportunity alone is not a
+reason to extend Phase 1. No residual risk is accepted by this register.
+
+#### E1–E7 checklist refreshed, not signed
+
+| Gate | Current status / remaining signature or evidence |
+|---|---|
+| E1 — finite baseline | **PARTIAL**: framework adopted in #43; D1's exact exit selection/criteria sign-off not recorded here. |
+| E2 — critical integrity | F4, original high/critical F9 and the named #48–#54 lineage/isolation repairs are not scheduled again as unresolved defects. **OPEN** pending F8 contracts/classification and independent adjudication; no blanket whole-app PASS. |
+| E3 — transaction/duplicate outcomes | F4 repaired. **OPEN** for explicit F2/F3 dispositions; successful characterizations do not waive uncertainty. |
+| E4 — connected workflow | **TECHNICAL PASS, SCOPED** at #55 head `e51b394` and identical merged product tree `80cf4c2`: existing REST/MCP/browser/reporter and migrated PostgreSQL selection retained. Not shared-stack/deployed/browser-matrix UAT or every external integration; a documentation-head run remains a separate receipt. |
+| E5 — historical data | Covered projections preserve isolation; live inventory prevalence **UNKNOWN**, authorization/disposition **OPEN** (D3). |
+| E6 — checks and independent review | #55 exact-head receipt and merged-head checks reviewed. **INDEPENDENT_REVIEW_NOT_RECORDED / EXIT_NOT_SIGNED**; owner merges are not reviewer signatures. Current documentation head requires its own applicable checks. |
+| E7 — next-phase authority | **BLOCKED_BY_CANONICAL_SOURCE_AND_DECISIONS**: all eight indexed files were reconciled in #51, but the approved raw package/living baseline and one exact approved Phase 2 increment remain unavailable/unapproved. Automatic publication additionally requires an approved P-07/FR-033 amendment; the existing human-approval contract remains binding. |
+
+#### Canonical-source recovery receipt and minimum unblock
+
+Bounded recovery distinguishes Git imports, indexed content and approved raw
+authority; it does not repeat the superseded claim that only two sources exist:
+
+- Fetched repository refs/history contain two imported working files on
+  `origin/docs/qa-specs-product-direction-20261028@d96f24e`: `00_README.md`
+  (Git blob `9f2b919a3a689779048c0b3aebcfa6b789147080`) and
+  `06_IMPLEMENTATION_AGENT_BRIEF.md`
+  (`48142bb976cb7138878b1d6ae8c8c0ac930f1743`). These remain the two **Git
+  imports on that branch**, not the complete known canonical-source inventory.
+  `development@80cf4c2` has no materialized `docs/qa-orchestration` package.
+- #51's [Section 18 crosswalk](reviews/governed-asset-evolution-reconciliation.md#18-crosswalk-against-recovered-tesbo-eight-spec-package-v1418-2026-10-28)
+  records reading **all eight indexed v1.4.18 files**, preserving their original
+  IDs. That review supersedes the earlier only-two-known-sources premise, but
+  explicitly did not materialize or authorize replacing the raw originals/ZIP.
+  Its proposals remain noncanonical review material, not a ninth spec or baseline.
+- Current configured MCP resource discovery returned no resources/templates;
+  the targeted baseline filename search under the approved workspace parent
+  again found no `Tesbo_Existing_Application_Baseline_v1.0.md`. Earlier release/
+  history recovery receipts did not recover a matching approved package. These
+  bounded checks do not establish absence from private chats, other disks or all
+  possible external sources; an accessible owner handoff can unblock recovery.
+- The README is a partial working text that starts inside a gate table. It
+  references older Project 1.2 attachments, revised 1.4.19 direction and an earlier
+  1.4.17 archive hash; a referenced hash is not a recovered/verified archive.
+  These conflicts cannot be resolved by choosing the newest-looking label.
+- Indexed P-07/FR-033 still requires human approval of the exact revision and
+  separately selected apply. Requested bounded automatic publication is an
+  **unratified amendment** until the owning eight source sections are amended
+  together and approved. Token onboarding, a Write token, Zyra review or owner
+  merge does not substitute for that authority.
+
+**Minimum owner handoff:** attach the original eight matching `00`–`07` files
+(preserving their existing names), or an accessible repository/archive URL plus
+revision and checksum; supply the single named living baseline; confirm which
+revision/source is approved when Project attachments and working exports differ.
+Supply referenced audit receipts/reviewer charters for any assurance claims they
+must substantiate. Do not invent missing IDs/acceptance criteria or create a ninth
+spec, parallel baseline or guessed roadmap to fill the gap.
+
+After recovery, reconcile each approved requirement as implemented (with evidence),
+incomplete, unverified, superseded or explicitly deferred, mapping to existing
+Test Cases/Runs/Bugs/Requirements/KB/Zyra/MCP/reporter owners. Ask the owner to
+approve **one** requirement-linked increment with observable acceptance and
+non-goals. Until that handoff, substantive Phase 2 coding is blocked rather than
+being replaced by indefinite isolated infrastructure work.
+
+### F. Historical bounded Phase 1 exit assessment — 2026-11-12 (as of #35)
+
+**Historical status below is preserved, not the current exit register.** F.0
+records the subsequently adopted framework; F.1 reconciles through #55. In particular,
+the old F4 committed-prefix and F9 critical/high counts are not current findings.
+
+**Outcome: Phase 1 exit is NOT YET ESTABLISHED; Phase 2 is not authorized.** This
+is an assessment of the declared integrity slice, not another specification or a
+claim that every Tesbo module/deployment passed. No risks below have been accepted
+by the owner in this assessment. Earlier sections are dated observations; this
+section reconciles the current source rather than treating old findings as live.
+
+#### Integrated source and finite scope
+
+Base: owner-merged `development@ef7f404fbb606545d276e6a6c16ac16b950c1cc3`.
+PR [#34](https://github.com/1alextest/Tesbooboo/pull/34) was owner-merged on
+2026-11-12 at 15:09:44 UTC after final head `ee4904a` passed **22/22 checks**.
+Its final [smoke](https://github.com/1alextest/Tesbooboo/actions/runs/43244124070/job/131272079339)
+passed 4 tests (3 genuine app/API/MCP/browser + 1 native source/HTTP matrix),
+[PostgreSQL](https://github.com/1alextest/Tesbooboo/actions/runs/43244123806/job/131272076256)
+passed 62/no skips and [backend](https://github.com/1alextest/Tesbooboo/actions/runs/43244123226/job/131272074925)
+passed 1,691/skipped 160 external/DB tests. The review's “open draft / 8 workflows”
+is stale; checks and workflow counts are not interchangeable. No agent merge,
+deployment or SDK publication occurred.
+
+Declared review selection: automation create/result/close/evidence; browser helper;
+bug create/update/link and their postcommit work; REST bulk status/assignment;
+actual MCP handlers in `mcp.tools.ts` (not dispatch alone); transaction boundary;
+history import; run soft-delete, snapshot-ID rename, member cleanup, public share
+projection and project-writability aliases. Existing route/scope/transaction tests
+are reused. Sync workers, all billing/account flows, all modules and unsupported
+client/browser matrices are **outside this execution selection**, not certified.
+
+**Proposed stopping rule:** finish this selection and one connected integration
+run; adjudicate the finite findings below. Expand only for a reproducible high or
+critical authorization/isolation, finalized-evidence or unintended-write violation
+of an applicable agreed contract, or a failed selected mandatory regression. New
+moderate debt/usability discoveries get a named disposition and follow-up, not an
+automatic Phase 1 extension. A conditional risk must state its trigger; an absent
+oracle is missing evidence, not proof of safety or an incident. The owner must
+approve the scope/criteria and may require a narrowly named extra release check.
+
+#### Writer / transport disposition matrix
+
+Severity is impact if triggered; likelihood is qualitative (no production rates
+were measured). “Confirmed conditional” describes controlled behavior, not a
+production incident. Test additions below are characterizations, **not approval
+of the behavior they assert**. No product writer/contract changes in this slice.
+
+| ID / path | Evidence and boundary | Severity / likelihood / impact | Applicable criterion and recommended disposition |
+|---|---|---|---|
+| F1 — automation create/result/close | Existing native concurrency tests and service source: project+external-ID run reuse; explicit retry index has exact-duplicate no-churn and monotonic ordering; run lock serializes results/closure; repeated close reads authoritative counts. Missing external ID and legacy missing attempt index do not gain these guarantees. | High if sealed verdicts change / covered paths guarded; legacy/multi-shard delivery risk remains conditional | Preserve existing seal `source=automation && closed_at!=null`, including incomplete closes. Selected integration extends live reporter evidence, not universal exactly-once or shard-coordinator certification. |
+| F2 — browser helper / SDK transport | #34 proves/repairs one-save automatic browser duplication. SDK `client.ts` still has bounded retries for writes; CI-keyed creates and indexed results have specific backend protection, evidence uploads/local unkeyed creates lack general command deduplication. | Moderate / conditional response loss; duplicate runs/evidence or explicit re-submission | Browser criterion satisfied by #34 and rerun. Do not silently port browser policy to SDK. Owner chooses a later versioned idempotency/shard policy if required; existing non-fatal reporting remains. |
+| F3 — bug create/update/link postcommit and transaction ACK | `createBug` commits bug/links before linked-result work/readback; update/add-link also await postcommit work. ID-allocation lock ensures distinct identifiers, not command uniqueness. New native characterizations cover a second-transaction SQL fault and a simulated lost *successful* COMMIT response; explicit caller resubmission can duplicate bugs while sealed rows remain intact. | Moderate, potentially high in bulk automation / conditional infrastructure fault+resubmit; unclear success and duplicate records | No rollback guarantee after COMMIT. `DatabaseService` rollback attempt cannot undo a successful COMMIT. Owner decision on command identity/reconciliation and uncertainty responses; no new policy here. ACK test is injected after real COMMIT, **not a real network-cut experiment**. |
+| F4 — REST bulk status / assignment | Initial IDs are validated together; loop calls `updateExecution` with per-item transactions. New two-item native SQL-fault controls observe first commit, second rollback, whole call rejected. Existing `resolveBulkExecutions` comment explicitly describes atomic intent; it does not provide a batch transaction. | Moderate / conditional later-item fault or concurrent close; user cannot infer applied prefix | Confirmed conditional native behavior at `526fe9e`, not just source suspicion. Recommend a bounded follow-up preserving REST atomic intent, or explicit owner approval of truthful partial-result UX. **Unaccepted decision**, not silently waived because characterization is green. |
+| F5 — MCP bulk handlers | `bulk_record_execution_results` and `bulk_create_testcases` explicitly isolate items/catch errors and return indexed outcomes. Bulk testcase update validates ownership then writes valid IDs together. Real HTTP integration exercises one writable manual result plus one sealed rejection with indexed success/failure. | Low residual on selected path / per-item partial outcome is intentional; no batch rollback promise | Do not conflate with F4. Retain shared per-item authorization/sealing; a tool-level error alone is not a no-write oracle. |
+| F6 — historical bug associations | Earlier native tests retain stored foreign/deleted tuples, suppress foreign resolved metadata, validate new/changed tuples atomically and preserve historical valid associations. Synthetic legacy rows demonstrate possibility, not production prevalence. | High if foreign metadata leaks / covered projection guarded; historical cleanup need unknown | No authorized live inventory was run. Owner approves read-only inventory and any per-record disposition; preserve associations, original IDs and audit. No destructive migration or title-based reassociation. |
+| F7 — indirect historical metadata / deletion | `deleteCycle` soft-deletes transactionally, without sealed-run refusal; testcase external-ID rename rewrites all snapshot IDs; member removal clears assignments including closed runs. | Moderate / ordinary authorized administration; potential loss of historical discoverability/identity, not demonstrated verdict tampering | Explicit retention/correction/identity policy decision, not automatic corruption blocker. Do not break normal completed-manual/open-automation workflows or delete history to resolve it. |
+| F8 — public share / entitlement aliases | `shareCycle` authorizes; `publicCycle` still returns all run columns; public execution projection is narrow (older broad-execution claim is superseded). `ProjectWriteLockGuard` matches project-prefixed URLs, not cycle URLs or `/api/mcp`; membership/token scope are separate guards. | Potential high if sensitive content is published or a lock is contractually bypassed / exposure/policy dependent | Source-confirmed broad projection/route-matcher limits, **not a freshly reproduced unauthorized exploit or approved entitlement exception**. Owner/security reviewer must classify actual public fields/lock contract before exit; cannot accept a confirmed high isolation breach as moderate debt. |
+
+F9 — production dependency reports: the retained `68f4508` audit artifact reports
+frontend **3 critical / 8 high / 38 moderate / 1 low**, backend **14 moderate**,
+and SDK/e2e production trees zero reported. These count affected dependency entries,
+not distinct exploits. Scanner severity is critical/high; likelihood depends on
+options and input paths and has not been measured. Security disposition is required,
+**not blanket moderate-debt deferral**. Preserve reports and approve any bounded
+dependency follow-up separately; a green collector is not release clearance.
+
+**F9 remediation implementation — 2026-11-12:** a separate compatible dependency
+batch updates Next **16.3.3 → 16.4.6**, Sentry
+**10.73.0 → 10.75.2**, and locked PostHog-transitive DOMPurify **3.4.15 → 3.4.17**
+within PostHog's declared `^3.4.13` range. Next's optional sharp dependency moves
+**0.35.4 → 0.35.5**. React/ReactDOM **19.2.3** and PostHog **1.433.7** remain
+unchanged. The Sentry config import uses its supported `@sentry/nextjs/config`
+entry point rather than the deprecated SDK root export; configuration values and
+telemetry policy are unchanged. No frontend component, proxy/rewrite,
+authentication or evidence policy is replaced; no codemod, React major or
+`npm audit fix --force`.
+Installed version-matched Next guides, peer/engine requirements and applicable
+frontend AGENTS guidance were read. Existing Node 22 CI satisfies the unchanged
+Next Node >=20.9 requirement, and `npm ls` shows a valid, deduplicated peer graph.
+
+Production audit comparison (affected dependency entries, **not distinct exploits**):
+
+| Severity | Baseline retained report | Patched lock, local audit |
+|---|---:|---:|
+| Critical | 3 | **0** |
+| High | 8 | **7** |
+| Moderate | 38 | **39** |
+| Low | 1 | **1** |
+| Total | 50 | **47** |
+
+Next/DOMPurify critical entries and sharp's high entry disappear; Sentry's entry
+changes critical → moderate, explaining the moderate count increase without a new
+advisory family. Remaining high entries are Tiptap core, brace-expansion,
+browserslist, minimatch, ProseMirror View, source-map-js and xlsx. They remain
+visible/unaccepted and require security applicability/disposition; zero critical
+entries is not a clean security certification or Phase 1 release approval.
+
+The existing `frontend-quality` job adds an enforcing
+`npm audit --omit=dev --audit-level=critical` step. The broader artifact collector
+still retains full reports. This **strengthens** CI against future critical
+production advisories; it does not suppress lower findings, reduce frozen lint
+limits, change a test threshold or accept any residual risk. Local locked
+`npm ci --ignore-scripts`, peer checks and the critical-level audit pass. Build,
+typecheck, frozen lint and fresh integrated Linux/backend/SDK/browser evidence are
+recorded in the implementation PR as completed, not inferred from old checks.
+Initial local Windows lint/build commands reached the five-minute process budget;
+the build reported successful production compilation but did not complete its
+TypeScript stage before timeout. Those are **inconclusive**, not passing build/
+lint evidence. The supported config import is used for the next verification;
+unchanged strict CI remains required. `disableLogger` emits an upstream deprecation
+warning; its removal/redesign is not silently mixed into this security patch.
+The audit includes time-sensitive registry metadata; no exploit was executed.
+
+First candidate head `54b2dd5` passed the real integrated app/browser workflow,
+native DB and other checks, but the optional matching ESLint upgrade changed
+React Hooks analysis **7.0.1 → 7.1.1**, exposing 51 diagnostics across unchanged
+pages (effects, purity and memoization). Those observations are not newly
+introduced security-patch behavior or proven incidents, and are not silently
+marked fixed. A mass account/KB/agent/repository UI refactor is outside this
+dependency repair. The candidate therefore removes the unrelated development-
+tooling upgrade: original `eslint-config-next` **16.3.3**, React Hooks **7.0.1**,
+enabled rules, configuration and frozen baseline are retained from `development`.
+No rule disable, baseline increase or vulnerable runtime rollback is used. The
+new critical-production audit gate remains additional enforcement. Fresh CI must
+verify the narrowed patch; the first head's failing lint is not waived as a pass.
+
+F3/F4 tests use real migrated PostgreSQL/production transaction logic and an
+independent reader, with authorization/activity/notification collaborators stubbed
+as disclosed by their owning suite. They are **not** live HTTP fault reproductions,
+independent security review or measurements of fault frequency. Existing genuine
+HTTP/browser authorization controls remain separate. No claim to audit every
+indirect writer, account flow or dependency is made.
+
+#### Connected regression: purpose, reuse and evidence boundaries
+
+Extend `e2e/ci-smoke.spec.ts` using `utils/ci-reporter.ts` and the existing
+`playwright-smoke` job. Build the repository SDK with its lockfile (no install from
+a registry for the reporter under test). The real Playwright child loads
+`sdk/playwright-reporter/dist/index.js`, authenticates using disposable API-created
+project tokens, resolves three existing cases and reports pass/fail/skip plus a
+file-backed log and Playwright's automatic error context. Its deliberate test failure must exit 1 **and** the
+production reporter must acknowledge completed closure with correct local counts.
+No fake HTTP server or direct hook invocation substitutes for this child.
+
+Independent DB readback checks one run, three results, error text and the exact
+two-file evidence set; authenticated download checks the synthetic log's actual
+bytes and attachment disposition. Real REST/MCP rejects a read-token write and late sealed result without
+persisted changes; MCP reads the result, reports a manual/sealed mixed batch
+truthfully and adds a valid bug association without changing sealed state. The
+real frontend reloads that same execution/association. Repeated close must be a
+no-churn authoritative summary. Existing auth/relationship/import, mutation-loss
+and four sealed UI journeys remain selected. Tokens stay in child environment,
+not generated config or attached logs; cleanup soft-deletes synthetic resources
+without deleting their audit/provenance. No shared deployment/data is targeted.
+
+This adds **no new top-level smoke test**: four outer tests remain, with three
+deliberate child test outcomes inside the connected journey. The native owner adds
+four parameterized characterizations. Synthetic log byte readback does not certify
+malware-scan or screenshot/video-storage acceptance. Single-process execution
+does not certify shards, outage behavior or every framework/runtime. Existing SDK
+143-test suite separately covers mocked close failures and production-artifact
+subprocess exit behavior. Windows permission assertions/Node 24 teardown findings
+remain disclosed earlier; Linux CI is required, not local skipped tests as passes.
+
+Initial local checks: SDK production build, E2E/backend typechecks and backend
+frozen lint (9 existing errors, 2 warnings, zero new) passed. Focused local auth/MCP
+selection passed **5 suites / 210 tests**; the unchanged Node 22 native transport
+selection passed one test. Four smoke tests collected with explicit unreachable
+loopback placeholders (collection only). No local PostgreSQL/authenticated app
+execution claimed. These were local results before the implementation-head CI
+below; prior #34 results are inherited evidence, not this head's passes.
+
+Initial assessment CI caught test-harness assumptions without changing production:
+the live reporter needs **read+write**, not write alone, because case resolution
+requires read. Its warning assertion caught that correctly even though the mixed
+child suite closed. Native head `e4fa101` passed 65/66 tests; bulk status failed
+because `ANY(ids)` resolution does not promise input order. The corrected oracle
+records both actual completed UPDATE IDs, requires exactly the requested set,
+then proves the first processed item committed and the second fully rolled back.
+No rollback or no-write assertion is removed. Instrumentation also forwards
+pg-pool's callback query form unchanged, avoiding a test-owned checkout leak; the
+superseded initial native workflow was canceled after that repair, not passed or
+waived. Final results must supersede these test-harness failures explicitly.
+Head `68f4508` passed **66/66 native tests** and **21/22 triggered checks**, but smoke correctly
+failed its initially one-file/original-name assumption: Playwright renames the log
+and adds `error-context.md`. The revised oracle requires exactly those two distinct
+records, validates log size and downloads its exact bytes; it does not relax the
+count to permit arbitrary extras. This is a fixture correction, not an SDK/backend
+repair or evidence of duplicate upload. Later MCP/browser steps were not executed
+after that assertion and are not counted as passing at this head.
+
+Fresh dependency evidence was read from the existing
+[audit artifact job](https://github.com/1alextest/Tesbooboo/actions/runs/43251880689/job/131299565387),
+not inferred from a green icon. The collector intentionally retains `npm audit`
+reports without failing on their findings; it is **not a vulnerability-clearance
+gate**. The frontend lock contains Next 16.3.3, Sentry 10.73.0, DOMPurify 3.4.15,
+Tiptap 3.27.1, ProseMirror View 1.42.0, sharp 0.35.4 and xlsx 0.18.5. Audit lists
+critical entries for Next/Sentry/DOMPurify and high entries including xlsx/editor
+and image-related dependencies. No lock/dependency or audit policy was changed.
+
+Bounded source triage: `ImportTestCasesModal.parseWorkbook` invokes xlsx on
+user-selected CSV/workbook bytes; KB `editorExtensions.ts` loads Tiptap Markdown
+and its editor/paste paths; DOMPurify is pulled through PostHog (`npm ls` verified).
+These are real application dependency paths, **not a reproduced malicious-file,
+paste or DOM exploit**. The inspected app source has no `next/og`/`ImageResponse`,
+`use cache`, `use server`, `next/image`, `dangerouslyAllowSVG`, Sentry `tunnelRoute`
+or cited DOMPurify special-mode configuration matches. Absence of those explicit
+matches is limited negative evidence, not proof that framework-generated or
+dependency-internal paths are unreachable. Before release, security owner confirms
+actual deployed options/paths and safe upgrade/mitigation for applicable advisories
+(e.g. GHSA-vcvr-r3jv-pc5j, GHSA-mchm-gjx6-7h55, GHSA-cg2g-xh64-v4q7 and
+GHSA-4r6h-8v6p-xvw6). Do not downgrade an untriaged critical entry merely to close
+Phase 1, or turn every transitive alert into a new feature requirement.
+
+Implementation head **`526fe9ef20c4a9cd973e241c2d83645a969e1e10` passed 22/22
+triggered checks**. Re-inspected completed logs and retained artifacts:
+
+- [Connected smoke: **4 passed**](https://github.com/1alextest/Tesbooboo/actions/runs/43253126357/job/131304070243)
+  = 3 genuine app/API/MCP/browser tests + 1 native helper-source/HTTP matrix. The
+  mixed child suite intentionally passed one, failed one, skipped one and exited 1;
+  the reporter acknowledged completed closure without ingest warnings. DB/REST/MCP
+  and browser reload assertions all executed. One run/three results, exactly two
+  evidence records, exact authenticated log-byte download, scope/late-write refusal,
+  indexed mixed bulk outcomes, valid association and repeated-close no-churn passed.
+  The inherited auth/import/relationship/mutation-loss/four sealed UI journeys passed.
+- [Migrated PostgreSQL: **4 suites / 66 tests, zero skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43253126947/job/131304072661).
+  F3 proves real bug/link persistence despite the two controlled failures and
+  duplicate records after explicit resubmission, with sealed rows unchanged. F4
+  proves first-processed commit/second rollback for status and assignment. A green
+  characterization does not make those unaccepted outcomes safe or approved.
+- [Backend quality: **1,691 passed / 164 external/DB skips**](https://github.com/1alextest/Tesbooboo/actions/runs/43253126957/job/131304072393).
+  Four new DB characterizations explain the increase from 160 skips; they ran in
+  the native job above, not in this DB-less job. Separate
+  [contracts](https://github.com/1alextest/Tesbooboo/actions/runs/43253126947/job/131304073345)
+  passed 206/skipped 8; [transactional unit selection](https://github.com/1alextest/Tesbooboo/actions/runs/43253126947/job/131304073198)
+  passed 72/skipped 90. No skipped test is relabeled as native persistence proof.
+- [Linux SDK: **143/143**, zero failures](https://github.com/1alextest/Tesbooboo/actions/runs/43253126957/job/131304072455).
+  Frontend typecheck/frozen lint/production build passed. Standalone authorization
+  workflow did not trigger for these paths; local 210-test selection and the
+  separate current-head contract/backend results are disclosed, not a stale gate.
+- [Current implementation-head dependency artifact](https://github.com/1alextest/Tesbooboo/actions/runs/43253126357/job/131304069523)
+  reconfirms the exact F9 counts above. The green collection job is **not** security
+  approval. Findings remain open; no acceptance, suppressions or check weakening.
+
+Inspected all **six** real CI browser captures. The uncertainty warning/draft are
+readable; the reporter execution visibly retains Failed; inherited drawer/full-page
+Passed/Failed styling is intact. Some lower Bug fields/buttons/evidence are outside
+the captured viewport; association values and byte readback have separate automated
+assertions, not a claim that screenshots show them. The owning page-error assertion
+passed. This is agent inspection of CI captures, not independent human security/
+release review, every browser or production verification. Documentation-only final
+reconciliation still requires fresh applicable checks; no final-head PASS is assumed.
+
+#### Non-destructive historical-data decision
+
+1. Obtain owner-approved read-only access to a named environment/schema/build,
+   data-governance limits and consistent snapshot; do not use CI fixture counts
+   as an estimate. Collect aggregate counts first, avoiding bug text/secrets.
+2. Separately inventory active `bug_links` with foreign project parents, missing
+   parents, inconsistent execution→item→run/testcase chains, soft-deleted targets,
+   duplicate tuples, and disagreements with legacy convenience IDs. An authorized
+   historical association to a later-deleted target is not automatically invalid.
+3. Record an access-controlled per-record receipt only where approved; distinguish
+   “unresolved historical”, “confirmed invalid” and “valid preserved historical”.
+   Reconcile reads/exports against authoritative `bug_links`; do not clear stored
+   IDs merely because display projection now hides foreign metadata.
+4. Owner chooses preserve/annotate or evidence-backed audited correction per class,
+   including backup, preview, counts, dry-run, rollback/forward-fix and human review.
+   **No remediation is authorized/run by this assessment.** Production counts,
+   sensitive-field exposure and actual retention obligations remain unknown.
+
+#### Canonical-source and roadmap reconciliation
+
+`origin/docs/qa-specs-product-direction-20261028@d96f24e` contains only
+`docs/qa-orchestration/00_README.md` and `06_IMPLEMENTATION_AGENT_BRIEF.md`;
+they are partial imported working documents (the README begins in a gate table,
+not a complete package header). The six companions (01–05 and
+`07_UI_DESIGN_TASKS.md`), single `Tesbo_Existing_Application_Baseline_v1.0.md`,
+supporting audit receipts and approved matching archive are unavailable. Git
+history search found the two import commits, not the missing originals; configured
+MCP resource discovery returned no resources/templates. No inaccessible provider
+private chats/Project files were searched or recovered.
+
+The working text mentions revision 1.4.19, older Project 1.2 attachments, pinned
+`124f128` code and unresolved replacement/approval. This is **not** sufficient to
+select canonical authority or certify complete FR/AC/QA traceability. Counts in
+that text are planned definitions, not executed tests. Preserve its eight-file
+identity; do not invent companions, copy fragments into `development` as approved,
+create a ninth spec, or reconstruct the missing living baseline from memory.
+
+| Available direction / old claim | Current implementation reconciliation | Status / next dependency |
+|---|---|---|
+| Original ingest/API/evidence/Playwright “unbuilt” plan | Existing automation service, migrations, reporter and execution UI are owners. Plan sections 1–6 are historical; section 7 already records delivery. Header now makes that ordering explicit. | Implemented in source; bounded regression extended, not universal GA certification. |
+| Pinned delivery/authorization/finalized-Bug concerns | PRs #25–#34 repaired named paths; direct/side classification, immutable correction and independent attempt model are not established by those repairs. Manual/open auto-failure intentionally remains. | Partly implemented / broader semantics incomplete or unverified; no full-spec PASS. |
+| Existing Zyra staging/chat, MCP, evidence/KB, review surfaces | Reuse these owners; existing modules do not prove exact-revision human approve→apply, scoped runtime identities or full external execution lifecycle. | Available reuse, proposed orchestration not accepted as delivered. |
+| Session distillation, autonomous exploration, optimization, environments, multimodal, shift-left | Partial working text proposes FR-101–110 and references a separately scoped PR extension that is also unavailable. No implementation authority follows from these headings alone. | Proposed/unverified; recover full sources, charters, targets and acceptance before selecting one increment. |
+| Historical visual “Before” reconstructions and broad public-execution leak claims | Draft itself withdraws reconstructed Before; current public execution projection is narrow. Actual #34 CI screenshots are bounded real captures, not the missing original baseline. | Superseded claims must not become new requirements or reasons to rebuild UI. |
+| Retention, new language SDKs, predictive scoring | No authorization here. Do not infer absence of all implementations without a dedicated source/contract review. | Deferred scope decision, not Phase 1 mandatory feature work. |
+
+**Required handoff:** owner supplies the exact approved eight matching files or
+repository/archive URL+revision+hash, the named living baseline and authority
+confirmation where Project/archive revisions conflict. Request relevant independent
+audit receipts separately. Until then report `BLOCKED_BY_CANONICAL_SOURCE`, not a
+fabricated full roadmap. Local path discovery is not permission to merge that draft.
+
+#### Proposed exit criteria and owner decisions
+
+| Gate | PASS rule (requires owner adoption) | Current assessment |
+|---|---|---|
+| E1 — agreed finite baseline | Owner adopts this scope, acceptance criteria and explicit non-goals | **NOT APPROVED**; current source contracts are evidence, not substitute approval |
+| E2 — critical integrity | No unresolved confirmed high/critical auth/isolation/finalized-verdict or unintended-write violation in the selected paths; negative cases inspect persisted state | Prior fixes evidenced; F8 exposure/entitlement and F9 high/critical advisory applicability/security disposition open, not a blanket PASS |
+| E3 — transaction/duplicate/bulk outcomes | Selected regressions pass; F2–F4 have explicit fix/deferral/policy disposition. Characterization greens cannot waive atomicity/uncertainty | **OPEN DECISIONS**; recommend narrow F4 follow-up before exit unless owner approves an alternative |
+| E4 — connected workflow | Current-head CI runs production reporter→authenticated app→PostgreSQL→MCP→browser with readback/no unintended changes; exact evidence/limits retained | **TECHNICAL PASS at `526fe9e`** within declared limits; documentation-only final head still needs fresh checks, not owner release acceptance |
+| E5 — historical data | No current isolation leak in covered projections; approved read-only inventory/remediation decision distinguishes unknown prevalence from evidence | Synthetic proof only; inventory authorization/disposition **OPEN**, no destructive cleanup |
+| E6 — review and checks | All applicable current-head checks green and required independent human security/release review, with accepted residual risks recorded by owner | **NOT YET REVIEWED**; do not self-certify blind/independent review or release readiness |
+| E7 — next phase authority | Full canonical package/baseline reconciled with implemented/incomplete/unverified/superseded/deferred map and next exact increment approved | **BLOCKED_BY_CANONICAL_SOURCE**; no Phase 2 implementation selected |
+
+**Accepted risks: none recorded.** Proposed defer candidates: moderate dependency/
+lint maintenance (without suppressing checks), unsupported-client portability,
+general command idempotency and retention/correction redesign *only after* owner
+adjudication. High/critical confirmed security/integrity violations cannot be hidden
+in that bucket. Existing moderate audit counts are dated, not a fresh clean scan.
+
+**Recommendation:** review this assessment PR; finish its targeted CI; decide F3/F4
+and classify F8/F9; provide the canonical sources and commission the required human
+review. If a repair is required, authorize a named bounded follow-up rather than
+reopening all modules. Exit is recorded only after adopted criteria pass and the
+owner signs the residual-risk/roadmap decision. No unapproved feature implementation,
+schema migration, historical cleanup, `main` change, deployment or publication.
+
+### G. Atomic bulk execution workflows — implementation batch (2026-11-12)
+
+**Purpose:** deliver both REST bulk status and bulk assignment repairs together,
+with shared writer extraction, concurrent lifecycle/member controls and real UI
+coverage in the same PR. This implements the existing `resolveBulkExecutions`
+atomicity contract; it does not adopt a new partial-result policy or declare
+general exactly-once effects. Base is owner-merged #35,
+`development@e538f2783fc267aba4b887701632b37ba174d0b5`. Its head `f17aea6` passed
+the original 22-check rollup and all eight requested workflow reruns. The owner
+merged at 16:25:55 UTC; extra reruns finished afterward. No agent merge or
+independent review/risk acceptance is inferred from that merge.
+
+#### Implementation and preserved behavior
+
+- `LegacyService.writeBulkExecutions` owns **one transaction and parent Run lock**
+  for the entire REST selection, checking the existing automation seal before any
+  row writes. Resolution now occurs inside that transaction, requiring every
+  execution and active cycle-item to belong to the authorized active run/project.
+  Stable ordered row locks prevent deletion/rebinding between validation and write.
+  Existing empty/malformed/duplicate/missing selection rejection is retained.
+- Non-null bulk assignment verifies/holds the project-membership row with
+  `FOR KEY SHARE` before acquiring execution locks. Actual member removal deletes
+  membership before clearing assignments: it either wins first and the batch is
+  refused, or waits and clears assignments after the complete batch commits.
+- Single-result REST and MCP writes retain their own transaction and authorization
+  entry points. The extracted `writeExecution` is their **same SQL writer**, reused
+  by the batch instead of nesting per-item transactions. Metadata-only edits keep
+  execution provenance; status changes retain existing actor/time conventions;
+  status-only edits preserve assignees; non-failing statuses clear legacy defect
+  fields; notes and valid Bug associations are not discarded. Completed manual
+  runs stay correctable; open automation remains writable; completed/incomplete
+  closed automation rejects the whole batch.
+- Row activity/notifications are published only after the owning COMMIT. Failed/
+  Blocked keep per-case notices; other bulk status changes retain one per-assignee
+  summary and quiet per-case status notices. Batch-only notification labels are
+  excluded from execution audit payloads. Native SQL failure during any selected
+  write rolls back all prior selected writes and emits no success effects.
+- MCP `bulk_record_execution_results` **still uses its explicit indexed per-item
+  contract**, including partial success. It is not silently converted to REST
+  atomic semantics. Public response shapes and existing frontend components,
+  selection/error handling, styling and navigation are unchanged.
+
+Atomic row writes do **not** resolve a lost successful COMMIT acknowledgement,
+explicit duplicate command submission, all postcommit delivery races or guaranteed
+audit/outbox delivery. The existing activity/notification error policy remains;
+those separate F2/F3 decisions and all F8/F9 security dispositions remain open.
+No schema, dependency, entitlement, deletion/retention or approved-roadmap policy
+change is included. No unapproved Phase 2 capability is inferred from draft specs.
+
+#### Regression scope and evidence boundaries
+
+Reuse `automation-closure.db.spec.ts`: strengthen the prior #35 committed-prefix
+characterizations into full-row rollback regressions for Failed, summarized Skipped
+and unassignment. Both production updates execute before a later native SQL error;
+an independent connection must observe **all original rows/timestamps unchanged**,
+no activity/notifications, then a clean successful whole-selection retry.
+Historical #35 evidence already proves the old defect; no extra red-only PR is
+created solely to reproduce it again.
+
+The same native owner adds completed-manual success/unselected/provenance/defect
+controls; empty, duplicate, malformed, unknown, wrong-run and soft-deleted
+execution/item selections; invalid/non-member assignment; actual automation-close
+races in both orders for both actions; and actual project-member removal versus
+bulk assignment. Race barriers observe completed SQL and PostgreSQL lock waiters,
+not just elapsed time. Independent reads verify no visible prefix while a batch
+is pending and authoritative close counts after all writes commit. Authorization,
+activity and notification collaborators are stubbed in these native tests; actual
+HTTP authorization is exercised separately, not mislabeled as native auth proof.
+
+Extend `execution-attribution.spec.ts` with transaction/event ordering controls:
+one transaction and one parent authorization, no calls to the public per-item
+writer loop, no effects when a later writer rejects, and no transaction entry
+after denied parent access. These are **unit orchestration tests**, not persistence
+or rollback proof. Existing single/MCP attribution and context regressions remain.
+
+Extend the existing production-reporter smoke, not a new test stack: a three-case
+manual run exercises REST status selection and real anonymous/read-token/wrong-run
+refusals for both routes; the existing assignment modal submits a forwarded stale/
+foreign selection to the **real backend**, receives 404 and must retain selection,
+assignee choice and an actionable error without changing any rows. After removal
+of that controlled interception, the same two selected cases are assigned, then
+browser reload and independent DB readback verify both assignments and the untouched
+third case. There is no fabricated failure/success response. Two captures cover
+the rejection and successful existing UI. The same connected journey still verifies
+the SDK, evidence bytes, MCP per-item outcomes and sealed associations. REST bulk
+changes against that finalized reporter run must return 409 without any sealed
+state changes. Four outer smoke tests remain; assertions/child outcomes are not
+inflated into separate outer test counts.
+
+Local backend/E2E typechecks and frozen backend lint pass (9 known errors,
+2 warnings, zero new errors). The corrected focused local selection passed
+**8 suites / 191 tests**, covering attribution, MCP, HTTP token guards and existing
+automation closure/retry/evidence/finalization controls. Fresh current-head
+CI is recorded in the PR as it completes; native PostgreSQL/browser execution is
+not claimed locally (Docker/psql were not available in this session). No skipped
+DB test or inherited #35 check is relabeled as this batch's runtime proof. Final
+CI receipts are reconciled in the same PR description/comment rather than creating
+an evidence-only commit/retest loop after every successful implementation head.
+
+**Release boundary:** reviewable implementation progress, not Phase 1 exit. Owner
+criteria/risk decisions, canonical eight-file/baseline recovery and required human
+security/release review remain distinct. The known frontend high/critical audit
+findings are not repaired, suppressed or accepted by this bulk-operation batch.
+
+### H. Rich-content dependency security and connected compatibility batch — 2026-11-12
+
+Base: owner-merged #37, `development@6567733ad269251f3eef539b9298cc7553f9ccdf`
+(17:59:50 UTC). Its corrected head `a62ae64` passed 22/22 checks, including the
+actual critical-production gate, complete build, 77 native DB tests and connected
+browser workflows. Owner merge is not independent review or Phase 1 acceptance.
+
+This follow-up repairs the remaining **seven high frontend production dependency
+entries together**, rather than making one PR per transitive package. TipTap's
+whole installed family is pinned to **3.33.1**, with core/PM peers explicit;
+ProseMirror View moves to **1.42.9**. Sentry stays on v10 (**10.78.0**, not v11),
+which supplies a compatible patched bundler dependency chain. Targeted in-range
+refreshes cover brace-expansion, minimatch, browserslist and source-map-js; no
+forced audit fix, incompatible override or React/Next/lint-toolchain upgrade.
+ESLint **9.39.2**, Next config/plugin **16.3.3**, React Hooks **7.0.1**, enabled
+rules and frozen baseline remain. Six development-only transitive entries also
+receive in-range security fixes: nested brace-expansion/minimatch, flatted,
+js-yaml, picomatch and zod. This removes the four remaining development-only high
+entries without upgrading the lint owners; it is not described as a byte-identical
+complete development dependency tree.
+
+The npm `xlsx` endpoint is unmaintained. Use the maintainer-documented **SheetJS
+0.20.3** distribution at `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`,
+with SHA-512 lock integrity, for both production and E2E fixtures. This is the
+same library/API, not an unofficial fork or a replacement that loses `.xls`.
+Its Apache-2.0 license remains. Clean builds now require access to that official
+CDN; availability and artifact provenance remain review considerations, not
+independently certified by a checksum. No scripts are enabled to install it.
+Existing `.csv`/`.xlsx`/`.xls`, UTF-8/Windows-1251 decoding, sheet/column mapping,
+20MB file limit, step parsing, default suites and custom-field behavior are not
+redesigned; no historical data/schema or backend writer changes are made.
+
+Fresh retained local **production** audit: **0 critical / 0 high / 7 moderate /
+1 low**, versus #37's 0/7/39/1. These are affected dependency entries, not counts
+of reproduced exploits. The all-dependency tree separately reports **0 critical /
+0 high / 15 moderate / 1 low** after the bounded development-transitive fixes.
+The existing enforcing frontend gate is strengthened from **production critical
+to all-dependency high/critical** (`npm audit --audit-level=high`); the full report
+collector remains.
+Moderate/low findings still require their own applicability/disposition; this is
+not a clean-security certificate or a Phase 1 exit decision.
+
+`scripts/frontend-content-security.test.mjs` exercises the frontend's actual
+installed libraries: one matched patched peer family/official SheetJS lock,
+prototype-shaped attributes without inherited event handlers, complete block and
+inline Markdown-tokenizer adversarial inputs in separately bounded child
+processes, and XLSX/BIFF8/CSV Unicode, multiple sheets, quoted newlines, cached
+formulas and prototype-shaped header text. **Before reinstall**, both 128KiB+
+tokenizer regressions hit the eight-second child deadline on installed core
+3.27.1; the merge-attributes control already passed and is not falsely claimed
+as a newly reproduced old-version defect. The deadline is a generous regression
+bound, not a production performance or asymptotic-complexity certification.
+
+`e2e/utils/ci-content-security.ts` extends the existing isolated smoke/bootstrap,
+not a new deployment/test stack. Actual KB and bug-comment editors paste ordinary
+Markdown plus synthetic malicious HTML, save to the real backend, verify stored
+content independently in PostgreSQL and reload. Headers/bold/tables/tasks/links
+and comment Markdown must survive; script/event/javascript-link payloads must not.
+Actual import UI covers BOM-less Unicode CSV, Windows-1251 CSV, XLSX and legacy
+BIFF8 `.xls`, explicit worksheet selection, descriptions/steps, preview without
+persistence, completion/reload and unchanged case counts/unselected worksheets.
+Unsupported files and cancelled previews must leave full stored rows unchanged.
+The original four outer smoke tests and all prior assertions remain; the
+integrated test's budget grows to three minutes for the additional real journeys,
+not retries or waived failures. Three captures document the new UI states.
+
+Inspection of the first fully green head's KB capture exposed a real no-op
+autosave: `RichTextEditor` called `setEditable(editable)` on mount, and TipTap's
+default `emitUpdate=true` made the document look dirty and schedule a save even
+without a content edit. Mode changes now explicitly suppress that content event;
+the page initializes its save payload from the loaded document instead, retaining
+title-only/explicit saves and the existing Blank-document title+body validation.
+Actual typing/paste/manual-save updates remain available. The connected reload
+regression checks Saved state, no PATCH during reload or beyond the actual
+1200ms debounce, unchanged stored content/**updated_at**, and unchanged version
+rows. An eighth direct-library case checks the installed API's event contract,
+not a mocked persistence claim. A subsequent explicit save under the existing
+Blank-document rule must still succeed without changing the loaded body. This
+fixes observed unintended-write scheduling
+in the selected workflow, not a new retention/approval/versioning policy.
+
+Local/CI results and final receipts are reconciled in the implementation PR as
+they complete, without a documentation-only follow-up commit. No local native
+PostgreSQL/app execution, independent human security review, all-browser/deployed
+verification, risk acceptance, merge, publication or Phase 2 authorization is
+implied. Canonical companion specifications/baseline and prior F2/F3/F6–F8 owner
+decisions remain separate; this bounded dependency batch does not invent them.
+
+### I. Knowledge-document save/restore integrity batch — 2026-11-12
+
+Base: owner-merged #38, `development@81691dc8f45c22b57c5d6130361f5bde361c0da6`
+(19:34:53 UTC). Its final implementation head `6646324` passed 22/22 checks;
+the merge does not imply independent security review, risk acceptance or Phase 1
+exit. This batch addresses confirmed defects in the existing document workflow,
+not functionality inferred from the still-unavailable canonical Phase 2 baseline.
+
+- The existing per-document advisory lock now covers the fresh locked document,
+  snapshot allocation **or coalesced diff update**, and the live document UPDATE
+  in one transaction. Activity, embeddings and notices remain postcommit. The
+  15-minute coalescing window and V94 version-number uniqueness constraint remain;
+  no migration, historical renumbering, record deletion or association rewrite.
+- Recheck author/mutation access, read-only and managed-memory body rules against
+  the locked document. Restore now enforces the existing provider-mirror read-only
+  rule too. JSON-only changes count as body edits, JSONB object-key reordering does
+  not, and stored JSON `false` survives save/snapshot/restore. A changed generic
+  approved AI-memory body loses approval on restore just as it already does on
+  ordinary editing; an explicit no-op restore keeps approval and adds no snapshot.
+  Changed restored content also requests an embedding refresh after commit.
+- The mounted document's queue serializes submitted save revisions and confirmed
+  restores, collapses duplicate in-flight saves of the same revision and blocks
+  duplicate restores synchronously. A confirmed restore cancels only the unsent
+  debounce; already-submitted edits drain first. A prior failed/uncertain write
+  blocks commands requested before that failure instead of automatically sending
+  them afterward. Genuinely new edits/explicit actions can proceed; no mutation
+  retry, global CAS, command uniqueness or approval-policy redesign is introduced.
+- Responses update the editor only for the current writer/revision. Restore locks
+  editing while pending and replaces content without emitting an autosave event.
+  Client-side navigation flushes a captured valid pending draft and closes/drains
+  already-requested work against its **original document** without updating the
+  destination page. Late loads are ignored. This is not guaranteed delivery after
+  a full browser/tab shutdown, nor cross-tab/cross-user stale-write protection.
+
+`scripts/document-write-queue.test.mjs` has 11 production-source queue cases;
+together with the unchanged eight library regressions, **19/19 pass locally**.
+`knowledge-document-writes.db.spec.ts` adds **24 native PostgreSQL cases** covering
+completed UPDATE + native division-by-zero rollback for snapshots/coalesced diffs/
+restores, commit visibility/effect ordering, four writer-race combinations, fresh
+read-only/deleted/author/managed-memory policy, foreign versions, JSON/approval and
+snapshot-window behavior. These use the real service, migrated SQL and independent
+connections, but stub parent project authorization and postcommit collaborators;
+they are not HTTP authorization proof. Local typechecking is not DB execution.
+
+`e2e/utils/ci-document-writes.ts` reuses the existing isolated smoke/bootstrap and
+real history/editor controls. A fifth outer smoke test covers held pre-delivery
+PATCH, delayed committed ACK with newer edits, duplicate Save/Restore, dropped
+successful save ACK blocking a queued restore, explicit recovery, a real read-only
+HTTP refusal, no restore-triggered autosave, pending/queued client-navigation
+draining and stale-load isolation. Only its final unsent-debounce/Cancel boundary
+uses controlled browser timers; all HTTP/backend/DB persistence remains real.
+Independent fixture steps aggregate failures but still fail the test. Synthetic
+records and immutable audit provenance remain until disposable database teardown.
+Current-head CI receipts and inspected captures belong in the implementation PR,
+not repeated documentation-only commits. Native DB/authenticated app execution is
+unavailable locally; no skipped DB case is counted as a pass.
+
+Fresh backend audit (unchanged dependencies): production **0 critical / 0 high /
+14 moderate**; all dependencies **1 critical / 5 high / 30 moderate / 12 low**.
+The serious entries are development-only `handlebars` (critical), `browserslist`,
+`form-data`, `js-yaml`, `picomatch` and `tmp` (high). Some suggested resolutions
+require a Nest CLI major upgrade; no forced fix, lint-owner/baseline change,
+suppression or risk acceptance is included. These findings remain open follow-up,
+separate from #38's repaired frontend high/critical tree. Existing postcommit
+delivery/lost-COMMIT-ACK limitations, F2/F3/F6–F8 owner dispositions, canonical
+specification recovery and independent human release review remain open. No agent
+merge, deployment, SDK publication or Phase 1/2 authorization is implied.
+
+### J. Backend development-dependency security and toolchain compatibility — 2026-11-12
+
+Base: owner-merged #39, `development@60558ee3d6002aa7b32562149182cfa549bc719d`
+(20:35:11 UTC). Its implementation head `4914695` passed 22/22 checks,
+101 native DB tests (24 new document cases), 1,697 backend passes, 143 SDK
+passes and five outer browser smoke tests. All 18 captures were inspected;
+the final receipt is in #39, not a documentation-only implementation commit.
+Owner merge still does not imply independent security review or Phase 1 exit.
+
+This bounded follow-up repairs the **six previously disclosed backend development
+critical/high dependency entries together** while keeping the approved runtime,
+compiler, test, mutation and lint owners installed at their existing versions.
+In-range lock refreshes cover Handlebars **4.7.10**, Browserslist **4.29.5**
+(including its same-major browser-data/cache helper chain), Form Data **4.0.6**,
+and both YAML lines (**3.15.2 / 4.3.2**). Three version-qualified overrides
+replace only the affected pinned transitive versions: Inquirer **8.2.6 → 8.2.7**,
+Inquirer **9.2.15 → 9.3.8**, and Picomatch **4.0.1 → 4.0.4**. The Inquirer
+maintenance releases move to the maintainer's `@inquirer/external-editor` and
+remove the legacy editor's vulnerable `tmp` 0.0.x chain; `tmp` is not forcibly
+overridden across incompatible pre-1.0 API ranges. Existing 2.x Picomatch
+consumers retain patched **2.3.2** rather than being forced onto 4.x.
+
+Nest runtime **10.4.22**, CLI **10.4.9**, schematics **10.2.3**, Devkit
+**17.3.11**, TypeScript **5.9.3**, Jest **29.7.0**, ts-jest **29.4.11**, Stryker
+**10.1.1**, ESLint **9.39.4** and TypeScript ESLint **8.59.4** remain unchanged.
+No force/legacy-peer-deps installation, unsupported package substitution,
+lint-rule/baseline expansion or runtime/deployment/schema/product-policy change.
+The before/after lock comparison separately verifies all **444 production lock
+entries** (including dependency metadata/integrity) and both direct dependency
+declarations are unchanged; no development fix is presented as a repaired
+backend production vulnerability. Scanner recommendations for a Nest CLI 12 major
+are not followed merely because they are the scanner's default suggestion.
+
+`scripts/backend-toolchain-security.test.mjs` exercises the actual installed
+dependencies and the affected owners' resolved copies. **Before reinstall**, all
+eight selected security regressions fail against the old installed libraries:
+the harmless AST sentinel executes, Function is exposed through constructor
+lookup, multipart CRLF becomes a header, hostile browser stats crash, old query
+results never evict, Devkit's extglob child exceeds its eight-second bound, and
+both YAML lines ignore the configured empty-merge-work budget. These are local
+library reproductions, **not proof of exploitable remote application endpoints**.
+The tests use no shell/exfiltration payload. YAML/extglob/cache checks run in
+bounded child processes, with ordinary matching/alias/Unicode controls retained.
+
+The same suite verifies locked owner versions, patched dependency lines and
+unchanged 2.x consumers; performs actual Nest dry-run generation without writes;
+generates a service in its own disposable directory, compiles and executes it
+with **both TypeScript and webpack**; and checks both maintained Inquirer editor
+paths' Unicode temporary-file creation/cleanup. Only self-created scratch paths
+are removed. Full backend build/Jest, native DB, mutation and connected HTTP/
+browser workflows remain independently required, not replaced by these probes.
+CI adds an enforcing **all-dependency high/critical** backend audit gate, matching
+the frontend's existing gate, without weakening the full report collector.
+
+Exact current-head audit/test/build receipts are reconciled in the implementation
+PR after CI and artifact inspection. Fresh local all-dependency audit reports
+**0 critical / 0 high / 29 moderate / 10 low**, versus the retained pre-change
+**1 / 5 / 30 / 12**; production remains **0 / 0 / 14 / 0**. Moderate/low findings remain open and are
+not accepted by a green high/critical gate. Canonical companion specification and
+baseline recovery, F2/F3/F6–F8 owner decisions, independent human security/release
+review and Phase 1 exit remain separate. No agent merge, deployment, SDK
+publication, risk acceptance or unapproved Phase 2 capability is included.
+
+### K. Repository partial-edit integrity and connected MCP onboarding (2026-11-12)
+
+**Confirmed defect and scope.** Drawer Archive/Unarchive sends status only, but the
+shared testcase writer previously cleared omitted suite/owner fields. MCP copied
+those values from an earlier read; suite rename had the analogous parent replay.
+Those compensations could overwrite a legitimate concurrent move/reassignment.
+This batch repairs existing edit contracts across REST, MCP and the existing UI;
+it adds no Phase 2 capability or new global concurrency/assignment policy.
+
+`updateTestCaseWithClient` and `updateSuite` now bind explicit presence flags and
+use SQL `CASE` to retain omitted relationships at the actual row write. Explicit
+IDs still move/reassign and explicit null still clears/unparents. MCP archive,
+restore, title/requirement edits and clone relocation send only intended fields;
+suite rename no longer reads/resends the previous parent. Existing authorization,
+external-ID lock ordering, testcase snapshot trigger, custom-field/tag transaction
+boundaries and postcommit effects remain in place. The ordinary full edit form
+remains a full edit, not a new compare-and-swap protocol.
+
+**Verification layers (not interchangeable).** The MCP adapter contract suite
+passes 152 local cases. `repository-partial-edits.db.spec.ts` adds native migrated
+PostgreSQL omission/null/set controls, real blocking-row races through service and
+MCP registry, and actual late SQL/collaborator rollback with complete trigger
+history checks. Its access/caches/custom-field/tag/effect collaborators are
+explicit stubs; it is not HTTP authorization or embedding-provider proof.
+The CI smoke adds genuine browser drawer archive/unarchive/reload, stale rename
+dialog plus concurrent authenticated REST move, and UI-created read-write/read-only
+tokens used from a cookie-free HTTP context for MCP initialize, all-50 discovery,
+attributed partial writes, scope refusal and UI revoke. Independent DB reads
+check history, untouched controls and existing manual run/snapshot/execution rows.
+Live testcase embedding bookkeeping also fires the existing snapshot trigger:
+browser assertions retain every raw history row/prefix, require exact authored
+transitions and allow extra snapshots only when adjacent states differ solely in
+embedding status/hash and update time (never suite/owner/content/attribution).
+Captures clear/mask secrets; synthetic record/audit provenance remains until the
+disposable database teardown.
+
+Native DB and connected browser execution require the isolated CI services and
+are not claimed merely because the suites compile or skip locally. Exact-head
+receipts and capture inspection belong in the implementation PR, not a follow-up
+documentation-only CI cycle. The MCP inventory above corrects stale "8 tools/no
+token UI" assertions; this is not a claim that 50 tools were newly built here.
+No deployment/external-client connection, SDK publication, agent merge, human
+review, risk acceptance or Phase 1 exit is implied. Canonical specifications and
+baseline, owner F2/F3/F6–F8 dispositions and remaining moderate/low dependency
+findings remain open.
+
+### L. Bug-edit metadata integrity across REST, MCP and the existing UI (2026-11-12)
+
+Base: owner-merged #41, `development@dc4f552f931469f88e9e935d310d04a28333934a`
+(22:14:18 UTC). That head passed 23/23 checks, 126 native DB tests, 1,697 backend
+passes, 143 Linux SDK passes and six outer browser smoke tests; its 24 captures
+were inspected. Those are #41 receipts, not results for this batch.
+
+**Existing-workflow repair.** Bug updates now distinguish omission, null/empty and
+explicit text for description, external URL/provider/key and BetterBugs URL at
+the SQL write. Omitted columns retain their live values; null/empty clears only
+its named field. To unlink a whole external association, explicitly clear all
+three external fields. No automatic relationship redesign or new provider policy
+is introduced. The MCP `update_bug` schema advertises the same nullable fields;
+the tool inventory remains 50.
+
+The existing edit form tracks deliberate tracking/evidence edits. Untouched or
+disconnected tracking controls omit those fields; explicit destination/evidence
+mode changes send the required clears. Existing comments, files, links, identity,
+assignment and normal manual-run behavior are preserved. Other authoring controls
+retain their existing full-edit semantics: this is not global compare-and-swap.
+Null descriptions initialize as blank text instead of an uncontrolled textarea.
+
+Before/after bug snapshots are read through the transaction client under the
+existing bug lock, after the established target locks. The returned value and
+postcommit activity/notification inputs therefore describe this writer's own
+transition, not an earlier snapshot or a later committed writer. **Activity is
+still best-effort and postcommit**; this repair does not make audit delivery
+atomic/durable or remove transaction-acknowledgement uncertainty.
+
+**Verification layers.** Two MCP adapter cases cover null/empty forwarding without
+stale reads. The 24 new native PostgreSQL cases cover five-field null/empty/set
+semantics, omission/no-op, service/registry blocking-row races, late native SQL
+faults after metadata/link changes, pending-write invisibility, own-result
+attribution and invalid-edit refusal. Access and notification collaborators are
+explicitly stubbed there; bug/link/comment/file/audit SQL is real. Those tests
+are not HTTP authorization proof.
+
+The connected smoke adds stale/disconnected controls, deliberate clears/mode
+changes with real uploaded evidence/comments/manual-run links, a committed clear
+with its browser acknowledgement aborted (one attempt, unconfirmed outcome),
+session-authenticated REST and cookie-free MCP writes, plus anonymous/read-only
+and unscoped write-token refusals. The legacy unprefixed bug REST route remains
+session-only; no token boundary is expanded. Independent DB reads
+check complete unchanged associations, immutable audit prefixes and an unselected
+control. A synthetic status-only Jira connection exposes the existing controls;
+it does **not** prove OAuth, search, sync or real provider connectivity. Tokens
+are revoked and dummy credentials cleared; record/audit provenance remains until
+isolated DB teardown.
+
+Native/browser execution requires isolated CI, not just local compilation or
+skips. Exact-head results and inspected captures belong in the implementation
+PR. No SDK publication, deployment, agent merge, independent human review, risk
+acceptance or Phase 1/2 exit is implied. Canonical specification/baseline recovery,
+owner F2/F3/F6–F8 dispositions and disclosed moderate/low findings remain open.
+
+### M. Review Board and API/MCP onboarding UI accuracy (2026-11-12, pending review)
+
+Two narrowly scoped presentation changes preserve existing routes, roles, token issuance,
+MCP contracts and Playwright reporting; neither is a new agent or repository subsystem.
+
+- Review Board (PR #45): a completed analysis that checks zero or one eligible test
+  case cannot establish pairwise distinctness. Empty findings distinguish zero,
+  one, unavailable analysis coverage, and two-or-more compared cases; category
+  filter emptiness retains its existing behavior. The UI uses the server's existing
+  analyzed-count field, rather than fabricating an eligible count.
+- API/MCP settings (PR #46): new tokens default to Read only; instructions explain
+  that reporters and write-capable agents need both scopes as appropriate. The
+  existing server enforces per-tool scopes/project access; changing a checkbox
+  default does not grant or revoke permissions on previously issued tokens.
+- The one-time token remains copyable in its reveal dialog but is removed from
+  component state on dismissal, never inserted into the persistent token-list
+  state, and not embedded in configuration examples. Existing token values cannot
+  be retrieved after creation. Config examples use placeholders or OpenCode's
+  environment-variable substitution.
+- OpenCode's documented remote MCP V2 configuration extends the existing
+  Claude/generic onboarding tab set (`mcp.servers`, remote type, `oauth: false`,
+  environment-substituted bearer header). Official references:
+  https://opencode.ai/docs/mcp-servers and https://opencode.ai/docs/config.
+  This is documentation-verified syntax, not a live external-client certification.
+- The manual connection diagnostic uses only JSON-RPC `tools/list` and the
+  read-only `list_projects` query on the configured project-scoped URL. Success
+  requires a matching returned project ID and a successful Read-scoped query.
+  Discovery alone advertises all 50 tools regardless of token scopes and cannot
+  certify writes. No write permission or reporter delivery is tested. The
+  submitted token is cleared on either outcome; requests omit cookies, refuse
+  redirects and share a 10-second deadline. Unmount/project changes cancel the
+  check. HTTP, JSON-RPC, malformed-response and network failures fail closed
+  without displaying raw remote error text. Token last-used bookkeeping can
+  update; authored project records are not intentionally mutated.
+- `API_BASE` is the configured `NEXT_PUBLIC_API_URL` (or local fallback).
+  App and API hosts can coincide behind a reverse proxy, so the UI no longer
+  asserts they must differ. The project breadcrumb is derived from the
+  route-bound ProjectDataProvider, while the sidebar can display a workspace
+  selector; the DMIS/Nesberry screenshot alone is not proof of cross-project
+  leakage. No speculative routing mutation was made.
+
+Implementation owners are the existing ReviewBoard component/review-board API
+and worker (#45), token settings page/API token service/MCP controller and tool
+registry (#46); tests extend `ci-review-board-ui.ts`, the existing
+`ci-repository-partial-edits.ts` token journey, and the frontend Node regression
+step. No new test framework or integration subsystem is introduced. Existing
+reporter configuration and server scope defaults/contracts are unchanged; only
+new tokens created in this UI require deliberate Write opt-in. Pending creation
+cannot be dismissed by Escape/backdrop before its one-time reveal.
+
+The PRs must independently pass latest-head CI and review before merging.
+Browser tests cover isolated genuine issuance, read/write use, denial/revocation,
+diagnostic/config/credential clearing and unchanged domain records. Controlled
+malformed/network fixtures and unit timeout/cancellation checks are not real
+provider outages. Deployed CORS/routing and actual OpenCode/reporter-client
+compatibility still need authorized environment verification. No credential,
+deployment, schema, authorization policy or Phase 2 approval is introduced.
+
+### N. Plan/Run project-lineage repair and next-work reconciliation (2026-11-13, pending verification)
+
+The owner requested continuation across the documented work, not a selection of
+only one strategic area. Re-read the historical inventory, F.0/F.1 gates and the
+available working `qa-orchestration` README/agent brief before selecting this
+increment. Historical claims are not a current backlog: estimated-duration
+persistence, API-token UI, REST bearer scopes, bug-link behavior and other named
+repairs already exist. Do not rebuild them from the older inventory.
+
+**Confirmed current owner/path:** `LegacyService.addPlanItem` checked access to
+the Plan but inserted unchecked Suite/Test Case IDs. `createCycle` (all three
+REST create aliases and both MCP creation tools) and `updateCycle` also accepted
+unchecked Plan IDs. Foreign keys establish existence, not common project
+ownership. Five new focused service regressions failed before repair because
+the invalid commands resolved instead of rejecting. That is service-level
+failing-first evidence, not a reproduced production exploit.
+
+**Bounded repair:** extend these existing writers with project-scoped active
+reference checks and row locks held through their transaction. Reject invalid,
+missing, foreign or deleted references before inserting/updating. Check both
+Suite and Test Case when supplied; retain the existing both-local form and
+explicit `clearPlan` precedence. Omission remains preservation, and ordinary
+unassociated Run creation remains supported. No schema or new Plan/Run engine.
+
+Historical invalid records are not deleted or reassociated. Existing Plan item
+readers hide foreign display metadata while retaining original association IDs;
+local since-deleted Suite names retain their explicit historical marker. Run
+lists/progress/summary joins and MCP Plan enrichment require matching project
+identity, even when an issuer can access both projects. This is not a live-data
+inventory or a claim that every historical relationship has been corrected.
+
+**Test owners:** `plan-project-lineage.spec.ts` and existing `mcp.service.spec.ts`
+exercise actual service/adapter behavior. `plan-project-lineage.db.spec.ts`
+extends the existing migrated-PostgreSQL CI job for no-write refusals, valid and
+historical compatibility, and concurrent soft-delete controls. The existing
+isolated smoke gains `ci-plan-project-lineage.ts`: genuine session REST aliases,
+cookie-free bearer MCP paths, persisted state comparisons, and the unchanged
+Plan-page local Run-link/reload workflow. Access is explicitly stubbed only in
+the native relational unit fixture, not in the connected smoke. Local native
+execution is unavailable; exact-head executed results/captures belong in the PR.
+
+**Remaining product sequence, not blanket completion:** the working brief orders
+principal/capability/protected-writer boundaries, shared staged review/apply,
+external task/report/evidence exchange, then existing UI/client integration and
+the gated optimization/environment/multimodal/PR directions. This repair maps to
+the described existing Plan/Run identity family (FR-085/090 references); it does
+not certify those full missing matrices or authorize invented contracts. The
+available branch still contains only `00_README.md` and
+`06_IMPLEMENTATION_AGENT_BRIEF.md`. Six matching specifications (`01`–`05`,
+`07`) and `Tesbo_Existing_Application_Baseline_v1.0.md` remain unavailable.
+F.1/D6's canonical-source/one-exact-increment approval gate remains applicable
+to new orchestration capabilities. No replacement spec/baseline, destructive
+cleanup, new entitlement policy, agent merge, deployment or release sign-off.
+
+Exact-head artifact inspection of the first lineage implementation exposed an
+additional existing Plan-page accuracy defect: the page used zero execution
+rows as proof that no Runs were associated, while displaying two actual Runs
+beneath that message. Keep the existing section/layout; select its guidance by
+the actual associated Run count, distinguishing no Runs from Runs with no
+execution data. Extend the genuine browser test for both cases and repeat the
+final-head verification. This is an observed same-build UI contradiction, not
+a screenshot reconstruction or a new workflow feature.
+
+### O. Testcase bulk target isolation (2026-11-13, pending verification)
+
+Owner-merged #48 (`4e2de3e`) is the base for this independently justified existing
+writer repair. Its [final-head receipt](https://github.com/1alextest/Tesbooboo/pull/48#issuecomment-6841978564)
+remains separate from this increment's verification. Newly available PR #49's GAE
+living draft explicitly forbids implementation before its owner decisions and
+review gates; it is not the recovered approved orchestration package or authority
+to introduce a revision/publishing/Copilot engine.
+
+**Confirmed mechanism:** REST bulk update/delete authorize the URL project, then
+the shared `bulkUpdateTestCases` / `bulkDeleteTestCases` SQL matched caller-supplied
+testcase IDs without a project predicate. MCP already partitions its IDs before
+calling the shared update writer; that adapter protection did not protect REST.
+Two failing-first actual-service tests selected a foreign row in a mixed selection
+on the old source. Their SQL-selection fixture is not native PostgreSQL or a live
+exploit; the real migrated-DB and genuine-session controls are separately required.
+Potential impact is unauthorized cross-project metadata changes or soft-deletion,
+so this is not an optional generic hardening opportunity or a new Phase 2 feature.
+
+**Bounded contract:** add the authorized project to the actual UPDATE predicate.
+Keep the existing single-statement eligible-row mutation, void REST responses,
+empty-array no-op, missing/deleted-ID filtering, field omission/blank behavior,
+and bulk `suiteId: "none"` sentinel. Foreign IDs now behave like missing IDs; a
+mixed selection may affect only its project-owned active rows. This is not a new
+whole-input validation/rejection policy. MCP's existing per-item outcomes remain
+unchanged. Activity `testcaseIds` comes from `RETURNING id`, so UI counts describe
+actual affected rows (deduplicated by SQL); `requestedCount` separately records
+input size without inserting foreign target IDs into the affected-ID list.
+Existing audit/history rows are not rewritten. Best-effort postcommit activity
+delivery remains F3's separately unaccepted uncertainty, not a new durability claim.
+
+**Existing owners/tests:** `legacy.service.ts` and the two legacy bulk controllers;
+MCP registry adapters remain unchanged. Extend `repository-partial-edits.db.spec.ts`
+(already selected by native DB CI) for mixed/foreign/unknown/deleted/empty input,
+duplicate IDs, exact untouched rows/history, actual activity IDs and PostgreSQL
+statement-level rollback after a late trigger fault. Native access/cache/activity
+collaborators are explicitly stubbed. Extend the existing isolated smoke with a
+tenth journey in `ci-testcase-bulk-scope.ts`: two genuinely separate tenant sessions,
+cookie-free Read/Write bearers, membership/scope refusals, REST/MCP mixed input,
+the existing bulk update/delete modal, controlled refusal/recovery and persisted
+reload. Fixture records and immutable provenance remain until disposable CI
+teardown; synthetic tokens are explicitly revoked.
+
+This scope does not validate Suite/owner association inputs, change sharing or
+entitlement policies, repair historical foreign associations, or certify all
+repository mutations. Source inspection also found Suite-association/deletion
+predicates needing their own bounded reproduction and disposition; they are not
+silently marked repaired by this target-ID fix. No shared-data mutation, deployment,
+agent merge, SDK publication, new orchestration authority or Phase 1 exit.
+Exact-head CI/results and inspected browser captures belong in the implementation
+PR, not an evidence-only commit. Local compilation/unit passes alone are unfinished
+verification; malformed-UUID driver behavior is characterized, not newly redesigned.
+
+### P. Suite subtree deletion and count isolation (2026-11-13, pending verification)
+
+Continue O's explicitly recorded Suite candidate from owner-merged #50, base
+`development@081462e`. The bounded reproducer confirmed both `deleteSuite` modes
+selected a foreign testcase when its `suite_id` referenced the local subtree.
+Two committed failing-first actual-service tests reproduce that selection with
+an explicit SQL-selection fixture, not native SQL or a production-data exploit.
+`requireSuiteAccess` protects the Suite, while the recursive walk already protects
+Suite children by project; neither established ownership of every referencing
+testcase. This is a destructive cross-project write boundary, not new governance.
+
+Extend the existing transaction's testcase UPDATE predicates with the authorized
+project. Preserve `moveToDefault` unassignment and `deleteTestcases` soft-deletion
+for the entire valid local subtree, existing actor/history conventions, parent
+advisory lock and postcommit cache invalidation. Foreign testcase/Suite rows and
+raw invalid associations remain unchanged rather than deleted/reassigned. No
+claim that historical invalid associations are valid or globally inventoried.
+
+Match the existing list's direct/recursive testcase joins and lightweight Zyra
+Suite-summary join by project too. These counts must not include foreign rows
+merely because an invalid Suite reference exists. The cache and UI are reused,
+not replaced. This does not validate new Suite/owner references or redesign tree
+concurrency, archived-case semantics, sharing, entitlement or retention policy.
+
+Test owners: `suite-delete-project-scope.spec.ts`, seven native migrated-PostgreSQL
+cases in `suite-project-isolation.db.spec.ts`, and the existing two-tenant smoke
+extended in `ci-suite-delete-scope.ts`. Native tests cover exact foreign/control
+rows/history, project-scoped counts, malformed/missing Suite refusals, both local
+subtree modes, repeated refusal, sealed Run witnesses and rollback of completed
+case/history writes after a later Suite-update fault. Access/cache collaborators
+are explicitly stubbed there. Genuine session, cookie-free bearer and MCP count
+readback, both current Suite-modal choices, local persisted reload and separate
+tenant readback supply different connected evidence. Retain all ten existing
+outer smoke cases and prior assertions; no new test framework, timeout increase,
+retry, baseline relaxation or evidence cleanup.
+
+Current roadmap context changed: PR #51 reports indexed recovery of all eight
+v1.4.18 originals and moves GAE to noncanonical reconciliation material. This
+session read its source/precedence crosswalk; the raw canonical package/baseline
+is still not available in this checkout. The reconciliation explicitly leaves
+P-07/FR-033 auto-publication amendments, in-place source updates, independent
+review/Graph/White gates unapproved. Do not repeat the old global claim that no
+indexed detailed sources exist, or use their reported recovery as approval to
+implement a duplicate publisher/guide/Copilot engine. This existing isolation
+repair does not implement or approve those new features.
+
+Final native/browser execution and capture review require the exact PR head;
+local unit/build checks alone do not complete verification. Receipts belong in
+PR metadata/comments. No agent merge/readiness action, shared data mutation,
+deployment, SDK publication, risk waiver or Phase 1/2 sign-off.
+
+### Q. REST testcase bulk-create project access (2026-11-13, pending verification)
+
+Base is owner-merged #52, `development@6781937`. While examining the remaining
+testcase/Suite-assignment seam, the actual REST bulk-create writer exposed a more
+direct authorization defect: `bulkCreateTestCases` required a signed-in actor but
+did not call `requireProjectAccess` for its target project. The controller directly
+calls this writer; browser requests do not inherit the bearer-only REST guard's
+membership check. A bulk-create request could therefore insert cases into a
+project the signed-in actor could not access. This is a bounded existing writer
+repair, not an approved new orchestration capability.
+
+Ten tests extend the existing real Nest controller/service/guard HTTP suite.
+The failing-first selection had seven failures: an ordinary nonmember batch
+returned 201, an empty one returned 201, invalid fields returned validation rather
+than authorization refusal, and permitted browser paths never checked access.
+Anonymous and bearer controls already worked. SQL/principals are explicit fixtures
+in that HTTP suite, not proof of a production exploit or genuine cookies/DB.
+
+**One-line production repair:** reuse `requireProjectAccess(uid, projectId)`
+immediately after `requireUser`, before batch parsing, empty returns, validation,
+allocation or transaction work. Preserve valid-member batch shape/fields/actor,
+500-row limit, existing empty response, atomic insertion and current custom-field
+collaboration. MCP `bulk_create_testcases` deliberately creates individual cases
+through a different existing writer; do not redirect it or change its per-item
+contract to claim coverage of this REST batch path. No new permission framework.
+
+Native verification extends existing `repository-partial-edits.db.spec.ts` with
+three cases for actual two-row insertion/attribution, late collaborator failure
+after INSERT with full rollback, and authorized empty-batch no effects. Access,
+cache and custom-field collaborators are explicitly stubbed there. Existing
+two-tenant smoke extends its genuine REST session/bearer refusals, including
+ordinary/empty/malformed nonmember batches and both tenant directions. It compares
+complete project case/history/audit populations before refusal and verifies real
+member-session/Write-token batch persistence plus repository browser reload.
+There is no current UI caller of `bulkCreateTestCases` beyond its exported API
+helper; this proves HTTP-created data displayed by the existing UI, not a new
+bulk-create form. Keep every previous smoke assertion, ten outer cases and all
+required native suites. Tokens revoked; provenance retained until CI teardown.
+
+Local full focused selection passes 223/223; build/typecheck/frozen lint checks
+and exact-head native/browser execution remain separately reported in PR metadata.
+Do not substitute local passes for connected execution. Suite/owner reference
+validation and arbitrary foreign display joins remain outside this authorization
+repair and are not certified safe. No schema, deployment, agent merge, SDK
+publication, canonical auto-publish policy change, independent-review substitute,
+risk acceptance or Phase 1/2 exit. The merged #51 review's approval/source gates
+remain applicable to new governance features.
+
+### R. Shared testcase/Suite assignment boundary (2026-11-13, review pending)
+
+This returns to the remaining repository gate after owner-merged #53. The UI
+recovery investigation is separate and has no product changes in this increment.
+No new orchestration, approval or publication authority is inferred from a request
+to continue development.
+
+**Reproduced boundary:** test-only head `2c8c8ba` in PR #54 ran the existing nine
+migrated PostgreSQL suites. All 200 prior tests passed; all 16 added cases failed.
+Single create/update and REST bulk-create/update accepted foreign/deleted Suite
+references, while missing/malformed IDs reached database errors rather than a
+controlled refusal. Synthetic native fixtures establish these writer behaviors,
+not live prevalence, an authenticated production exploit or deployed acceptance.
+
+**Implementation ownership and contract:**
+
+| Existing owner/path | Bounded change; preserved behavior |
+| --- | --- |
+| `insertTestCaseWithClient`, REST/MCP create | Validate nonempty assignments against active Suites in the case's project inside the insertion transaction; preserve unassigned defaults and existing field/actor handling. |
+| `updateTestCase` / `updateTestCaseWithClient`, REST/MCP edits | Validate explicitly supplied Suite IDs; omitted relationships remain live-write omissions, explicit null still clears. Do not silently repair preexisting foreign/deleted relationships on unrelated edits. |
+| REST `bulkCreateTestCases` | Validate every supplied target before the set-based INSERT; one invalid target rejects the entire batch, with no valid prefix. Existing access-before-parsing and empty-response contracts remain. |
+| `bulkUpdateTestCases`, REST/MCP bulk move | Validate target and UPDATE in one transaction. Keep SQL-time source-row project filtering, actual `RETURNING` activity IDs, blank omission and `"none"` unassignment. MCP's existing mixed-ID per-item ownership contract remains distinct. |
+| `duplicateTestCase` | Reread the active source after acquiring the project mutex; validate its current Suite, allocate the new external ID inside the transaction, and retain custom-field/tag copy owners. Do not propagate an invalid historical association. |
+| `importTestCases` / `resolveImportSuites` | Refresh the active Suite-name map per chunk under the mutex. Revalidate the default inside existing savepoints; stale defaults retain row-numbered failures, and deleted named targets are resolved anew rather than reused from the old cache. Existing chunk and replay contracts remain. |
+| `zyraSaveAttempt`, sequential and set-based entries | Acquire the project mutex before review/case/ID locks. Preserve the existing invalid/stale new-Suite fallback to unassigned and its review receipt; do not replace it with the REST rejection contract. |
+| `applyZyraChatOperations` direct move | Revalidate the resolved destination and write under the same transaction/mutex; keep existing per-operation failure reporting, never silently assign a stale resolved Suite. |
+| `SetupService` demo insertion | Source-inspected separately: predetermined Suite IDs created with the new project in the same setup transaction, not a caller-supplied assignment path. No setup rewrite. |
+
+**Lock order:** reuse `deleteSuite`'s transaction-scoped `suite-tree:<project>`
+advisory lock, before any assignment transaction's review row, testcase row or
+external-ID lock. Hold through commit/rollback. Single creates, bulk creates,
+edits (including omitted-Suite edits), duplication, each import chunk and Zyra
+saves/moves obey that order. A Suite-row lock acquired after a case-row lock would
+invert deletion's case-then-Suite updates; no such lock is added. The project mutex
+serializes these writes within a project, including ordinary edits; this is a
+correctness/throughput tradeoff, not a performance improvement claim.
+
+**Verification owners:** existing `repository-partial-edits.db.spec.ts` covers
+invalid targets/no effects, valid and explicit-clear controls, historical omissions,
+duplicate rereads, real two-connection deletion orderings, stale import caches and
+both actual Zyra save transactions with late database rollback. Native auth,
+custom-field/tag, capability, activity-delivery and queue collaborators are declared
+stubs; their policies/external delivery are not proved by those tests. Existing
+Notion-link and bulk-scope unit tests retain their assertions and model the new
+reread/transaction boundary. `ci-testcase-bulk-scope.ts` extends the same isolated
+two-tenant journey with real session/Write-token/MCP refusals and a real stale-option
+bulk form: selection/input survive refusal, a valid replacement persists and is
+shown after reload. All ten outer smoke cases, authorization assertions and native
+selections remain. Final exact-head results/screenshots belong in PR metadata.
+
+**Still not certified:** arbitrary direct SQL, unsupported cross-project testcase
+reparenting, historical-data cleanup, Suite-parent/cycle validation and hierarchy
+creation/reparent races, all Suite display joins, concurrent membership revocation,
+postcommit audit/queue durability, lost acknowledgements, shared/deployed-stack
+acceptance or independent review. In particular, this closes testcase assignment
+versus `deleteSuite`, not the separate hierarchy-writer caveat documented in Q12.
+
+**Next gate, not another implied feature approval:** submit this focused boundary
+repair for human review. F.1/D1–D6 still requires named independent review, exact
+public-share/locked-project contracts, explicit uncertainty/history dispositions,
+and access to the approved eight-file package plus living baseline. Those decisions
+remain open until the responsible owner records them; no green test run supplies
+the missing signatures or ratifies bounded automatic publication. The indexed
+eight-source reconciliation in `docs/reviews/` remains noncanonical and does not
+authorize a ninth spec or a duplicate Copilot/review system.
+
+### S. Existing repository UI deletion and recovery (2026-11-13, review pending)
+
+This is the finite UI/UX batch previously requested by the owner, kept separate
+from PR #54's shared Suite-reference repair and its tested head. Initially based
+on #53; owner-merged #54 (`e578a27`) is now integrated, retaining Section R and
+both regression sets. Owner merge is not independent review or Phase 1 sign-off.
+This increment changes no backend, schema, transport retry policy, publication
+authority, governance workflow or Copilot system.
+
+**Reproduced before repair:** test-only PR #55 head `ede5f8e` extended the existing
+isolated two-tenant Suite journey with one controlled pre-delivery 403. The actual
+browser showed no inline deletion error, and the attached page-error record
+contained the refusal as an uncaught exception. The decoded report was 9 expected /
+1 unexpected; later deletion/readback steps did not execute. The failure screenshot
+also showed the existing misleading "Default Suite", permanent-erasure and
+descendants "may" be affected wording. The request interception is not evidence
+of a real entitlement transition or server outage; the existing genuine anonymous,
+nonmember and bearer refusals remain separate, unchanged controls.
+
+**Existing owners and behavior:**
+
+- `app/(app)/projects/[id]/testcases/page.tsx` catches deletion failures inside the
+  existing modal, renders an alert and offers a read-only full reload. API errors
+  retain their original wording, including "outcome unconfirmed" after transport
+  loss; no automatic DELETE replay or promise of server rollback is introduced.
+- Opening/closing a dialog clears its prior error. Both delete choices and Cancel
+  remain disabled during the request, including Escape/backdrop close protection.
+- Count and subtree guidance use the existing Suite list/recursive testcase count
+  and a cycle-safe descendant walk. Zero-case copy is distinct. Both options remove
+  every descendant; retained cases become unassigned under the existing "No suites"
+  node. Removed cases leave existing run results and version history intact; no
+  restore capability or physical-erasure guarantee is invented.
+- Successful ancestor deletion clears an active child/grandchild Suite filter.
+  Navigation owns the new list fetch instead of starting one through the deleted
+  child's old closure. Unrelated and "No suites" views keep their context.
+- A confirmed DELETE followed by a failed Suite-list refresh closes the delete
+  modal and shows a separate reload warning. It does not describe the committed
+  deletion as an unconfirmed write or offer to repeat it blindly.
+- Bulk update cannot confirm with every field on "Leave unchanged" (button and
+  handler guard). All bulk form fields are disabled while saving; failures retain
+  selected cases and chosen values. Bulk-delete guidance reflects retained history.
+- Continued owner-requested recovery reuses that same repository warning/reload
+  block for confirmed bulk writes whose Suite-list refresh fails. The submitted
+  selection/dialog is retired as soon as the write succeeds, and a deleted case's
+  open panel is closed before refresh. Genuine write refusals still retain the
+  form/selection. The existing paginated-list error and read-only Retry remain
+  their own recovery owner, without a second banner or new notification system.
+
+**Bulk continuation reproduced before repair:** test-only `22bf1cd` performed a
+real successful bulk update, verified PostgreSQL priority/history and preserved
+unselected/foreign rows, then failed because the submission modal remained visible
+with Confirm enabled after a controlled failed follow-up Suite read. Decoded
+report: 9 expected / 1 unexpected. This is a failed post-write read, not a lost
+mutation response, production outage or new server-side uncertainty policy.
+
+**Verification owners:** extend `ci-suite-delete-scope.ts` and
+`ci-testcase-bulk-scope.ts`, not a parallel fixture/framework. Keep all ten outer
+smoke tests, page-error oracle, 120-second timeout, zero retries and existing
+authorization/foreign-row/history/readback checks. Added journeys cover pending
+controls, 403/cancel/reopen, pre-delivery network loss without replay, both subtree
+deletion modes, empty and deep Suites, no-suite navigation, successful deletion
+with controlled refresh failure, reload recovery, and bulk no-change/refusal/input
+retention. Compare actual PostgreSQL rows/history and capture visible states;
+compilation or synthetic requests alone are not UI acceptance. Exact-head results,
+failed-first evidence and inspected captures belong in PR comments/metadata, not
+evidence-only commits.
+
+The bulk continuation extends the same helper, surviving local control, native
+history/activity oracles and canonical project route. Update, unassign, archive
+and delete each commit through the real writer before a controlled Suite-read
+failure; assert one submission/history/activity change, closed dialog, reload and
+authoritative content. A separate list-read refusal exercises its existing inline
+Retry with no competing banner. No new outer test, identity, framework, transport
+retry, backend policy or duplicated recovery component is introduced.
+
+Counts/hierarchy are an advisory loaded snapshot, not a concurrency guarantee.
+PR #54 owns assignment-versus-deletion consistency; hierarchy-parent/cycle races,
+historical cleanup, unknown postcommit outcomes, independent security/release
+review, deployed acceptance and the existing F.1/D1–D6 owner decisions remain
+outside this UI repair. No broader Phase 1/2 sign-off is implied.
+
+---
+
+### T-455 graph-to-QA handoff — implementation and assurance checkpoint (2026-11-15)
+
+**Product ownership:** reuse Tesbo's existing Requirements, Test Cases, Runs/Results, Evidence/Bugs, Zyra/Review Board, and Notifications/Activity records and authorization. This is an implementation checkpoint in the existing living feature document, **not a ninth specification or a second graph/approval/notification platform**.
+
+**Verified source foundation:** `src/behavior-graph/current-cache-graph.reader.ts` provides a project-authorized coherent read of cached Jira/Linear/Notion requirement rows and native test-case links; `current-cache-graph-projection.ts` versions these as `cached_requirement`, `test_case`, and `references_cached_requirement`. The source-neutral comparison and `qa-review-candidates.ts` identify direct edits and explicitly related candidates without asserting coverage. PR #80 proposes a pure version-bound receipt suitable for future native QA triage and duplicate suppression; it has **no persisted snapshot, notification writer, endpoint, MCP tool, or actual user review**.
+
+**Native notification source already present (must be reused rather than replaced):**
+- `src/legacy/notification-events.ts` has `requirement_updated` and `integration_sync_completed/failed`, along with the existing matrix wording. A requirement update is already a native event type; do **not** introduce `graph_requirement_updated` as a duplicate.
+- `src/integration-sync/integration-sync.processor.ts` already resolves owners/creators of test cases explicitly linked to a changed requirement; `integration-sync.requirements.spec.ts` asserts recipients and Requirements navigation.
+- `src/legacy/notification-writer.ts` is the existing idempotent user-scoped writer, with `dedupeKey`, actor exclusion, and current project/organization membership filtering. Importing it blindly into another class without checking module dependencies and transaction boundaries risks duplicate or missing notifications.
+- The sync-completion notification is a different concern from a changed-requirement candidate. A local cache observation is **not** evidence the remote provider history is complete/fresh or that every applicable QA candidate was found.
+
+**Acceptance boundary / next vertical slice:** (1) verify canonical eight specification sources and independently run assurance lenses against the exact graph PR; (2) decide historical snapshot retention, partial/unsynced provider handling, provenance, concurrency and post-COMMIT delivery recovery; (3) persist project-scoped server-authorized captures with version, contract/scope, idempotency and source metadata; (4) feed the existing QA/Zyra review and notification entry points rather than creating another inbox; (5) prove a source change → impacted reference → human triage → authorized test run → evidence/version link → approval path end to end. Neither an AI assertion nor a cached reference is an executed test, validated behavior, or approved coverage. The six synthetic draft-case fixtures are **not** the live NES-TC cases; no live authoring or publication is implied.
+
+**Side findings / non-goals:** a missing link must not mean 'no tests'; an unchanged cache must not certify 'no upstream change'; user-supplied graph snapshots must never assert completeness or create notifications; future events must not send before committed source evidence is available or be silently lost after a partially committed write. Notes-MCP authoring support and its separate retest do not replace T-455 or change graph acceptance.
+
+---
+
+### T-455 durable-history and QA review-feed checkpoint (2026-11-15)
+
+**Status and ownership:** stacked PR #81 proposes a transactionally recorded cache-graph observation ledger after PR #80's immutable-data QA change receipt. PR #82 proposes an internal, bounded, authorized read-only review-feed query. These changes belong to **Tesbo**, not Nesberry. Neither PR is merged/deployed or proof of a working user-facing QA notification/approval flow. Keep native Requirements, Test Cases, Runs/Evidence, Zyra/Review Board and Notifications authoritative.
+
+**Implementation verified in code:** V145 `graph_capture_history` stores project-scoped graph revisions, projection contracts/scope fingerprints, actor and timestamp, source observation envelope, and nullable change-review receipt. The internal writer serializes project history with a transaction-scoped advisory lock, reads an authorized source projection inside the same transaction, rechecks membership in the history INSERT, refuses incomplete/ambiguous observations, and deduplicates immediately repeated revisions. An integration test **on real migrated PostgreSQL** confirmed 514/514 selected tests green on PR #81's repaired history code; this is not an E2E product result. PR #82's internal review-feed reader reads only revision metadata and review receipts with project+organization membership in the same SQL statement, newest-first bounded paging and validated bigint cursors.
+
+**Evidence semantics:** `upstreamFreshness = unverified`, `coverageAssertion = none`, `executionAssertion = none`; a snapshot observes **current local cached** records, not necessarily a complete source-provider or deployed application version. A changed cached requirement with zero native case links still deserves QA triage; a cached link is only a reference, and missing links do not prove no coverage. A source-scope/connection discontinuity records a new observation without a comparable impact receipt, requiring an explicit *scope changed / impact unknown* QA state in the subsequent integration.
+
+**Assurance preflight (source-based one-agent lenses, NOT independently run teams):**
+- **Blue/Green:** reuse existing graph projection/reader, native historical test/run records, notifications and Zyra; the new ledger alone holds historical *graph observations*, not duplicate test-case/run owners.
+- **Red/Security:** model double capture, retry after lost COMMIT ack, membership revocation, cross-tenant access, malformed and overflow cursors, forged client provenance; never accept externally authored captures as complete.
+- **White/Graph:** maintain exact revision/contract/scope and preserved historical data, even if current links disappear; do not confuse an empty candidate list with a no-change certificate; a deleted node currently lacks a human-readable authorized tombstone label.
+- **Lifecycle/Concurrency:** serialize same-project writers and commit receipt with capture, but source-trigger identity, long-term retention, nonconsecutive delivery idempotency and post-commit notification recovery are **unproven**.
+- **Grey/Purple:** neither change creates a reviewer-facing UX or guarantees journey/route/state behavioral coverage. Existing Zyra/QA review should consume the future authorized result with a human approval step.
+- **Operability:** storage growth, retention/backfill, metrics, audit tamper controls and error categorization need measured and approved contracts. Cold-team/evaluator trials and real product E2E **NOT RUN**.
+
+**Next implementation order:** (1) finish exact-head CI/assurance on #80→#81→#82; (2) define service-scoped capture provenance for background sync/coding-agent changes without impersonating users; (3) extend graph projection with versioned implementation/behavior/route/state/journey dependencies; (4) connect committed history to native `requirement_updated` and existing Notifications/Zyra review, with delivery idempotency and failure recovery; (5) execute a real source change → candidate scope → human triage → authorized test execution → evidence/finding/version linkage → approval journey. No automatic publication, test-run result or approved status is inferred from a receipt.
+
+---
+
+### T-455 implementation-observation graph checkpoint (2026-11-15)
+
+**Exact scope:** PR #86 proposes the first internal implementation-source observation projection on top of existing Tesbo graph primitives. It keeps native requirement/test-case and history owners; stable source-file and source-declared `route`, `state`, `behavior`, and `journey` nodes join the existing graph shape with `declared_in_source` edges only. A declaration is not a runtime or test-coverage proof. This is an *additional observation tier*, not the final integrated behavioral graph or a separate graph service.
+
+**Evidence and boundaries:** the proposed adapter requires a caller-verified repository identity, commit, full file inventory, SHA-256 source contents and evidence location. It deliberately does not produce its own trust attestation or claim that an agent-provided description is verified. Project mismatch, invalid source path/hash, missing supporting file, duplicate declaration and incomplete inventories are rejected. Source scope is stable for a selected repository/ref across commits, but a repo/ref switch is not a comparable no-change result. **No production Git/MCP scanner, source authority, direct API or persisted combined graph capture is implemented.**
+
+**Next required proof:** use a trusted internal repository reader to bind observations to actual commit bytes and line ranges, including deletion/renames and source-root boundaries; expand dependency relationships only with declared source evidence and explicit uncertainty; then persist authorized multi-source captures/version and route QA impact receipts through existing Zyra, test cases, Runs/Evidence and Notifications. Do not auto-mark tests failed or approved. Retain non-model-first spontaneous coding and prepared requirement/model workflows as equal inputs.
+
+**External pilot feature handoff:** MCP Postconditions on create/bulk was handled separately in merged PR #83. Structured Context associations and starter-workspace skill provisioning still need their own source-authority and existing-skill ownership reconciliation, not addition to the graph or Notes storage by default. The 12 Nesberry cases remain controlled by the test-authoring workflow.
+
+---
+
+### T-455 pinned-source verification and coding-agent integration checkpoint (2026-11-15)
+
+**Implementation proposal:** PR #86 now includes internal declaration graph nodes, source hash/location checking and a `LocalPinnedGitSourceReader` for read-only immutable local Git tree/blob access. The reader accepts a **server-configured checkout**, resolves a local branch to an immutable commit, refuses symlink/submodule entries, rejects malformed paths and caps blob/tree reads. The verification adapter rehashes actual source bytes and declared line spans. No source-control provider, CLI path or MCP request is automatically trusted as project authority. Neither component is registered as a user-facing tool or deployed source scan.
+
+**Distinct evidence tiers (do not collapse):** (1) repository/ref and source bytes authenticated by a separately authorized project binding — **not yet wired**; (2) file contents and proposed line spans verified against a pinned commit — supported by the internal adapter when its reader is trusted; (3) route/state/behavior/journey label or completeness — **unverified** until a source-grounded semantic classification and exhaustiveness oracle is established; (4) deployed/runtime behavior — **not verified**; (5) test-case references vs actual coverage/execution/approval — **not inferred**. Source-only differences can nominate review without automatically failing or approving any test. A new commit with identical observed source content must NOT produce an impact receipt.
+
+**Portability/trust limits:** source inventories are bounded to 2,000 files, 2 MiB per file and 32 MiB total, failing closed rather than reporting an incomplete inventory as complete. Existing Tesbo `Repository` UI represents test-case repository features; do not confuse it with a project-to-Git source-control binding. Need a project-authorized source/root/ref configuration, scoped selection and retention/provenance contract, deterministic metadata, and safe service authority for coding agents/CI/sync before enabling real repository observations. A server-approved checkout is not equivalent to an arbitrary client-chosen filesystem path.
+
+**Joint workflow next:** existing requirements/cache capture + source observation → same version-aware graph comparison/QA receipt → persisted versioned evidence → existing Notifications/Zyra review owner → human QA triage → existing test runs/evidence/findings. Prepared specs and spontaneous coding must be supported without model-first prerequisites. Separate the observed changed implementation from guessed causal behavior and from verified test execution. Maintain no duplicate test-case records, graph stores, assistants or approval flows. The 12 Nesberry authoring cases and MCP Notes retest remain separate.
+
+---
+
+### T-455 consolidated project-source capture and QA-history integration (2026-11-15)
+
+**Merged baseline:** PRs #62, #73, #80, #81, #82 and #85 established local cached requirement/case projections, change comparison, QA review candidates, deterministic receipts, migrated PostgreSQL history and authorized paginated history access. None of those components proves deployed target behavior or test execution. This is the **same graph and native QA record chain**, not a new parallel test-management system.
+
+**Consolidated PR #86 (staged, not deployed):** proposes source-declared implementation-file/route/state/behavior/journey nodes; pinned immutable Git blob/tree reader; exact source-line/digest verification; explicit source selection bound into graph scope; project-scoped `project_source_bindings` (V146); internal server-approved checkout registry; and `ProjectSourceGraphCoordinator` that composes the trusted Git source observation with the authoritative local requirement/test-case capture into the existing `graph_capture_history` transaction. The operation has **no REST/MCP endpoint**, automatic scheduler, new assistant, duplicate graph ledger, run outcome mutation or notification emission. Source binding is provisioned via trusted internal configuration only; checkout filesystem paths/credentials are **not** stored in project rows or accepted from MCP callers.
+
+**Authorized sequence:** current project+organization membership and enabled source binding read together → server-approved checkout key + matching repository ID → local ref resolved to pinned commit → complete configured selection verified from Git tree/blob bytes, including bounds, symlink/submodule refusal, line evidence and UTF-8 checks → independently recheck the project source binding while holding a transaction-scoped lock → capture existing project-authorized native requirements/cases → project a single combined graph revision → deduplicate identical content or persist observation and QA receipt atomically → allow the existing internal authorized history feed to read revision/candidate metadata. No notification may claim delivery from an uncommitted receipt; delivery retry and appropriate human reviewer-facing destination remain design gates.
+
+**Evidence distinctions:** verified Git bytes and source-line existence are not semantic correctness/completeness or deployed behavior; proposed labels explicitly remain `proposed_not_semantically_attested`, with `conceptInventoryStatus: unverified`. Cache-linked Jira/Linear/Notion entries are still upstream freshness `unverified`; no `covers` edge is fabricated. Code-only source changes may yield a triage receipt with no test candidate, not an implicit Failed test. Commit movement without a change to observed source content does not produce a spurious receipt. Changes in repository/ref/file-selection scope are discontinuities, not `no impact` certificates.
+
+**Boundaries and risks:** the configured source selection is explicitly scoped, not the whole application by implication; selected files limited to 2,000, 2 MiB each and 32 MiB total, and Git tree output independently bounded. Missing/oversized/binary source data fails closed. Source projection is still internal and does not yet include cross-repository user-journey dependency truth, semantic route discovery, production build provenance, automatic CI/coding-agent trigger, or a shipped QA Inbox/Zyra review screen. Workflow delivery needs an authorized native notification route with durable retry; do not emit alerts pointing to an unavailable review destination. Never treat an MCP-supplied source manifest or alleged test result as authoritative.
+
+**Assurance run requirements:** security/inventory/source-scope ownership and reviewer model, cross-tenant access, forged JSON observation, ref movement, path traversal, symlink/submodule refusal, source byte vs semantic distinction, incomplete provider caches, binding update/revocation races, concurrent captures, dedupe and change receipts, storage/retention/operability, UI/MCP read acceptance and independent QA triage/execution evidence. CI's migrated PostgreSQL tests use a disposable project and temporary Git checkout. These checks do **not** establish a deployed end-to-end journey or independent ten-team assurance verdict.
+
+**Next stage:** register explicit project repository provisioning/authority through existing Tesbo setup/roles, expose only authorized history/QA review via Zyra or native review ownership, add a committed-receipt notification delivery/retry policy, and run the coding-agent source change → QA triage → test execution → evidence → human approval journey. Preserve spontaneous coding and prepared requirements as first-class origins, without model-first prerequisites.
+
+---
+
+### Shared case-edit content preconditions — implementation checkpoint (2026-11-15)
+
+**Separate scope:** this slice addresses the founder's conflict-aware human/MCP
+case-edit feedback, independently of the graph work in PR #88. It extends the
+existing case detail reader, single-case writer/transaction and editor. No new
+case/history/review store, migration, workspace authority, graph feature or
+automatic merge is introduced.
+
+**Wire contract:** authorized case-detail reads (REST UUID/readable reference and
+MCP `get_testcase`) return `editRevision`. It is an opaque lowercase SHA-256
+content fingerprint calculated in the same PostgreSQL SELECT as the native row.
+Single updates may send it as `expectedRevision`; malformed supplied values
+are refused, and a mismatching row returns HTTP 409 / `TESTCASE_EDIT_CONFLICT`
+(an ordinary tool error through MCP). The comparison is part of the actual
+UPDATE, not a separate read-then-check, so a concurrent committed row update
+must be rechecked after lock waiting. Refusal precedes custom-field/tag writes
+and postcommit activity/cache/embedding/notification effects. Existing
+project/token/role/plan guards and actor attribution remain authoritative.
+
+**Content, not a new revision history:** hash the actual native row except
+`embedding_status`, `embedding_content_hash` and `updated_at`. Existing indexing
+workers legitimately update those fields; they must not manufacture an authored
+edit conflict. Identity, ownership, hierarchy, Notes/body/steps, source citations,
+status and other native content still participate. Timestamp-only differences
+and a return to identical content do not represent a different fingerprint.
+V63's native historical snapshots remain unchanged. No JavaScript timestamp
+rounding, client hash computation, persisted token or extra database round trip
+is needed.
+
+**Editor behavior:** fetched revision metadata is retained with the loaded case
+and sent on Save/Archive/Unarchive. Missing metadata fails closed with a visible
+reload instruction, rather than silently dropping the guard. A rejected save
+retains unsaved form text and the old precondition; pressing Save again cannot
+quietly overwrite newer content. “Reload latest case” explicitly confirms that
+unsaved edits will be discarded. The user then reviews the current case and
+chooses what to save. Mutations are not automatically retried.
+
+**Compatibility and limits:** omission retains unconditional legacy single-edit
+behavior for existing clients/internal callers. MCP advertises the precondition
+and tells clients not to omit it as automatic conflict recovery. This is an
+opt-in row-content guard, not universal stale-write prevention, a permission
+token, a batch/review-set approval or a revision contract for independently
+stored custom-field values, tags and other relationships. Those metadata-only
+paths, delete/bulk/import/review semantics and mandatory preconditions for every
+client require separate reconciliation; do not claim they are solved here.
+
+**Verification:** identical final unit assertions against `cbc408b` reproduced
+**21 failed / 169 passed / 190 total**, zero skipped. The changed tree passed
+**1,286/1,286 tests in 49 suites** before integration; after retaining merged
+`development@7fdd4ba`, the same selection passed **1,296/1,296, zero skipped**,
+covering existing non-DB legacy cases, MCP and token guards. Two surrounding fixture assumptions were updated without removing
+their assertions: the Notion SQL binding oracle now includes the optional null
+guard, and the Zyra read double recognizes the new row-plus-revision SELECT.
+All three non-incremental typechecks and backend build emission passed.
+Changed-file lint has no new findings; the existing nine backend findings
+(five in the legacy service, four in MCP tools) remain, not silently waived.
+
+**Authored native/integration coverage:** the existing migrated PostgreSQL
+repository spec now covers stale refusal with unchanged history/effects,
+actual row-lock interleaving, sub-millisecond content changes, embedding-only
+updates, missing rows and rollback after a late custom-tag failure. Existing
+case API/MCP/editor specs cover the transport and explicit review/reload flow.
+The existing isolated CI repository journey also checks browser retained Notes,
+confirmation dismissal, missing revision metadata, actual persisted history,
+MCP malformed/stale refusal and unchanged run/execution associations.
+
+**Unfinished gates:** collection succeeded for the existing isolated CI smoke
+selection (**19 of 19 journeys**, including the extended repository journey).
+The merged workflow's existing five selected Zyra scenarios also collected
+successfully; their implementation is unchanged by this slice.
+That is collection, not execution. Local configured DB/API/browser runs remain
+unrun: this checkout has no root environment or authenticated A/B contexts, and
+no credentials were copied or replacement/shared database started. Exact-head
+CI needs publication/run approval; deployed impacted case/MCP/editor acceptance
+and independent review are separate gates. Nothing here authorizes edits to the
+twelve live Nesberry cases, production deployment or SDK publication.
+
+---
+
+### T-455 native Zyra change review, committed-receipt notifications (2026-11-15)
+
+**Consolidated successor:** PR #88 builds on merged T-455 PR #86 and reuses the same graph ledger, case/requisite links and Zyra entry point. It registers an authenticated project-scoped `/agents/zyra/changes` REST API and a change-review view **inside Zyra**. The view distinguishes initial baselines, source-scope discontinuities and comparable changes; displays exact affected node identities and explicitly linked test-case review candidates, and states that references are not coverage and source changes are not failed executions. The capture action accepts **no client source manifest**: only approved server checkout configuration, the project source binding and native auth/plan write guards can initiate it. Unconfigured projects fail closed.
+
+**Notification reuse:** a new, distinct `qa_change_review` event is emitted through Tesbo's **existing** notification writer/type catalogue and user notification table, with a stable per-recipient deduplication key for a **committed** graph-history receipt. It navigates to the actual Zyra change-review page, not an unavailable route. Recipient discovery selects current QA/manager/owner members, and the native insert rechecks both project and organization membership. After writing, delivery is verified by inspecting persisted per-user notifications. The API reports `delivered`, `pending`, or `no_recipients`; a scoped retry action is idempotent and does not duplicate delivered notifications. This is **manual / capture-triggered retry**, not guaranteed unattended outbox recovery. A failed confirmation cannot convert an already committed graph capture into a false failure.
+
+**Verification matrix:** backend unit contracts for registry validation, no foreign checkout paths, API project identity, invalid paging/source payloads, native per-recipient notification/partial confirmation and unauthorized history; disposable migrated PostgreSQL test for native graph receipt → actual notification row → idempotent replay; existing Zyra API and browser Playwright specs for empty view, navigation, unconfigured capture and unauthorized API. New exact-head CI + authorized deployment E2E remains required; passing Jest/migrated PostgreSQL is not an executed user acceptance or a live connected agent proof. No source scanning scheduler, autonomous delivery, semantic behavior verification, automatic test failure or approval was introduced.
+
+**Outstanding:** administrator-provisioned project Git binding UI/permission contract; source scan trigger from an authorized coding agent/CI; genuinely linked implementation/route/state/journey→requirements/cases with evidence provenance; QA action selection, execution/evidence/finding and human approval; durable unattended notification retries/operability, retention and independent multi-team assurance. Do not duplicate native test case, run, Notes, Zyra or notification owners.
+
+---
+
+### T-455 connected MCP coding-agent → Zyra QA impact handoff (2026-11-15)
+
+**Delivery unit:** Existing large PR #88 extends merged behavioral graph PR #86 with a native Zyra Change Review page, project-scoped authorized REST history/capture, native committed-receipt notifications, explicit retry, and now two MCP tools in the **existing** Tesbo server. No other case repository, AI assistant, graph ledger or approval board is created. This is a code/CI stage, not a deployed acceptance verdict.
+
+**Connected agent interfaces:** `list_qa_graph_changes` requires MCP read scope, reads the same `CurrentCacheGraphHistory.listForUser` with bounded newest-first cursor pagination and current project+organization membership, and returns review candidates plus exact changed identities. `capture_qa_graph_change` requires MCP write scope and the existing project-plan write guard; it calls the same trusted project source coordinator and notification delivery used by Zyra. The capture tool takes **zero client-supplied fields**, so an agent cannot invent repository roots, source files, behavior verification, execution outcomes or approvals. An absent/disabled server source binding fails closed. Session fingerprinting invalidates old MCP tool catalogs on deploy.
+
+**Canonical cases and QA boundary:** the Zyra review view resolves only JSON case-node tuples matching `["test_case", currentProjectId, validUuid]` into existing case-detail links; it does not clone cases, infer coverage from no/yes links, create test cycles, mark results or approve drafts. A coding agent can follow a committed receipt to `get_testcase` and the native test-run tools if/when QA authorizes genuine execution with evidence. Historical source changes with no explicitly linked case require further investigation, not a “no tests affected” certificate.
+
+**Native delivery semantics:** graph-history capture/receipt commits before notification writes. Existing `writeNotifications` enforces per-user dedupe and both current project/workspace membership at insert. The receipt-linked QA view is the actual notification destination. A delivery reply distinguishes confirmed rows, pending recipients and no recipients; retries use the same deterministic key. No unattended retry scheduler or guaranteed delivery latency is claimed.
+
+**Verification plan/results:** exact-head MCP unit tests cover discovery, read/write scopes, locked-project parity, project isolation, invalid limits/cursors, rejected caller source claims, successful coordinator invocation, duplicate/no-change capture and notification outcomes. The existing migrated PostgreSQL authorization parity suite inventories all **52** current MCP tools as **31 writes + 21 reads** rather than sampling names; a new tool without a classified negative fixture fails CI. Existing MCP API Playwright tests cover discovery/read/capture failure in an unconfigured smoke tenant, and existing Zyra UI E2E verifies exact canonical case navigation from a disposable committed review. All new Playwright tests are authored but **not** claimed as deployed execution. Never substitute local database fixtures for the root-env shared server.
+
+**Gaps:** trusted source checkout provisioning UI/permissions, automatic CI/coding-agent source-change triggers, reliable unattended post-COMMIT notification retries/monitoring, evidence-backed route/state/journey-to-native-case relationships, QA traceable test-run selection/execution/evidence/defect links, approval and full independent cross-application assurance. A source byte fingerprint is not proof of deployed behavior; a QA review receipt is not a test result.
+
+---
+
+### T-455 notification eligibility race and smoke catalog parity checkpoint (2026-11-15)
+
+**Why:** Review receipt creation and notification delivery are independent operations. A user can lose the QA, manager or owner role or active organization/project membership after recipient discovery but before insertion. Membership alone does not establish continued permission to receive a restricted QA impact alert. The 50-to-52 MCP catalog expansion also revealed two independent older UI smoke assertions.
+
+**Change:** The existing `writeNotifications` now accepts an optional `memberOf.projectRoles` restriction on the existing project-scoped notification predicate. It checks allowed role plus non-deleted project and organization memberships inside the same INSERT SELECT as the notification write. Graph delivery supplies QA/manager/owner roles. Other notification callers remain unconstrained by project role; an explicit empty role list refuses delivery. Per-user dedupe, committed receipt lookup and post-insert row confirmation remain unchanged.
+
+**Regressions:** native notification tests check active-membership/role SQL predicates and empty allowlists; the graph-delivery contract checks role-bound writer arguments. The UI smoke checks both the exact 52-tool discovery set and its 52-tool connection diagnostic. Previous CI at `99ae093b` passed eight workflows but smoke failed on the diagnostic still expecting 50. Latest-head CI remains independently required.
+
+**Open evidence gates:** real role-revocation interleaving under migrated PostgreSQL, authorized deployed coding-agent source-to-Zyra-to-QA execution in disposable tenants, delivery replay, unchanged canonical case/execution status until genuine QA actions, durable unattended retry/monitoring, approved source checkout provisioning, and independently executed assurance teams. No autonomous delivery guarantee, semantic behavior certification or automatic case approval is claimed.
+
+---
+
+### T-455 opt-in durable graph notification recovery (2026-11-15)
+
+**Architecture and ownership:** The existing `graph_capture_history` committed receipt and native `notifications` table are authoritative. No parallel graph store, outbox table, agent, or QA case repository is introduced. A dedicated small BullMQ worker in the existing GraphChangeReviewModule retries missing native notification rows using the same GraphChangeReviewDelivery and existing per-user dedupe key. It does not mutate test cases, executions, approval decisions, findings, evidence, or source bindings.
+
+**Opt-in:** Set `TESBO_GRAPH_QA_RECOVERY_MODE=global` (or, when MODE is unset, exactly `TESBO_GRAPH_QA_RECOVERY_ENABLED=1`) only after repository deployment and acceptance are authorized. Without either value an instance does not register the shared scheduler and its processor refuses even previously queued jobs. Because the Redis scheduler identity is shared by the entire backend cluster, a disabled instance never removes it during mixed-configuration rollout. Operators retiring recovery cluster-wide must explicitly remove the registered scheduler after all workers have been disabled; otherwise inert jobs may still be enqueued. With the flag enabled, the same Redis-backed scheduler identity is upserted every ten minutes UTC, avoiding one schedule per instance. This does not mean capture/source scanning is scheduled: only committed QA receipt notification delivery is retried.
+
+**Execution scope (prepared, pending owner approval):** `TESBO_GRAPH_QA_RECOVERY_MODE=off|project|global` makes the existing recovery worker's scope explicit. `off` is the default; `project` uses a separate scoped queue/scheduler and requires `TESBO_GRAPH_QA_RECOVERY_PROJECT_ID`; `global` preserves the existing all-project sweep. With `MODE` unset, the legacy `ENABLED=1` flag still means `global`, so an existing deployment does not lose its worker on upgrade. The separate queue prevents an older instance from claiming a project-scoped job. All replicas must share the mode and, in project mode, the project id; mixed modes are unsupported. The recommended development/project/global rollout policy is still pending; see [background-recovery-modes.md](specs/agent-synchronized-engineering/background-recovery-modes.md). No live environment variable has been changed by this preparation.
+
+**Bounded recovery:** Each pass reads at most 100 committed, comparable review receipts captured in the previous 48 hours. The query checks currently active projects, QA/manager/owner project memberships, active organization memberships, and absence of the stable per-recipient native notification row. Receipt rows are processed sequentially with per-item error isolation and a structured summary (`eligible`, `delivered`, `pending`, `noRecipients`, `failed`) on **every** run (including empty-backlog heartbeats) in backend logs. A batch at the 100-receipt cap emits a saturation warning; it does not assert the backlog is drained. Repeating the job is idempotent through native `(user_id, dedupe_key)` uniqueness and the same insertion-time project/organization/role restrictions. Never claim that a notification was sent merely because a row was selected or a write was attempted.
+
+**Safety and limits:** The worker only calls an internal trusted recovery method; REST and MCP continue to require authenticated project identity for manual retries and cannot invoke system recovery. The internal method does not forge a human actor, accepts no arbitrary source bytes, and rejects invalid/uncommitted receipt identifiers. A disabled queue, archived project, revoked member, or ineligible role must not deliver a new notification. Delivery is best effort rather than exactly-once external delivery; the unique row is the actual evidence of notification availability.
+
+**Operator runbook:** Inspect GraphChangeReviewRecovery log summaries and the committed receipt + notification dedupe rows for suspected gaps. Diagnose Redis scheduler connectivity, current role/membership, retention window, and database write errors. Preserve the graph receipt; restart/re-enable the worker only after correcting infrastructure. To retry a specific older receipt, use the existing authorized manual `/agents/zyra/changes/:historyId/notify` route from Zyra. Do not backfill arbitrarily old receipts as new events without explicit review because membership and recipient intent may have changed.
+
+**Verification status:** Automated unit contracts cover backlog selection predicates, idempotent delivery service reuse, isolated per-receipt failures, rejected missing IDs and worker disablement. Previously introduced migrated-PostgreSQL tests cover durable native receipt delivery plus revoked membership and role refusal. Exact HEAD CI must pass; enabling the scheduler in a configured deployment, its real Redis timer behavior, operational alerts, latency/SLO and a connected-agent-to-human-QA acceptance journey remain outstanding. No assurance-team certification or deployed verification is asserted.
+
+---
+
+### T-455 native owner source provisioning (2026-11-15)
+
+**Purpose:** close the gap between server-admin allowlisting and project configuration. Reuse native `project_source_bindings`, approved checkout registry, existing Zyra change review and global project plan write guards. Do not create an alternative integration app, source scanner, test repository, or client-controlled checkout location.
+
+**Native owner UI/API:** `GET` and `POST /api/projects/:projectId/agents/zyra/changes/source-binding` manage only `repositoryId`, `checkoutKey`, `refName`, `selectionPrefixes`, and `enabled`. The same Zyra change-review view exposes the setup form to project owners; QA/manager access is refused server-side and does not display the form. Neither API nor UI exposes server checkout roots or credentials. The server registry remains environment-admin controlled through `TESBO_GRAPH_APPROVED_CHECKOUTS_JSON`; approved project configuration is not proof the checkout exists or can be read.
+
+**Authority and mutation:** Current project owner + organization membership and active project are required. Owner membership is rechecked inside the upsert SQL with locked authorization rows before any project binding can be inserted/updated. Unknown/mismatched checkout key/repository identity, path traversal, arbitrary manifest, unexpected body fields, bad ref, invalid/duplicate selections and invalid types fail closed; the existing binding is left unchanged. Disabling preserves the identity and provenance but prevents capture through the current source reader. The global plan write lock covers the POST; GET remains accessible to owners on locked projects.
+
+**Regression matrix:** owner GET empty/existing without checkout root, known checkout creation, disable, owner-to-QA demotion, missing owner, unknown checkout, raw path/credentials injection, foreign project, malformed and duplicate path prefixes, invalid ref/field types, no unauthorized writes, and actual migrated PostgreSQL persistence. The existing API and browser suites now exercise refused roles, rejected source payloads and the native UI, including unchanged binding rows on failure.
+
+**Important limits:** Server operators still need to provision the real approved Git checkout and repository ID via trusted deployment configuration; the UI cannot invent an approved source, and cannot configure credentials. There is no claim of active semantic route/journey verification from a pinned source byte observation. Exact-head CI, approved deployed API/browser E2E, independent assurance agents and the complete coding-agent → QA run/evidence/approval flow are still outstanding.
+
+---
+
+### T-455 human-selected QA test-run handoff and mutation uncertainty (2026-11-15)
+
+**Owner and purpose.** The graph receipt suggests explicitly linked canonical test cases, but it does not prove that a test covers changed behavior, that tests have executed, or that any finding was approved. The native Zyra Change Impact Review now offers a human-controlled test-run handoff. The reviewer must select case IDs explicitly; zero cases are selected automatically. Only same-project, UUID-shaped canonical `test_case` node tuples are eligible in the UI; the existing test-run API remains authoritative and validates live project ownership and case eligibility. No parallel case/run/approval tables or agents were introduced.
+
+**Two native destinations.** A reviewer may add cases to an existing open manual Test Run (`listTestRuns` and `addTestCasesToRun`), or create a new run via existing `createTestRun`, then attach selected cases with the same native endpoint. New runs require a human-provided name and environment. The new run's description contains a human-readable graph receipt reference for context, **not** a verified traceability edge or formal attestation. The UI links to the canonical run for execution, evidence, defects and human review; it never sets execution status, invents evidence, creates a defect or approves a test.
+
+**Ambiguous mutation safeguards.** Create+attach are two distinct commits; Tesbo already implements them as separate native operations. If attachment fails or its response is lost after a successful CREATE, the UI retains the actual run ID and retries attachment against that SAME run. The canonical add operation deduplicates the case membership. If the initial CREATE response is lost, the run ID is unknown: the UI blocks blind recreation, directs the reviewer to inspect native Test Runs, allows refreshing the open-run list and linking the existing run, and requires explicit confirmation before a fresh CREATE. Skipped attachments are reported as skipped (already present or no longer eligible), not as proven coverage. No automatic retry occurs for non-idempotent writes.
+
+**Validation matrix.** The existing disposable Zyra browser E2E now covers explicit selection, required environment, persisted cycle and cycle-item rows, unchanged Passed/Failed/Blocked execution counts, source receipt -> existing canonical case link, duplicate attachment retry, and an injected HTTP 503 **after real database commit** for both attachment and run creation. It verifies one run/case membership rather than trusting a UI toast. The recovery worker's migrated PostgreSQL test is isolated to its own synthetic project using a parameterized *internal only* project filter; the scheduled worker continues to scan all eligible projects. No tests may send other tenants' QA notifications simply to exercise a global recovery fixture.
+
+**CI execution rather than authored-only tests.** Extended the existing isolated CI smoke workflow to run the impacted Zyra API and UI tests using explicit localhost API/web bases, the same temporary PostgreSQL/Redis services and disposable RBAC tenants, direct DB transport, with Playwright reporter network submission disabled. No external AI provider or live customer data is involved. This is a CI local-stack proof only; authorized deployed end-to-end acceptance, live Git checkout registration, realistic route/state/journey traceability, execution/evidence/defect/approval workflow and independently executed assurance teams are still mandatory release gates.
+
+**Operability and limitations.** The run builder limits selection to 200 distinct suggested case IDs per receipt and refers reviewers to the existing repository for any remainder; it does not auto-select or silently declare remaining scope unimpacted. A run description is context metadata only: the later formal graph-to-run evidence relationship, source revision/build provenance, and human QA sign-off remain unimplemented. Guard the opt-in recovery scheduler across mixed-instance deployments; check SQL-confirmed notification rows rather than reporting successful delivery from an enqueued job.
+---
+
+### T-455 persistent human QA run/case handoff references (V147) — 2026-11-15
+
+**Single-source ownership:** V147 adds only a *relationship table* `graph_review_run_case_links`. It carries project, committed graph-history receipt, canonical cycle/run, canonical test-case ID, human selector, and timestamp. Three composite project+ID unique indexes and foreign keys prevent cross-project references even outside the API. No test case, run, execution, evidence, defect, approval or graph source record is copied. Native soft deletions retain associations; an actual hard delete of a referenced parent cascades the relationship and therefore cannot be treated as indefinite audit archival.
+
+**Positive write contract:** A human explicitly selects 1–200 distinct canonical case UUIDs from a committed comparable graph receipt and attaches them through Tesbo's native run API first. Only then POST `.../changes/:historyId/runs/:cycleId/link` is called with `{ testcaseIds }`. One serialized PostgreSQL transaction validates current project+organization membership and QA/manager/owner role, active project/cycle/cycle-items/testcase rows, and *each* selected canonical tuple in the existing receipt's `candidates`. Reject the entire batch on a single nonmatching or missing case. Duplicate POSTs return `newlyLinked:0` on the existing composite primary key without rewriting origin or attributing any execution status. No source paths, forged results, coverage flags, approval fields or foreign-project IDs may be written.
+
+**Read contract:** GET `.../changes/:historyId/runs` returns authorized per-receipt native run/case handoff references, current run name/status and association timestamp. It never infers that cases passed, failed, were executed or cover behavior. The existing Zyra change review's run-preparation section shows these persisted links after reload and navigates to the canonical native run for evidence, defects and human decision-making. Failure to record a link after a successful native attachment must be presented as a retryable *association* failure; it must never implicitly roll back the run, create a duplicate, or assert that execution occurred.
+
+**Tests:** backend unit contracts cover malformed/forged inputs, unknown receipts, authorization, atomic all-case eligibility and idempotent replay. Migrated PostgreSQL integration tests create an actual committed review and native cycle/case association, assert persisted project-scoped FK provenance and zero completed executions, verify repeated inserts, reject foreign project and non-nominated cases, roll back mixed batches, and recheck denied membership. Existing disposable Zyra browser/API E2E now check the full handoff path, persistence across reload, duplicate insertion avoidance and rejected forged execution payloads. Those authored tests must be executed by exact-head CI before this is considered verified.
+
+**Assurance boundaries and next phases:** This proves only a *human test-selection handoff*, not semantic implementation-route-state/journey correctness or test coverage. Source bytes remain pinned but proposed behavior semantics remain unverified. A later supported execution/evidence association must join existing run results, attachments/defects and human QA approval with explicit provenance; never mutate a source receipt to claim success, or construct a second execution store. Live deployed Git checkout, independent assurance team execution, full agent→Zyra→run→evidence→approval acceptance, retention/hard-delete policy and scheduler operations remain release gates.
+
+---
+
+### Recovered pilot feedback and bounded PR #88 repair checkpoint (2026-11-15)
+
+**Scope:** the founder's feedback covers more than MCP Notes/Postconditions.
+The table below reconciles that existing feedback with inspected source, rather
+than creating another specification or claiming all requested capabilities are
+missing. Historical checkpoints above retain their recorded scope. The current
+integration includes the PR owner's work through `3e774a2761df0fd6ff087e655908c7e67cecd915`.
+No live Nesberry cases, project-token grants, production deployment, SDK
+publication or paid resources were changed.
+
+| Feedback | Current source finding and remaining work |
+|---|---|
+| Notes and creation-time Postconditions | Already advertised and handled by the existing MCP case tools. Reuse those native fields; do not add another Notes/final-state field. The separately prepared Notes release, actual serving build, connected-client catalog and deployed read/write acceptance remain distinct evidence. |
+| Workspace project provisioning and secure access handoff | Native browser project creation and project-scoped API tokens already exist. MCP `list_projects` deliberately returns only its token's project; no workspace machine principal/provisioning contract was found in the inspected auth/MCP paths. Define explicit workspace authority and secure new-project-scoped access handoff before extending them. Never reinterpret an existing project token as workspace authority or return credentials in chat/MCP results. |
+| Structured Context/source associations | Existing case `source_refs`, Zyra citation resolution, detail rendering and external requirement-link tools are the owners to extend. `sanitizeSourceRefsInput` checks shape and bounds, not source existence/access; MCP's advertised authoring fields do not establish validated citation authoring. Require actual accessible sources and explicit omit/replace/clear semantics, not arbitrary Context text, invented external keys or another citation store. |
+| Starter case-authoring guidance | Reconcile existing onboarding, knowledge and agent-guidance ownership with the supplied complete versioned project-neutral package. No complete onboarding skill-bundle provisioner was identified in this inspection. Do not copy Nesberry roles, reference inaccessible assets or overwrite workspace customizations; workspace defaults require separate owner/admin authority. |
+| Relationship-based journey/traceability views | Reuse native case IDs, source/requirement links and the existing graph. Source-declared route/state/behavior/journey observations are present, but they do not establish verified behavioral dependencies, saved multidimensional views or coverage. Preserve provenance and identity rather than cloning cases between cohorts. |
+| Change-impact analysis and notifications | PR #88 already supplies graph review, native notifications/recovery, owner source setup, MCP read/capture and durable human-selected run/case handoff links. Repair and verify that implementation rather than creating another inbox, assistant or graph. Source semantics, execution/evidence/defect/approval provenance and deployed acceptance remain separate gates. A change must not automatically edit, fail or approve a case. |
+| Conflict-aware edits, review/recovery and field contracts | The inspected shared `updateTestCaseWithClient` updates active rows without a caller-revision predicate; `updateTestCase` and the advertised MCP update schema supply none. This is a source-level concurrency concern, not a reproduced live lost-update incident. Existing history, Zyra review-batch transactions, omitted-field preservation and per-item bulk outcomes must be retained. Confirm the edit-conflict policy and audit UI/API/MCP field support before extending the shared writer; do not impose all-or-nothing semantics on deliberately per-item bulk creation. |
+| Readiness and source/review freshness | Inspect existing run/reporting/versioning facilities before adding statuses. Case counts, source citations, pinned source bytes, a prepared run and an impact receipt each convey different evidence; none alone means runnable prerequisites, executed coverage or human approval. Target/data/access binding and independent procedure/comprehension review remain the authoring/QA workflow's responsibility. |
+
+**Bounded security/navigation repair:** CodeQL alert
+[#42](https://github.com/1alextest/Tesbooboo/security/code-scanning/42)
+identified HTTP parameter type confusion in the existing graph-history reader.
+Treat `beforeId` as runtime `unknown` and require a primitive string before regex,
+length or bigint operations. Structured HTTP limits remain invalid without
+running coercion hooks. Preserve authentication-first refusal, the existing
+1–100 limit, exact bigint cursor bounds, project authorization and SQL parameters.
+Add structured-query negatives and maximum-cursor acceptance to the existing
+Zyra API spec. Navigation checks resolve and assert exact canonical project/case
+identities instead of assuming UUID address-bar spelling. Retain the owner's
+newer whitespace fix, durable-link persistence/reload/duplicate/forged-outcome
+checks and cleanup unchanged.
+
+**Local evidence:** 27 new paging regressions first produced **8 failures /
+34 passes / 42 total** on the unmodified controller/history implementation.
+After integration, **426/426 tests across 19 suites passed, zero skipped**,
+including all non-database behavior-graph suites, MCP, token authorization and
+native notification contracts. Broader verification initially exposed a Windows
+symlink-fixture privilege failure; the same existing security test now constructs
+a real Git mode-`120000` entry and verifies it before asserting reader refusal.
+No symlink check was skipped or mocked. Backend/frontend/E2E non-incremental
+typechecks, changed-file lint, backend build emission and actual status-JSX
+rendering checks passed. JSX rendering is not browser acceptance; collaborator
+doubles are not PostgreSQL persistence evidence.
+
+**Still required:** fresh exact-head CodeQL and browser/DB CI on this repair;
+the owner's earlier green smoke is not a run of the repaired tree. No configured
+API/browser/database E2E or migration was launched by this local continuation.
+Shared/deployed execution still requires the repository's explicit selection,
+runner and approval gates. Do not declare the alert closed, PR complete or
+release approved from unit/typecheck results. Canonical-source reconciliation,
+F1–F9 / D1–D6 / E1–E7 decisions and independent security/release assurance remain
+outstanding. After this bounded repair, resume conflict/revision and field-contract
+reconciliation alongside the separately authorized workspace handoff design,
+not infrastructure planning or a duplicate graph implementation.
+
+---
+
+### T-455 live QA execution and evidence reconciliation (2026-11-15)
+
+**Read-only, canonical authority:** Extend the existing per-graph-receipt `GET .../changes/:historyId/runs` response; do not add another execution snapshot, mutable outcome store, or alternate approval record. Every human-selected handoff link keeps project/cycle/testcase FK provenance, but reads the **current** native `cycles`, active `cycle_items`, active `testcases`, active `executions`, and active `attachments` metadata. The response explicitly distinguishes a live/native execution row from a historical or deleted case/run.
+
+**Reported fields:** `caseStillInRun` requires an active run + active cycle-item + active canonical case. `execution` is null when no active execution applies. Otherwise expose the actual execution ID/status/time, whether real actual-result notes exist, the stored defect reference if any, and count of active native execution-attachment metadata rows. This does NOT validate stored attachment bytes, that a defect was adjudicated, or that the status applies to the currently deployed build. The UI links directly to the native execution view and offers a read-only refresh after a tester edits that record elsewhere.
+
+**Temporal provenance:** Existing native test runs can contain executions and files **older than the graph handoff**. The response therefore distinguishes `executedAfterHandoff` (native `executed_at >= graph_review_run_case_links.linked_at`) and `evidenceAddedAfterHandoffCount` (active attachment metadata whose `created_at` follows the handoff). An older Failed/Passed status remains visible as history but is explicitly *not evidence for this change*. A later result/evidence item is likewise only temporally subsequent: the source commit, test build, environment, run config, coverage assertions, file-byte availability and human approval still require independent verification.
+
+**Regression basis:** Extended backend SQL/contract checks and migrated PostgreSQL tests create a disposable manual QA run, record a real execution row and native attachment metadata, verify counts/time flags, artificially make the execution/metadata older than the handoff, then soft-delete attachment and cycle-item records to prove no stale active result is reported. The existing Zyra browser E2E verifies that a human-triggered result appears after refresh, alongside a native execution URL and a clear unverified-build disclaimer. Tests do not fake coverage or approve any case.
+
+**Open gates:** Exact-head CI on this revision, running against a genuinely configured approved Git checkout, full linked requirements/behavior/state/journey model provenance, actual stored file access, executable quality evidence, independent assurance-team execution and human QA approval remain required. Do not interpret `executedAfterHandoff=true` or an attachment count as conclusive regression verification.
+
+---
+
+### T-455 approved-case policy and native add bypass side finding (2026-11-15)
+
+**Existing product policy discovered during independent source/baseline challenge:** Tesbo's native run-case picker permits **only `Approved` test cases** to be selected, but the older baseline explicitly documents that this is **client-side-only**: direct `POST /api/cycles/:cycleId/testcases` can still add Draft/In Review cases. That pre-existing native API bypass is *not* cured by a graph-specific UI or metadata relationship guard. Treat it as a cross-feature authorization/business-rule gap requiring a separate native shared-service fix and automated direct-API negative test; do not claim the application-wide approval invariant is already enforced.
+
+**Current graph handoff containment:** Before performing either non-idempotent run CREATE or case attachment, the Zyra graph handoff reads each explicitly selected canonical case through Tesbo's own `getTestCase` API (bounded groups of eight) and refuses any status other than `Approved`. A preflight denial is **not** reported as uncertain CREATE and leaves no new run. The persistent graph-run-case linkage endpoint independently enforces `tc.status='Approved'` in the atomic SQL eligibility gate. Both blocks preserve the human approval rule for this new path; client-server interleavings and the old native add endpoint remain separate risks.
+
+**Regression matrix:** unit SQL contracts assert the server Approved predicate; migrated PostgreSQL checks an Approved candidate links and its subsequent Draft status makes an additional link request conflict without mutation. The disposable Zyra browser journey creates an Approved canonical test case, exercises actual handoff/progression, then demotes it to Draft and asserts the preflight refuses another run CREATE, with no mutation and no misleading ambiguous-outcome banner. This guard prevents this feature from introducing a second known bypass but does not replace server-wide enforcement in the shared native run-add service.
+
+---
+
+### T-456 live QA verification gap summary (2026-11-15)
+
+**Why:** A graph receipt and persisted human case/run handoff are not regression verification. QA also needs a bounded, explicit accounting of which nominated cases have actually been selected, which still lack a subsequent native result, and which have only pre-handoff history. Extend the existing Zyra review instead of building a new status/approval store.
+
+**Source and semantics:** `GraphReviewRunLinks.listForUser` now reads the committed receipt and existing authorized native run-case execution references in one project-scoped SQL request. A pure projector `summarizeQaVerificationGaps` deduplicates canonical same-project case nodes and returns: nominated/selected/unselected counts; cases without a native result recorded after the human handoff; cases with such a subsequent result; cases with later attachment **metadata**; cases with only historical results; excluded malformed/duplicate nominations; explicitly unlinked case-node count; and a source-only-change-needs-triage flag when observed graph nodes/edges changed without case nominations. The response always records `coverageAssertion:'none'` and `approvalAssertion:'none'`.
+
+**No false proof:** Even a later native Passed status or evidence attachment is not sufficient to establish that the executed build matches the captured source, that attached bytes remain accessible, that requirements are fully covered, or that QA approved the change. Post-handoff result means only the native execution timestamp and status exist; pre-handoff Failed/Passed history cannot be laundered into acceptance. No snapshots, duplicate run results, or new mutation endpoints were added.
+
+**Validation:** Unit fixtures cover unselected candidates, Untested executions, post-handoff observations, old results, forged/malformed/foreign graph nominees and zero-case source changes. Migrated PostgreSQL cases assert the gap counts before actual native execution, after subsequent result+attachment metadata, and after moving timestamps before the handoff. The existing disposable Zyra Playwright journey checks refreshed gap counts and the no-coverage/no-approval disclaimer. Exact-head CI and deployed accepted source/build verification are outstanding at authoring time.
+
+**Source-only UI parity (follow-up):** The native review gap section now remains accessible even when a committed source-only receipt nominates zero cases; it shows the `sourceOnlyChangeNeedsTriage` warning but hides run/case selection controls. This prevents an unexplained empty view or a false implication that no tests need investigation. The disposable Zyra browser scenario inserts a source-only committed receipt, opens its review section, asserts a zero-nomination triage warning and no create-run button, then cleans up the synthetic history row.
+
+---
+
+### Native Test Run Approved-only persistence policy — 2026-11-15
+
+**Purpose and authority.** Tesbo already permits only **Approved** cases to be selected in the Test Run picker. That was only a UI rule: direct HTTP, MCP and automated ingestion could attach Draft/In Review cases. This remediation now applies the rule at the **canonical native cycle-item write boundary**, not as a new assistant, test-case store, or independent run system.
+
+**Shared mechanism.** `approved-run-cases.policy.ts` is reused by `LegacyService.addCycleTestCases`, the new native atomic `createCycleWithTestcasesForUser` used by MCP, and `AutomationService.attachCases`. Each new native run-case association must be for an active, same-project test case whose current status is `Approved`. The writer holds the run row's transaction lock, reads current test-case state with `FOR SHARE OF t`, refuses an active non-Approved **new** candidate with HTTP 409 before INSERT, and repeats `t.status = 'Approved'` inside the cycle-item INSERT as defence in depth. A mixed Approved + Draft batch cannot partially add associations or executions. A concurrent case demotion waits for or wins against the writer: the resulting case state and association must be consistent at commit.
+
+**Backward compatibility.** A case already associated with a run is a historical test snapshot. If it later becomes Draft/Deprecated, re-adding to that same active run is an idempotent no-op, not a new attachment; previously recorded results and evidence are retained. Missing, malformed and foreign-project case IDs retain the existing `requested/added/skipped` API accounting without leaking a foreign tenant's case status. The policy rejects a *known, active, same-project* unapproved case rather than reporting that case as a silent skip. Re-adding after an explicit case removal is a **new** association and requires Approved again.
+
+**Multi-path atomicity.** Manual REST `POST /api/cycles/:cycleId/testcases` uses the shared transactional writer. The MCP `create_cycle_from_testcases` tool now delegates to one native transaction for run creation, plan lineage checks and case attachment; a rejected Draft case leaves **no new run**. Automation ingestion uses the same gate both for initial run creation and later attachments; a rejected fresh run rolls back the run itself. Automation result updates to already-attached historical cases remain possible and do not rewrite case approval.
+
+**Assurance and regression evidence.** Unit tests verify every non-Approved status, project/active-case selection, previously attached exclusion and row locking. Migrated-PostgreSQL tests verify mixed-batch rollback, Approved success, foreign/malformed skip, replay after demotion, MCP atomic cycle creation, concurrent demotion, and automated run creation without orphan rows. A dedicated disposable Playwright tenant exercises direct REST, MCP, automation and anonymous access. Positive fixtures in existing smoke/execution suites were updated to create Approved cases; negative cases deliberately remain Draft/In Review. The exact latest-head GitHub CI verdict must be inspected before declaring this release-accepted.
+
+**Remaining distinct work.** Whether `POST /api/projects/:projectId/cycles/from-cases` should truly seed run membership is a separate pre-existing route-behavior question: historically its controller delegates to plain `createCycleForUser` and does **not** add case IDs. This PR does not silently change that contract. **Updated 2026-11-18:** the question was answered — `from-cases` now seeds run membership atomically (see the Test Runs section) and this paragraph records the earlier decision not to change it silently. Source-code semantic evidence, real deployed build-to-execution provenance, independent assurance-team certification and human sign-off remain outside this write-policy correction.
+
+### MBT-001 — Model Studio: governed model-based and graph-based testing (proposal revision 0.3, 2026-11-15)
+
+**Document status:** PROPOSED SPECIFICATION AMENDMENT, NOT SHIPPED AND NOT CANONICAL-FROZEN. The original v1.4.21 archive has been obtained and its same eight documents extended as proposed package v1.4.23, preserving historical content and identifiers. This living-document section is a synchronized reference, not a ninth implementation authority. Structural reconciliation does not establish owner ratification, independent delta sign-off or runtime acceptance.
+
+**Product proposition:** A project-scoped Model Studio for explicit, versioned expected behavior; precise graph-to-canonical-test-case associations; bounded, reproducible generation of test-path **proposals**; human approval; optional governed execution through Tesbo's existing run/attempt/evidence/defect infrastructure; and separate, honest model, case, run and verified coverage views. Existing tests with no meaningful behavioral path remain graph-visible without invented transitions. Prepared models and spontaneous coding both work; neither requires the other as a prerequisite.
+
+**Implemented subset (2026-11-19):** per-project finite-state drafts with immutable revisions; authoring in the studio (create, save the next revision from the current head, archive) and through MCP (`create_behavior_model`, `save_behavior_model_revision`, `link_behavior_model_case`, `get_behavior_model_coverage`, `archive_behavior_model`) with write-scope and plan-lock enforcement; explicit case mappings that record the case revision they were accepted against, are flagged when the case changed or was deleted, and can be unlinked; reachability preview; bounded `PROPOSAL_ONLY` path generation; **human approval of the current revision, bound to the content hash the reviewer saw (`mbt_model_approvals`)**; **conversion of selected proposals into unapproved Draft cases, linked to the exact path digest so a repeated request is idempotent and a fabricated path is refused (`mbt_generated_cases`)**; and a coverage view that reports mappings, staleness, and the observed execution history of linked cases as a separate, explicitly non-model-verification section.
+
+**Governed runs (native source, 2026-11-20):** `POST .../revisions/:revisionId/runs` starts a native Test Run from the model's **current** revision only: saving a newer revision changes the basis and requires its approval. Dispatch refuses an unapproved or superseded basis (`MODEL_NOT_APPROVED`/`SUPERSEDED_REVISION`), a case outside the revision (`CASE_NOT_IN_MODEL`), or a case lacking current exact human review (`CASE_NOT_APPROVED`). The native Approved-only writer remains authoritative. Run, memberships, executions and the immutable `mbt_model_runs` manifest commit in one transaction; partial attachment, missing/ambiguous original occurrence or manifest failure rolls back all those effects. Each manifest case retains its model elements, mapping/generated-path basis and the actual native `cycleItemId`, `executionId` and reviewed snapshot hash captured before commit. Both governed-run status counts and per-element outcomes consume only those exact original active occurrences. Removing and re-adding a case, or adding an unrelated case, keeps the ordinary native run editable but cannot assign the new occurrence to the prior model dispatch. Manifest case counts describe the original dispatch; removed/mismatched original occurrences are unavailable, and legacy or incomplete pins remain explicitly UNKNOWN without reconstruction from today's testcase ID. The UI shows these attribution limits and distinguishes linked-case history from original-dispatch outcomes. This is a bounded occurrence correction, not complete step/attempt/adapter provenance. Case outcomes remain **not** behavioral coverage (`coverageAssertion: "none"`). `run_behavior_model` uses the same native dispatch and cannot approve a model. The native run detail retains the original model/revision/approval link and states that later additions are outside that dispatch. Verification status is pinned in the integration closure record; this source description is not deployment proof.
+
+**Verified integration baseline as of 2026-11-15:** Tesbo PR #88 was merged into `development` at `2026-11-15T10:29:37Z`; merge commit `7fdd4ba1c81914767f8b98dcd3f589011b5cb08b`, final PR head `19d326702d27d7e6eac483617a44805f14419e5c`. The **final PR head** has nine successful GitHub workflow groups, distinct from the older 9/9 run cited earlier. Repository source inspection confirms graph diff/history, project-scoped native case/run handoff, a read-only native execution/attachment metadata join, and Zyra warnings that older/undated results do not verify a newer graph change. This is **source-observed implementation**, not an exhaustive independent code audit, verified deployed build, actual target semantics, or human approval. Model Studio shall reuse those facilities from merged Tesbo, extending expected-model authority, case-to-path mapping, model validation and bounded generation; it is a **separate incremental feature**, not part of #88.
+
+#### MBT-001-A — Reuse and authority boundary
+
+| Existing authority / capability | Reuse decision | MBT addition, not duplication |
+|---|---|---|
+| Projects, organizations, current membership and project-policy guards | Reuse unchanged, always recheck at writes and sensitive reads | Model-scoped permissions only if justified by existing policy gaps |
+| Existing graph node/edge identities, graph capture history, source observation and receipt | Extend with typed, explicit **expected-model** nodes/edges and provenance, without overwriting source observations | Versioned normative behavioral model with transitions/guards/invariants; model and source versions independently addressable |
+| Requirements, canonical cases, native versions/drafts and protected publication | Reuse native case/version authority and native policy substrate; duplicate Review Board is not generic model approval | Exact initial/current case version and protected model/mapping decision extensions in MBT-C-05/06; no second case or approval platform |
+| Native test runs, cycle items, executions, evidence and bugs | Reuse canonical authorities, extend exact provenance rather than duplicate stores | Immutable selection/attempt/step-occurrence manifest and corrections under native owners (MBT-C-05); no inferred pass/fail |
+| Zyra project Copilot and durable project sessions; Tesbo MCP | Extend the single assistant/tool catalog | Propose/inspect/critique models and test candidates, with explicit scoped consent and human confirmation |
+| Current source declaration graph | Read as **observed implementation** only | Candidate mismatches requiring independent checks; never auto-promote observed code into expected truth |
+| Existing test-case repository, suite tree, source-linked tests | Reuse cases and suites | Model Studio visualization/filter; any meaningful case can link many model elements and vice versa |
+| Existing PostgreSQL, lifecycle and CI | Extend/reuse | No Neo4j/second graph database, no parallel task/runs store or another agent |
+
+**Binding invariant:** Expected behavior, observed code declarations, candidate paths, approved case definitions, dispatched execution and observed results are different artifact types. Neither a graph edge nor an AI assertion confers verification, permission, or release sign-off. **Authoritative model storage** must be versioned relational model/revision records using Tesbo's current PostgreSQL project and review policy. Existing GraphSnapshot node/edge shapes become a **derived read-side projection** for viewing/comparison; immutable graph_capture_history remains a source observation/history authority and MUST NOT be silently reused as the mutable expected-model database. This distinction prevents a second authoritative graph and prevents the observed implementation from defining its own expected oracle.
+
+#### MBT-001-B — Actors, consent and publication
+
+- **Owner/authorized maintainer:** manages model scope and model-level policy within project authorization; can request review and enable bounded generation. Approval requires Tesbo's currently effective project permission policy and exact immutable revision. Do **not** introduce hardcoded owner/QA/admin roles by analogy with duplicate Review Board. Apply the explicit proposed action bindings and independent-review default in C-06; actual native policy mapping and ratification are required before activation.
+- **Tester/QA:** may create drafts, map existing cases, critique generated paths, request runs and inspect coverage; cannot silently publish a case/model or bypass native protected publication and the exact model-action policy.
+- **BA/product owner:** may supply authoritative expected business rules/acceptance conditions, but model assertions are not automatically authoritative just because a role typed them.
+- **Zyra/authorized external assistant:** drafts and explains candidate model edits, mapping hypotheses, paths and gaps in the existing Copilot/session pipeline. Server validates all writes. No autonomous model publishing, test approval, production execution or external-data exfiltration.
+- **Execution agent:** uses existing assigned task/attempt/adapter with explicit target/environment/permissions/budget. The agent cannot grant itself a new target, credentials or model authority.
+- **Viewer/executive:** may view permitted model/coverage status and provenance, cannot see cross-project models or confidential test data merely via a graph endpoint.
+
+#### MBT-001-C — Typed domain contracts and lifecycles
+
+**Model identity:** project ID + immutable model ID + immutable model revision ID. A model identity must also carry a project-scoped tenant boundary in relational foreign keys and test-case/model links; changing a display name or suite location cannot transplant identity or inherited permissions. Every revision records author, timestamp, parent revision, content digest, model type, scope boundaries, requirements/decisions cited, assumptions, validation result, policy, authorizing reviewer and status. Never use a title, slug, array index or mutable branch alias as the identity. M1 supports finite state machines and directed sequential journeys; bounded EFSM and finite compiled decision/permission capability is conditional in M2 under MBT-C-01. Temporal/asynchronous/concurrency generation is explicitly UNSUPPORTED until separately specified. Composition is explicit; no implicit graph join across arbitrary projects/models.
+
+**Model revision lifecycle:** MBT-C-02 defines the complete status × active-pointer × action/mode matrix. Approval of r2 never changes active r1; SUPERSEDED is a derived historical label, retirement explicit. Only active approved revisions support CURRENT generation/dispatch; inactive approved revisions require explicit HISTORICAL mode, and retired revisions cannot generate or dispatch. Activation/rollback/deactivation are exact pointer CAS actions with independent human authority. Attempts retain original revision and scope. Draft previews never populate official coverage.
+
+**Core model schema (conceptual, not a second database):**
+
+| Element | Required properties / invariant |
+|---|---|
+| Model | projectId, modelId, modelRevisionId, modelType, startingStateIds, scope, provenance, status |
+| State | stable element ID, human name, observable predicate/oracle, entry/exit invariants where applicable |
+| Transition | stable ID, from/to state IDs, action/event, explicit guard, preconditions, postconditions, expected observation, risk/weight |
+| Guard/data | typed finite or bounded variable domains; pure, deterministic declarative expressions; parameter sources and constraints |
+| Prohibited behavior | explicit rejection/invariant assertion, rather than a fabricated successful transition |
+| Journey | version-bound sequence/branch of explicit transitions with actor/permissions/context and recovery conditions |
+| Case association | project, model revision/element/path, existing canonical case ID and exact case revision/step, relation type, author, provenance/status |
+| Generated proposal | model digest, algorithm, algorithm version, deterministic seed, replay path, data/fixture reference, selected transitions, rationale, bounds, permissions |
+| Execution mapping | selected approved case/path revision → existing native run/attempt/step, real observation, original evidence IDs, timestamps and outcome |
+| Evaluation | covered/uncovered/excluded/unknown with denominator, revision, execution environment/build and evidence confidence; never a single misleading “covered” boolean |
+
+**Status truth matrix:** MODELLED means declared in a validated model; LINKED means an accepted relationship to a real case revision; SELECTED means case/path was put into a run; EXECUTED means an actual native attempt has observations; VERIFIED means a supported assertion against the expected oracle with suitable evidence; APPROVED means human-governed decision on an exact revision. A count in one column MUST NOT populate another.
+
+**Source-of-truth precedence:** Independently justified and human-approved normative requirements/rules and versioned accepted business decisions inform **expected** behavior; source-declared implementation feeds **observed** declarations; actual execution evidence supports reality. If the three disagree, report a contradiction requiring triage with distinct provenance, never auto-conform the expected model to defective code. No inferred or “AI-generated” edge is trusted until accepted under policy.
+
+#### MBT-001-D — Test-case-centric use and workflow
+
+1. **Open any canonical case → View in Model.** Show linked models, exact model revisions/elements, mapped steps, unlinked/uncertain status and path highlights. If a case is exploratory, accessibility, security, performance or otherwise not state-based, show it in the broader traceability graph; never force an invented finite-state path. Many-to-many links are supported and can be proposed, reviewed, rejected, removed and versioned.
+2. **Open model → inspect test inventory.** Accessible list and graph show elements, linked cases, live case revision, approvals, actual native run attempts/evidence, model revision comparison and explicit unknowns. A model can exist without any cases; a case can exist without any model.
+3. **Create or import model.** Manual UI and typed versioned JSON import produce a draft. An assistant may propose a draft using requirements/cases/source observations, marking every supported source and unresolved assumption. Import cannot execute arbitrary scripts, reference foreign projects, auto-activate a model, grant roles or include secrets.
+4. **Validate and review model.** Apply fatal schema/type/security/authority/unsupported errors separately from reachability, infeasible-guard and dead-end diagnostics (MBT-C-03). Unresolved semantic diagnostics block complete normative approval until corrected or explicitly reviewed/excluded with rationale. Finite cycles are bounded traversal inputs, not inherently invalid. Never hide unresolved/excluded elements.
+5. **Approve immutable revision.** Native protected-publication policy and explicit model action bindings in MBT-C-06 apply, not the duplicate Review Board entitlement by analogy. Approval pins model bytes, historical rule versions/accepted snapshots and validation receipt. Material edit creates a new revision. Activation is separate; mappings require separate accepted decisions.
+6. **Generate bounded paths.** User chooses model revision, objective (state, transition, transition-pair, targeted risk, negative rule/invariant), actor/role, environment and deterministic budget. Generator returns previewed proposed paths with rationale, reproducibility/coverage forecast, dead-end/unreachable diagnostics and what remains unknown. It does not create approved cases or dispatch agents by itself.
+7. **Map/reuse first.** Match generated paths against existing canonical cases by accepted mappings and signatures. Default is to reuse/refine cases, not flood the repository with duplicates. New case text remains a draft, including preconditions/fixtures, steps, expected results, negative assertions and side findings separated by scope.
+8. **Prepare native run explicitly.** Human selects approved case revisions and/or approved runnable path adapters, chooses run/environment/data/permissions, sets budget and dispatch consent. Existing attempts, attachments and defects remain authoritative. Report genuine step observations, blockers and discrepancies; preserve raw reports.
+9. **Assess coverage & change.** Compare approved model revisions and independently observed source graph; impact existing mapped cases, paths and actual runs. A code-only change, an unknown implementation declaration or changed expected model creates review candidates, never a failed case or automatic approval.
+
+#### MBT-001-E — Generator and validator contract
+
+**MVP deterministic engine:** A bounded traversal proposes shortest feasible paths, edge and edge-pair coverage for a small approved model under MBT-C-01/02/04. CURRENT requires the active pointer; HISTORICAL is explicit. EFSM feasibility cannot be claimed before the finite interpreter gate. Evaluate a proven library adapter before custom traversal; adapter implementation MUST be replaceable without changing model/run/case authorities. A result includes generator ID/version, seed, path/replay marker, start state, chosen transitions, guard/data bindings, partial coverage, unreachable nodes, stop reason and any unresolved constraints.
+
+**Guard and oracle safety:** Only an independently sourced, approved and falsifiable expected observation can become an oracle; if no oracle is available, generated paths remain proposals and execution coverage stays UNKNOWN. Guards must not turn source code into a self-validating oracle. Use a pure declarative, allowlisted expression AST for booleans, bounded finite sets, integers, strings/enums and equality/comparison; no eval, Function, shell, filesystem, network, SQL, browser scripting, arbitrary JavaScript, reflection, secrets or untrusted model-controlled adapter calls. All guard evaluations deterministic and subject to operation/time/memory limits. External test-step executors are separately authorized adapters, not executable guard language.
+
+**Budgets and termination:** Per-project policy caps graph size, path count/depth, generated input combinations, memory, CPU time, third-party tokens and tool actions. A safe platform-level hard ceiling applies even if a project omits or inflates its limits; actual bootstrap defaults and p95 targets MUST be selected from a measured two-domain prototype, not invented in this spec. Each job has QUEUED/RUNNING/PARTIAL/FAILED/CANCELLED/COMPLETED states, a project-scoped owner, lease, fencing token, cancellation checkpoint, replay key, expiration and audit. A quota failure may not silently schedule an unbounded follow-up. Return partial/incomplete/blocked with diagnostics when budget is reached. Report scoped eligible percentages and whole-model completeness separately under MBT-C-03. A fully known slice may read 100% without claiming whole-model verification; unresolved inventory is UNKNOWN and reviewed exclusions remain visible. Cycles, guard contradictions, combinatorial explosion and lack of a runnable adapter are nonfatal bounded results, not infinite retry.
+
+**Determinism:** Equal canonical model/interpreter/generator/seed/bindings/scope and logical limits produce equal logical ordered output only without emergency interruption (MBT-C-04). Wall-time/memory cutoff returns explicit nondeterministic PARTIAL, not equal-completion promise. For stochastic/property-based extensions persist seed and shrink/replay identifiers; stochastic sampling must not imply exhaustive coverage. Pairwise and concurrency schedule coverage are separately defined dimensions, never equated to edge coverage.
+
+**Engine candidates:** Evaluate GraphWalker (path generators, guards, stop conditions and replay) and fast-check (stateful commands, asynchronous model runs, shrinking/scheduled race exploration) under current license, maintenance, bundle/runtime boundary and cost constraints. Adopt only after small model benchmark against native Tesbo adapters; no new dependency, paid service or remote runner is mandated by the specification.
+Reference: https://graphwalker.github.io/graphwalker-rs/ ; https://fast-check.dev/docs/advanced/model-based-testing/ ; https://fast-check.dev/docs/advanced/race-conditions/
+
+#### MBT-001-F — Coverage and reporting semantics
+
+- **Structural model coverage** uses the explicit E/X/U/O partition and separate mapped/selected/observed/verified numerators in MBT-C-03. Unknown inventory prevents overall percentage; null empty denominator is N/A only if fully resolved. A known eligible subset ratio cannot imply whole-model completeness.
+- **Case-link coverage** shows which accepted model elements are linked to published case revisions, including multiple roles/datasets; it does NOT establish that cases have run.
+- **Run path coverage** maps observed native step/transition results against one pinned approved model revision, accepted case-step mapping and environment/build identity; a projected declaration change or AI assertion is not enough to claim behavior was traversed. A case with multiple datasets/actors has independently scoped observations; one actor's passing result does not verify every role or guard. a successful navigation without oracle evidence is OBSERVED/UNKNOWN, not VERIFIED. Historical evidence remains attributed to the model and build used at the time.
+- **Requirement/negative coverage** distinguishes expected successful transitions, forbidden transitions, invariant enforcement and requirement associations. “Rejected with expected error” can verify a negative test only with real observed evidence.
+- **Risk view** weights elements only when a project policy defines and approves weights; no feedback loop may lower risk simply because an execution agent returned PASS without independent evidence. Nonfunctional/properties that do not map to finite transitions (performance, accessibility, data integrity) retain separate requirements/metrics; no unlabeled ranking based on graph degree alone. Show denominator, filter, version, confidence and evidence freshness in every aggregate; executive dashboards must not hide UNKNOWN.
+- **Staleness rules:** changed model revision, changed test-case revision, environment/role/fixture change, changed source or build, invalidated oracle or ambiguous mapping marks previous assertion STALE or REVALIDATION_REQUIRED without rewriting historical results. Previously executed/approved work is retained with its historical provenance, not silently moved onto the new model.
+
+#### MBT-001-G — Model Studio UX and interoperability
+
+**Placement:** A dedicated “Model Studio” view under existing project Test Management/QA navigation, using native project routing and one Zyra Copilot. The graph is a visualization/projection of authorized backend data, not client-held authority. Case detail adds “View in Model”; model detail shows states/transitions and their linked cases. Existing test-case creation, cascade/minimize forms, native protected publication and evidence views are reused with explicit model-policy extensions; duplicate Review Board remains duplicate review. Large graphs get filtering, search, hierarchy/clustered overview and accessible list/table alternative. Keyboard, screen reader, focus/zoom/reset, high-contrast and mobile/responsive navigation must be tested. Never require a diagram to complete a test.
+
+**Interaction contract:** The current UI baseline, route ownership, authentication behavior and accessibility must first be observed from source and then in a real browser; no visual pixel/focus sign-off is claimed from this proposal. Click node/transition → inspect expected predicate, risk, requirement, known cases, gaps and last native execution; click case → highlight precise accepted model paths and list versioned links; click changed element → version diff and impact; click generated path → preview steps and existing-case reuse suggestions. Native deep links remain stable on reload and no unsaved edits disappear on panel collapse. Unapproved drafts are owner/author-policy scoped and not publicly presented as accepted product truth.
+
+**Import/export:** start with schema-versioned JSON and a rendered read-only diagram; diagram/image import or automatic ML extraction is proposal-only and separately reviewed. Exports redact sensitive data based on project role; must preserve IDs, revision hashes, evidence references and explicit unknown/excluded states. Cross-project imports clone semantic proposals with NEW IDs and require human revalidation, rather than preserving foreign-project permissions or evidence bindings.
+
+#### MBT-001-H — Service/API/MCP contract shape (proposed, not implemented)
+
+- Model drafts: project-scoped GET/POST/PATCH with explicit expected revision token; immutable approve/reject and version-diff actions; writes require current roles, project policy and audit. Server-generated IDs only.
+- Model validation: bounded POST validate on a draft revision; returns diagnostics and coverage feasibility without executing user code or changing published models.
+- Case links: GET and policy-gated POST/DELETE with modelRevisionId + caseId + caseRevisionId + optional step/path and provenance; validate both artifact ownership and active publication; version link decisions.
+- Generation: bounded POST generate with explicit CURRENT/HISTORICAL mode, pointer token, strategy, seed, logical budget, actor/fixture and scope; eligible states per MBT-C-02, resource/determinism per C-04. Store through native task/draft owners only.
+- Execution preparation: POST propose-case/run mapping through existing Tesbo agents/tasks/runs; explicit human authorization and cancellation. New executor adapters are capability-checked and sandboxed; no browser/network actions by the graph engine.
+- Coverage: GET parameterized by model revision, environment/build and evidence mode, with paginated model paths/cases and confidence categories. Unauthorized or ambiguous requests fail closed rather than silently returning an empty but apparently complete graph.
+- Observability: native audit/change and task/attempt events record actor, project, model revision, generation manifest, policy decision, outcome, retry dedupe and errors. Diagnostic data must not contain secrets. Read permissions must be rechecked on every downstream dereference.
+- MCP: extend the existing Tesbo tool catalog, typed input schemas, budgets and user/project consent; external agent cannot submit self-attested runtime “passed” or approve the model by writing JSON.
+
+**Backend rule:** Versioned model/revision/element/relationship records use project-composite foreign keys, immutable approved snapshots and restricted delete semantics. Referenced provenance uses targeted RESTRICT at native parent deletion owners while reliance/holds exist, with archival and authorized privacy-erasure handling under MBT-C-05. This is a proposed explicit policy needing native-owner ratification and migration proof, not a claim existing cascade FKs are safe. All writes check authorization within their database transaction; immutable revisions use optimistic concurrency plus project/organization FK constraints and idempotency keys. A stale revision, foreign case, revoked member, duplicated approval, mixed valid/invalid batch, conflict or lost network response cannot partially publish or cross-link unrelated records. Side-finding proposals remain separate from the selected path.
+
+#### MBT-001-I — Nonfunctional and assurance requirements
+
+| ID | MUST requirement and evidence gate |
+|---|---|
+| MBT-NFR-01 | Tenant/project isolation on every model, revision, link, path, preview, export, generation job and native run read/write; negative IDOR/MCP tests |
+| MBT-NFR-02 | No untrusted code evaluation from model text/guards/imports; input caps, parser security, resource/timeouts, path-traversal rejection |
+| MBT-NFR-03 | Deterministic logical work/output under C-04, emergency resource cutoffs explicitly partial; native aggregate admission, fencing, cancellation and measured safety caps |
+| MBT-NFR-04 | Immutable versioned models; optimistic concurrency/idempotency and atomic review/publish linkage; error replay and dual-review races |
+| MBT-NFR-05 | Evidence/provenance truth: executed/verified/approved are independently established; NEVER infer pass/fail from a modeled path |
+| MBT-NFR-06 | Accessibility parity: keyboard-only journey, screen reader list fallback and non-color-only statuses on dense graph |
+| MBT-NFR-07 | Platform-agnostic model schema and adapter: web, API, mobile and non-browser contexts without mandatory Chromium/OpenCode |
+| MBT-NFR-08 | Model source and version changes invalidate only affected claims; stale/unknown remain visible; old execution history preserved |
+| MBT-NFR-09 | Security-sensitive roles, invalid data and destructive transitions require explicit policy authorization and safe fixture/cleanup plan |
+| MBT-NFR-10 | Reuse/extension proof and dependency/license review before committing an external graph-generation runtime; no paid required service |
+| MBT-NFR-11 | Model deletion, retention, restoration, migration and export policy honors canonical records and hard-delete/soft-delete behavior |
+| MBT-NFR-12 | UI graph performance: paginated/bounded loads, progressive search, no uncontrolled full project graph fetch; measured p95 targets to be established before phase sign-off |
+
+#### MBT-001-J — Acceptance scenarios and falsification suite (all NOT RUN)
+
+| Scenario | Expected result |
+|---|---|
+| MBT-AC-01 | Existing manual case with no model remains visible and actionable; no fake model path |
+| MBT-AC-02 | One case links to multiple transitions/roles; one transition links to multiple cases without duplicate case entities |
+| MBT-AC-03 | Draft model can be previewed by authorized author but cannot affect official coverage |
+| MBT-AC-04 | CURRENT uses exact active approved revision; HISTORICAL requires explicit mode/consent; retired cannot dispatch; approve without activation and rollback preserve pointer/history semantics in C-02 |
+| MBT-AC-05 | Changed guard/source requirement produces proposed impact/stale relationship, not automatic Failed case |
+| MBT-AC-06 | Generator on finite cyclic graph terminates at budget and returns partial outcome, never falsely 100% |
+| MBT-AC-07 | Dead-end, unreachable state, contradictory guards and missing oracle are reported with explicit denominator |
+| MBT-AC-08 | Same full deterministic inputs/logical limits produce identical logical manifest without emergency interruption; differing operational envelopes allowed; emergency cutoff is explicit PARTIAL under C-04 |
+| MBT-AC-09 | Negative transition/denied role test requires observed refusal and evidence, not mere model prohibition |
+| MBT-AC-10 | Competing decisions on the same revision/version have one effective decision; independent revisions may both approve without activation. Competing same-pointer activations have one winner; stale submission conflicts |
+| MBT-AC-11 | Revoked reviewer/foreign project fails read, write, export, generation and linked case/run dereference |
+| MBT-AC-12 | Imported malicious expression/code, hostile path, oversize file and secret-bearing data are rejected/redacted |
+| MBT-AC-13 | AI-generated case draft never becomes published without exact human approval; duplicate existing case preferred |
+| MBT-AC-14 | Receipt-backed model/link writes replay once with same key/body and conflict on changed body. Unknown native run/case creation stops blind retry and requires explicit reconciliation across reload (C-07); link dedupe never claims create idempotency |
+| MBT-AC-15 | Cancelled execution stops Tesbo-side authorized further actions; no false reversal of in-flight external effects |
+| MBT-AC-16 | An “observed source route” contradictory to an approved expected workflow is displayed as disputed, not self-validating |
+| MBT-AC-17 | Soft-delete/archive retains historical references; referenced hard delete is refused; authorized erasure/restore preserves permitted receipt and UNKNOWN where bytes unavailable, never automatic current verification (C-05) |
+| MBT-AC-18 | Model revision change preserves old execution and labels current coverage STALE until reverified |
+| MBT-AC-19 | Graph-only case navigation works with keyboard/list fallback and does not lose unsaved edits on minimization |
+| MBT-AC-20 | Second non-DMIS project, distinct technology and actor roles pass equivalent schema/auth/runner scenarios |
+| MBT-AC-21 | Bulk mapping of 199 valid and 1 foreign case rejects atomically with no leaked project metadata |
+| MBT-AC-22 | Model import of unexpected nested/recursive schema fails deterministically within budget, not process crash |
+| MBT-AC-23 | Source history incomplete or unapproved cannot be used as complete model/coverage denominator |
+| MBT-AC-24 | Real target execution through supported adapter records original evidence and separate actual vs expected outcomes; unsupported adapter returns BLOCKED |
+| MBT-AC-25 | Target operation permission is revoked between preview and dispatch; dispatch is refused, no in-flight privilege escalation |
+| MBT-AC-26 | Concurrent model run/role-change/graph-version updates cannot attach evidence to another tenant or rewrite approved version |
+
+Each acceptance scenario needs an owner, setup/fixture, actionable steps, expected result, test level and proof link in existing QA plan. These scenario IDs are provisional extension IDs, NOT new canonical QA counts and never “passed” merely by appearing here.
+
+#### MBT-001-K — Implementation increments and stop/go criteria
+
+**M1: Requirements-to-model feasibility pilot (read-only + governed drafts).** One small lifecycle (e.g. authentication or approval, generalized beyond DMIS) and a second unrelated sample app. Establish authoritative expected-state source and approval; pin case/model versions; implement model validation + native list/graph viewer + cross-linked existing case detail. No automated target execution. Prove no duplicate data domains and all MBT-AC-01–05, 07, 10–12, 17, 19–21.
+
+**M2: Reproducible traversal and candidate reuse.** Benchmark native small-graph traversal versus GraphWalker and fast-check adapters against identical fixture + outcome schema. Select maintainable engine(s), implement capped deterministic path/negative/invariant proposals and native Zyra/staged-case proposals and protected case publication; duplicate Review Board only supplies reuse suggestions. Demonstrate deterministic manifest, budget exhaustion, adversarial guards and zero implicit publication. Block if model semantics remain unverified.
+
+**M3: Authorized execution and evidence.** Map selected approved paths/cases to existing native Tesbo runs and supported Chrome/Playwright/Appium/API execution tools, with immutable attempt manifest, evidence, cleanup, cancellation, eventual retry and human approval. Not all adapters must ship together; missing adapter → BLOCKED. Verify actual target result independently from model and source declarations.
+
+**M4: Change-aware graph assurance and operations.** Connect approved model changes and verified source graph observations to affected cases/paths and native run evidence; measured regression prioritization, freshness/unknown metrics, multi-tenant load/security, long-run resource costs, retention and operator playbook. Run independent assurance lenses and live journeys before launch.
+
+**Exit gates:** model schema, role/authorization, canonical reuse map, no second graph/test/approval authority, protected publication, algorithm reproducibility, bound on runtime/side effects, proof of actual outcome semantics, accessible UI, and two different target domains. Add an explicit **counterexample-quality gate**: inject a known mismatch where observed code permits a forbidden operation while the approved expected model denies it; the engine MUST find/report the contradiction, not learn it as expected. Repeat the symbolic target fixture with sequential actor switches and a stale model revision. Requested target concurrency/temporal generation MUST return UNSUPPORTED_SEMANTICS in M1/M2. Separately prove native Tesbo activation/job/revocation races through real authorized integration tests; those are not target-model race coverage. Any later target concurrency adapter/engine needs its own versioned semantics and consent before coverage claims. For high-impact target writes (destructive, paid, personal data or production), require separate per-attempt execution authorization with target-level enforcement and preapproved cleanup; model approval alone is insufficient. White must retain BLOCKED while substantive gaps or independent proof are outstanding. Human owner approves merge/release, not the model generator.
+
+#### MBT-001-L — Required distribution into canonical eight specifications
+
+The following is a **change map**, NOT a claim these files were edited or validated. The original Tesbo_Specifications_v1.4.21.zip bytes were obtained in this correction pass; proposed v1.4.22 extends the same eight documents in place with structural/diff validation. The table below assigns normative ownership of the distributed contracts; the living appendix is a reference. Preserve all current IDs and contents, add only reconciled extension identifiers, and run structural/coverage validation plus old/new diff.
+
+| Existing canonical file | MBT-001 insertions |
+|---|---|
+| 00_README.md | Scope, normative/observed/evidence distinction, reuse matrix, versioning/assurance gates and no ninth source |
+| 01_PRODUCT_REQUIREMENTS.md | Functional MBT requirements, permissions, expected-vs-observed truth model, acceptance criteria |
+| 02_WORKFLOW_AND_UX_SPEC.md | Case→model→path→run flows, manual/non-model cases, review states, negative/recovery journeys |
+| 03_TECHNICAL_DESIGN.md | Model/revision/transition/guard/link schemas, data provenance, transaction/security/graph boundaries |
+| 04_MCP_API_CONTRACTS.md | Typed read/write/generation/execution APIs, consent, version conflicts, error/IDOR/budget contracts |
+| 05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md | M1–M4 tasks, MBT-AC-01–40 planned scenarios, 24-journey/branch crosswalk and evidence regression matrices |
+| 06_IMPLEMENTATION_AGENT_BRIEF.md | Reuse-first migration/implementation instructions, adapter experiment, proof-before-claim, no extra assistant |
+| 07_UI_DESIGN_TASKS.md | Source-grounded baseline, Model Studio/Cases graph interaction, keyboard/reader fallback, approval and empty states |
+
+**Review provenance:** independent agents reviewed revision0.1; original receipts and White NOT FROZEN/Graph NOT CLEAN remain unchanged. Revision0.2 addresses their written findings; it has not received independent delta sign-off. No code, database migration, UI or model generator is implemented by this specification. Do not treat as frozen normative requirements until owner-policy ratification and independent revised-artifact closeout; runtime claims require executed evidence.
+
+
+#### MBT-001-M — Open design decisions and verification requirements
+
+These are proposed written policy choices and remaining ratification/acceptance evidence. The status table distinguishes document reconciliation from owner decisions and executed proof. They are not a team verdict, a substitute for external review, or directions to a reviewer about what to find.
+
+| ID | Disposition | Required closure before model spec freeze |
+|---|---|---|
+| MBT-GATE-01 | DOCUMENT RECONCILED; FREEZE PENDING | Original v1.4.21 bytes obtained and same eight documents extended as v1.4.22, with old content/IDs preserved except explicit revision metadata. Structural evidence is separate from human approval and independent delta assurance; living appendix is reference only |
+| MBT-GATE-02 | OWNER RATIFICATION / IMPLEMENTATION PROOF OPEN | C-06 defines action-capability binding, deny-unset, independent-review proposal and human grants. Ground actual native writer/entitlement bindings and ratify policy; duplicate Review Board is not model approval |
+| MBT-GATE-03 | BLOCKING | Prove expected-model authority is independent of observed implementation and that the injected forbidden-operation counterexample is detected |
+| MBT-GATE-04 | WRITTEN CHOICE RESOLVED; RATIFICATION / PROOF OPEN | C-05 chooses targeted RESTRICT while provenance is referenced, native archival and authorized privacy erasure/UNKNOWN. Ratify data schedule/holds and prove migration/delete/restore/evidence behavior |
+| MBT-GATE-05 | BLOCKING | Execute model UI source-baseline and real keyboard/screen-reader journey; screenshots or mock graph views alone cannot certify design truth |
+| MBT-GATE-06 | BLOCKING | Complete two target-domain prototype: reachable/denominator calculations, bounded cyclic and infeasible guards, seed/replay, full error/cancel/recovery paths, actor-dependent semantics and actual adapter cost measurements |
+| MBT-GATE-07 | REVISION0.1 REVIEW COMPLETE; DELTA REVIEW OPEN | Original independent multi-agent receipts retained; NOT FROZEN/NOT CLEAN remain. Review revised v1.4.22 and revision0.2 at a new pin using unchanged charters; do not self-issue closeout |
+| MBT-GATE-08 | BLOCKING | Human-approved target-execution scope, PII/destructive controls, real adapter evidence and audit; no modeled path can self-authorize production effects |
+| MBT-GATE-09 | BLOCKING | Complete existing-run / native-execution evidence linking with exact case/model/build revision, model stale-state recovery and a read-only executive truth table with UNKNOWN explicitly visible |
+
+**Review scope:** MBT-001 is a proposed capability, not implemented behavior. Use the existing canonical review-team charters and their orchestration unchanged to review this specification. Reviewers must receive the pinned specification, applicable project policy and source context, without any previous answer, suggested findings, issue list or reviewer verdict. A full team-run receipt is required before claiming those teams signed off. PR #88's separately evidenced merge and CI do not validate MBT behavior.
+
+## Model Studio revision 0.3 — assurance corrections (15 November 2026)
+
+**Status: proposed design, NOT FROZEN, NOT IMPLEMENTED.** These contracts resolve the written ambiguities identified in the independent review of Tesbo `a24e47ad8a5a850fd6696aec7ba1f09905322b02`. They extend existing canonical owners. Product-policy ratification, source/writer census, implementation, independent delta review and runtime proof are separate gates. The original team reports and charters are unchanged. The eight canonical files remain the implementation specification; the living feature document is a synchronized reference.
+
+### MBT-C-01 — Finite state semantics and supported capability boundary
+
+M1 supports ordinary finite state machines and directed journeys with fixed, explicit actor/fixture bindings. M2 may enable bounded EFSMs only after the interpreter passes the fixtures below. Permission/decision models compile to the same finite semantic representation; no separate decision runtime is promised. Every model and adapter declares a versioned capability set. Unsupported constructs fail validation with `UNSUPPORTED_SEMANTICS`; they cannot silently degrade into an ordinary edge traversal.
+
+An EFSM configuration is `(stateId, sharedValuation, actorValuations, immutableBindings)`. Each variable has a unique stable ID, explicit SHARED or ACTOR scope, type, finite domain and initial value for every bound actor. Integers have inclusive finite bounds; enums/strings have enumerated finite domains. Secret values are credential references, never model variables. Actor IDs and role-policy revision are pinned input, not inferred from the authenticated Tesbo principal. No implicit actor change is allowed within a transition.
+
+One sequential model step has this exact order: evaluate source invariant and precondition against the pre-state; evaluate the guard; calculate all declared assignments from that same pre-state; apply assignments simultaneously to a candidate valuation; validate types/domain, destination invariant and declared postcondition; then admit the symbolic transition. An unassigned variable retains its value. Duplicate assignments to the same scoped variable, undefined symbols, unbounded domains, impure expressions or out-of-domain results are invalid. Guard FALSE means infeasible for that configuration; evaluation error means INVALID, never FALSE or PASS. Postconditions assert the candidate state; they never solve missing assignments. Branches are separate stable transition IDs, not unspecified nondeterministic effects. State equality includes all valuations and actor bindings; a generator cannot merge distinct valuations because their state labels match.
+
+Symbolic effects describe the expected model only. A separately authorized adapter performs target actions, records pre/post observations and evaluates the independently approved oracle; a symbolic assignment does not prove a target change. Actual observations cannot silently mutate the expected valuation to make an assertion pass. Disagreement is a recorded mismatch or UNKNOWN when required observation is unavailable.
+
+Each independent generated path starts from its declared initial valuation and fixture revision. Before target replay, the adapter must establish/verify the fixture baseline through an authorized reset or prove the declared precondition from observations. Reset is a separate recorded operation, cannot delete prior evidence, and failure blocks the path. Sequential multi-actor paths may use explicit actor switches between transitions while sharing SHARED variables; they do not establish concurrent safety.
+
+M1/M2 do not support virtual time, asynchronous event scheduling, eventual-consistency windows, interleaving exploration or race-coverage claims. Such requests return `UNSUPPORTED_SEMANTICS`. A future capability must specify clock/event ordering, bounded observation windows, schedule/reset identity and replay semantics before enabling them. Independent concurrency testing of Tesbo's own authorization/activation/job mechanisms remains required; this scope limit does not waive those tests.
+
+Hand-calculated fixtures: (a) `remaining=1`, reserve guard `remaining>0`, effect `remaining:=remaining-1`: first reserve yields 0, a second reserve is infeasible; (b) two actors share remaining: sequential A reserve prevents B reserve; actor-local counters do not change each other; (c) reset restores remaining=1 for the next independent path; (d) `x=0`, increment then guard `x=1` admits the second step; (e) duplicate assignments, overflow and undefined actor are invalid; (f) a requested concurrent reserve race is UNSUPPORTED, not “covered.” These fixtures discriminate feasible-path correctness from simple edge visitation.
+
+### MBT-C-02 — Revision, activation and historical eligibility
+
+Approval lifecycle and activation are independent axes. Lifecycle is DRAFT → PROPOSED → IN_REVIEW → APPROVED or REJECTED. Changes to submitted content invalidate the review receipt and produce a new draft revision; approved content is immutable. APPROVED → RETIRED is an explicit action, never an automatic effect of approving another revision. SUPERSEDED is a derived display label for an approved revision formerly active and now inactive; it is not loss of approval or deletion. Rejected/retired bytes and decision history remain retained.
+
+One active pointer exists per `(projectId, modelId, declaredScopeId)`. Model and revision identities and this pointer are the SAME FR-117 family-owned authority under C-12; each M1/M2 family has one immutable scope. Scope identifies the model's normative applicability, not arbitrary UI filters. Overlapping model scopes require an explicit composition/conflict decision; the platform must not select an oracle by last write. Activation atomically compares `expectedActiveRevisionId` (including null) and `expectedPointerVersion`, validates approval/current policy, writes the pointer and activation event, and increments its version. Approving r2 leaves active r1 unchanged. Concurrent activation against the same pointer version has one winner; the loser receives `409 ACTIVE_REVISION_CONFLICT`. Rollback is activation of a previous still-approved revision with a new event; it never rewrites an attempt or previous activation event. Retiring the active revision is rejected with `409 ACTIVE_REVISION_IN_USE`; explicitly deactivate it or activate a replacement first. Retirement cannot be undone implicitly; re-adoption creates a new approved revision preserving its origin.
+
+| Revision state / selection | Preview and compare | Normative generation | Run preparation / dispatch | Coverage interpretation |
+|---|---|---|---|---|
+| Draft/proposed/in-review/rejected | Authorized draft inspection only | No; draft-only exploratory preview clearly labeled | No normative dispatch | No official denominator |
+| Approved and active in declared scope | Yes | CURRENT mode | Current target consent and exact binding required | Current claims only for matching build/actor/fixture/oracle scope |
+| Approved, inactive, never active | Yes | HISTORICAL/INACTIVE mode explicitly selected | Historical-labeled replay only with exact consent | Separate revision-specific view; never current |
+| Approved, formerly active (derived superseded) | Yes | HISTORICAL mode explicitly selected | Historical-labeled replay only with exact consent | Original history retained; no current promotion |
+| Retired | Authorized historical inspection | No new generation | No new preparation/dispatch | Retained historical observations only |
+
+CURRENT requests include the expected active pointer version. Recheck it at admission, protected commit and immediately before dispatch. If it changes, return `409 MODEL_SCOPE_CHANGED`; preserve selections and require a refreshed preview/consent, or a new explicit HISTORICAL request. Do not silently convert modes. An already dispatched attempt stays pinned and is marked historical relative to the new pointer; late results cannot attach to the newly active revision. Activation, mapping acceptance, case publication and target execution each require their own action authorization.
+
+### MBT-C-03 — Validator classes and exact coverage arithmetic
+
+FATAL errors block approval/generation: invalid schema/IDs, dangling endpoints, missing required initial configuration, invalid domains/assignments, unsafe AST, unauthorized cross-project reference, unsupported semantics, missing normative oracle or unresolved authority for a claimed normative assertion. Diagnostics include stable code, element/configuration identity and reason; input/security failures persist no partial imported model.
+
+An unreachable element, guard unsatisfiable in a reachable configuration, disconnected component or dead end is a semantic diagnostic, not automatically a fatal syntax error. It remains unresolved until corrected or explicitly accepted as an intentional exclusion on the exact revision by the authorized reviewer with reason and source. Unresolved diagnostics block approval of a model claiming complete normative scope. A prohibited operation is a negative assertion with an expected refusal/invariant, not a successful traversable edge. Negative assertions have their own denominator and observed refusal oracle.
+
+For a requested finite revision/scope and dimension, partition all elements into disjoint known eligible E, approved excluded X, unresolved eligibility U, and outside-request O. Unknown inventory cardinality is separately flagged. The eligible set is computed from approved semantics/bindings, not from which cases happen to exist or which paths the generator visited. Independently compute mapped M, selected S, observed T and verified V subsets of E; no stage implies another. Report counts and `|M|/|E|`, `|S|/|E|`, `|T|/|E|`, `|V|/|E|` separately. If E is empty, percentage is null and label NOT_APPLICABLE only when eligibility is fully resolved; otherwise UNKNOWN. Unknown total inventory suppresses an overall percentage. Known subset percentages may appear only as “known eligible subset,” with unknown count prominently visible.
+
+Scoped 100% is permitted for a fully known eligible slice, labeled with revision, mode, dimension and filters. It never implies whole-model verification. Whole-model VERIFIED_COMPLETE requires a complete inventory, all required eligible assertions verified for the declared execution scope, no unresolved unknowns, no required element outside the request, and no unverified negative/non-state obligations. Approved exclusions yield COMPLETE_WITH_EXCLUSIONS rather than unqualified whole-model complete. A generation forecast is not measured execution coverage.
+
+
+
+**Coverage unit version MBT-COVERAGE/1:** STATE and TRANSITION dimensions key E by `(projectId, familyId, modelRevisionId, dimension, elementId)` within pinned scope; repeated actor/data observations never multiply a structural element. ACTOR_ASSERTION keys E by that structural key plus exact oracle/assertion ID/version, actor/role-policy revision, declared finite valuation/configuration binding, fixture/dataset revision and environment/build scope. These are separate requested dimensions, not one mixed denominator. Ordinary transition coverage does not require exhaustive valuations; whole-model verification also requires all approved required assertion obligations. Eligible keys come from approved declared semantics/applicability, not from observed executions. Repeated occurrences and correction events support the same obligation rather than increment E or V. Unsupported or incomplete eligibility is U/UNKNOWN; unbounded cross-products are not implicitly enumerated. Fixture: one transition, two required actor assertions; actor A verified once or twice yields structural1/1 and actor-assertion1/2, never2/2; changing a model/oracle/actor-policy/fixture/build binding requires a new scoped claim.
+
+Required display fixture: two reachable observed/verified edges, one reviewed exclusion, one unresolved element, no outside filter: `verified 2/2 known eligible (100%); excluded 1; unresolved 1; whole model UNKNOWN`. Remove the unresolved element with a justified resolution: the scope may read `2/2 (100%); excluded 1; COMPLETE_WITH_EXCLUSIONS`. Empty E with unresolved U reads `—; UNKNOWN`, never 0% or 100%. Failed projection/data fetch reads UNAVAILABLE and retains the last result as stale; it cannot become an empty successful denominator.
+
+### MBT-C-04 — Deterministic traversal and bounded native jobs
+
+Deterministic inputs are canonical model bytes/digest, semantic schema/interpreter version, generator/version, seed, ordered strategy parameters, actor/role-policy and fixture revisions, initial configuration, objective, scope and logical limits. Canonical serialization defines stable ID ordering (UTF-8 byte order), adjacency/queue tie-breaking, seeded PRNG/version and finite value enumeration. The engine counts each candidate transition guard/effect evaluation as one work unit, including infeasible candidates; stops before exceeding maxWorkUnits, maxPathDepth, maxPaths or maxInputCombinations; and records units consumed and the exact deterministic stop reason. Limits are part of the input digest. Each engine version must specify its strategy ordering; libraries with nondeterministic output cannot claim deterministic support.
+
+Equal deterministic inputs with no emergency interruption produce byte-equivalent ordered path/configuration/valuation output and deterministic stop fields. Operational envelope fields (job IDs, timestamps, host, duration, telemetry) are outside that equivalence and outside the logical manifest digest. Execution observations are never included in this deterministic-output promise. Wall-time, memory, CPU or provider interruption is an emergency protection: return PARTIAL with `EMERGENCY_RESOURCE_CUTOFF`, observed prefix and diagnostics, never a deterministic-completion claim. Delayed evaluation with adequate emergency allowance must produce identical logical output; a forced timeout may differ and must be visibly partial. M2 promises replay from the beginning, not opaque resume; resumability requires a later versioned frontier/counter/PRNG checkpoint contract.
+
+Reuse Tesbo's native task/job, BullMQ, project-limit and audit owners. Before admitting any generation/retry, reserve bounded capacity atomically against BOTH project and platform active-work/rate/spend quotas. Charge actual work/tool/provider consumption cumulatively across attempts, without double charging duplicate command receipts or refunding consumed work after cancellation. Admission failure returns `429 RESOURCE_LIMIT` plus retry guidance and causes no automatic follow-up. Unknown or unset safety caps disable generation with `503 RESOURCE_POLICY_UNCONFIGURED`; there is no uncapped default. Numeric defaults, fairness and p95 objectives must be measured and ratified for the two-domain pilot before M2 activation; no measurements are claimed here.
+
+Native jobs follow QUEUED → RUNNING → COMPLETED/PARTIAL/FAILED/CANCELLED. Cancellation first records CANCEL_REQUESTED (nonterminal), prevents new claims/actions, then reaches CANCELLED after fenced ownership reconciliation. Lease expiry ends the old attempt and fences its writes; retry creates a new attempt under the same logical request with a new generation, subject to cumulative budget and retry cap. Terminal states are immutable. Every heartbeat/result/attachment publication checks project, attempt and lease generation transactionally. A late worker cannot publish, release another worker's reservation or consume fresh credentials. Release unused reservation exactly once at terminal reconciliation; shared active slots are not freed merely because an old process missed a heartbeat while its effects are uncertain. Admission counts unresolved in-flight effects until reconciled. The native job owner is responsible for orphan lease accounting, backlog/age/stop-reason telemetry and bounded operator recovery; no second scheduler/job store is introduced.
+
+### MBT-C-05 — Native versions, rule provenance, evidence and retention
+
+Accepted normative reliance pins source kind/provider, native source ID, exact revision where available, retained canonical content digest/snapshot, approval/acceptance event and actor/time, applicability scope and retrieval provenance. A mutable latest URL, provider cache row, source graph node or title is not historical authority. When the provider lacks immutable revisions, retain the authorized approved snapshot under native retention and its digest; absent lawful retained content/authority, the assertion is EXPECTATION_UNKNOWN. Provider update/delete/reconnect creates impact candidates and read restrictions; it does not replace accepted history or silently change an oracle.
+
+The native case owner must expose an immutable content version for BOTH initial and current case content. Reuse trustworthy existing version/snapshot records; extend the native version contract if current content lacks an address. On new selection, atomically capture/resolve the exact approved case revision and stable step/condition IDs, content digest, capture origin/time and approval event. This snapshot is a native version artifact, not a second editable case. A historical OLD-row trigger alone does not prove an unedited initial/current version. Legacy links gain no fabricated contemporaneous version: annotate UNKNOWN or RECONSTRUCTED_UNVERIFIED with reconstruction limits; never promote them to VERIFIED from today's case text.
+
+An accepted mapping event pins model revision/element/path, exact case revision/step/condition and actor/data scope, proposer, acceptor, source and status. Add/reject/supersede/remove are versioned decisions. Removing a mapping is a versioned no-new-dispatch boundary. Preparation records a frozen selection but does not freeze permission to rely on the mapping later. Before preparation and again at claim/dispatch under the canonical native owner, require the exact accepted mapping event still eligible and not removed/superseded. A change before dispatch returns `409 MAPPING_CHANGED`/BLOCKED, preserves the selection and requires fresh accepted mapping plus refreshed consent under a new operation before retry. This applies equally to CURRENT and HISTORICAL work. Once an occurrence has actually dispatched, its original mapping/consent is retained as historical reliance; later removal alone neither rewrites nor cancels it. Explicit cancellation or target/membership revocation remains the separate authority to fence further actions. The remove-versus-dispatch transaction must have one serialization point: if removal commits first, no new dispatch; if dispatch commits first, that exact occurrence retains its prior reliance. Preparation and a queued task are not proof of dispatch. Mixed-validity batches are atomic, with no foreign-object metadata in errors. Suite/name moves preserve identity; material edits create new versions and revalidation candidates.
+
+Before dispatch, the native run/attempt owner retains an immutable selection manifest referencing model and case versions, mapping acceptance event, ordered path/configurations, generated manifest digest, native run/cycle item, attempt ID, step OCCURRENCE ID (including repeated visits), actor/role-policy, dataset/fixture, target environment/build or explicit unknown, adapter/version, independently sourced oracle/evaluator version and exact consent. A run/case pair is insufficient to distinguish reruns, roles, datasets or repeated transitions. The existing picker must gain an opt-in occurrence-aware Model Studio view without silently changing other consumers. Reuse native execution/evidence panels and APIs; extend references/provenance instead of storing copied mutable results in the model domain.
+
+Native observations retain original received report, timestamps/source, expected-vs-actual value, original evidence IDs/digests and admission state. Evidence supports VERIFIED only when bytes, ownership, exact occurrence and oracle adequacy are established under policy. Attachment count, temporal ordering, HTTP 200, navigation or agent PASS alone is not proof. Missing/quarantined/quota-skipped/inaccessible bytes give UNKNOWN/PARTIAL; they do not fabricate evidence or erase the actual action. Corrections append authenticated correction events pointing to the original and reason; the effective result is a native projection. Manual UI, automation reporter, API/MCP, jobs, imports and late callbacks must share this occurrence/correction owner. Findings link the exact occurrence, with direct-failure and side-discovery distinguished.
+
+**Chosen proposed deletion behavior: RESTRICT referenced provenance.** While a model decision, accepted mapping, selected/queued plan, attempt/assertion, retained review or preservation hold relies on a record, hard deletion of that record or its owning project/case/run/model is rejected with `409 PROVENANCE_IN_USE` under the native deletion owner. Existing soft-delete/archive remains available according to policy and removes current eligibility without erasing retained IDs/content. Apply targeted constraints to the relevant native delete paths; do not assume V147 cascade FKs already implement this. Evidence bytes with retained reliance require a preservation hold; deliberate lawful erasure follows a separately authorized native retention process that keeps a minimal access-controlled erasure receipt/digest where permitted and downgrades unavailable proof to UNKNOWN. No fabricated snapshot may stand in for erased bytes. Product privacy/retention owner must ratify the schedule and legally permitted metadata before real sensitive data is admitted. Default referenced provenance has no automatic expiry; this is a proposed integrity rule, not a universal legal retention period.
+
+Restoration preserves original identity and audit, rechecks current access, and restores historical visibility only. It never reactivates a model, reaccepts a removed mapping, restores revoked consent or makes evidence current VERIFIED. Native deletion/migration/restore transactions must be exercised with historical and legacy fixtures before this contract can be called implemented.
+
+### MBT-C-06 — One server action policy and exact human decisions
+
+Reuse native project membership, writability, entitlement, protected publication, audit and target permission owners. The duplicate Review Board remains the duplicate-recommendation feature; its Pro owner/manager gates are not the Model Studio approval policy. Reuse its transaction/locking/audit/UI patterns where appropriate, not its recommendation rows or commercial entitlement by name. No new pricing tier or bypass of current plan/storage/read-only restrictions is authorized. Existing approved protected-publication policy takes precedence; the additive Model Studio binding below must be explicitly ratified and mapped to actual native capabilities before activation. Unset bindings DENY the action and give the owner a configuration explanation; they do not infer permission from a role string.
+
+| Action | Required effective native capability/binding | Additional exact checks |
+|---|---|---|
+| Read/list/history/dereference | Project read + artifact visibility | Current access at each hop; draft confidentiality |
+| Draft/edit/import/submit | Project write + case/model authoring binding | Expected draft version; imports draft-only |
+| Accept/remove case mapping | Project write + mapping-review binding | Both exact artifact versions; no inherited acceptance from model approval |
+| Approve/reject model | Protected-publication/model-review binding | Human authenticated decision, exact digest/validation/source receipt; independent reviewer default |
+| Activate/deactivate/rollback/retire | Model-maintenance binding + approved revision | Separate human action, scope pointer CAS; no implicit approval |
+| Generate | Generation binding + admitted budget | Eligible revision/mode and current pointer; draft preview separate |
+| Prepare case/run | Native case/run prepare binding | Exact accepted selections; no dispatch implied |
+| Dispatch/cancel | Native task/execution binding + target permission | Exact attempt/environment/action/budget consent; cancel never needs renewed permission to prevent further actions |
+| Export | Artifact read + native export/data policy | Current reauthorization/redaction; no foreign evidence |
+| Restore/purge/retention exception | Native storage/privacy maintenance binding | Provenance restrictions, independent audit; restore gives no approval/activation |
+
+Proposed independent-review default: author cannot approve their own revision or accept their own proposed normative mapping; no self-review override is exposed in M1. Where an existing ratified native policy differs, resolve that binding explicitly before implementation; do not silently change existing case publication rules. A project with only one eligible reviewer remains draft-only until the actual owner resolves its publication policy. Neither nominal QA title nor org ownership alone is a grant. Changed entitlement can preserve permitted historical reads while blocking mutations; no paid AI allocation is consumed by external MCP work unless separately requested through existing hosted-model policy.
+
+The owner service applies the same action rule across REST, MCP, UI, assistant, importer and jobs, with actual resource ownership and transaction-bound membership/policy version checks. A machine API token's eligible issuer userId is not evidence of a human decision. Human-only model approval/activation/dispatch requires either a currently authenticated interactive human action or a previously recorded human grant bound to exact action, revision/digest, scope, target/attempt, allowed effects, policy version, expiry and operation key. The server issues/verifies grants; external tools cannot supply a boolean `approved=true`. Revoked/expired/mismatched grants are refused. Same-key replay returns the prior action receipt, not fresh authority. Audit records principal kind, actual human authorizer and machine executor separately. A grant never expands the token's own scope or target credentials.
+
+Preview, queue admission, dispatch and every subsequent credential/action boundary recheck current authority. Cancellation/revocation fences further actions; already-issued external effects remain recorded as known/uncertain and are not represented as reversed. Cleanup requires its own preauthorized scope. High-impact target operations remain off until explicit per-attempt authorization and target-side enforcement are proved.
+
+### MBT-C-07 — Command recovery without fictional native idempotency
+
+All new model/approval/activation/mapping/accepted-materialization operations require a project-scoped operation key, canonical payload digest, action/principal binding and server receipt. Scope is `(projectId, action, operationKey)`; payload includes all native target IDs, immutable revisions, mode, selection, expected versions and consent identity. Same key/same payload returns the prior outcome after current read authorization; same key/different payload returns `409 OPERATION_KEY_CONFLICT` with no mutation. Persist request identity and selections across reload under the authenticated project session; never store credentials in URL/local state. A server operation receipt lookup is authoritative; a browser timeout is not FAILED or proof of rollback.
+
+**M1–M3 initial run-create decision: retain explicit manual reconciliation.** Current native run creation is not assumed idempotent. Prepare against an existing run where possible. For a new run, a lost response enters OUTCOME_UNKNOWN and disables automatic create/retry. Preserve exact requested name/selection/time/context and offer “Inspect existing runs,” then explicit attachment to the identified canonical run. Finding a similar title is only a candidate, not proof. If no authoritative outcome can be established, remain BLOCKED; a human must acknowledge possible duplication before starting a distinct new intent/key. Existing case-attachment/link deduplication cannot certify preceding run creation. AC-14 expressly tests this behavior rather than claiming automatic no-duplicate native creates. The same fallback applies to any native case materialization/adapter write whose owner lacks a verified receipt contract.
+
+Idempotent relationship attachment records a separate receipt and cannot partially publish a mixed batch. Workflow stages (prepare intent → native create/choose → attach cases → accepted model link → dispatch) retain native IDs and stage outcomes; this is orchestration metadata on existing native task/run owners, not a distributed transaction or second run store. Failure after commit leaves its committed truth visible and subsequent projection/evidence state PARTIAL. Never compensate by deleting an unrelated run or conceal a performed external action.
+
+For new receipt-backed model operations, retain key/digest/result identity while any provenance relies on it. If full payload is expired under policy, a minimal key/digest/outcome tombstone prevents re-execution. Expired grants are not renewed by retry. An absent/expired recoverable receipt returns `410 OPERATION_RECEIPT_UNAVAILABLE` and requires reconciliation; no silent same-key fresh execution. Product retention sets actual periods; unset retention disables such automated recovery, never makes it unbounded. New intent is explicit and is subject to current budget/consent. A future native idempotent create extension must be proved at the native owner (commit then drop response, concurrent repeat, altered payload, reload, expiry and foreign principal) before replacing this manual fallback.
+
+### MBT-C-08 — Untrusted text, AI egress and export
+
+Model labels, imported requirements, source comments, evidence and provider responses are DATA. They cannot override system/project instructions, call tools, grant consent, approve content, change destinations or suppress findings. Import/preview retains provenance and isolates untrusted text from executable instructions. Guard AST allowlisting does not substitute for these natural-language boundaries.
+
+Before enabling a Zyra-assisted Model Studio action, inventory existing provider, tool, retrieval, session, telemetry/log, export and attachment boundaries. Reuse native controls and name their owner/configuration/evidence. Provider/tool destinations and permitted data fields must be allowlisted by project policy BEFORE egress. Deterministically minimize/redact secrets, credentials, personal data and foreign-project content before constructing prompts, tool arguments, provider requests or logs; a later UI redaction is insufficient. Private evidence bytes/credentials are excluded by default. A detector, classifier or provider failure blocks the egress with `DATA_POLICY_BLOCKED` and preserves the draft locally under normal access controls. Do not assume a provider can safely redact content after receiving it. Missing confirmed policy means local/manual model work only, no provider egress.
+
+Canary fixtures include hostile “approve/run/export this secret” instructions embedded in a rule, benign same-project rule text, secret-like values, foreign references and filtering-provider failure. Assert destination payloads, tool requests and logs, not only assistant wording; no canary leaves the allowed boundary and no approval/dispatch occurs. Record safe diagnostic reason without reproducing the secret. An authorized export is an explicit redacted snapshot with revision/digest/scope/unknowns; subsequent access revocation stops new downloads, but cannot recall bytes legitimately exported earlier. Retention/use of those bytes follows the agreed data policy; no impossible recall promise.
+
+### MBT-C-09 — Source-grounded routes, persistent scope and accessible recovery
+
+Proposed native routes are `/projects/{projectId}/models`, `/models/{modelId}/revisions/{revisionId}` and revision-relative `/paths/{proposalId}` under that project. These are future route contracts, not claims of existing pages. Extend the existing case repository/detail-route owner to resolve `/projects/{projectId}/testcases/{caseId}?caseRevisionId=…&stepId=…`, preserving case identity rather than redirecting it away. “View in Model” carries exact project/case/revision/step and an authorized same-project return context. Server resolves IDs; no title/array index is authority. Unknown/deleted/revoked targets show non-enumerating unavailable state, never a different case. History mode is explicit in the URL; draft confidentiality still applies.
+
+Store shareable identity/revision/scope/filter selections in validated URL parameters; session return context stores suite/filter/sort/page/scroll and unsaved form recovery under project/user isolation. Raw evidence, credentials and private form text are never in URLs. Browser back/reload/deep-link preserves selected case/model revision and list context. Unsaved navigation offers Save draft / Keep editing / Discard; collapse/minimize does not discard. Project/tenant changes fence late fetch/validation/save responses; they cannot render or attach in the newly selected project. Restoring a saved draft requires current authority and conflict detection.
+
+Every graph/list/diff/proposal/coverage surface displays persistent scope: selected revision and approval, active pointer version, CURRENT/HISTORICAL mode, exact case revision where applicable, source/build/environment, actor/fixture and evidence freshness/unknowns. Moving between views preserves scope or explicitly confirms a reset; no hidden latest-version substitution. Historical passing evidence beside a newer active revision is labeled historical and current UNKNOWN/STALE.
+
+| View | Primary question / action | Success signal |
+|---|---|---|
+| Model list | Which applicable model/revision should I inspect? Open model | Exact revision and scope retained |
+| Detail/list/graph | Which behavior and canonical cases apply? Inspect element/case | Same identity/relationships in graph and list |
+| Draft editor | What expected rule changes? Save/submit exact draft | Preserved input and new version/receipt |
+| Review/diff | Is this revision justified? Approve/reject | Exact human decision receipt, no activation implied |
+| Path preview | Which bounded proposals reuse existing cases? Select/reuse | Explicit selections, forecast distinct from verification |
+| Run preparation | Where will selected work execute? Choose/prepare native run | Native run ID or visible uncertainty, no dispatch implied |
+| Coverage | What is actually verified in this scope? Inspect supporting observation | Counts, exclusions/unknowns and evidence provenance visible |
+
+| UI state | Required presentation and recovery |
+|---|---|
+| Complete empty/no model | Explain no model/links; offer authorized create/link action; no fake path |
+| Loading/pending | Keep context/input; announce progress; prevent duplicate intent |
+| Fetch/provider unavailable | “Unavailable,” retained stale data if safe, explicit retry; never empty-success |
+| Forbidden/revoked | Non-enumerating access-unavailable message; no stale private data or retry-write loop |
+| Conflict/stale revision/link | Preserve draft/selection; compare/refresh/review, no blind overwrite |
+| Partial/truncated | Show stop reason, logical work/unknowns; no complete forecast |
+| Commit outcome unknown | Reconcile original request/receipt/native records; disable blind create |
+| Cancel requested | Show pending acknowledgement and known/uncertain effects; no false terminal success |
+| Cancelled/failed/budget blocked | Show terminal cause and authorized explicit new attempt; preserve evidence |
+
+Every graph action has an equivalent permission-identical list/table action: select states/transitions, inspect predicate, map/unmap case steps, compare revisions, inspect evidence, preview/select paths and review/activate. Use stable accessible names, textual statuses, roving/standard keyboard order, focus return to the invoking element after drawers/modals, validation/status announcements, zoom/reset controls and bounded pagination with selection retained. Changing graph/list layout does not reset scope or dirty input. No graph-only drag gesture is required.
+
+Before implementing UI changes, inspect actual repository routes, picker, evidence panel, forms/shared consumers, and render the authorized current build at agreed fixture/role/viewport/theme. Capture After against the same baseline, including full keyboard/screen-reader author→review→mapping→preview and back/reload/collapse, responsive/zoom and permission/error/empty states. Existing screenshots/mockups/source-derived drawings cannot certify visual parity. No runtime/UI sign-off is recorded by this document.
+
+### MBT-C-10 — API errors, enforcement owners and dependency direction
+
+Add explicit project/model actions activate, deactivate, retire and historical generation mode alongside existing draft/review/links APIs. Every mutation carries expected artifact/pointer versions and operation key; do not put these in optional UI-only state. Typed outcomes include `400 INVALID_MODEL`, `422 UNSUPPORTED_SEMANTICS`, non-enumerating `403/404`, `409 REVISION_CONFLICT/ACTIVE_REVISION_CONFLICT/MODEL_SCOPE_CHANGED/OPERATION_KEY_CONFLICT/PROVENANCE_IN_USE`, `410 OPERATION_RECEIPT_UNAVAILABLE`, `429 RESOURCE_LIMIT`, `503 RESOURCE_POLICY_UNCONFIGURED/DATA_POLICY_BLOCKED`. Native request transports may map these to existing envelope conventions but must preserve machine-readable distinctions. No API exposes a writable `verified` boolean.
+
+| Authoritative fact | Owner / required extension | Downstream projection; forbidden reverse authority |
+|---|---|---|
+| Approved normative rule | Native requirement/decision owner + retained accepted version | Justifies model revision; current source/cache cannot approve rule |
+| Model bytes/approval/active pointer | Expected-model aggregate under native policy/audit | GraphSnapshot/diff/highlight; projection cannot mutate approval |
+| Case content/approval/step version | Native case version/publication owner | Accepted model mapping; model cannot copy/publish a second case |
+| Mapping decisions | Typed native trace relationship owner | Case/model highlighting; removing a link cannot erase past reliance |
+| Generation intent/work | Native task/job/quota owners | Proposal manifest; no separate job authority |
+| Run/attempt/occurrence/report/correction | Native run/execution owner | Coverage evaluation; model cannot edit a native observation |
+| Bytes and retention | Native attachment/storage/privacy owner | Evidence drilldown; count is not byte proof |
+| Human/target authority | Native authorization + exact consent owner | Dispatch permission; token issuer is not human consent |
+| Coverage/evaluation | Derived from exact references + versioned evaluator | Recomputable read view; no independent mutable VERIFIED store |
+
+Implementation archaeology must census all affected writers/readers, including manual native result editing, reporter/automation, MCP, UI, import, jobs, deletion/restore, exports and shared picker/evidence consumers at the actual implementation head. Resolve resource ownership for non-project URL paths rather than trusting a submitted projectId. Each writer enters the same owner-level policy/version/fencing path; a UI or controller-only check is insufficient. Record source path, operation, existing guard, new extension and impacted existing tests. No new universal artifact/review platform, graph DB, assistant, case/run/evidence store or scheduler is earned by these requirements.
+
+### MBT-C-11 — Closure evidence and rollout discipline
+
+Addressing a written ambiguity does not pass its implementation gate. The independent report remains the original review result; only a later review can supersede White NOT FROZEN or Graph NOT CLEAN. Owner-policy bindings above are explicit proposed choices, not signed human ratifications. Models with unset policy, budgets, unsupported semantics or missing normative authority remain blocked rather than shipped behind optimistic labels.
+
+M1 implements finite drafts/validated list+graph mapping only after native authority/version/policy grounding. M2 enables bounded EFSM/path proposals only after hand-calculated semantics, logical-budget reproducibility, resource admission and duplicate-reuse proof. M3 enables separately authorized adapters and native immutable occurrence/retention references after commit-loss/cancel/revoke/evidence tests. M4 covers affected-only stale projections, operational recovery and measured scale. Additional engines, temporal schedulers, imports from images and automatic native run creation recovery remain explicitly deferred until earned.
+
+Canonical archive reconciliation is a document evidence gate: retain all eight names, preserve all preceding bytes/IDs except explicit package revision metadata, add these extension clauses to the appropriate existing owners, validate old/new differences and cross-document IDs. This does not retroactively validate historical source claims or reconcile every older task against merged implementation. Current repository source baseline and historical archive baseline are separately named. Runtime acceptance requires authorized actual build/schema, disposable fixtures and real observations; no new test/model/generator/adapter result is claimed by spec validation.
+
+### MBT-001-J2 — Additional acceptance scenarios for revision 0.2 (all NOT RUN)
+
+The original MBT-AC-01–26 remain, with corrected oracles in J. These additional IDs extend that namespace, not the historical QA-001–490 inventory. Each row names a discriminating setup/sequence, expected persisted/user-visible outcome, accountable implementation owner and test level. Existing e2e suites must be extended at the actual owner; no parallel test project. Proof links are UNAVAILABLE until implementation and execution. No row below is a test result.
+
+| Scenario | Fixture / sequence and expected oracle | Owner / level |
+|---|---|---|
+| MBT-AC-27 | EFSM remaining=1: reserve → reserve again → reset; first yields 0, second infeasible, reset restores 1. Actor A/B share remaining but keep local counters separate; x=0 increment permits x=1 guard. Duplicate assignment/overflow/undefined actor invalid; concurrent/temporal request UNSUPPORTED. Source-permitted forbidden target action still disagrees with independent oracle. | Model interpreter + QA; unit/contract, two-domain API/adapter proof where supported |
+| MBT-AC-28 | Active approved r1; approve r2 without activation; r1 remains active. Concurrent r2/r3 activate with same pointer token: one winner/one 409. Replay same activation key returns same event. Retire active fails; rollback to approved r1 records new activation and preserves old attempt. Retired revision cannot dispatch. | Model/policy owner; transactional DB + API |
+| MBT-AC-29 | Generate CURRENT r1 plan then activate r2 before dispatch: refuse stale pointer, preserve plan, require refreshed consent or explicit HISTORICAL new intent. Results of a previously dispatched r1 attempt remain r1 history; r2 gets no verified credit. | Model/native execution; API + browser + DB |
+| MBT-AC-30 | Two verified eligible edges + one reviewed excluded + one unresolved: show 2/2 known eligible, excluded 1, unresolved 1, whole UNKNOWN. Resolve unknown: COMPLETE_WITH_EXCLUSIONS. Empty eligible with unknown gives null/UNKNOWN; fully empty resolved gives N/A. Fetch failure is UNAVAILABLE. Negative refusal and non-state obligations have separate denominators. | Validator/coverage/frontend; unit/API + browser |
+| MBT-AC-31 | Same canonical model/engine/seed/logical limits on fast and artificially delayed evaluators: equal ordered logical output/digest. Force emergency cutoff: PARTIAL/EMERGENCY_RESOURCE_CUTOFF, no completion or equal-manifest promise. Operational IDs/timestamps may differ. | Generator; unit/worker integration |
+| MBT-AC-32 | Admit parallel/retried jobs under project and platform quotas; neither cap may be multiplied. Cancel consumes already-used work; release unused reservation once. Lease A expires, B retries, late A publish/release rejected. Duplicate request not double-charged. Uncertain external effect retains its reservation until reconciled; unset caps disable admission. | Native job/quota owner; multi-worker DB/queue integration |
+| MBT-AC-33 | Accept exact provider rule revision; update/delete/reconnect provider and revoke source read. Old accepted snapshot/digest unchanged under policy; proposed impact/current UNKNOWN visible. Mutable latest cache cannot become accepted historical truth. | Requirement/model/trace owner; API + DB |
+| MBT-AC-34 | Select an initially unedited case, edit it, repeat execution with new role/dataset and repeated transition; manifests preserve original case/step revision and distinct attempt/occurrence IDs. Correct result twice: original and both authorized events retained. Missing legacy version stays UNKNOWN/RECONSTRUCTED_UNVERIFIED. | Native case/run/evidence; migration + API + DB |
+| MBT-AC-35 | Accepted mapping/attempt relies on model/case/run/evidence/project; hard-delete each parent refused PROVENANCE_IN_USE without cascade loss. Soft-delete excludes current eligibility but retains history. Authorized erasure removes permitted bytes, leaves permitted receipt and UNKNOWN proof. Restore gives historical visibility without activation, consent or current VERIFIED. | Native storage/privacy/deletion; migration/API/attachment integration |
+| MBT-AC-36 | Apply each action-policy row through all actual UI/REST/MCP/assistant/import/job writers, with allowed identity, author self-review, missing binding, read-only project, changed entitlement and revoked membership. Same owner-level allow/deny; no foreign mutation/leak. Machine token with eligible issuer cannot approve/activate/dispatch without exact server-recorded human authority; wrong revision/expired/revoked grant refused. | Authorization/protected publication/security; API/MCP + DB races |
+| MBT-AC-37 | Native create commits then response is dropped: UI OUTCOME_UNKNOWN, no automatic second create, input/key preserved across reload, explicit inspection/choice of canonical run. Receipt-backed model write repeats with same key/body once; altered body conflicts; expired receipt cannot reexecute; expired grant cannot renew. Failure between attach and model link leaves committed stage visible/PARTIAL. | Native run/trace command owners; fault-injected API + browser/DB |
+| MBT-AC-38 | Import hostile rule text and safe canary secrets; request model draft via Zyra. Inspect provider/tool/log destinations: only authorized minimized fields leave, no canary secret or foreign content. Hostile text cannot approve/dispatch. Filter/provider failure blocks egress. Benign allowed rule remains usable. Already exported legitimate snapshot is not falsely recalled after revocation. | Zyra/security/export owners; integration + API |
+| MBT-AC-39 | Edited case → exact-revision model → diff/path → back/reload/collapse/list switch: case/suite/filter/sort/page/scroll, dirty input and scope preserved or explicit Save/Keep/Discard. Project switch with late response cannot attach/render old private data. Error/unavailable/revoked/empty/partial/cancel-requested/outcome-unknown are distinct with correct recovery. | Native routing/repository/frontend; browser + API |
+| MBT-AC-40 | Full author → review → mapping → preview → evidence journey using only keyboard and screen reader/list. Every graph action has equivalent names/permissions/results; modal close restores focus, async status announced, text statuses survive high contrast/zoom/reflow. Before/After and shared picker/form/evidence consumers checked at identical build/role/fixture/viewport/theme. | Frontend/accessibility + QA; authentic browser/manual assistive-technology evidence |
+
+All 24 original Grey journeys remain in scope, not replaced by these additional IDs: J01–02 case access → AC01–02/34/39; J03–04 draft/import → AC03/12/22/33/36/38; J05 validation → AC07/27/30; J06–07 review/activation → AC04/10/28–29/36; J08 mapping → AC02/21/34/36; J09–10 generation/recovery → AC06/08/27/31–32; J11 reuse → AC13/37; J12–15 dispatch/retry/cancel/oracle → AC09/14–16/24–26/29/34/36–37; J16–18 coverage/change/retention → AC05/17–18/23/30/33–35; J19–20 export/revoke → AC11–12/25–26/36/38; J21 resume/accessibility → AC19/39–40; J22 second technology → AC20/24/27; J23 degradation → AC15/24/31–32/35/37–39; J24 publication → canonical structural validation and GATE01. QA branches for stale callbacks, corrected results, key conflicts/expiry, active-versus-approved states and exported-byte retention are explicit in these rows. Analytical mapping does not execute any of them.
+
+
+
+
+**Canonical identity:** MBT-C-12 in `03_TECHNICAL_DESIGN.md` binds Model Studio to the same FR-117 behavior family/revision owner; model IDs are aliases, and current-published is the active pointer, never a second latest-approved authority. This v1.4.23 clarification governs operative FR-117/MBT identity and selection wording in earlier proposal sections; historical source evidence retains its original pin.
+
+### MBT-C-12 — Canonical behavior/model identity, publication and applicability
+
+Model Studio is the authoring/generation/view capability of the existing **proposed** FR-117 behavior-definition authority. It does not create a second expected-model registry. `modelId` is the API/UI alias of `quality_journey_families.id`; `modelRevisionId` is the alias of `quality_journey_revisions.id`. They are the same project-bound identities, never separately minted IDs joined later by a best-effort link. Typed model content, source justification and C-01 semantics extend that revision's immutable `model_json`. Observed implementation GraphSnapshot/capture history remains a separate observational authority and cannot publish expected truth. Physical schema names remain implementation choices; the logical owner is singular.
+
+M1/M2 give each family one immutable `declaredScopeId` and one active-revision pointer with a version token. The tuple `(projectId, modelId, declaredScopeId)` therefore addresses that same family-owned selection, not a second applicability registry. Changing the scope requires an explicit new family and reviewed relationship/impact, never silently reinterpreting old attempts. The earlier term **current published revision** means the active approved revision under C-02; it is a compatibility/read alias, not a separately writable pointer or “latest approved” selector. Latest approved is a derived historical query and cannot authorize CURRENT work. Approving/publishing revision r2 stores its exact approval event but leaves active r1 unchanged. Activating/rolling back/deactivating changes the one family-owned pointer through C-02 CAS and a distinct human action.
+
+Prepared requirements/model entry WF-21 and spontaneous coding entry WF-20 resolve this same family/revision/selection owner. An unplanned source observation without an accepted family remains an UNKNOWN impact or candidate proposal; it cannot create a second normative model. All UI/REST/MCP/jobs use this resolver. Missing or inconsistent legacy identity yields BLOCKED/UNKNOWN rather than selecting whichever pointer or record was most recently written. If an existing deployment has duplicate candidate records, migration must establish explicit same-project correspondence from retained content/provenance and owner-reviewed resolution; matching titles alone cannot merge them. Ambiguous candidates stay quarantined from CURRENT selection. No new migration is claimed here.
+
+For M1/M2, incompatible overlapping normative families are blocked with `409 MODEL_SCOPE_CONFLICT`; no last-write-wins or implicit OR/AND of their oracles. An authorized resolution must select the governing family with explicit scope/provenance before CURRENT generation or dispatch. General cross-model composition and multi-scope families are deferred until their conflict/approval/replay semantics are specified. This restriction preserves reusable cases across different non-conflicting models and historical views.
+
+Closure fixture: one family f, approved active r1; author r2 through prepared entry and inspect through spontaneous entry → same f/r2 identities. Approve r2 → both entrances still resolve CURRENT r1 and pointer version v. Competing activation r2/r3 with v → exactly one pointer update/event; both entrances observe that winner. HISTORICAL r1 remains pinned and never becomes current credit for r2. An input containing unequal familyId/modelId or revision aliases fails before persistence. Two conflicting families with no approved resolution return MODEL_SCOPE_CONFLICT; source capture cannot choose a normative winner. These are planned native DB/API/entry-parity tests; the offline finite-semantics pilot does not implement or prove this authority.
+
+
+### MBT-001-J3 — Revision 0.3 acceptance additions (all NOT RUN in Tesbo)
+
+| Scenario | Discriminating fixture and required outcome | Owner / level |
+|---|---|---|
+| MBT-AC-41 | Prepared and spontaneous entrances address the same family/model and revision aliases; approve r2 leaves r1 active, one CAS winner visible through both entrances; conflicting aliases/overlapping unresolved scopes refused; historical r1 remains pinned. | Behavior/model policy owner; native DB/API/MCP integration |
+| MBT-AC-42 | Request target race/eventual/time semantics from M1/M2 → UNSUPPORTED_SEMANTICS; sequential A→B reservation fixture remains sequential. Separately execute native Tesbo activation/job/revoke races. No sequential path is advertised as concurrent coverage. | Model/QA; finite pilot plus separately authorized native concurrency tests |
+| MBT-AC-43 | Remove mapping before preparation, after preparation while queued, or immediately before dispatch → new dispatch BLOCKED MAPPING_CHANGED with preserved selection; fresh acceptance and refreshed consent/new operation required. Already-dispatched occurrence keeps old acceptance evidence; removal itself neither rewrites nor cancels it. Explicit cancel/target revoke separately fences subsequent actions. Both CURRENT/HISTORICAL modes follow the same rule. | Trace/native attempt/policy owners; DB/API race + UI recovery |
+| MBT-AC-44 | One structural transition observed/verified for actor A only: structural transition1/1 can hold while actor-conditioned assertions show1/2; repeated observations and corrections do not increment either eligible denominator. Change valuation/actor/fixture/model revision → new scoped obligation; unknown eligibility stays UNKNOWN. | Coverage/native evidence owners; unit/API/query fixtures |
+| MBT-AC-45 | Generated case text enters existing Zyra/native staged-case and protected publication path; duplicate Review Board may suggest reuse but cannot confer model/case approval or import its entitlement. Direct native publication without exact authority refused. | Case/publication owner; API/MCP/UI integration |
+| MBT-AC-46 | Implementation manifest pins exact source parent/head, spec archive digest, dependency versions and actual affected owners before code/DB/UI integration. Older source/review pins remain historical; missing or changed implementation-head reconciliation blocks acceptance. | Engineering/QA owner; document/CI contract plus actual implementation proof |
+
+The 40-journey independent review inventory remains the review baseline; these six criteria close its specific cross-contract ambiguities without claiming a new inventory or executed product coverage. The preceding 40 MBT criteria retain IDs and remain NOT RUN as native product tests. Offline fixture checks exercise only their explicitly named symbolic subset.
+
+
+## Revision 1.4.24 — opt-in native M1 candidate preview
+
+MBT-C-13 in `04_MCP_API_CONTRACTS.md` owns the exact ephemeral structural preview contract. This adds no expected-model identity, publication, active pointer or second data store; FR-117/C-12 remain authoritative for future persisted models. Intake and authorization are explicit; default OFF. Source implementation is proposed for merge in Tesbo PR95, parent92abc860/native implementation23b5a7ec; no deployed or target-runtime proof is claimed by this spec checkpoint. Existing historical source/test/review claims remain at their original pins.
+
+### MBT-C-13 — Native M1 ephemeral structural candidate preview
+
+POST `/api/projects/{projectId}/agents/zyra/changes/model-preview` extends the existing graph change-review module. Its sole job is bounded structural inspection of caller-authored sequential FSM candidate data. It does not resolve/persist an FR-117 family, issue canonical model/revision IDs, accept rule authority, approve/activate a model, generate paths, prepare a run, access a provider or act on a target. C-12 remains the only expected-family/revision authority for future persisted models. This route's candidate digest is not a canonical model version.
+
+The route is OFF unless server configuration `TESBO_MODEL_PREVIEW_ENABLED=1` explicitly enables it. A caller must pass existing native authentication/current project/workspace access; the POST retains existing project write-lock and machine-token WRITE-scope enforcement. This revision adds no special role/entitlement bypass. The later MBT-C-14 adapter exposes this same native preview through the existing MCP gateway; it does not add a second validator or authority. Native access is checked before feature/body diagnostics, and project/organization membership/archive/deletion is rechecked before returning the computed candidate preview. Missing/changed access fails with native non-enumerating refusal; disabled feature returns503 MODEL_PREVIEW_DISABLED to an otherwise authorized caller. Preview's no-write boundary concerns model/case/run/execution/Bug/graph/link state; existing authentication/token/workspace bookkeeping remains its native owner's behavior.
+
+Request schema is intentionally limited to the explicit preview format, not a final executable EFSM/import contract:
+
+```json
+{
+  "schemaVersion": "tesbo-fsm-draft/1",
+  "semantics": "SEQUENTIAL_FSM",
+  "initialStateId": "draft",
+  "states": [{"id":"draft","label":"Draft"},{"id":"approved","label":"Approved"}],
+  "transitions": [{"id":"approve","from":"draft","to":"approved","action":"Approve","expectedObservation":"Approval recorded"}]
+}
+```
+
+Only those fields are accepted. IDs use `[A-Za-z][A-Za-z0-9_-]{0,63}` and are unique across states and transitions. Require1–32 states,0–64 transitions, a valid initial state and existing transition endpoints. Nonblank label/action/expected-observation text has respective limits120/500/1000 characters and no NUL. These fixed parser/transport safeguards are not ratified production generation quotas. No caller budget can expand them. Variables/guards/effects, code-bearing fields, canonical IDs, project/principal overrides, approval/VERIFIED/result claims and any unknown field fail400 INVALID_MODEL. Semantics other than SEQUENTIAL_FSM fail422 UNSUPPORTED_SEMANTICS. All action/observation strings remain inert untrusted data; nonempty observation text is not a justified/approved oracle.
+
+Normalize by stable ASCII element-ID order and hash the explicit normalized definition using SHA-256. Visit each reachable state once and its outgoing edges once, so finite cycles cannot create an unbounded job. Return states/transitions with structural reachable annotations and retained UNREACHABLE_STATE/UNREACHABLE_TRANSITION/TERMINAL_STATE diagnostics. A terminal state can be legitimate; an unreachable diagnostic is not automatically an approved exclusion. This is neither path enumeration nor an execution-coverage calculation and supplies no percentage.
+
+Response always states schemaVersion tesbo-fsm-preview/1, status DRAFT_PREVIEW, validation STRUCTURALLY_VALID, approval NOT_APPROVED, sourceAuthority UNVERIFIED and runtimeEvidence NONE. modelId/modelRevisionId are null; candidateDigest describes caller bytes only. capabilities persistence/publication/activation/pathGeneration/targetExecution are all false. No paths, canonical records, execution result, source approval or coverage claim are returned. Actual service HTTP execution is distinct from the absence of real target-behavior evidence.
+
+Implementation slice: native core/service/controller in the existing backend behavior-graph owner, no database migration or frontend change; opt-in isolated CI only. The earlier offline finite-EFSM pilot remains an experiment and is not imported as a production generation/authority engine. Native model storage/publication, quotas/generation, adapters, exact case/attempt/evidence, UI/AT and real target conformance retain their separate gates.
+
+
+### MBT-001-J4 — Native preview acceptance additions
+
+| Scenario | Expected outcome | Proof level |
+|---|---|---|
+| MBT-AC-47 | Authorized owner/manager/QA sequential candidate returns deterministic normalized DRAFT_PREVIEW, reachability/diagnostics, null canonical IDs and no approval/runtime/coverage/path-generation authority. | Native core + actual project API/DB integration |
+| MBT-AC-48 | Invalid/empty/oversized/duplicate/dangling/authority-bearing/guard-bearing requests fail400 INVALID_MODEL; EFSM/concurrent/temporal/eventual requests fail422 UNSUPPORTED_SEMANTICS. Finite cycles terminate within state/edge intake bounds. | Native core + actual API validation |
+| MBT-AC-49 | Default-off feature is503 after current access; anonymous/guest/foreign/revoked callers refused. Read-scoped token cannot POST; project-bound write token may preview but gains no approval/target authority. Member/archive change at final access fence refuses result. | Native service/guard + actual API membership/token checks; full plan-transition matrix separate |
+| MBT-AC-50 | Repeated valid/invalid previews leave native cases, cycles, executions, Bugs, graph history and run-case links unchanged. Existing source-binding/change-review/handoff neighbors still work. Disposable membership/token fixtures restore/revoke in finally. | Actual migrated disposable DB + API/browser neighboring regressions |
+
+These criteria may receive only their executed-slice evidence after exact-head results; they do not turn unexecuted native authoring/model publication, UI or target-app criteria into PASS. Earlier unit/source-planned and historical review statuses retain their original pins. Default-off service behavior and mid-validation revocation have native unit oracles; a complete independent entitlement/plan-transition and live deployment audit is still required separately.
+
+
+## Revision 1.4.25 — native MCP draft-preview integration
+
+MBT-C-14 extends the existing MCP gateway with the MBT-C-13 stateless validator. This adapter creates no model authority or native QA record. Review gates remain NOT FROZEN; persisted models, activation, generation, target execution and native UI require their own completed work/evidence. The earlier native REST code at778e3658 has exact-head CI evidence; this MCP delta requires its own final-head receipt in PR95. Historical review and implementation statements remain pinned to their original revisions.
+
+### MBT-C-14 — Native MCP structural draft preview adapter
+
+`preview_behavior_model_draft` extends Tesbo's existing in-process MCP registry, not a second MCP server or model authority. Arguments are exactly `{ "model": <MBT-C-13 native candidate> }`, with no project/principal/approval override. The native `ModelStudioPreview.previewForUser` remains the sole validator for REST and MCP. The shared discovery schema advertises the same 1–32 states,0–64 transitions, required fields, ID pattern, text limits and unknown-field rejection; runtime cross-reference, duplicate-ID, blank/NUL text and semantics checks remain the native parser's responsibility.
+
+Require a valid project-scoped token, current issuer membership, `write` scope and existing project write entitlement before handler execution. This matches the REST POST boundary even though the preview creates no domain records. The existing native membership/archive/deletion completion fence is retained. No read-token escalation, new approval role, paid provider, remote tool, actor creation, database migration, family pointer or publication path is added. Existing token authentication/usage bookkeeping remains with its current owner.
+
+The static MCP catalog contains 59 tools and advertises the feature prerequisite/default-off boundary. Discovery alone does not mean a deployment enables preview. The existing tool fingerprint/session-expiry behavior forces stale session clients to rediscover the changed schema. No new server stream or listChanged claim is introduced.
+
+MCP uses existing JSON-RPC result/error envelopes. Successful preview content is exactly the C-13 native result, including DRAFT_PREVIEW/NOT_APPROVED/UNVERIFIED/NONE, null model/revision IDs and all authority/execution capabilities false. Native parsing errors map to JSON-RPC ToolExecutionError -32003 with `data.code` and `data.httpStatus`: INVALID_MODEL/400, UNSUPPORTED_SEMANTICS/422 and MODEL_PREVIEW_DISABLED/503. Missing native service fails MODEL_PREVIEW_UNAVAILABLE/503. These status values are diagnostic metadata, not the actual transport status: native MCP's HTTP201 JSON-RPC error envelope is preserved. Existing scope/project/auth/write-lock errors retain their established categories and non-enumerating behavior. Unknown infrastructure errors are not promoted to validation success.
+
+Both `/api/mcp` and `/api/projects/{projectId}/mcp` use this same handler; URL project still must equal the token project. Repeated accepted/refused previews must not change native cases, cycles, executions, Bugs, graph history or run-case links. No generated path, runtime coverage, target execution or canonical model version can be inferred from a successful tool response. All existing model persistence/publication/activation/dispatch/target/UI and independent review gates remain open as recorded.
+
+
+### MBT-001-J5 — Native MCP preview acceptance additions
+
+| Scenario | Expected outcome | Proof level |
+|---|---|---|
+| MBT-AC-51 | Native discovery exposes53 unique tools including the exact bounded model wrapper; current clients rediscover on schema fingerprint change. Feature prerequisite is explicit and discovery does not imply enablement. | Native MCP registry/service plus existing session regressions and actual HTTP discovery |
+| MBT-AC-52 | Both native MCP transports return precisely the REST preview result for the same candidate; no canonical identity, approval, runtime evidence or persisted QA/graph record is created. | Actual disposable migrated DB/HTTP comparison plus real shared-validator unit tests |
+| MBT-AC-53 | Invalid wrapper/model, authority fields, unsupported semantics, default-off feature and absent service fail with explicit typed codes. Diagnostic httpStatus is distinguished from JSON-RPC transport status. | Native MCP/service plus actual enabled HTTP malformed/unsupported refusal; disabled/missing injection tested in service |
+| MBT-AC-54 | Read-scope, cross-project, revoked issuer/token and locked project cannot invoke a successful preview; membership removal at completion refuses the computed result. Catalog/diagnostic neighbors and all prior preview/source/QA-handoff scenarios continue working. | Native service boundary scenarios plus actual token/project HTTP journeys and existing regression jobs; full entitlement-transition matrix remains separate |
+
+The new HTTP scenario extends the existing isolated Zyra suite; with its prior eight preview/graph/source/handoff neighbors it should list/run9 targeted scenarios. Native tests also exercise all32 admitted states and64 edges under an explicit constant traversal bound following the earlier CodeQL loop-bound alert. Source preparation and locally stripped core checks do not count as actual native HTTP/DB execution. Read final exact-head CI evidence in PR95; earlier green heads do not verify this adapter. No independent assurance closeout is inferred.
+
+**Compatibility follow-up (2026-11-15):** The positive cases in the *existing* native Cycles, Automation, Executions and Attachment API suites now explicitly create `Approved` case fixtures before adding them to runs (9 isolated fixture changes). These are not artificial waivers: the workflows genuinely expect an executable case. Deliberately Draft/In Review/Deprecated negative fixtures and the earlier approval-boundary tests remain unchanged. The CI smoke pipeline now runs six representative pre-existing positive API tests in addition to the dedicated REST/MCP/automation negative/positive approval suite, so a policy fix must preserve historical retry, run execution and evidence behavior in actual HTTP tests.
+
+---
+
+### Native Approved-only write boundary — additional proof (2026-11-15)
+
+**Reuse verification:** Live `development` source already contains `assertApprovedNewRunCases` in the canonical `LegacyService.insertApprovedCycleItems`, called from direct REST and atomic MCP run creation, and `AutomationService.attachCases`. Its transaction locks the cycle, locks active same-project case rows with `FOR SHARE`, and enforces `Approved` again in the insert. Existing migrated PostgreSQL/Playwright tests already covered Draft, In Review, mixed-batch atomicity, concurrency demotion, MCP and automation. Do **not** create another writer, queue or duplicate agent to implement this already-shipped policy.
+
+**New remaining gap now tested:** After an explicit soft removal of a case from a test run, a later re-add is a **new** association and requires fresh approval. The historical cycle-item/execution identity must remain unchanged even when the case is subsequently demoted. Added migrated PostgreSQL and disposable REST API tests for: add Approved → remove → demote to Draft → reject a new add with 409, no new active item/execution → re-approve → allow exactly one new item/execution → replay as idempotent skip. Also added direct REST foreign-project Approved-case rejection: a QA user in the primary project cannot import an Approved case from their other project, and the returned `requested/added/skipped` contract does not expose status or existence.
+
+**Scope of proof:** These are executable regressions of Tesbo's existing shared writer, not a new implementation path. They run as part of the existing `Approved-only native run attachments` dedicated disposable API suite under the isolated smoke workflow and migrated PostgreSQL quality job. No production tenant, live evidence, protected branch, second graph, or duplication of canonical case/run stores is touched.
+
+
+## Revision 1.4.26 — native ephemeral draft inspector
+
+MBT-C-15 adds the bounded structural list inspector and scoped availability read to the existing Zyra page. C-13/C-14 remain validation owners; C-12 remains future persisted-model authority. Earlier API-only/no-frontend statements describe their historical slices, not this new increment. There is still no approved/persisted model, graphical editor, case mapping, target action or self-issued independent freeze. PR98 owns exact-head implementation/visual receipts. Historical acceptance and review results retain their original pins.
+
+### MBT-C-15 — Native ephemeral preview inspection in Zyra
+
+Extend Zyra's existing Change impact review page with a collapsed Draft model preview inspector. Reuse the current page/layout/CSS and API transport, native ModelStudioPreview, current project/session/token/plan boundaries, and existing API/UI suites. C-12 retains the only future persisted family/revision authority; C-13/C-14 remain the REST/MCP validation owners. This is an in-memory structural list inspector, not the full graphical editor, an approved expected model, case mapping or target execution.
+
+GET `/api/projects/{projectId}/agents/zyra/changes/model-preview` reports `schemaVersion: tesbo-fsm-preview-availability/1`, enabled boolean, SEQUENTIAL_FSM, maxStates32 and maxTransitions64. Require current native project/org membership and the same final archive/delete/revoke access fence before returning. Availability is a read: a scoped read token may GET but still cannot POST. It neither enables the server's default-off flag nor grants write, publication, source-oracle or execution authority. No project-specific enablement is invented for the existing server-wide flag. Unknown/failed availability fails closed; disabled availability hides editing and offers an explicit recheck. A cached enabled read never overrides a subsequent native POST refusal.
+
+Enabled UI offers an explicitly labelled draft-format JSON editor, an inert example requiring review, preview, cancel and clear. One1000000-character textarea intake safeguard accommodates the bounded native format, including escaped text; it is not a model-version or M2 generation quota. Invalid JSON and non-object transport frames (null, arrays or primitives) fail locally without a POST. This is basic request-format admission, not semantic validation. Object-shaped candidate data uses C-13 unchanged; do not create a competing browser model validator or silently repair unsupported semantics/unknown authority fields. Preserve invalid draft text for explicit correction. Do not automatically retry POSTs or save draft content in local/session storage, caches, graph history, cases, runs or any new owner. Leaving the page discards it and the UI must say so.
+
+A successful view belongs to exactly one project and input generation. Editing, clearing, loading an example, cancellation or unmount immediately clears prior result/error and invalidates the outstanding generation, with transport cancellation as a supplementary safeguard. Late success/error cannot replace newer input or another project's state. Component keying uses the canonical project ID. Cancel stops accepting that response; it is not a claim that a target action or persisted job was cancelled. Stateless preview loss can safely say the draft remains unsaved; it must not imply a possible model write by blindly displaying a generic mutation warning.
+
+Fence the response wire format/version and exact DRAFT_PREVIEW/STRUCTURALLY_VALID/NOT_APPROVED/UNVERIFIED/NONE, null model/revision IDs and all false persistence/publication/activation/path-generation/target-execution capabilities. Incompatible or authority-bearing envelopes and unexpected paths/coverage claims must not be rendered as an accepted result. This is defensive protocol admission, not a second expected-model validator. Render author text with ordinary React text nodes, never executable markup.
+
+Show labelled states with initial/reachability annotations, transitions with action and expected observation, and retained terminal/unreachable diagnostics. A terminal state can be legitimate; no diagnostic is an approved exclusion. Do not equate a clean structural preview with PASS, target conformance, executed coverage or approval. The digest is a fingerprint of normalized input, not an approved/canonical revision. Semantic truth badges remain visible beside the result. Native details, labelled controls, table captions/column headers, keyboard actions, focusable bounded scrolling and small-screen containment are required. Full graphical editing and broad assistive-technology certification remain separate work.
+
+Prior native preview/source-binding/history/run-handoff flows remain intact. Native records and current publication policy must be unchanged by this inspector. Actual runtime proof requires the existing isolated full-stack stack at the final source head, listed/ran selection, real native HTTP successes/refusals and desktop/mobile screenshot inspection. Route-injected network/service/hostile response failures establish browser recovery only, not independent evidence of a real production outage or server access policy. No independent assurance freeze can be self-issued from a passing implementation test.
+
+
+### MBT-001-J6 — Native structural preview inspector acceptance additions
+
+| Scenario | Expected outcome | Proof level |
+|---|---|---|
+| MBT-AC-55 | Native GET availability is authenticated/project scoped and fenced after membership/archive/revoke checks; default-off stays false; read tokens may inspect availability but cannot POST. No enablement or native record write occurs. | Native service/controller tests + actual disposable API/token/DB journey |
+| MBT-AC-56 | Human opens the existing Zyra inspector, loads/pastes a candidate and receives the same real native unapproved structure/initial state/transitions/terminal or unreachable diagnostics. Unsafe labels remain text; no model/case/run/graph authority is created. | Actual browser/native HTTP response comparison + unchanged DB records |
+| MBT-AC-57 | Edit during delayed response, cancel, clear/example replacement, reload and project navigation cannot resurrect stale output or another project's input. Duplicate submit is fenced; no automatic replay or browser draft persistence. | Browser interleaving with actual completed native response + native navigation/reload/no-write readback |
+| MBT-AC-58 | Whitespace/invalid/non-object JSON sends no POST; native malformed/unsupported/oversized object models preserve input and expose refusal. Disabled/denied/network/incompatible/authority-bearing replies never become accepted results; explicit availability retry recovers honestly. | Real native malformed/access checks plus separately identified browser failure injection |
+| MBT-AC-59 | Keyboard details/controls, labels, truth announcements, table captions/headers and bounded scroll remain usable; desktop/mobile rendering is inspected. All prior nine preview/graph/source/handoff scenarios still pass beside five new API/UI scenarios, with inherited approval/evidence compatibility tests retained. | Actual15-scenario combined API/browser selection (the original14 inspector scenarios plus the separate history-pagination race), screenshots and existing native regressions; full AT audit not inferred |
+
+These criteria extend the distinct MBT namespace from54 to59. Source preparation, local compile/lint/unit tests or a screenshot alone do not mark all criteria complete. Exact-head CI and actual visual receipts must state their proof level; independent review, ratification, full M1 graphical/persisted authoring and real target conformance remain open.
+
+
+## Revision 1.4.27 — inspector wire-format and layout proof clarification
+
+C-15 admits only object-shaped JSON to the native POST transport. Invalid JSON, null, arrays and primitives remain in the editor with local errors; semantic fields, bounds and authority still use the one native validator. This avoids treating a pre-routing JSON/CORS transport failure as a typed model response. Mobile containment is measured after the existing sidebar reaches its chosen60px collapsed width; the strict overflow assertion and default timeout are unchanged. Independent assurance, full AT, persisted/graphical authoring and target-conformance gates remain open.
+
+### Connected-agent catalog drift: read-only verification gate (2026-11-15)
+
+A live external agent established successful **read-only** MCP operation against the existing Nesberry project: 10/10 read calls succeeded; observed baseline 12 cases, 245 suites, zero runs. The agent's current session advertises **50 tools** and does not expose the graph-change tools, create-time `postconditions`, or Notes writing. This is evidence about the *client session*, not evidence that the connected production backend is current. Do not mutate Nesberry or reissue a token merely to mask a catalog discrepancy.
+
+**Current source contract:** The active PR branch registry defines **53 distinct tools** (the agent's session exposes 50). `mcp.tools.ts` already declares `list_qa_graph_changes`, `capture_qa_graph_change`, `create_testcase.postconditions`, and plain-text Notes via `create_testcase.attachments`/`update_testcase.attachments`. `McpService` fingerprints the exact tool-list payload plus server instructions and includes it in the `initialize.serverInfo.version` and session ID. The HTTP controller refuses a fingerprint-incompatible supplied session ID with HTTP 404, prompting re-initialization; callers **without** a session ID are backward-compatible and can cache old schemas. Thus neither client caching nor older deployed code can be assumed without a fresh authorized comparison.
+
+**Safe diagnostic decision procedure (no writes):**
+1. Keep the already authorized read-only Nesberry connection untouched. Record the client's existing `initialize.serverInfo.version`, active endpoint, session-header support, tool count, presence of both graph tools and exact `create_testcase`/`update_testcase` field schemas; never log/export bearer credentials.
+2. Through the *same authorized endpoint and token/project* invoke a fresh `initialize` and `tools/list` (read-only protocol operations) in a new client session. Compare the server version/fingerprint and full tool-name/schema set, not just the headline count. Verify `list_qa_graph_changes` and `capture_qa_graph_change` and the create-time `postconditions` and Notes fields. If fresh server output is current but the original session is not, reconnect/invalidate the client's cached catalog. If fresh output is old, inspect deployed backend SHA/release/configuration and routing before deploying; the GitHub branch proves source intent, not deployment. If instances disagree, verify rollout consistency/load balancing before treating any session as authoritative.
+3. Separately bind a **disposable test project** through the existing secure token-creation/configuration flow, with the minimum requested scope. Do not point the existing Nesberry token at a different project, copy live cases, bypass organization access checks, or place tokens in GitHub/CI/logs.
+4. Only after exact deployed catalog and test-project identity are confirmed, run isolated create → read → update with explicit edit revision → archive → read verification, checking Notes and Postconditions round-trip, and graph read/capture only if a server-approved test checkout is provisioned. Require idempotent cleanup, actual database evidence, and no changes to Nesberry's baseline.
+5. Treat pending deployment, old client caches, absent disposable connection, or unavailable configured checkout as distinct blocked gates. A success on 10 read calls is **not** a write-side acceptance or graph execution proof.
+
+**UI race side finding / regression:** the prior parent Change Impact Review history viewer did not sequence overlapping responses. The same page now fences history responses by request epoch, invalidates pending work on cleanup, and resets entries/cursor on project change. The existing disposable Zyra Playwright suite now simulates a delayed first pagination response versus a newer authorized response; the older response must not erase the newer records. This is an executable local/CI regression, not a production or independent assurance sign-off.
+
+The concurrent native history-pagination response-generation fix and its isolated regression are retained in combined PR98. Validation includes15 scenarios, preserving all original14 inspector/source/handoff cases plus that race; no concurrent MCP diagnostic note is overwritten.
+
+
+### Native QA mutation-response navigation fence (2026-11-15)
+
+The source-history GET race fix does not govern *mutating* requests: source capture may commit a graph receipt and reviewer notification retry may commit deduplicated notification rows before the browser receives an answer. The parent Zyra view now retains an independent page/project lifetime generation for these asynchronous mutation responses. A response from a prior route lifetime cannot set the current project's notice/error/loading state or trigger the old project's history reload; switching projects clears previous-project status while the existing backend idempotency, authorization and committed-receipt truth remain unchanged. **This is a UI response-contamination defense, not a claim that client navigation cancels or rolls back server writes.**
+
+The existing isolated Zyra browser suite also holds a synthetic failed capture response, navigates to the other disposable project, releases the response, and checks that the old project's error is not presented. It verifies the first project's graph receipt count did not change. The real create/read/notification DB contract tests still own server-side commit behavior. The smoke workflow includes the new test; its exact-head execution is required before acceptance.
+
+
+### Reviewer notification retry concurrency: single owner per native page (2026-11-15)
+
+A further concurrency side finding in the existing Change Impact Review: each receipt had its own retry button, but the parent kept only one `notifying` string. Users could start deliveries for two different receipts concurrently; whichever resolved first cleared the shared busy indicator even while the other request remained pending, enabling repeated clicks and confusing status. The existing server already deduplicates committed delivery per user+receipt, so no new backend queue, ledger or persistence is justified.
+
+The same native page now keeps one synchronous per-lifetime in-flight notification attempt, disables all receipt retry buttons during that attempt, and only releases the lock/notice for its originating generation. A disposable-project browser test seeds two committed review receipts, holds one POST response, proves the other receipt button is disabled, observes one request, then verifies controls recover after the failed response. The existing smoke selection includes this regression. It proves client-side concurrency control only: actual delivery and deduplication remain independently covered by migrated PostgreSQL contract tests. Do not claim a test result, execution, coverage or approval from notification completion.
+
+
+### Source-capture single-flight UI guard (2026-11-15)
+
+The source capture button previously relied on React's asynchronous `capturing` state to disable another click. A rapid second event can reach the handler before the disabled state commits, creating redundant source-capture requests. These could lead to confusing concurrent progress/notification feedback even where the committed graph-history writer deduplicates unchanged observations. Reuse the existing per-page mutation-lifetime mechanism: a synchronous in-flight ref now refuses overlapping capture submissions, releases only the originating attempt's state, and resets across route lifetimes. The graph source reader, approval binding, history transaction and notification delivery remain authoritative.
+
+A disposable Zyra browser regression double-clicks capture while an injected response is held, asserts one network request, verifies the in-progress button remains disabled, then releases a failure and checks recovery with unchanged graph-history row count. It is included in the existing targeted smoke workflow. A cancelled UI request is not evidence that a committed backend capture was rolled back.
+
+
+### Native draft-preview wire integrity (2026-11-15)
+
+**Side finding — internally inconsistent accepted-preview envelopes:** The existing frontend response boundary checked the truthful top-level preview flags and the basic shape of displayed rows, but did not enforce correspondence to the embedded normalized `definition`, exact envelope fields, or legitimate diagnostic references. A compatible-looking HTTP response could therefore display a different state label, an unbound transition/diagnostic or extra authority-bearing metadata underneath the reassuring “Structure accepted for preview” banner. This is a client presentation/protocol defect identified by code inspection, **not** evidence of a compromised deployed server.
+
+**Reuse-first correction:** `Tesbo-Frontend/lib/model-draft-preview.ts` remains the *single* frontend response-admission module. It now accepts only the native preview and availability fields/versions, checks bounded same-position correspondence of UI rows to their returned normalized definition, unique shared element IDs, transition/diagnostic reference integrity, explicit backend limits and the already required false capability declarations. It does **not** recompute graph reachability, validate a proposed model's semantics, derive a new oracle, recalculate the digest or grant source/case/execution authority. C-13's native `previewDraftModel` remains the sole semantic validator.
+
+**Regression:** The existing disposable Zyra browser refusal test now tampers independently with a returned state label, transition endpoint, diagnostic target, duplicate state ID, draft schema revision, and a hidden `published` assertion. Each must be refused with the same fail-closed warning and leave the draft text intact. Existing positive real native preview, authorization, responsive layout, history/QA handoff and no-DB-write tests remain in the same targeted CI selection. An injected response demonstrates browser fail-closed behavior; it does not prove a live server emitted hostile data.
+
+**Acceptance boundary:** Exact-head frontend type/lint and browser CI must finish successfully. Until then this is a committed fix with executable scenarios, not a verified release. Independent assurance, production deployment, authorized live source verification, and a disposable external MCP writer connection are still separate proof gates.
+
+
+### Fresh MCP catalog contract in isolated E2E (2026-11-16)
+
+The external agent's successful 10/10 read calls against Nesberry still expose a 50-tool cached/old server catalog. The current source registry has exactly 53 unique tools, including graph history read/capture and `preview_behavior_model_draft`, and the native create/update case tools expose text Notes through `attachments` and Postconditions through `postconditions`. Source assertions alone could not distinguish a missing backend deployment from stale client discovery.
+
+**Executable proof at the exact code head:** Extend the existing `api/mcp.spec.ts` current-session test, not a new test framework or MCP endpoint. The test creates a disposable project token, calls *fresh* `initialize` and `tools/list` over the running isolated backend, checks 53 unique names and all three graph/model tools, verifies Notes and Postconditions fields on the native create/update tool schemas, verifies the severity enum, and matches the reported server version fingerprint to the initialized session. The existing token cleanup remains. The current `smoke-security-quality.yml` selects this single MCP API test using 10 workers and distinct HTML/output paths so the Zyra visual evidence remains retained.
+
+**Evidence boundary:** A green isolated-build catalog proves code+transport parity in CI, **not** the remote agent's deployment revision, project binding, client cache invalidation, or write-side acceptance. Do not mutate Nesberry. The authorized disposable-project agent flow (create/read/update/archive/verify) and actual approved checkout capture remain blocked until that secure connection exists. The catalog check does not weaken any project or write-scope guard.
+
+
+### Source-binding submitted snapshot and stage evidence retention
+
+The existing owner-only source-binding form now owns a single synchronous in-flight save. Its native fieldset disables every editable setting while the submitted snapshot is pending, so a normalization response cannot silently replace newer edits. Failure preserves the submitted values and restores editing/retry; a project-keyed component and generation fence prevent late save feedback from touching a new route lifetime. Browser navigation does not undo a server write. Existing owner, approved-checkout, project, plan and token authorization remain authoritative; no checkout is provisioned or feature flag enabled.
+
+The existing Zyra browser suite holds a genuine HTTP400 refusal for an unapproved checkout, checks the submitted body, one pending request, all fields disabled, original values retained, explicit retry and unchanged binding-row count. This is a refusal/recovery regression, not successful checkout-configuration evidence. Existing owner/QA and server authorization tests remain selected.
+
+CI retains separate HTML reports and test-result directories for smoke, Zyra, approval and compatibility stages. Later Playwright invocations must not delete the earlier inspector screenshot attachments. A passing job alone does not establish that evidence was retained: inspect the uploaded artifact. Exact-head execution/visual receipts belong in the PR; this prose is not a pass claim.
+
+
+### M1 read-only draft state graph
+
+The existing Zyra ephemeral draft inspector also presents its admitted native response as a directed SVG graph. Each native state and transition appears once; the schematic circular layout is not an execution order. Initial/reachable/unreachable annotations reuse the server result. Cycles, self-loops and parallel declared transitions remain distinct. The existing exact state/transition tables remain available; clipped diagram labels are presentation abbreviations only. A keyboard-accessible native transition selector exposes exact endpoints, declared action and unapproved expected observation. No frontend reachability algorithm, path generation, model storage, approval or target execution is added.
+
+Overview and actual-size modes share a focusable bounded scroll region. The graph component is keyed by the candidate fingerprint and disappears with the parent result on input edit, cancel, clear or project navigation. SVG title/description and the existing tables provide text alternatives; this does not establish full assistive-technology certification. React renders all candidate labels as inert text.
+
+Two existing-suite browser journeys exercise real native previews: three states with cycle/self-loop/parallel/unreachable transitions, endpoint/detail parity, keyboard inspection, inert labels, mobile containment and edit invalidation; then one state with no transitions and the exact32-state/64-transition bound, without invented edges or native QA/graph writes. The existing targeted CI selector includes both tests. Actual final-head execution and inspected desktop/mobile screenshots are required before acceptance; the implementation does not complete persisted or graphical model authoring.
+
+
+## PR #100: disposable MCP and source/run commit comparison (2026-11-16)
+
+**Purpose and scope:** Continue the existing graph-change→native-QA workflow without new actors, state stores, service endpoints, executable coverage claims or automatic case/run mutations. The exact merge base is Tesbo `development` after merged PR #98. These additions apply to Tesbo's existing Model Studio draft and graph-review specification, not to Nesberry marketplace policy.
+
+**Concrete bug — historical selection counted as active QA scope:** A durable graph-to-run/case handoff survives native soft-removal, correctly preserving an audit relationship. But the read-only `summarizeQaVerificationGaps` projected any historical link as a *current selection*. When a cycle item/case/run was removed, the summary could say a case was selected although there was no active execution target. The same existing summary now counts `selectedCaseCount` only for `caseStillInRun`; `historicalSelectionOnlyCount` records nominated cases with only stale handoffs; `notSelectedCount` includes those requiring renewed selection. The UI labels the distinction. Unit and migrated PostgreSQL tests cover active→soft-removed→restored states. No historical link is deleted or reinterpreted as a result.
+
+**Source-to-run provenance improvement — comparison, not attestation:** The native `cycles.commit_sha` already exists for reported automation builds (V84); the server-pinned graph history already stores `observedCommitSha` and `sourceByteEvidence=verified_pinned_git` when a configured, approved checkout's Git bytes are verified. The existing `GET /api/projects/{projectId}/agents/zyra/changes/{historyId}/runs` now projects a read-only `commitProvenance` per canonical run link. It compares only syntactically valid Git SHA values and exposes `unknown`, `reported_equal_unverified`, or `reported_different`; it never calls an unverified source declaration a pinned commit. Unlike a trustworthy deploy attestation, the cycle's commit is supplied by a test runner/CI client and can be missing or wrong. Even matching strings **do not establish that the target under test deployed this build**, that an execution actually tested it, that evidence bytes exist, that observed behavior conforms or that a human accepted the result. No SHA match affects pass/fail, coverage, result or approval. Existing native actor, run, execution, attachment and graph records remain authoritative. The actual trusted deployment/source→environment binding and file-byte/evidence proof remain unimplemented acceptance gates under C-05.
+
+**Single disposable MCP agent lifecycle:** Existing MCP has separate tests for Notes, Postconditions, edit revision, project scope and archive. This PR adds one contiguous, cookie-free real MCP session in an isolated `mcp-lifecycle` RBAC fixture project: fresh initialized catalog, token binding and foreign-project denial; create Draft with Notes/Postconditions; read; revision-guarded update; reject stale overwrite; REST readback; archive; check hidden/explicitly archived list; read graph history and fail closed on unconfigured source; and assert native run/execution counts are unchanged. All created case/token records are cleaned in `finally`. The test cannot safely run on Nesberry or a remote workspace without separately approved fixture access; it runs only with disposable DB fixture control in existing CI.
+
+**Provenance coverage limitations:** Native automation execution records and uploaded attachment metadata are not an independent oracle. A report's commit SHA is not an authenticated deploy digest. Source bytes pinned to Git do not prove route/state/journey semantics. A `reported_equal_unverified` result is explicitly NOT verified coverage. A `reported_different` result requires triage, not an automatically failed case. The current user journey remains human review and execution through native Tesbo records.
+
+**External agent blocker:** The external connected Nesberry client previously advertised 50 tools while the current source and isolated MCP catalog test enumerate 53. No direct authenticated fresh `initialize`/`tools/list` from the agent, live app deployment SHA or connected disposable project has been provided. Public health checks were inaccessible in this environment. The authorized write E2E and deployed source/build proof remain BLOCKED; no Nesberry credentials or records were changed.
+
+**Independent assurance:** Canonical charters and orchestration are in `NesberryEnterprise/Nesberry` and remain unchanged. This PR records source-based findings and executable tests; it does not claim independently run Blue/Red/Green/QA/Grey/Security/Purple/Graph/Elephant-Gold/White reviews, White freeze or Graph clean closeout. Use the existing Model Studio assurance manifest for an actual cold, isolated team dispatch. Treat specification/design readiness separately from a green implementation CI.
+
+**Acceptance:** Exact-head backend/frontend checks; unit, migrated PostgreSQL and isolated Playwright regressions; all other project authorization/catalog/approval compatibility tests kept. Do not merge into main or deploy to real projects based solely on those results.
+
+## Zyra source-behavior investigation and linked defect history — bounded increment
+
+**Owner and use.** Extend the existing native graph change receipt and its authorized read-only impact explanation. The comparable source captures already contain exact implementation file identities, source-declared route/state/behavior/journey identities and explicit `declared_in_source` relationships. For an implementation-contract receipt, retain the exact before/after support references for direct declaration changes and declarations associated with changed file/edge evidence. A changed file with unchanged declaration bytes may still need review; a file without a declaration in either observation is unresolved scope, not no impact. A removed declaration requires investigation of intended removal and alternate journeys. Ordinary capture currently supplies no proposed concepts by default; it must not claim automatic discovery of a complete application behavior model.
+
+**Reviewer workflow.** Open Zyra → Change impact review → Explain possible impact. Inspect unresolved files and declaration leads; use the displayed route/state/behavior/journey-specific investigation questions to reconcile applicable approved requirements, existing cases and independent expected outcomes. Direct declaration changes precede related-source leads as an evidence ordering, not a severity score. Display at most 50 declaration leads and 50 unresolved file references, retaining total counts. Historic receipts without the additive projection are unavailable, not rewritten or interpreted as zero. Scope/identity validation rejects malformed or foreign references. Preserve existing requirement nominations, handoffs, approval and result owners.
+
+**Historical defect retrieval.** After explicitly inspecting a nominated native case, the reviewer can request its currently linked Bugs through the existing project-scoped `listBugs(testcaseId)` owner. Its current canonical relationship is `bug_links`, not the potentially stale `bugs.testcase_id` column (existing TES-TC-2015 regression in [bugs.spec.ts](../e2e/api/bugs.spec.ts)). Display only titles, status and exact native Bug links, up to ten returned records. A mismatched response, duplicate/invalid identity or unavailable read clears the previous display. Refreshing the selected case invalidates an in-flight defect read. Ask the reviewer to compare trigger, actor, state, durable effect and verified correction; a case association is not an independently established causal match, exhaustive history, fixed-state verification or recurrence forecast. The existing API returns its current linked inventory; the display limit is not server pagination. No automatic provider/model disclosure or new Bug store/search endpoint.
+
+**Precedent and transfer.** Reconciled three merged source-grounded failure mechanisms: [#312](https://github.com/1alextest/Tesbooboo/pull/312) exact case identity and stale editor readback; [#232](https://github.com/1alextest/Tesbooboo/pull/232) delayed stale projection after committed changes; [#296](https://github.com/1alextest/Tesbooboo/pull/296) ambiguous write acknowledgments and repeated effects. Their exact reviewed heads had successful hosted workflow groups (11, 9 and 11 respectively). Reuse existing principles 6/7/9/10: check the authoritative subject and relationship, preserve old versus new observation and unrelated neighbors, and assess the durable effect independently. This is recorded, source-qualified transfer, not a newly activated Skill or proof of semantic retrieval. The new receipt tests discriminate direct declaration change, changed supporting bytes, removal/movement, missing declarations and older/malformed receipts. The linked-Bug browser fixture creates an exact-case record and an unrelated record; it checks the real scoped read, exact link and mismatch recovery. The prior original outcomes remain distinct from this candidate's new evidence.
+
+**Qualification.** Exact local source helper blob `cb917623755d1f75a4820bf6320a2f2901647797` and graph comparator `182e8c480e924c21798d0f18b4c64b76bfbe0607` were exercised in Node 22.16.0: 8/8 isolated tests passed. Strict TypeScript checking of the helper and graph contract used a type-only concept-kind stub. In the known paired graph fixture, direct changed declaration IDs alone retained one of two expected leads; the new association projection retained both and excluded the unchanged unrelated state. This is a deterministic evidence-selection comparison, not independent AI recall. The native browser and complete Jest tests are authored, not yet run at publication. Source declaration semantics, approved requirement/behavior reconciliation, verified regression coverage gaps, project-authorized semantic retrieval over defects, live model baseline, full assurance and production acceptance remain separate. Reuse FR-124/T-459 and T-422 for independent method evaluation; no new score or normative requirement owner.

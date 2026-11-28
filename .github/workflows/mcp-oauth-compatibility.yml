@@ -1,0 +1,118 @@
+name: MCP OAuth embedded compatibility spike
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mcp-oauth-compatibility.yml"
+      - "Tesbo-Backend-Nest/scripts/ci/embedded-oauth-spike.cjs"
+      - "Tesbo-Backend-Nest/scripts/ci/embedded-oauth-state-spike.cjs"
+      - "Tesbo-Backend-Nest/scripts/ci/oauth-interaction-redirect.cjs"
+      - "Tesbo-Backend-Nest/src/common/crypto.util.ts"
+      - "Tesbo-Backend-Nest/src/auth/**"
+      - "Tesbo-Backend-Nest/src/mcp/**"
+      - "Tesbo-Backend-Nest/src/legacy/legacy.service.ts"
+      - "Tesbo-Backend-Nest/src/main.ts"
+      - "Tesbo-Backend-Nest/src/database/**"
+      - "Tesbo-Backend-Nest/migrations/**"
+      - "Tesbo-Backend-Nest/tsconfig*.json"
+      - "Tesbo-Backend-Nest/src/common/request.types.ts"
+      - "Tesbo-Backend-Nest/Dockerfile"
+      - "Tesbo-Backend-Nest/package*.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  embedded-provider-compatibility:
+    name: embedded-provider-compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - name: Install existing backend (unchanged lockfile)
+        working-directory: Tesbo-Backend-Nest
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install pinned provider in an isolated test-only directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tesbo-oidc-spike"
+          echo '{"name":"tesbo-oidc-spike","version":"0.0.0","private":true}' > "$RUNNER_TEMP/tesbo-oidc-spike/package.json"
+          npm install --prefix "$RUNNER_TEMP/tesbo-oidc-spike" --save-exact --ignore-scripts --no-audit --no-fund oidc-provider@9.15.1
+          npm audit --prefix "$RUNNER_TEMP/tesbo-oidc-spike" --omit=dev --audit-level=high
+          node Tesbo-Backend-Nest/scripts/ci/embedded-oauth-spike.cjs "$RUNNER_TEMP/tesbo-oidc-spike"
+      - name: Build actual existing Node 22 production runtime image
+        run: docker build -f Tesbo-Backend-Nest/Dockerfile -t tesbo-embedded-oauth-spike:ci Tesbo-Backend-Nest
+      - name: Test ESM provider mount in the actual Node 22 production runtime (isolated network)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            --mount "type=bind,src=$RUNNER_TEMP/tesbo-oidc-spike,dst=/opt/tesbo-oidc-spike,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/Tesbo-Backend-Nest/scripts/ci/embedded-oauth-spike.cjs,dst=/app/embedded-oauth-spike.cjs,readonly" \
+            --entrypoint node tesbo-embedded-oauth-spike:ci \
+            /app/embedded-oauth-spike.cjs /opt/tesbo-oidc-spike
+
+  real-provider-persistence:
+    name: real-provider-persistence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: tesbo_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tesbo_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      # Strict disposable guard in test script rejects any other database.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tesbo_ci
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Tesbo-Backend-Nest/package-lock.json
+      - name: Install and compile existing Tesbo backend
+        working-directory: Tesbo-Backend-Nest
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+      - name: Verify compiled issuer redirects to Tesbo login and consent
+        working-directory: Tesbo-Backend-Nest
+        run: node scripts/ci/oauth-interaction-redirect.cjs
+      - name: Migrate disposable database and verify repeatable migration
+        working-directory: Tesbo-Backend-Nest
+        run: |
+          npm run migrate
+          npm run migrate
+      - name: Verify the owner transaction and consent bindings on disposable PostgreSQL
+        working-directory: Tesbo-Backend-Nest
+        run: npm test -- --runTestsByPath src/auth/mcp-oauth-grant-binding.db.spec.ts
+      - name: Install and audit pinned authorization server ONLY into isolated test directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tesbo-oidc-spike"
+          echo '{"name":"tesbo-oidc-spike","version":"0.0.0","private":true}' > "$RUNNER_TEMP/tesbo-oidc-spike/package.json"
+          npm install --prefix "$RUNNER_TEMP/tesbo-oidc-spike" --save-exact --ignore-scripts --no-audit --no-fund oidc-provider@9.15.1
+          npm audit --prefix "$RUNNER_TEMP/tesbo-oidc-spike" --omit=dev --audit-level=high
+      - name: Verify real oidc-provider model through encrypted PostgreSQL adapter
+        working-directory: Tesbo-Backend-Nest
+        shell: bash
+        run: node scripts/ci/embedded-oauth-state-spike.cjs "$RUNNER_TEMP/tesbo-oidc-spike"

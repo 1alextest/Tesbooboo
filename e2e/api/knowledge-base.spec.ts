@@ -1,7 +1,9 @@
 import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { emailDomain } from "../utils/env";
 import { zipEntryNames, zipEntryText } from "../utils/zip";
 import { exec, literal, scalar } from "../utils/psql";
+import { activeProjectIdsOldestFirst, readBillingState, setBillingState, setGraceWindow, setProPlan } from "../utils/billing-db";
 import {
   anonymousContext,
   detachUserByEmail,
@@ -80,6 +82,168 @@ test.describe("knowledge base v2 — folders and documents", () => {
    */
   test.afterEach(() => {
     if (tenant) purgeKb(tenant);
+  });
+
+  test("WPA-01 preview-only requirement respects rollout and anonymous denial without native writes", async () => {
+    const projectId = tenant!.mainProjectId;
+    const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+    const input = {
+      documentType: "requirement_note",
+      title: "QA preview only",
+      contentJson: {
+        schemaVersion: "tesbo-requirement/1",
+        description: "Example acceptance obligations for a preview-only test",
+        criteria: [{ key: "AC-1", text: "An unauthorized change is denied", normative: true }]
+      }
+    };
+    // The default-off rollout must not create native KB, case or run history.
+    const counts = () => scalar(`SELECT json_build_object(
+      'documents', (SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)}),
+      'versions', (SELECT COUNT(*) FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id
+        WHERE d.project_id=${literal(projectId)}),
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)})
+    )::text;`);
+    const before = counts();
+    const unauthenticated = await anon.post(path, { data: { notARequirement: true } });
+    // Existing KB authentication contract permits 400/401/403/404; 503 would
+    // reveal preview availability to an unauthenticated caller.
+    expect([400, 401, 403, 404]).toContain(unauthenticated.status());
+    const authorized = await asOwner.post(path, { data: input });
+    if (process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1") {
+      expect(authorized.status(), await authorized.text()).toBe(200);
+      expect(await authorized.json()).toMatchObject({ canPublish: false, disposition: "preview_only" });
+    } else {
+      expect(authorized.status(), await authorized.text()).toBe(503);
+      expect((await authorized.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    }
+    expect(counts()).toBe(before);
+  });
+
+  function requirementCandidate() {
+    return { documentType: "requirement_note", title: "  Preview acceptance  ", contentJson: {
+      schemaVersion: "tesbo-requirement/1", description: "  Bounded read-only candidate  ",
+      criteria: [{ key: "AC-1", text: "  Deny unauthorized changes  ", normative: true }]
+    } };
+  }
+
+  // Observe product/history and billing effects, not authentication metadata such as session access.
+  function previewState(projectId: string): string {
+    return scalar(`SELECT json_build_object(
+      'documents', (SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)}),
+      'versions', (SELECT COUNT(*) FROM knowledge_document_versions v JOIN knowledge_documents d ON d.id=v.document_id WHERE d.project_id=${literal(projectId)}),
+      'cases', (SELECT COUNT(*) FROM testcases WHERE project_id=${literal(projectId)}),
+      'runs', (SELECT COUNT(*) FROM cycles WHERE project_id=${literal(projectId)}),
+      'proposals', (SELECT COUNT(*) FROM ai_generation_requests WHERE project_id=${literal(projectId)}),
+      'billingNotified', (SELECT grace_locked_notified_at FROM organizations WHERE id=${literal(tenant!.organizationId)}),
+      'organizationUpdated', (SELECT updated_at FROM organizations WHERE id=${literal(tenant!.organizationId)}),
+      'billingAudits', (SELECT COUNT(*) FROM audit_logs WHERE organization_id=${literal(tenant!.organizationId)} AND action='billing_limits_enforced')
+    )::text;`);
+  }
+
+  async function ownerOutboxCount(): Promise<number> {
+    const response = await anon.get(`/api/test/email-outbox?to=${encodeURIComponent(tenant!.owner.email)}`);
+    expect(response.status(), "The disposable preview acceptance stack must expose its test email outbox").toBe(200);
+    return (await response.json()).messages.length;
+  }
+
+  test("WPA-02 bounded HTTP candidates obey explicit rollout without publishing", async () => {
+    // The whole KB file remains runnable in either declared mode. Disabled requests must refuse
+    // before validation; the opted-in CI lane must prove each positive and negative schema case.
+    const enabled = process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1";
+    const projectId = tenant!.mainProjectId;
+    const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+    const before = previewState(projectId);
+    const messagesBefore = await ownerOutboxCount();
+    const input = requirementCandidate();
+    const response = await asOwner.post(path, { data: input });
+    expect(response.status(), await response.text()).toBe(enabled ? 200 : 503);
+    const preview = await response.json();
+    if (enabled) {
+      expect(preview).toMatchObject({ title: "Preview acceptance", disposition: "preview_only", canPublish: false,
+        authoritativeRequirementId: null, publicationBlocker: "SKILL_CONTEXT_UNAVAILABLE", coverageAssertion: "none", executionAssertion: "none",
+        contentJson: { description: "Bounded read-only candidate", criteria: [{ key: "AC-1", text: "Deny unauthorized changes", normative: true }] } });
+      expect(preview.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+    } else expect(preview.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    const replay = await asOwner.post(`${path}/`, { data: input });
+    expect(replay.status()).toBe(enabled ? 200 : 503);
+    const replayBody = await replay.json();
+    if (enabled) expect(replayBody.candidateDigest).toBe(preview.candidateDigest);
+    else expect(replayBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    const maximum = await asOwner.post(path, { data: { ...input, contentJson: { ...input.contentJson,
+      criteria: Array.from({ length: 50 }, (_, index) => ({ key: `AC-${index + 1}`, text: "Bounded criterion", normative: false })) } } });
+    expect(maximum.status()).toBe(enabled ? 200 : 503);
+    const maximumBody = await maximum.json();
+    if (enabled) expect(maximumBody.contentJson.criteria).toHaveLength(50);
+    else expect(maximumBody.error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    // Strict JSON parsing rejects a scalar body before application guards in either rollout mode.
+    const malformedTransport = await asOwner.post(path, { data: null });
+    expect(malformedTransport.status()).toBe(400);
+    expect(await malformedTransport.text()).not.toContain("REQUIREMENT_PREVIEW_DISABLED");
+    for (const invalid of [{ ...input, contentJson: null }, { ...input, title: "" }, { ...input, projectId: tenant!.secondProjectId },
+      { ...input, contentJson: { ...input.contentJson, criteria: [input.contentJson.criteria[0], input.contentJson.criteria[0]] } },
+      { ...input, contentJson: { ...input.contentJson, criteria: [{ ...input.contentJson.criteria[0], normative: "true" }] } },
+      { ...input, contentJson: { ...input.contentJson, criteria: Array(51).fill(input.contentJson.criteria[0]) } },
+      { ...input, contentJson: { ...input.contentJson, description: "X".repeat(20001) } }]) {
+      const rejected = await asOwner.post(path, { data: invalid });
+      expect(rejected.status(), await rejected.text()).toBe(enabled ? 400 : 503);
+      if (!enabled) expect((await rejected.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+    }
+    for (const caller of [anon, asGuest]) {
+      const denied = await caller.post(path, { data: { malformed: true } });
+      expect([400, 401, 403, 404]).toContain(denied.status());
+      expect(await denied.text()).not.toMatch(/Launch|REQUIREMENT_PREVIEW_DISABLED|UNRECOGNIZED_FIELD/);
+    }
+    expect(previewState(projectId)).toBe(before);
+    expect(await ownerOutboxCount()).toBe(messagesBefore);
+  });
+
+  test("WPA-03 locked project preview preserves authorization and causes no billing effects", async () => {
+    const orgId = tenant!.organizationId;
+    const originalBilling = readBillingState(orgId);
+    let projectId = "";
+    try {
+      setProPlan(orgId);
+      const suffix = Date.now().toString(36).toUpperCase();
+      const created = await asOwner.post("/api/projects", { data: { name: `E2E WPA ${suffix}`, key: `WPA${suffix}` } });
+      expect(created.status(), await created.text()).toBe(201);
+      projectId = (await created.json()).id;
+      expect(activeProjectIdsOldestFirst(orgId).indexOf(projectId)).toBeGreaterThanOrEqual(2);
+      setGraceWindow(orgId, -1, { grace_locked_notified_at: null });
+      const path = `/api/projects/${projectId}/knowledge-base/requirements/preview`;
+      const before = previewState(projectId);
+      const messagesBefore = await ownerOutboxCount();
+      for (const caller of [anon, asGuest]) {
+        const denied = await caller.post(path, { data: { malformed: true } });
+        expect([400, 401, 403, 404]).toContain(denied.status());
+        expect(await denied.text()).not.toMatch(/Launch|REQUIREMENT_PREVIEW_DISABLED|UNRECOGNIZED_FIELD/);
+      }
+      const response = await asOwner.post(path, { data: requirementCandidate() });
+      if (process.env.E2E_REQUIREMENT_PREVIEW_ENABLED === "1") {
+        expect(response.status(), await response.text()).toBe(200);
+        expect(await response.json()).toMatchObject({ canPublish: false, disposition: "preview_only", authoritativeRequirementId: null });
+        const malformed = await asOwner.post(path, { data: { ...requirementCandidate(), title: "" } });
+        expect(malformed.status()).toBe(400);
+      } else {
+        expect(response.status(), await response.text()).toBe(503);
+        expect((await response.json()).error).toBe("REQUIREMENT_PREVIEW_DISABLED");
+      }
+      expect(previewState(projectId)).toBe(before);
+      expect(readBillingState(orgId).grace_locked_notified_at).toBeNull();
+      expect(await ownerOutboxCount()).toBe(messagesBefore);
+      // A real adjacent mutation must still exercise billing enforcement. This also proves the
+      // preview assertions above ran with a genuinely locked workspace, not disabled billing.
+      const mutation = await asOwner.post(`/api/projects/${projectId}/knowledge-base/documents`, {
+        data: { title: "Must not publish", documentType: "general" }
+      });
+      expect(mutation.status()).toBe(403);
+      expect((await mutation.json()).error).toContain("read-only");
+      expect(scalar(`SELECT COUNT(*) FROM knowledge_documents WHERE project_id=${literal(projectId)};`)).toBe("0");
+    } finally {
+      setProPlan(orgId);
+      if (projectId) await asOwner.delete(`/api/projects/${projectId}`, { failOnStatusCode: false });
+      setBillingState(orgId, originalBilling);
+    }
   });
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -665,6 +829,94 @@ test.describe("knowledge base v2 — folders and documents", () => {
     expect((await asOwner.get(kbUrl(`/documents/${doc.id}`))).status()).toBe(200);
   });
 
+  test("KB-A-50 the trash lists a deleted subtree and restores its contents with the folder", { tag: '@tesbo.testId("TES-TC-3031")' }, async () => {
+    const parent = await createFolder({ name: stamp("Trash parent") });
+    const child = await createFolder({ name: stamp("Trash child"), parentFolderId: parent.id });
+    const doc = await createDocument({ title: stamp("Trash doc"), folderId: child.id });
+    await asOwner.delete(kbUrl(`/folders/${parent.id}`), { failOnStatusCode: false });
+
+    const trashRes = await asOwner.get(kbUrl("/trash"), { failOnStatusCode: false });
+    expect(trashRes.status()).toBe(200);
+    const trash = await trashRes.json();
+    expect(trash.folders.find((f: any) => f.id === parent.id)).toMatchObject({ restorable: true });
+    // The child folder is inside the deleted parent: restoring it alone would leave it invisible.
+    expect(trash.folders.find((f: any) => f.id === child.id)).toMatchObject({ restorable: false });
+    expect(trash.documents.find((d: any) => d.id === doc.id)).toMatchObject({ restorable: false, folderId: child.id });
+
+    // Folders and documents deleted together come back together.
+    const restored = await asOwner.patch(kbUrl(`/folders/${parent.id}/restore`), { failOnStatusCode: false });
+    expect(restored.status(), await restored.text()).toBe(200);
+    expect(await restored.json()).toMatchObject({ isDeleted: false, restoredFolders: 2, restoredDocuments: 1 });
+    expect(isDeleted("knowledge_folders", child.id)).toBe(false);
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(false);
+
+    const after = await (await asOwner.get(kbUrl("/trash"))).json();
+    expect(after.folders.map((f: any) => f.id)).not.toContain(parent.id);
+    expect(after.documents.map((d: any) => d.id)).not.toContain(doc.id);
+  });
+
+  test("KB-A-80 a child folder cannot be restored directly while its parent remains deleted", async () => {
+    const parent = await createFolder({ name: stamp("Orphan parent") });
+    const child = await createFolder({ name: stamp("Orphan child"), parentFolderId: parent.id });
+    await asOwner.delete(kbUrl(`/folders/${parent.id}`), { failOnStatusCode: false });
+    expect(isDeleted("knowledge_folders", child.id)).toBe(true);
+
+    const direct = await asOwner.patch(kbUrl(`/folders/${child.id}/restore`), { failOnStatusCode: false });
+    expect(direct.status()).toBe(400);
+    expect(JSON.stringify(await direct.json())).toContain("Restore the parent folder");
+    expect(isDeleted("knowledge_folders", child.id)).toBe(true);
+
+    // Restoring the parent brings the child back with it, rather than leaving it stranded.
+    const restored = await asOwner.patch(kbUrl(`/folders/${parent.id}/restore`), { failOnStatusCode: false });
+    expect(restored.status(), await restored.text()).toBe(200);
+    expect(isDeleted("knowledge_folders", child.id)).toBe(false);
+  });
+
+  test("KB-A-51 a document cannot be restored while its folder is deleted", { tag: '@tesbo.testId("TES-TC-3032")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash blocked folder") });
+    const doc = await createDocument({ title: stamp("Trash independent doc"), folderId: folder.id });
+    // Delete the document first, then the folder: the cascade skips an already-deleted document,
+    // so the two deletions have different instants and are restored separately.
+    await asOwner.delete(kbUrl(`/documents/${doc.id}`), { failOnStatusCode: false });
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const blocked = await asOwner.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false });
+    expect(blocked.status()).toBe(409);
+    expect(JSON.stringify(await blocked.json())).toContain("Restore the containing folder first");
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(true);
+
+    const folderRes = await asOwner.patch(kbUrl(`/folders/${folder.id}/restore`), { failOnStatusCode: false });
+    expect(folderRes.status()).toBe(200);
+    // The earlier document deletion is not part of the folder's deletion instant.
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(true);
+
+    const docRes = await asOwner.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false });
+    expect(docRes.status()).toBe(200);
+    expect(isDeleted("knowledge_documents", doc.id)).toBe(false);
+  });
+
+  test("KB-A-52 deleted files are listed in the trash but are not restorable", { tag: '@tesbo.testId("TES-TC-3033")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash files") });
+    // A file row is enough: restorability is decided by the delete policy, not by storage content.
+    const fileId = scalar(
+      "INSERT INTO knowledge_files (organization_id, project_id, folder_id, file_name, original_file_name, is_deleted, deleted_at) " +
+        `VALUES (${literal(tenant!.organizationId)}, ${literal(tenant!.mainProjectId)}, ${literal(folder.id)}, 'gone.txt', 'gone.txt', true, now()) RETURNING id;`,
+    );
+    const trash = await (await asOwner.get(kbUrl("/trash"))).json();
+    const entry = trash.files.find((f: any) => f.id === fileId);
+    expect(entry).toMatchObject({ restorable: false });
+    expect(entry.unavailableReason).toContain("permanently removed");
+  });
+
+  test("KB-A-53 the trash is project-scoped and refuses a caller with no session", { tag: '@tesbo.testId("TES-TC-3034")' }, async () => {
+    const folder = await createFolder({ name: stamp("Trash scoped") });
+    await asOwner.delete(kbUrl(`/folders/${folder.id}`), { failOnStatusCode: false });
+
+    const other = await (await asOwner.get(kbUrl("/trash", tenant!.secondProjectId))).json();
+    expect(other.folders.map((f: any) => f.id)).not.toContain(folder.id);
+    await expectUnauthenticated(await anon.get(kbUrl("/trash"), { failOnStatusCode: false }), "GET trash");
+  });
+
   test("KB-A-22 a document from another project is not reachable through this project's URL", { tag: '@tesbo.testId("TES-TC-354")' }, async () => {
     const created = await asOwner.post(kbUrl("/documents", tenant!.secondProjectId), {
       data: {
@@ -868,6 +1120,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
     expect(doc.status).toBe("draft");
 
     const approved = await asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), {
+      data: { expectedRevision: doc.editRevision },
       failOnStatusCode: false,
     });
     expect(approved.status()).toBe(200);
@@ -891,6 +1144,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
   test("KB-A-29 an ai_memory document is rejected, and the status endpoints refuse a general document", { tag: '@tesbo.testId("TES-TC-361")' }, async () => {
     const memory = await createDocument({ title: stamp("Rejectable"), documentType: "ai_memory" });
     const rejected = await asOwner.patch(kbUrl(`/documents/${memory.id}/reject-ai-memory`), {
+      data: { expectedRevision: memory.editRevision },
       failOnStatusCode: false,
     });
     expect(rejected.status()).toBe(200);
@@ -927,6 +1181,241 @@ test.describe("knowledge base v2 — folders and documents", () => {
     });
     expect(res.status()).toBe(200);
     expect((await res.json()).status).toBe("published");
+  });
+
+  test("KB-A-72 submissions preserve exact revisions inside the autosave window and replay only their own receipt", async () => {
+    const doc = await createDocument({ title: stamp("Submitted"), contentText: "First submitted body" });
+    const submissionKey = randomUUID();
+    const submit = () => asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: doc.editRevision, submissionKey }, failOnStatusCode: false,
+    });
+    const firstResponse = await submit();
+    expect(firstResponse.status(), await firstResponse.text()).toBe(201);
+    const first = await firstResponse.json();
+    expect(first).toMatchObject({ snapshotKind: "submitted", contentText: "First submitted body" });
+    expect(first.snapshotMetadata).toMatchObject({ authority: "candidate", expectedRevision: doc.editRevision });
+
+    const edit = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Later draft", expectedRevision: doc.editRevision } });
+    expect(edit.status()).toBe(200);
+    const current = await edit.json();
+    const secondResponse = await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: current.editRevision, submissionKey: randomUUID() }, failOnStatusCode: false,
+    });
+    expect(secondResponse.status()).toBe(201);
+    const second = await secondResponse.json();
+    expect(second.id).not.toBe(first.id);
+    expect(second.contentText).toBe("Later draft");
+    expect((await (await submit()).json()).id).toBe(first.id);
+    expect(await (await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${first.id}`))).json()).toMatchObject(first);
+    const conflict = await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: current.editRevision, submissionKey }, failOnStatusCode: false,
+    });
+    expect(conflict.status()).toBe(409);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json()).status).toBe("draft");
+  });
+
+  test("KB-A-73 missing, malformed and stale review revisions cannot approve newer content", async () => {
+    const doc = await createDocument({ title: stamp("Reviewed revision"), documentType: "ai_memory", contentText: "What the reviewer saw" });
+    for (const expectedRevision of [undefined, null, "", "not-a-revision"]) {
+      const result = await asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), { data: { expectedRevision }, failOnStatusCode: false });
+      expect(result.status()).toBe(400);
+    }
+    await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Changed while review was open" } });
+    const result = await asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), {
+      data: { expectedRevision: doc.editRevision }, failOnStatusCode: false,
+    });
+    expect(result.status()).toBe(409);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ status: "draft", reviewedBy: null, reviewedVersionId: null });
+    expect(scalar(`SELECT count(*) FROM knowledge_document_versions WHERE document_id = ${literal(doc.id)} AND snapshot_kind = 'approved';`)).toBe("0");
+  });
+
+  test("KB-A-74 an owner-issued API token cannot review AI memory", async () => {
+    const doc = await createDocument({ title: stamp("Machine review refused"), documentType: "ai_memory" });
+    const issued = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/apikeys`, { data: { name: stamp("KB review token"), scopes: ["read", "write"] } });
+    expect(issued.status()).toBe(201);
+    const token = await issued.json();
+    try {
+      for (const action of ["approve-ai-memory", "reject-ai-memory"]) {
+        const result = await anon.patch(kbUrl(`/documents/${doc.id}/${action}`), {
+          headers: { Authorization: `Bearer ${token.token}` }, data: { expectedRevision: doc.editRevision }, failOnStatusCode: false,
+        });
+        expect(result.status()).toBe(403);
+        expect((await result.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
+      }
+      expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json()).status).toBe("draft");
+      expect(scalar(`SELECT count(*) FROM knowledge_document_versions WHERE document_id = ${literal(doc.id)};`)).toBe("0");
+    } finally {
+      await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
+    }
+  });
+
+  test("KB-A-75 changing document type cannot turn a candidate into approved AI context", async () => {
+    const doc = await createDocument({ title: stamp("Type boundary") });
+    const converted = await asOwner.patch(kbUrl(`/documents/${doc.id}`), {
+      data: { documentType: "ai_memory", status: "approved" }, failOnStatusCode: false,
+    });
+    expect(converted.status()).toBe(200);
+    expect(await converted.json()).toMatchObject({ documentType: "ai_memory", status: "draft", reviewedBy: null });
+    const escaped = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { documentType: "general", status: "approved" }, failOnStatusCode: false });
+    expect(escaped.status()).toBe(400);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ documentType: "ai_memory", status: "draft" });
+  });
+
+  test("KB-A-76 review preserves the exact body and repeat decisions do not create duplicate receipts", async () => {
+    const doc = await createDocument({ title: stamp("Immutable review"), documentType: "ai_memory", contentText: "Exact approved content" });
+    const decide = () => asOwner.patch(kbUrl(`/documents/${doc.id}/approve-ai-memory`), { data: { expectedRevision: doc.editRevision }, failOnStatusCode: false });
+    const [firstResponse, retryResponse] = await Promise.all([decide(), decide()]);
+    expect(firstResponse.status()).toBe(200);
+    expect(retryResponse.status()).toBe(200);
+    const approved = await firstResponse.json();
+    expect((await retryResponse.json()).reviewedVersionId).toBe(approved.reviewedVersionId);
+    const exact = await (await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${approved.reviewedVersionId}`))).json();
+    expect(exact).toMatchObject({ snapshotKind: "approved", contentText: "Exact approved content" });
+    await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { contentText: "Unreviewed successor", expectedRevision: approved.editRevision } });
+    expect(await (await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${approved.reviewedVersionId}`))).json()).toEqual(exact);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json())).toMatchObject({ status: "draft", reviewedVersionId: null });
+    const history = await (await asOwner.get(kbUrl(`/documents/${doc.id}/history`))).json();
+    expect(history.events.some((event: { changedSummary: string }) => /^Approved exact version /.test(event.changedSummary))).toBe(true);
+  });
+
+  test("KB-A-77 submission and exact-version reads retain project and document boundaries", async () => {
+    const doc = await createDocument({ title: stamp("Scoped submission") });
+    const payload = { expectedRevision: doc.editRevision, submissionKey: randomUUID() };
+    await expectUnauthenticated(await anon.post(kbUrl(`/documents/${doc.id}/submissions`), { data: payload, failOnStatusCode: false }), "anonymous submission");
+    expect((await asGuest.post(kbUrl(`/documents/${doc.id}/submissions`), { data: payload, failOnStatusCode: false })).status()).toBe(404);
+    expect((await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), { data: { ...payload, submissionKey: "bad-key" }, failOnStatusCode: false })).status()).toBe(400);
+    const submitted = await (await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), { data: payload })).json();
+    const otherDoc = await createDocument({ title: stamp("Other document") });
+    expect((await asOwner.get(kbUrl(`/documents/${otherDoc.id}/versions/${submitted.id}`), { failOnStatusCode: false })).status()).toBe(404);
+    expect((await asOwner.get(kbUrl(`/documents/${doc.id}/versions/${submitted.id}`, tenant!.secondProjectId), { failOnStatusCode: false })).status()).toBe(404);
+    await expectUnauthenticated(await anon.get(kbUrl(`/documents/${doc.id}/versions/${submitted.id}`), { failOnStatusCode: false }), "anonymous version read");
+  });
+
+  test("KB-A-78 governed review is owner/manager-only, project-scoped and human-session-only", async () => {
+    const metadata = {
+      schemaVersion: "tesbo-governed-document/1", audience: "internal", subtype: "manual", confidentiality: "internal",
+      distribution: "internal", sourceAuthority: { kind: "internal", label: "Project owner", reference: null },
+      effectivity: { from: null, to: null }, enforcementRefs: [],
+    };
+    const doc = await createDocument({
+      title: stamp("Governed review"), documentType: "user_manual", contentText: "Exact governed body",
+      contentHtml: "<p>Exact governed body</p>", governedMetadata: metadata,
+    });
+    const submittedResponse = await asOwner.post(kbUrl(`/documents/${doc.id}/submissions`), {
+      data: { expectedRevision: doc.editRevision, submissionKey: randomUUID() }, failOnStatusCode: false,
+    });
+    expect(submittedResponse.status(), await submittedResponse.text()).toBe(201);
+    const submitted = await submittedResponse.json();
+    const decisionUrl = (action: "governed-approval" | "governed-rejection") => kbUrl(`/documents/${doc.id}/${action}`);
+
+    // Role and session gates are checked before any state change. The guest fixture is not a
+    // project member in this tenant, so its refusal is the same 404 the other KB boundaries use.
+    expect((await asQa.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(403);
+    expect((await asGuest.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false })).status()).toBe(404);
+    await expectUnauthenticated(await anon.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false }), "anonymous governed approval");
+    // A document in another project is not reachable, even by the owner of this one.
+    expect((await asOwner.post(kbUrl(`/documents/${doc.id}/governed-approval`, tenant!.secondProjectId), {
+      data: { versionId: submitted.id }, failOnStatusCode: false,
+    })).status()).toBe(404);
+    expect((await (await asOwner.get(kbUrl(`/documents/${doc.id}`))).json()).status).toBe("draft");
+
+    // A manager holds the same owner/manager authority as approval elsewhere.
+    const approvedResponse = await asManager.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false });
+    // Nest's default POST status is 201, including an idempotent replay.
+    expect(approvedResponse.status(), await approvedResponse.text()).toBe(201);
+    const approved = await approvedResponse.json();
+    expect(approved).toMatchObject({ status: "approved", sourceVersionId: submitted.id, replayed: false });
+    expect(approved.reviewedVersionId).toBe(approved.decidedVersionId);
+    const replay = await asManager.post(decisionUrl("governed-approval"), { data: { versionId: submitted.id }, failOnStatusCode: false });
+    expect(replay.status()).toBe(201);
+    expect((await replay.json()).replayed).toBe(true);
+
+    // A human session is required: an owner-issued token cannot approve or reject.
+    const issued = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/apikeys`, { data: { name: stamp("Governed review token"), scopes: ["read", "write"] } });
+    expect(issued.status()).toBe(201);
+    const token = await issued.json();
+    try {
+      for (const action of ["governed-approval", "governed-rejection"] as const) {
+        const result = await anon.post(decisionUrl(action), {
+          headers: { Authorization: `Bearer ${token.token}` }, data: { versionId: submitted.id }, failOnStatusCode: false,
+        });
+        expect(result.status()).toBe(403);
+        expect((await result.json()).code).toBe("HUMAN_REVIEW_REQUIRED");
+      }
+      // An agent token cannot originate governed metadata or rewrite a governed document.
+      const tokenCreate = await anon.post(kbUrl("/documents"), {
+        headers: { Authorization: `Bearer ${token.token}` },
+        data: { title: stamp("Agent governed"), folderId: rootFolderId, documentType: "user_manual", governedMetadata: metadata },
+        failOnStatusCode: false,
+      });
+      expect(tokenCreate.status()).toBe(403);
+      const tokenUpdate = await anon.patch(kbUrl(`/documents/${doc.id}`), {
+        headers: { Authorization: `Bearer ${token.token}` }, data: { governedMetadata: metadata }, failOnStatusCode: false,
+      });
+      expect(tokenUpdate.status()).toBe(403);
+      for (const [method, suffix, data] of [
+        ["post", `/documents/${doc.id}/duplicate`, {}],
+        ["patch", `/documents/${doc.id}/move`, { folderId: rootFolderId }],
+        ["post", `/documents/${doc.id}/restore-version`, { versionId: submitted.id }],
+        ["post", `/documents/${doc.id}/submissions`, { expectedRevision: approved.editRevision, submissionKey: randomUUID() }],
+        ["delete", `/documents/${doc.id}`, undefined],
+        ["patch", `/documents/${doc.id}/restore`, undefined],
+      ] as const) {
+        const headers = { Authorization: `Bearer ${token.token}` };
+        const result = method === "post"
+          ? await anon.post(kbUrl(suffix), { headers, data, failOnStatusCode: false })
+          : method === "delete"
+            ? await anon.delete(kbUrl(suffix), { headers, failOnStatusCode: false })
+            : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
+        expect(result.status(), `${method} ${suffix} — ${await result.text()}`).toBe(403);
+      }
+      // Folder cascades are the same mutation as archiving/moving the documents beneath them.
+      const governedFolder = await createFolder({ name: stamp("Governed folder") });
+      const folderDoc = await createDocument({
+        title: stamp("Governed in folder"), folderId: governedFolder.id, documentType: "user_manual",
+        contentText: "Folder governed body", governedMetadata: metadata,
+      });
+      for (const [method, suffix, data] of [
+        ["delete", `/folders/${governedFolder.id}`, undefined],
+        ["patch", `/folders/${governedFolder.id}/move`, { parentFolderId: rootFolderId }],
+        ["patch", `/folders/${governedFolder.id}/restore`, undefined],
+      ] as const) {
+        const headers = { Authorization: `Bearer ${token.token}` };
+        const result = method === "delete"
+          ? await anon.delete(kbUrl(suffix), { headers, failOnStatusCode: false })
+          : await anon.patch(kbUrl(suffix), { headers, data, failOnStatusCode: false });
+        expect(result.status(), `${method} folder ${suffix} — ${await result.text()}`).toBe(403);
+      }
+      expect(scalar(`SELECT is_deleted FROM knowledge_documents WHERE id=${literal(folderDoc.id)};`)).toBe("f");
+      expect(scalar(`SELECT is_deleted FROM knowledge_folders WHERE id=${literal(governedFolder.id)};`)).toBe("f");
+    } finally {
+      await asOwner.delete(`/api/projects/${tenant!.mainProjectId}/apikeys/${token.id}`, { failOnStatusCode: false });
+    }
+
+    // The policy half uses the same exact-version machinery with policy-only enforcement refs.
+    const policyMetadata = { ...metadata, subtype: "policy", enforcementRefs: ["ACME-POL-1"] };
+    const policy = await createDocument({
+      title: stamp("Governed policy"), documentType: "policy", contentText: "Policy body", contentHtml: "<p>Policy body</p>",
+      governedMetadata: policyMetadata,
+    });
+    const policySubmission = await asOwner.post(kbUrl(`/documents/${policy.id}/submissions`), {
+      data: { expectedRevision: policy.editRevision, submissionKey: randomUUID() }, failOnStatusCode: false,
+    });
+    expect(policySubmission.status(), await policySubmission.text()).toBe(201);
+    const policyVersion = await policySubmission.json();
+    const policyApproval = await asOwner.post(kbUrl(`/documents/${policy.id}/governed-approval`), {
+      data: { versionId: policyVersion.id }, failOnStatusCode: false,
+    });
+    expect(policyApproval.status(), await policyApproval.text()).toBe(201);
+    expect(await policyApproval.json()).toMatchObject({ status: "approved", sourceVersionId: policyVersion.id });
+    expect((await (await asOwner.get(kbUrl(`/documents/${policy.id}`))).json()).governedMetadata)
+      .toMatchObject({ subtype: "policy", enforcementRefs: ["ACME-POL-1"] });
+
+    // A governed type cannot be changed to bypass the exact-version decision.
+    const converted = await asOwner.patch(kbUrl(`/documents/${doc.id}`), { data: { documentType: "general" }, failOnStatusCode: false });
+    expect(converted.status()).toBe(400);
+    expect(scalar(`SELECT status FROM knowledge_documents WHERE id = ${literal(doc.id)};`)).toBe("approved");
+    expect(scalar(`SELECT snapshot_kind FROM knowledge_document_versions WHERE id = ${literal(approved.decidedVersionId)};`)).toBe("approved");
   });
 
   // ─── Search and summary ───────────────────────────────────────────────────
@@ -1322,7 +1811,7 @@ test.describe("knowledge base v2 — folders and documents", () => {
 
     // A manager is allowed both.
     expect(
-      (await asManager.patch(kbUrl(`/documents/${memory.id}/approve-ai-memory`), { failOnStatusCode: false })).status(),
+      (await asManager.patch(kbUrl(`/documents/${memory.id}/approve-ai-memory`), { data: { expectedRevision: memory.editRevision }, failOnStatusCode: false })).status(),
     ).toBe(200);
     expect((await asManager.patch(kbUrl(`/documents/${doc.id}/restore`), { failOnStatusCode: false })).status()).toBe(200);
   });

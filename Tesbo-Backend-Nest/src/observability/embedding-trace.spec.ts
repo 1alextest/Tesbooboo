@@ -23,6 +23,7 @@ jest.mock("@langfuse/tracing", () => ({
 }));
 
 import { tracedEmbeddingCall, type EmbeddingCallContext } from "./embedding-trace";
+import { embedTexts, type EmbeddingKeyAllocation } from "../rag/rag-ai-allocation";
 
 function baseCtx(overrides: Partial<EmbeddingCallContext> = {}): EmbeddingCallContext {
   return {
@@ -37,11 +38,34 @@ function baseCtx(overrides: Partial<EmbeddingCallContext> = {}): EmbeddingCallCo
 }
 
 describe("tracedEmbeddingCall", () => {
+  afterEach(() => jest.restoreAllMocks());
   beforeEach(() => {
     isTracingEnabledMock.mockReset();
     startObservationMock.mockReset();
     createTraceIdMock.mockClear();
     startObservationMock.mockImplementation(() => makeFakeSpan());
+  });
+
+  it.each([[true, "HTTP"], [false, "HTTP"], [true, "vector"], [false, "vector"]] as const)("a real embedding adapter failure stays private with tracing enabled=%s, failure=%s", async (enabled, kind) => {
+    isTracingEnabledMock.mockReturnValue(enabled);
+    const span = makeFakeSpan();
+    startObservationMock.mockReturnValue(span);
+    const privateDetail = "synthetic-private-embedding-trace-context";
+    jest.spyOn(global, "fetch").mockResolvedValue(kind === "HTTP"
+      ? new Response(JSON.stringify({ error: { message: privateDetail } }), { status: 500 })
+      : new Response(JSON.stringify({ data: [{ index: 0, embedding: [privateDetail] }] })));
+    const allocation: EmbeddingKeyAllocation = { provider: "openai", api_key: "synthetic-only", base_url: null, auth_header_name: null, auth_scheme: null, model: "text-embedding-3-small", dimension: 1024, sendDimensionParam: true };
+    const call = jest.fn(() => embedTexts(allocation, ["public synthetic input"]));
+    const error = await tracedEmbeddingCall(baseCtx({ traceId: "t1" }), call).then(() => null, (failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(kind === "HTTP" ? "temporarily unavailable (HTTP 500)" : "AI provider returned invalid embedding data.");
+    expect((error as Error).message).not.toContain(privateDetail);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(span.update.mock.calls)).not.toContain(privateDetail);
+    expect(span.update).not.toHaveBeenCalledWith(expect.objectContaining({ output: expect.objectContaining({ vectorCount: expect.any(Number) }) }));
+    if (enabled) expect(span.update).toHaveBeenCalledWith(expect.objectContaining({ level: "ERROR", output: { error: (error as Error).message } }));
+    else expect(startObservationMock).not.toHaveBeenCalled();
   });
 
   it("returns fn()'s result unchanged when tracing is disabled — no span opened", async () => {
@@ -124,6 +148,25 @@ describe("tracedEmbeddingCall", () => {
     expect(span.end).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps provider details only in masked output while preserving the original failure and single invocation", async () => {
+    isTracingEnabledMock.mockReturnValue(true);
+    const span = makeFakeSpan();
+    startObservationMock.mockReturnValue(span);
+    const original = new Error("embedding request failed sk-synthetic_embedding_error_12345 Bearer synthetic.embedding.bearer.12345");
+    const fn = jest.fn().mockRejectedValue(original);
+
+    await expect(tracedEmbeddingCall(baseCtx({ traceId: "t1" }), fn)).rejects.toBe(original);
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(span.update).toHaveBeenCalledTimes(1);
+    expect(span.update).toHaveBeenCalledWith(expect.objectContaining({
+      output: { error: original.message },
+      level: "ERROR",
+      statusMessage: "Embedding failed (details in masked output)"
+    }));
+    expect(span.end).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows the exact original error unchanged even when tracing is off", async () => {
     isTracingEnabledMock.mockReturnValue(false);
     const original = new Error("network timeout");
@@ -202,8 +245,9 @@ describe("tracedEmbeddingCall", () => {
   it("calls fn() exactly once even when tracing is fully wired up", async () => {
     isTracingEnabledMock.mockReturnValue(true);
     startObservationMock.mockReturnValue(makeFakeSpan());
-    const fn = jest.fn().mockResolvedValue([[0.1, 0.2]]);
-    await tracedEmbeddingCall(baseCtx({ traceId: "t1" }), fn);
+    const vectors = [[0.1, 0.2]];
+    const fn = jest.fn().mockResolvedValue(vectors);
+    expect(await tracedEmbeddingCall(baseCtx({ traceId: "t1" }), fn)).toBe(vectors);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });

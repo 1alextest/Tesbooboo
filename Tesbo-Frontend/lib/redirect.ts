@@ -1,3 +1,5 @@
+import { API_BASE } from "./api";
+
 /**
  * The `?redirect=` parameter on /login, and the two ways it can turn against the user.
  *
@@ -78,6 +80,25 @@ export function safeRedirectPath(raw: string | null | undefined): string | null 
   const [path] = value.split(/[?#]/, 1);
   if (path === "/login") return null;
   return value;
+}
+
+/** OAuth consent is an HTML document on the API host, where the provider set its cookies.
+ * All other sign-in destinations use the usual frontend navigation. */
+export function navigateAfterSignIn(
+  router: { push(path: string): void; replace(path: string): void; refresh(): void },
+  target: string,
+  mode: "push" | "replace" = "push"
+): void {
+  if (/^\/api\/oauth\/interactions\/[A-Za-z0-9_-]+$/.test(target)) {
+    const api = new URL(API_BASE, window.location.origin);
+    const consent = new URL(target, api.origin);
+    if (mode === "replace") window.location.replace(consent.href);
+    else window.location.assign(consent.href);
+    return;
+  }
+
+  router[mode](target);
+  if (mode === "push") router.refresh();
 }
 
 /** True when we already sent the user to `target` and they came straight back. */

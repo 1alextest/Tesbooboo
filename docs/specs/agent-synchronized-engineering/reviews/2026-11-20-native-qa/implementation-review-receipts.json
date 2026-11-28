@@ -1,0 +1,62 @@
+{
+  "status": "Source-review receipts; findings and later fixes remain separately recorded. Runtime proof pending.",
+  "files": [
+    {
+      "path": "native-backend-independent.md",
+      "sha256": "ecd934dd84c675e8da06625b08fa6a539a6d691ec5290b36d633f4703c682452"
+    },
+    {
+      "path": "native-backend-review.md",
+      "sha256": "c19f0e1d26241c63d0591e7976029ee4fac031501712a0224adbdb023c60f065"
+    },
+    {
+      "path": "native-backend-fix-review.md",
+      "sha256": "b084c144d6ba7f150c692b6065132cfd45e94309871c4182164044ec7f9e1b78"
+    },
+    {
+      "path": "native-ui-independent.md",
+      "sha256": "aa923cc13e40952b1ae67f261e4c34e767fbacd82a3c5ab68e956f5ac322f952"
+    },
+    {
+      "path": "native-ui-review.md",
+      "sha256": "911fa8c1f75431ef16ad9e6375d9c0f251536cd71ae9c9b0c6a3293a46f98f09"
+    },
+    {
+      "path": "native-request-disposition-addendum.md",
+      "sha256": "c83f702e5e6b1847e1b682318fb1a5657f6acfc4069fc8663da8a9455e8528ae"
+    },
+    {
+      "path": "white-native-request-disposition.md",
+      "sha256": "c6bd03d794017ce713b0a1ff7c64ccf1aa29533a0a53925b841c5e8ade580f0d"
+    },
+    {
+      "path": "native-backend-terminal-review.md",
+      "sha256": "176333d40caca586ea0ff8875d66897546635017b5a824d7e9faca7c2701f1d0"
+    },
+    {
+      "path": "native-ui-remediation-review.md",
+      "sha256": "b8314c1de775c5be731795caa22c7d9cc28a0a93f33c2039916f46e2bac606af"
+    },
+    {
+      "path": "native-ui-storage-recovery-review.md",
+      "sha256": "0a07b5cf9f041b8238670aff8170191bb9e7604a0056c23cd995acf358c41b4a"
+    },
+    {
+      "path": "native-v38-reconciliation-publication.md",
+      "sha256": "2642e12a8fb288be9bc71e98d2e75de77b25958d80b43e4e80d0b7dbd934a8a8"
+    },
+    {
+      "path": "native-v38-reconciliation.md.json",
+      "sha256": "46b4a2bb7ab1876baa78f34c2c1c65dff2d935c13130f615f166a447e8e75163",
+      "originalReportSha256": "78b33b5c354fb53bdcbf2cd638ed303bd2785946c58dea2c049f73e123a693fa"
+    },
+    {
+      "path": "native-ui-identity-composition-review.md",
+      "sha256": "9a17c1abde34dbf76ee9fc83c85cf2301b02c243873abfebbe23561d9785f62e"
+    },
+    {
+      "path": "native-secret-exception-review.md",
+      "sha256": "34ed52805f3db1b3a55597898060d06460e4f75b890279802dd7da9fb31969fd"
+    }
+  ]
+}

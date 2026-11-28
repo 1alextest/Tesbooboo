@@ -1,0 +1,11 @@
+✔ historical revision selected during the actual pending detail callback survives its late result (5.530505ms)
+✔ an unavailable previous selection defaults to the received model head (2.305048ms)
+✔ cleanup rejects a stale detail result without replacing selection or visible detail (2.476048ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1046.43821

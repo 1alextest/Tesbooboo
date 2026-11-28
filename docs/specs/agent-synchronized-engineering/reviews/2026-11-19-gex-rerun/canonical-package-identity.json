@@ -1,0 +1,27 @@
+{
+  "run": "GEX-ASER-2026-11-19",
+  "review_input": "1.4.36-candidate-v16",
+  "manifest_sha256": "9dba403c3bb129ce5a5fcab4064a6afccdc669e588ba983e124680bbcf4e7062",
+  "canonical_archive_sha256": "406d5da0eb7f4d4a6fc062407f2d3affa7ec540d2e8572678e457f8847a7de33",
+  "archive_bytes": 582993,
+  "exact_canonical_members": [
+    "00_README.md",
+    "01_PRODUCT_REQUIREMENTS.md",
+    "02_WORKFLOW_AND_UX_SPEC.md",
+    "03_TECHNICAL_DESIGN.md",
+    "04_MCP_API_CONTRACTS.md",
+    "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+    "06_IMPLEMENTATION_AGENT_BRIEF.md",
+    "07_UI_DESIGN_TASKS.md"
+  ],
+  "immediate_baseline_revision": "1.4.35",
+  "immediate_baseline_archive_sha256": "e415fdb18b327d8ad8522f53cadd1582a524abbcc82a099018af9fcb1d96e48a",
+  "original_1_4_28_archive_sha256": "6094687758ebf1e5dfa3c6ed8e2209b8967a190523815ba1e1197d11867374ef",
+  "archive_validation": "CRC and exact eight-member equality passed; full published 1.4.35 body retained with current-revision header replacement and trailing separator-whitespace normalization. Not product execution.",
+  "publication_status": "same canonical item replaced successfully",
+  "source_audit_sha": "6897f989b055a955280f810c7daace86f74057fa",
+  "delivery_parent_sha": "1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea",
+  "library_file_id": "libfile_fde3_f-ab7b146b72588191b8a51735ae46d0b4_4ee04b678f8481919580c594fcc15a5b",
+  "library_version": 16,
+  "backing_file_id": "file_000000009b9881f5bfe68e4a49dcdf1f"
+}

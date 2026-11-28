@@ -1,0 +1,130 @@
+# Blue informed allocation delta — native QA continuation
+
+**Reviewer:** `/root/blue_qa_allocation`. **Date:** 20 November 2026 UTC.
+
+**Independent recommendation: admit the selected A allocation for this bounded architecture increment, with the explicit implementation and enablement conditions below. Also admit the destination-cycle retest creation receipt as a bounded native new-Run extension.** No reconstructed invariant requires a second task, execution, evidence, defect or proposal root. This is architecture/source review at the immutable baseline, not a review of the manual implementation now underway, a runtime acceptance, or whole-product certification.
+
+The initial independent reconstruction remains unchanged. This delta is the subsequent informed review of the two supplied earlier design documents and the actual current author's selected allocation. It supplies one actual independent Blue contribution. `/root` supplies the separately disclosed current author/grounding contribution; neither historical receipt nor this document invents another independent vote. White must evaluate the actual packet and retained gates.
+
+## 1. Binding and independence
+
+| Input | Exact binding |
+|---|---|
+| Immutable current application source | `/workspace/scratch/8e9074abd0d0/tesbo-qa-baseline`, HEAD `1fe100588be6c3a1627ee39a4b0bbc1c0d9da2ea`, tree `390058d78ef0175b729570f75c66320a5895f3ed`; clean when checked |
+| Product authority | Eight numbered canonical files v1.4.34 in `/workspace/scratch/8e9074abd0d0/delivery-input/canonical`; their exact hashes are in the independent receipt |
+| Unchanged method | Blue charter, teams README and orchestration from supplied recovered Nesberry `d83549c85a4dcd047fb40dc4fba4ec62737ab0fc`; exact consumed method hashes are in the independent receipt |
+| Frozen Phase 1 | `blue-independent.md`, SHA-256 `c22c05756a4cdcb4994fd1e047b60612137e45cdd89320ae936c194cdac60804` |
+| Current actual author input | `author-allocation-20261120.md`, SHA-256 `73c8cc188d042c846784d5f99d87943a9909103c2d04ae62ce2e20d979479643`; all §§1–9 consumed after Phase 1 freeze |
+| Earlier concrete A/B allocation | Baseline review directory `blue-i3-allocation-delta.md`, SHA-256 `47d7d1b6c3fbe64580c51f48ceb8ddfb32242cf4e68cd0e8a752057f9f65d776`; historical source `9519b56d…`, canonical v1.4.28 |
+| Earlier author design | Same directory `i3-native-owner-fit.md`, SHA-256 `93a3364f9a56d8936dae1092645978a551e02df94a95c52d25dcea9c3dbd1720`; authoring input, not an additional independent receipt |
+| Supplied source freshness | `allocation-source-freshness.json`, SHA-256 `5ffab7bd5437d480a9b18251da971b81cb2e13a5b5167e79ce117d6835f775c0` |
+
+The author file was initially announced with hash `2793369b…`; this review instead binds the later actual bytes above, which include the governance cutover clarification and evidence-context binding. Those clarifications were not fed into Phase 1. I did not edit or reframe the frozen independent findings after reading them.
+
+I independently recalculated the current side of all 59 files in the supplied freshness record: all current hashes match. The record reports 58 identical historical/current files and one changed `Tesbo-Frontend/lib/api.ts`. The local baseline Git view did not expose a complete historical `9519b56d…` tree, so historical byte identity remains attributed to the supplied comparison; I do not claim fresh reconstruction of those historical objects. The architecture conclusion also rests on direct current source inspection and the independent reconstruction, not historical identity alone. No new fetch, broad archaeology or runtime test was needed for this bounded decision.
+
+**Evidence tier:** source inspection, deterministic input hashes and conceptual discriminating probes. No application boot, DB access/write, migration, driver action, external client session, browser render or deployment. UI remains **SOURCE-INSPECTED / VISUAL-BASELINE BLOCKED**. No product or method file was changed.
+
+## 2. What the independent reconstruction establishes
+
+The problem has separate durable facts: authorized intent, current authority, actual observation, retained original, interpretation, human decision and native commitment. Their cardinalities differ. A task can exist without a case, assignment without a claim, an assignment with several sequential attempts, a report with several interpretations, and a logical operation with several submitted revisions but only one native commitment. The actual outcome must remain readable after later interpretation, revocation, retest or publication.
+
+The existing owners already supply native identity, navigation, case approval, Runs, Bugs, actor identity, credential hashing, storage, and a strong narrower proposal save transaction. They do not yet supply the full external lifecycle or immutable native execution history. This supports extending those owners with constrained child facts. It does not support another top-level workflow system or relabelling existing mutable fields as missing evidence.
+
+| Decision under review | Independent comparison and disposition |
+|---|---|
+| A: extend `ai_generation_requests` with immutable kind | **ADMIT.** Preserves UUID/TASK namespace, current relationships and native home. The proposed explicit type checks, separate external state and kind-specific fields can enforce the required distinctions. |
+| B: extract a common work root with shared-PK generation dependent | Coherent alternative, but no identified missing invariant requires the additional root/allocator/FK migration. Keep as a falsifiable alternative if a concrete constraint/consumer counterexample defeats A. No reason to implement both. |
+| Unchanged generation producer or provider-label workaround | **REJECT for case-free work.** `aiGenerate` requires AI allocation and schedules generation; a provider label does not change its state, readers or workers. |
+| Reuse native Automation ingestion as external task/report owner | **REJECT for case-free originals.** `AutomationService.recordResult` requires case/Run context and updates the native execution projection. Dummy cases or Runs would alter the required starting condition. |
+| Editable KB document or bare attachment as original report | **REJECT unchanged.** Neither owns primary uniqueness, task/attempt/fence attribution, immutable finalization or exact received-byte custody. Existing storage and governed document patterns remain reusable mechanisms. |
+| Task-owned prompt/analysis/report/assignment/attempt facts | **ADMIT subordinate persistence.** The selected separate cardinalities and lifecycle rules justify these facts. Typed prompt/analysis content can share one immutable envelope; report requires its own reserve/finalize lifecycle. |
+| Stable operations/submissions/decisions/commitments below existing proposal root | **ADMIT.** Necessary to separate revisions, human decisions and once-only effects; no independent proposal product is justified. |
+| Native new-Run retest creation manifest | **ADMIT bounded extension.** The new Run is already a distinct execution occasion. Immutable creation lineage belongs to destination `cycles`; it is not another status owner or completion registry. |
+
+Removing names such as Zyra, ChatGPT, OpenCode and Appium leaves the same intent, installation, authority, observation and decision axes. Driver brand cannot become installation identity, and a transport/API token cannot become human assent. One installation can participate in multiple project grants without a second project-agent registry. Same-project links still require the narrower evidence/document scope.
+
+## 3. Selected physical and semantic boundaries
+
+### 3.1 Native manual flow
+
+The current source has ordinary manual case authoring, exact human approval and approved-definition Run membership. `approveTestCaseForUser`, V155 and `assertApprovedNewRunCases` are the relevant existing approval/admission owners. `createCycleWithTestcasesForUser`, `createCycle` and `insertApprovedCycleItems` expose a real same-client composition seam for a fresh Run and its approved cases. The planned retest should use these native cores while validating its stricter occurrence selection before any creation.
+
+The author's bounded retest manifest must fix the source cycle/item/execution identity, source reviewed definition, source result **as observed at retest creation**, prior evidence references, target environment/build intent and exact new approved-definition/execution pins. It must not copy earlier evidence into the new Run as proof of a new execution. Source observations remain historical; the destination starts Untested. Later membership changes cannot rewrite the receipt to point at a replacement item. Public Run sharing must not gain source-private lineage by default.
+
+The current native creation contract can report skipped foreign/missing case IDs; a retest selection promising exact occurrences cannot silently inherit that permissiveness. Its explicit prevalidation and in-transaction fingerprint comparison must reject mixed invalid, unauthorized, stale or unapproved selections atomically. Exact replay returns the original destination/receipt; changed intent under the same key conflicts. The UI's persisted pending intent plus receipt readback is appropriate recovery for uncertain POST results.
+
+**Limit retained:** `writeExecution`, bulk update, history import and automation result projection still mutate the current native execution representation. A new destination Run with an immutable creation receipt does not implement the whole T-428 attempt model, T-424 correction journal, stable step/condition occurrence model or reconstruction of old history. It can be implemented and tested as the explicit bounded new-Run flow. Full canonical manual-attempt completion still requires an immutable subordinate attempt/correction structure at the native execution owner and reconciliation of all its writers/readers. This is a retained milestone obligation, not a reason to introduce a new Run store or block the narrower lineage extension.
+
+### 3.2 Case-free external work
+
+The selected A root keeps the current UUID/project/TASK sequence and introduces immutable `legacy_generation_review`, `external_qa_work` and `governed_proposal` kinds. External author, current prompt pointer, work revision/state, current assignment and fence generation have explicit meanings; legacy model/provider/counters/payload/status fields are inapplicable where the new kind says so. Do not fabricate zero-generation facts. Preserve old NULL requester/system meaning; do not infer deleted humans or historical execution from old rows.
+
+The prior concrete allocation's separate assignment and attempt relations are justified: unclaimed assignment and sequential fenced execution are different facts. The task remains the completion/authority root. Fixed task → assignment/attempt → report locking, current credential/grant checks after waits, one active fence and one primary receipt independent of request key are appropriate enforceable invariants. Manual import records authenticated human submission and separately asserted external origin; it does not invent a machine claim or override an active executor. Retest creates a new task/prompt/assignment/attempt/report; resume creates a new fenced continuation under the proper existing task authority.
+
+Installation extends `agents`/`actors`; rotating project credentials extend `api_tokens`; current consent stays at the existing MCP settings/grant owner. The bound-project resolver must check current organization/project membership independently of the issuer's last browser workspace, while human UI retains its navigation rule. The current source's `requireProjectAccess` active-workspace dependency and MCP result handlers passing issuer `userId` make this a concrete implementation obligation. Narrow executor/analyst grants must not inherit native result or protected publication powers from that user ID.
+
+### 3.3 Original report and file custody
+
+A task-owned pending/final report receipt plus the existing attachment catalog/storage owner is the smallest justified combination. Checked same-project report ownership, explicit report-type attachment FK, primary uniqueness, immutable finalized body/manifest, server-computed complete-byte digest and exact immutable object generation are required. Original bytes, safe rendering, supplements and analysis remain distinguishable.
+
+The proposed reserve → upload → verify → finalize protocol separates slow byte work from short native transactions. Finalize, mandatory audit and work transition commit together. Finalize and cleanup serialize at the same report/reservation owner; abandoned upload completion cannot resurrect an object, and cleanup cannot win over finalized/held evidence. Raw/preview/range/export/MCP readers reauthorize the exact report parent; ordinary direct URL or public-trace aliases cannot provide a weaker route.
+
+Local exclusive create plus full read/hash is a concrete implementation candidate. S3-compatible immutable mode remains disabled until the configured driver's conditional-create and immutable-generation reads are demonstrated. Keeping that unsupported optional adapter disabled does not block supported local custody, truthful authorized manual intake, or unrelated raw observation capability. Ordinary storage remains supported under its actual existing contract. Existing size-only `verify` is not full-byte integrity.
+
+### 3.4 Shared review and exact selected application
+
+V157 supplies meaningful positive controls: exact current snapshot, current human authority, target/dependency locking, transactional native case writes/audit and replay receipt. Its selected indexes are safe within that fresh snapshot; this review does not invent a proven wrong-index mutation. Its limits are different: remaining arrays are reindexed, operation identities are not stable across revisions, and current Save combines decision/application for case-only effects.
+
+The selected extensions address those limits at the same owner: stable logical operation IDs, immutable exact submissions, distinct trusted human decisions and unique commitments with native ID/revision mapping. Apply computes a supported dependency-closed plan, rechecks exact bases and current authority, then performs all selected native effects, mandatory audit and commitments with one database client. `createBug` currently opens its own transaction; extracting its bounded with-client core is necessary. Calling the public wrapper from an outer transaction would not suffice. Unsupported selected adapters refuse the affected atomic set before writes. Unselected items and copy-only text do not acquire native or tracker effects.
+
+**Two clarifications in the current author input are necessary parts of this admitted design:**
+
+1. **Kind is not a governance exemption.** The project/capability writer policy governs generation/chat/sweep/staging/promotion aliases. Retaining the legacy kind preserves representation, not a permanent weaker route. Where current required guidance applies, an old pending batch without it must be refused with a specific action or explicitly adopted into one new immutable governed successor with fresh review. Original history remains and the old mutable/save route is fenced. Ordinary permitted human Draft authoring retains its real authorization.
+2. **Evidence changes can stale decisions without changing proposal text.** Exact submission/native-base hashes alone miss a contradictory report arriving after approval. Operation submissions must bind relevant task/report/finding evidence-context revisions. Primary/retest/supplement finalization advances relevant context and forces review of affected decisions. Apply locks/rechecks it. An authorized exact unaffected/relevance disposition can support fresh review; arbitrary executor/analyst labels cannot preserve an old approval. Unrelated reports are a control and must not invalidate all project proposals. Already committed effects remain history and need explicit follow-up/correction.
+
+These points refine the older allocation under current canonical v1.4.34. They require no new global guidance or evidence registry.
+
+## 4. Independent findings reconciled, without retroactive closure
+
+| Frozen finding | Informed disposition | Remaining accountable consequence |
+|---|---|---|
+| QA-B01 — generation task mismatch | **Addressed for allocation** by selected typed A and finite consumer census | Implement every affected legacy reader/writer guard before external producers; ordinary generation positive controls remain |
+| QA-B02 — mutable native execution history | **Partially addressed by bounded new-Run receipt; full requirement retained** | New-Run receipt preserves creation facts; later native attempt/correction work must cover manual/bulk/import/reporter paths before claiming full immutable execution history |
+| QA-B03 — installation, project-bound authority and performer | **Addressed for allocation** by existing actor/token/grant extensions and dedicated bound-project resolution | Prove sibling installation denial, revoke/expiry/reassignment fencing, truthful performer and no issuer-ID publication bypass |
+| QA-B04 — missing case-free original receipt | **Addressed for allocation** by task report/attachment protocol | Implement complete-byte custody, primary uniqueness, finalization/cleanup/read authorization and recovery; optional unsupported driver stays disabled |
+| QA-B05 — V157 scope is narrower than stable mixed review | **Addressed for allocation** by operation/submission/decision/commitment extension and same-client adapters | Keep old receipts; reject unsupported selected effects; converge governed aliases and bind current relevant evidence context |
+| QA-B06 — relied-on history and deletion | **Addressed for allocation with explicit retention guards** | Root deletion guard/RESTRICT relationships must cover relied-on new facts and protected receipts, including cascades; live token deletion cannot erase attribution. No reproduced deletion-loss exploit is asserted |
+| QA-B07 — bounded resources | **Open enablement condition, finite owner/workload** | Declare/measure supported prompt/report/manifest/page/lease/backlog/retry/cleanup bounds; shared quota reservation must include competing ordinary writers before claiming global concurrency limits |
+| QA-B08 — dated as-is claims | **Resolved as review scope** | Current source governs as-is. Historical scope/read/auth/approval/Bug/storage statements remain attributed to their pins; no rewriting of canonical or prior receipts |
+
+The old allocation's concrete consumer census remains a useful implementation checklist because the current owner/source seams match the independently inspected baseline. Its older source/product binding and earlier review statuses do not become current certification. The older owner-fit document left A/B unselected; the actual current author now selects A, and this independent reviewer finds that choice justified. That is a real bounded decision rather than another unresolved alternatives exercise.
+
+## 5. Finite prerequisites and their exact triggers
+
+These conditions do not reopen settled user choices or require a generic continuation approval. They are concrete implementation/enablement responsibilities at existing owners. A missing optional adapter blocks that adapter or the selected atomic set that actually requires it, not unrelated authorized work.
+
+| Gate and trigger | Finite prerequisite / decisive proof | Scope that can proceed |
+|---|---|---|
+| **N — expose new native retest action** | Same-project actual occurrence selection, current approved-definition fingerprint after serialization, one-transaction creation/lineage/audit, immutable manifest, exact request replay, readback recovery and private lineage projection. Prove stale/mixed selection leaves no orphan Run; new execution Untested; old result/evidence not replaced. | Source-free manual authoring/approval and bounded native implementation; do not claim full immutable attempt model |
+| **K — first external-kind insertion** | Apply prior §5 concrete generation/worker/chat/sweep/history/metrics/notification/cache/formatter/snapshot census to the implementation head. Schema/readers/denials must precede producers; positive legacy fixtures plus wrong-kind attempts. Preserve IDs/receipts and compatible read/deny rollback after new rows exist. | Design and guarded schema/readers with producers disabled |
+| **A — installation claim/progress/report commands** | Current project-bound credential/install/grant/issuer delegation checks after waits; explicit assignments; unique fence; atomic claim; lease expiry/reassignment/revocation denial. Manual primary versus active claim has one authority winner. | Authorized no-claim draft/task preparation and correctly scoped reads; no fake execution authority |
+| **E — finalized original evidence** | Supported immutable storage mode, complete-byte digest/readback, ready-manifest completeness, primary uniqueness, mandatory audit, finalize/cleanup races, current private read in every alias and preserved attribution/held bytes. Prove supported mode; disable unsupported mode. | Independently authorized intake through a supported mode; no unconditional governed-authoring prerequisite |
+| **P — governed authoring/promotion** | Applicable effective-guidance authority admitted at its existing owner; shared server check across affected producers/promoters, immutable exact consumption bindings and current recheck. Historical unknown batches refused or explicitly adopted with only one writable successor. | Raw observations, manual new-Run retest and ordinary permitted Draft authoring retain their own authority |
+| **C — selected native apply** | Stable ops/submissions/decisions/commitments; supported adapter set; dependency closure; exact native and evidence-context pins; same-client writes/audit/receipts; current human intent. Prove rollback on audit/link/native failure and recovery of lost response without duplicate effects. | Stage/review permitted candidates; unsupported selected effect is visibly blocked, not silently omitted |
+| **H — retained-data exposure or deletion path** | Guard relied-on roots/children and protected receipts from cascade loss; preserve nonsecret actor/credential history; old unknown provenance remains unknown. Apply supplied synthetic retention only within its scope; actual real-data policy before that exposure. | Synthetic bounded implementation/proof; no invented production retention/governance authority |
+| **R — operational exposure and full milestone closure** | Explicit supported limits, shared quota reservation at current storage-plan owner, cleanup/backlog/retry ownership, actual UI/error/recovery evidence at exact build, actual authenticated external client/full evidence consumption/own-driver run, independent analysis, new retest and selected apply. | Architecture admission and staged implementation; no source-only claim of live/client/visual success |
+
+The implementation checks should be discriminating and bounded. The independent B-S01–B-S16 probes already cover these boundaries. The prior BD-Q/Q matrices are additional historical planning inputs, not executed results or a new product test-ID authority.
+
+The especially decisive pairs are: no-case/no-key external task versus legitimate generation; two installations of one vendor with only one assignment; expired fence versus valid resumed fence; missing required bytes versus complete originals; unsupported adapter versus supported raw intake; report finalization after human approval with unchanged proposal/native hashes versus unrelated-report control; all-selected atomic case/Bug apply versus forced mandatory-audit failure; and fresh native retest versus rewriting the old result. The full workflow must eventually run through real producers, not seed missing lifecycle rows and call that reachability.
+
+## 6. UI, history and completion accounting
+
+Reuse current native Tasks, Agents/settings, Run/detail/execution/evidence, case approval and shared review components. Existing `ZyraChatReviewPanel` dirty-state protection and exact snapshot handling are useful positive controls. Preserve ordinary generation purpose and native manual authoring. External work needs its own typed no-key composer, queue pagination and state projection within the same home; it cannot use the old latest-50 generation board or accepted/rejected normalizer as lifecycle truth.
+
+Specific affected current UI dependencies remain initial detail error versus loader, exact testcase deep-link identity, stale project/request cache fencing, selected exact revision context and pending POST recovery. Source findings identify implementation work; they are not a rendered defect reproduction or visual-parity acceptance. The bounded manual implementation now underway is outside this receipt's source binding and must receive its own verification.
+
+All prior IDs, save receipts, chat/source links and provenance survive with their actual meaning. Ordinary old rows keep honest legacy representation. Never backfill consumed prompt, verified execution, stable historical logical operation, human decision, report byte digest or effective Skill usage from labels, titles, counters or current content.
+
+**Final disposition:** A and the bounded native new-Run retest receipt are sufficiently concrete and owner-consistent for actual White architecture admission and subsequent guarded implementation. There is no remaining known representation counterexample requiring root extraction, a parallel store or another generic archaeology round. The named enablement/runtime/authority conditions remain open at their exact triggers. Full native attempt/correction semantics and the complete original external QA loop remain explicit product obligations; this admission does not certify their implementation or completion.

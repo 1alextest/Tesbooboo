@@ -1,0 +1,28 @@
+✖ historical revision selected during the actual pending detail callback survives its late result (4.072785ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 427.424051
+
+✖ failing tests:
+
+test at assurance-working/qa-native-final-temporal-probe.cjs:42:1
+✖ historical revision selected during the actual pending detail callback survives its late result (4.072785ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  'R2' !== 'R1'
+
+      at TestContext.<anonymous> (/workspace/scratch/fb086055b433/assurance-working/qa-native-final-temporal-probe.cjs:47:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'R2',
+    expected: 'R1',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

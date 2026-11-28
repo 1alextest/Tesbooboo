@@ -1,5 +1,6 @@
 import { BullModule } from "@nestjs/bullmq";
 import { Module } from "@nestjs/common";
+import { EmailOutboxService } from "../auth/email-outbox.service";
 import { EmailService } from "../auth/email.service";
 import { WELCOME_EMAIL_QUEUE } from "./welcome-email.constants";
 import { WelcomeEmailProcessor } from "./welcome-email.processor";
@@ -14,7 +15,9 @@ import { WelcomeEmailService } from "./welcome-email.service";
  */
 @Module({
   imports: [BullModule.registerQueue({ name: WELCOME_EMAIL_QUEUE })],
-  providers: [WelcomeEmailService, WelcomeEmailProcessor, EmailService],
+  // EmailService needs the outbox it records log-mode messages into; provide a second outbox
+  // instance here rather than importing AuthModule, which imports this module (cycle).
+  providers: [WelcomeEmailService, WelcomeEmailProcessor, EmailService, EmailOutboxService],
   exports: [WelcomeEmailService]
 })
 export class WelcomeEmailModule {}

@@ -3,9 +3,12 @@ import {
   backendLogsAvailable,
   readBackendLogs,
   readEmailDeliveryReport,
-  waitForInviteLinkInLogs,
-  waitForOtpInLogs,
 } from "../utils/backend-logs";
+import {
+  emailOutboxAvailable,
+  waitForInviteLinkEmail,
+  waitForOtpEmail,
+} from "../utils/email-outbox";
 import { env, testAddress } from "../utils/env";
 import { clearOtpIpRateLimit, disposableEmail } from "../utils/otp";
 import { dbControlAvailable, exec, execAllowingAuditImmutability, literal, scalar } from "../utils/psql";
@@ -26,16 +29,15 @@ import {
  * be handed to Postmark at all (Tesbo-Backend-Nest/src/config/email-delivery.policy.ts):
  *
  *   EMAIL_DELIVERY_MODE=live  → everything is delivered for real. Production only.
- *   EMAIL_DELIVERY_MODE=log   → the OTP is printed to the backend log and posted NOWHERE, and the
+ *   EMAIL_DELIVERY_MODE=log   → the OTP is recorded in the test outbox and posted NOWHERE, and the
  *                               other emails are posted only once Postmark confirms the token
  *                               belongs to a SANDBOX server, which accepts sends and delivers to
  *                               nobody. A live token in this mode sends nothing at all.
  *
  * "log" is the default, so these tests assert the stack under test cannot email a real person — and
- * that the log really is a usable substitute for a mailbox, which is what the suite depends on.
- *
- * Everything here reads the backend container's stdout, so it needs `docker compose` and skips
- * against a remote target.
+ * that the test outbox really is a usable substitute for a mailbox, which is what the suite depends
+ * on. The delivery-policy assertions read the container's stdout and need `docker compose`; the
+ * message-content assertions read the outbox over HTTP and need EMAIL_OUTBOX_ENABLED=1 instead.
  */
 
 const logsUnavailable = !backendLogsAvailable();
@@ -44,9 +46,8 @@ const SKIP_NO_LOGS =
   "instead of sending. Unavailable against a remote target.";
 
 test.describe("email delivery gating", () => {
-  test.skip(logsUnavailable, SKIP_NO_LOGS);
-
   test("the stack under test cannot deliver email to a real recipient", { tag: '@tesbo.testId("TES-TC-915")' }, async () => {
+    test.skip(logsUnavailable, SKIP_NO_LOGS);
     const report = readEmailDeliveryReport();
     expect(
       report,
@@ -75,6 +76,7 @@ test.describe("email delivery gating", () => {
   });
 
   test("a sandbox-configured stack logs no delivery-blocked warnings", { tag: '@tesbo.testId("TES-TC-916")' }, async () => {
+    test.skip(logsUnavailable, SKIP_NO_LOGS);
     const report = readEmailDeliveryReport();
     test.skip(report?.server !== "sandbox", "only meaningful when a sandbox server is configured");
 
@@ -83,7 +85,8 @@ test.describe("email delivery gating", () => {
     expect(readBackendLogs(20_000) ?? "").not.toContain("[email] Blocking delivery");
   });
 
-  test("an OTP is printed to the log and never emailed, and the printed code works", { tag: '@tesbo.testId("TES-TC-917")' }, async ({ playwright }) => {
+  test("an OTP is recorded in the test outbox and never emailed, and the recorded code works", { tag: '@tesbo.testId("TES-TC-917")' }, async ({ playwright }) => {
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     clearOtpIpRateLimit();
     const anon = await playwright.request.newContext({
       baseURL: env.apiBaseUrl,
@@ -99,16 +102,16 @@ test.describe("email delivery gating", () => {
       // The code never comes back in the response — the whole point is that it travels out of band.
       expect(await requestRes.text()).not.toMatch(/\d{6}/);
 
-      const code = await waitForOtpInLogs(email);
+      const code = await waitForOtpEmail(email);
       expect(
         code,
-        "the backend did not print an OTP for this address. In log mode it always should; if this " +
-          "stack is on EMAIL_DELIVERY_MODE=live the code went out as a real email instead.",
+        "the backend did not record an OTP for this address. In log mode it should; if this stack is " +
+          "on EMAIL_DELIVERY_MODE=live the code went out as a real email instead.",
       ).not.toBeNull();
 
-      // Proves the logged code is the real one, not a placeholder: it completes a sign-in.
+      // Proves the recorded code is the real one, not a placeholder: it completes a sign-in.
       const verifyRes = await anon.post("/api/auth/otp/verify", { data: { email, code }, failOnStatusCode: false });
-      expect(verifyRes.ok(), `verifying the logged code failed: ${verifyRes.status()} ${await verifyRes.text()}`).toBeTruthy();
+      expect(verifyRes.ok(), `verifying the recorded code failed: ${verifyRes.status()} ${await verifyRes.text()}`).toBeTruthy();
 
       const me = await anon.get("/api/auth/me");
       expect(me.ok()).toBeTruthy();
@@ -121,7 +124,8 @@ test.describe("email delivery gating", () => {
     }
   });
 
-  test("a wrong code is still rejected when the right one is sitting in the log", { tag: '@tesbo.testId("TES-TC-918")' }, async ({ playwright }) => {
+  test("a wrong code is still rejected when the right one is in the outbox", { tag: '@tesbo.testId("TES-TC-918")' }, async ({ playwright }) => {
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     clearOtpIpRateLimit();
     const anon = await playwright.request.newContext({
       baseURL: env.apiBaseUrl,
@@ -131,10 +135,10 @@ test.describe("email delivery gating", () => {
 
     try {
       expect((await anon.post("/api/auth/otp/request", { data: { email } })).status()).toBe(204);
-      const code = await waitForOtpInLogs(email);
+      const code = await waitForOtpEmail(email);
       expect(code).not.toBeNull();
 
-      // Deliberately a different six-digit code from the logged one.
+      // Deliberately a different six-digit code from the recorded one.
       const wrong = code === "000000" ? "111111" : "000000";
       const res = await anon.post("/api/auth/otp/verify", { data: { email, code: wrong }, failOnStatusCode: false });
       expect(res.status()).toBe(401);
@@ -162,10 +166,10 @@ test.describe("invite email in log mode", () => {
   test.beforeEach(() => {
     const reason = rbacSuiteSkipReason(tenant);
     test.skip(!!reason, reason ?? "");
-    test.skip(logsUnavailable, SKIP_NO_LOGS);
   });
 
-  test("the accept link is printed to the log and the printed token actually works", { tag: '@tesbo.testId("TES-TC-919")' }, async ({ playwright }) => {
+  test("the accept link is recorded in the outbox and its token actually works", { tag: '@tesbo.testId("TES-TC-919")' }, async ({ playwright }) => {
+    test.skip(!(await emailOutboxAvailable()), "needs EMAIL_OUTBOX_ENABLED=1 on a log-mode stack");
     const email = testAddress(`email-delivery-invite-${Date.now()}`);
     let inviteId: string | null = null;
     const anon = await playwright.request.newContext({
@@ -181,17 +185,17 @@ test.describe("invite email in log mode", () => {
       expect(res.ok(), `invite failed: ${res.status()} ${await res.text()}`).toBeTruthy();
       inviteId = (await res.json()).id;
 
-      const link = await waitForInviteLinkInLogs(email);
+      const link = await waitForInviteLinkEmail(email);
       expect(
         link,
-        "the backend did not print the invite accept link. In log mode it always should — and with " +
-          "nothing delivered, the log is the only place that link exists.",
+        "the backend did not record the invite accept link. In log mode it should — and with " +
+          "nothing delivered, the outbox is the only place that link exists.",
       ).not.toBeNull();
 
       // The link is what an invitee would click, so assert on it as a whole, not just its token.
       expect(link).toContain("/invite/");
       const token = link!.split("/invite/")[1];
-      expect(token, "the printed link carries no token").toBeTruthy();
+      expect(token, "the recorded link carries no token").toBeTruthy();
 
       // Deliberately anonymous: the invite landing page renders before the invitee has a session.
       const lookup = await anon.get(`/api/invitations/${token}`, { failOnStatusCode: false });

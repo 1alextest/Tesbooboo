@@ -1,0 +1,19 @@
+--- reviewed36
++++ concurrent37
+@@ -1,6 +1,6 @@
+ # Functional Workflow and UX Specification
+ 
+-**Document ID:** TESBO-FS-002 | **Revision:** 1.4.36 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed workflow plus scoped native preview; NOT FROZEN.
++**Document ID:** TESBO-FS-002 | **Revision:** 1.4.37 — GEX-ASER-2026-11-19 final reconciliation; governed graph reasoning and principle-based learning; NOT FROZEN | **Status:** proposed workflow plus scoped native preview; NOT FROZEN.
+ **Scoped implementation evidence:** Native preview increments are tracked in Tesbo PR95 and PR98; use their exact-head receipts and the MBT contract/acceptance sections below. Historical full-source audit pins and older review results retain their original scope/date. Unverified criteria and independent assurance remain open; this is not package-wide implementation or deployment certification.
+ 
+ **Interaction/ownership doctrine (P-01–P-20):** One Copilot presents Tesbo-owned sessions and linked QA artifacts; never embed another product's standalone project/chat hierarchy. Imported UI primitives must retain Tesbo's real project/session routes, current auth, violet tokens, accessible focus/keyboard conventions, and source-linked task/review views. Users can switch project/session/provider without moving or cloning KB files, reports or approved cases. Third-party demo flows are references only.
+@@ -811,3 +811,8 @@
+ 
+ 
+ **Current36 integration boundary:** The published35 Graph Analytics closure contracts are preserved and govern mixed model/policy/requirement obligation scope, distinct evidence sufficiency and observed PASS/FAIL, per-impact actions, total ranking, authorized-visible snapshot identity and current-authority rollover. Their new fixtures extend the same five GA-AC checks and remain NOT RUN. The DMIS approval-to-posting workflow is the named pilot context, not a universal actor/schema/method or a claimed live test. The incoming short source-checkout claim belongs to its separate review; this run's inspected source remains6897 and its delivery parent is1fe. Earlier current-state statements are historical when this latest explicit qualification differs. This chapter preserves the independently reviewed CURRENT/HISTORICAL, separate Skill assignment, prepared-Run and source-status qualifications above. No empirical benefit, deployment, activation or implementation acceptance is inherited.
++
++
++## Revision 1.4.37 — Graph Analytics review resolution
++
++In the opening-balance fixture freeze the obligation, build, environment, role, fixture, initial state and path. Approval evidence and posting evidence from a neighbor scope cannot verify posting. Show verified FAIL with triage, verified PASS with met, and mixed verified attempts with the applicable native discrepancy and a review action. Arrival order must not change that result. Show exactly which comparison basis is historical and which decisions are current.
