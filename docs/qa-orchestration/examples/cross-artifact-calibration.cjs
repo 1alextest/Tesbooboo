@@ -229,4 +229,68 @@ function wholeSystemPracticeStudy() {
     ]};
 }
 
-module.exports={ARTIFACT_DOMAINS,WHOLE_SYSTEM_DOMAINS,prepareCrossArtifactContext,bindCrossArtifactCitation,crossArtifactPracticeStudy,wholeSystemPracticeStudy};
+// Source-informed practice only; see skills-governance.md §§ Skill identity, assignment and authority.
+// This published fixture does not establish current Tesbo behavior or a new normative owner.
+function skillsReviewPracticeStudy() {
+  const scopeRef='practice:governed-skill-review';
+  const blank=changeRef=>({purpose:'SYNTHETIC_WHOLE_SYSTEM_CALIBRATION',scopeRef,asOf:'2026-11-28',changeRef,
+    domains:Object.fromEntries(WHOLE_SYSTEM_DOMAINS.map(domain=>[domain,
+      {availability:'unavailable',reason:'No observation supplied for this bounded practice inquiry.',records:[]}]))});
+  const record=(id,revision,role,excerpt)=>({id,revision,scopeRef,role,from:null,to:null,excerpt});
+  const supplied=(b,domain,...records)=>{b.domains[domain]={availability:'supplied',reason:'Selected practice records; not exhaustive.',records};};
+  const partial=(b,domain,reason,...records)=>{b.domains[domain]={availability:'partial',reason,records};};
+  const common=ref=>{
+    const b=blank(ref);
+    supplied(b,'stakeholder_outcome',record('reviewer-outcome','v1','approved','A project QA reviewer can determine which Skill revision is actually in use, review its proposed successor and understand the consequence before changing an assignment.'));
+    supplied(b,'requirement',record('skill-review-req','v2','approved','Approval of a Skill revision is distinct from activation of an assignment. The project may continue to use its explicitly assigned prior approved version.'));
+    supplied(b,'policy',record('skill-governance','v1','approved','An agent may propose a Skill revision but only an authorized interactive human can approve or change its effective assignment. Preserve the historical basis of prior work.'));
+    supplied(b,'skill',record('case-authoring','v1','approved','Check expected results independently.'),record('case-authoring','v2','approved','Check expected results and preserve stable subject identity.'));
+    supplied(b,'effective_configuration',record('project-A-case-assignment','assignment-rev7','observed','Project A case authoring is bound to Skill case-authoring v1. No reassignment is recorded.'));
+    supplied(b,'decision',record('skill-review-decision','receipt-2','observed','The reviewer approved case-authoring v2; this decision records approval only and contains no assignment change.'));
+    supplied(b,'user_manual',record('skills-guide','v3','approved','After approving a candidate, review the existing project assignment and explicitly reassign if authorized.'));
+    return b;
+  };
+  const assignment=common('practice:approval-not-activation');
+  supplied(assignment,'design',record('skill-review-screen','design-v4','candidate','On approval of v2, replace the effective version label with v2 and remove the explicit reassignment action.'));
+  supplied(assignment,'test_case',record('skill-approval-case','v1','approved','Verify the approved version badge changes to v2 after approval.'));
+  supplied(assignment,'execution',record('skill-approval-run','run1','observed','The v2 badge assertion passed; the active project assignment and next authoring operation were not read.'));
+  const accessibility=common('practice:keyboard-review');
+  supplied(accessibility,'requirement',record('keyboard-review-req','v1','approved','A keyboard-only reviewer must be able to open, inspect and dismiss the version comparison; focus returns to the initiating control.'));
+  supplied(accessibility,'design',record('skill-version-comparison','design-v5','candidate','A comparison is opened from the Versions button. The proposed dialog has no keyboard-dismiss control; closing it places focus on the page body.'));
+  supplied(accessibility,'test_case',record('comparison-mouse-case','v1','approved','Verify a reviewer opens and closes the comparison using a pointer.'));
+  supplied(accessibility,'execution',record('comparison-run','run1','observed','Mouse-based opening and closing passed; keyboard traversal and focus restoration were not exercised.'));
+  const spec=common('practice:spec-only-authority');
+  supplied(spec,'design',record('skill-approval-spec','design-v6','candidate','Let a connected machine client approve a submitted Skill when the token issuer has owner role. No code change is supplied.'));
+  const stale=common('practice:stale-evidence');
+  supplied(stale,'design',record('skill-review-screen','design-v3','historical','The approved version and effective version use separate labels.'),record('skill-review-screen','design-v4','candidate','Display one Latest version label for both approval and active assignment.'));
+  supplied(stale,'test_case',record('skill-version-labels','v1','approved','Verify separate approved and active labels on design-v3.'));
+  supplied(stale,'execution',record('skill-version-labels','run2','historical','Passed against design-v3 before design-v4 was proposed; design-v4 has not been tested.'));
+  const clean=common('practice:correct-skill-approval');
+  supplied(clean,'design',record('skill-review-screen','design-v7','candidate','Show v2 as approved and v1 as effective; authorized humans may separately change the assignment.'));
+  supplied(clean,'execution',record('skill-approval-run','run3','observed','After approval, the UI shows v2 approved and v1 effective. The independent project assignment readback is v1. The next authoring operation records v1.'));
+  supplied(clean,'test_case',record('skill-approval-case','v2','approved','Verify approval of v2 leaves assignment v1, displayed effective version v1 and the next authoring operation pinned to v1.'));
+  const unknown=common('practice:unavailable-active-binding');
+  unknown.domains.effective_configuration={availability:'unavailable',reason:'No authorized read of the current project assignment or effective resolver result.',records:[]};
+  partial(unknown,'execution','Only a review confirmation was observed; no assignment or next-operation readback.',record('skill-approval-run','run4','observed','The UI displayed Approved v2.'));
+  supplied(unknown,'design',record('skill-review-screen','design-v8','candidate','Display the approved Skill revision.'));
+  const target=(id,kind,oracle)=>({id:'private:'+id,kind,oracleRef:'practice-oracle:'+oracle});
+  const pair=(id,basis,expectedDisposition,targets=[])=>({id,ordinaryTrialId:id+'-1',candidateTrialId:id+'-2',
+    input:{story:'Assess the bounded Skills review change against the supplied expectations, proposals and evidence. Cite exact sources. Distinguish observed behavior, proposed risk, missing verification and unavailable authority. Do not assume an observation or approval establishes a different relationship.',
+      acceptanceCriteria:'',context:prepareCrossArtifactContext(basis),language:'en',requestedCount:3},
+    expectedDisposition,targets});
+  return {scopeRef,cutoffRef:'practice:2026-11-28',rubricRef:'practice:skill-review-rubric-v1',
+    settings:{nativeBuildRef:'practice:synthetic',modelRef:'practice:not-run',clientRef:'practice:offline',grantRef:'practice:no-live-access',
+      budget:{maxWallMs:20000,maxToolCalls:0,maxOutputTokens:2000}},
+    ordinaryMethodRef:'practice:ordinary',candidateMethodRef:'practice:skill-review-relationships',
+    candidateMethod:'Identify the actual subject, exact revision, relationship and event or decision before comparing meaning. Distinguish approval from assignment and effective use, a design proposal from observed behavior, an applicable quality concern from a separate artifact type, and a passing observation from evidence for a different revision. Trace upstream authority and downstream outcomes, including keyboard interaction where the supplied requirements make it applicable. Preserve unknown scope and propose discriminating checks without inventing a new governing decision.',
+    pairs:[
+      pair('assignment',assignment,'FINDINGS',[target('binding','RISK','approved-version-and-effective-assignment-are-different-relationships'),target('assignment-oracle','REQUIREMENT_GAP','badge-only-test-does-not-establish-next-operation-effective-version')]),
+      pair('accessibility',accessibility,'FINDINGS',[target('focus','RISK','candidate-design-conflicts-with-explicit-keyboard-dismissal-and-focus-restoration-requirement'),target('keyboard-oracle','REQUIREMENT_GAP','pointer-only-test-does-not-establish-keyboard-outcome')]),
+      pair('specification',spec,'FINDINGS',[target('authority','RISK','proposed-machine-approval-conflicts-with-interactive-human-authority')]),
+      pair('stale',stale,'FINDINGS',[target('version-labels','RISK','candidate-design-merges-distinct-approved-and-effective-labels'),target('stale-oracle','REQUIREMENT_GAP','historical-pass-on-design-v3-does-not-cover-v4')]),
+      pair('clean',clean,'NO_FINDINGS'),
+      pair('unknown',unknown,'UNKNOWN')
+    ]};
+}
+
+module.exports={ARTIFACT_DOMAINS,WHOLE_SYSTEM_DOMAINS,prepareCrossArtifactContext,bindCrossArtifactCitation,crossArtifactPracticeStudy,wholeSystemPracticeStudy,skillsReviewPracticeStudy};
