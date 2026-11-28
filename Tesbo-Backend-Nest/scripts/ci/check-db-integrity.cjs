@@ -615,8 +615,11 @@ async function verifyAssignmentFencing(client) {
         "UPDATE ai_generation_requests SET external_work_state='REPORTED',external_work_revision=3 WHERE id=$1", [taskId]),
         "23514", ["native_qa_external_manual_blocked"]);
 
-      // An elapsed lease cannot renew authority.
-      await client.query("UPDATE native_qa_attempts SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [attempt.id]);
+      // An elapsed lease cannot renew authority. The lease must stay positive
+      // relative to claimed_at, so shorten it and let real time pass rather
+      // than writing a negative lease.
+      await client.query("UPDATE native_qa_attempts SET lease_expires_at=claimed_at+interval '1 second' WHERE id=$1", [attempt.id]);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
       await reject("expired attempt renewing to in_progress", () => client.query(
         "UPDATE native_qa_attempts SET state='in_progress' WHERE id=$1", [attempt.id]),
         "23514", ["native_qa_attempts_lease_expired"]);
