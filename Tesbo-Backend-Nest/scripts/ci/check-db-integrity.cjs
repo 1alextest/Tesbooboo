@@ -19,9 +19,10 @@ const EXTERNAL_NULL_COLUMNS = [
   "include_boundary", "feedback", "context", "language"
 ];
 
-function externalInsertSql(provider, explicitKind, initial = "'DRAFT',0,1") {
+function externalInsertSql(provider, explicitKind, initial = "'DRAFT',0,1", id = null) {
   const columns = ["project_id", "requested_by", "provider"];
   const values = ["$1", "$2", "'" + provider + "'"];
+  if (id) { columns.unshift("id"); values.unshift("'" + id + "'"); }
   if (explicitKind) {
     columns.push("task_kind");
     values.push("'external_qa_work'");
@@ -271,7 +272,16 @@ async function verifyExternalWorkShape(client) {
     assert.equal(legacyChat.chat_session_id, chatSession, "legacy chat ownership must remain valid");
     assert.equal(legacySweep.sweep_testcase_id, testcase, "legacy archive-sweep ownership must remain valid");
 
-    const externalInsert = externalInsertSql("external_qa_work", true);
+    // The pointer must reference retained content. Both reviewed revisions are
+    // authored before the fenced task so every state transition can bind.
+    const externalTaskId = require("node:crypto").randomUUID();
+    const promptOne = "a".repeat(64);
+    const promptTwo = "b".repeat(64);
+    await client.query(
+      "INSERT INTO native_qa_task_prompt_revisions(task_id,project_id,revision,digest,investigation_objective,target_application,authored_by,reviewed_by,reviewed_at) VALUES ($1,$2,1,$3,'Investigate the fixture','https://example.invalid',$4,$4,now()),($1,$2,2,$5,'Clarified fixture','https://example.invalid',$4,$4,now())",
+      [externalTaskId, project, promptOne, user, promptTwo]
+    );
+    const externalInsert = externalInsertSql("external_qa_work", true, "'DRAFT',0,1", externalTaskId);
 
     const reject = async (label, operation, allowedConstraints) => {
       await client.query("SAVEPOINT external_shape_probe");
@@ -362,7 +372,7 @@ async function verifyExternalWorkShape(client) {
 
       // Canonical clarification: revise the prompt pre-assignment, then resume.
       await client.query("UPDATE ai_generation_requests SET external_work_state='NEEDS_CLARIFICATION',external_work_revision=3 WHERE id=$1", [external.id]);
-      await client.query("UPDATE ai_generation_requests SET external_prompt_revision=2,external_work_revision=4 WHERE id=$1", [external.id]);
+      await client.query("UPDATE ai_generation_requests SET external_prompt_revision=2,external_prompt_digest=$2,external_work_revision=4 WHERE id=$1", [external.id, promptTwo]);
       await client.query("UPDATE ai_generation_requests SET external_work_state='ASSIGNED',external_work_revision=5 WHERE id=$1", [external.id]);
       row = (await client.query("SELECT external_work_state,external_work_revision,external_prompt_revision FROM ai_generation_requests WHERE id=$1", [external.id])).rows[0];
       assert.equal(row.external_work_state, "ASSIGNED");
@@ -508,6 +518,132 @@ async function verifyInstallationFoundation(client) {
     const state = (await client.query("SELECT status FROM agent_installations WHERE id=$1", [installationA.id])).rows[0];
     assert.equal(state.status, "deactivated");
     console.log("Installation foundation: shared MCP actor rejected, per-organization keys, cross-org grant refused, unknown capability refused, credential binding retained, deactivation preserves attribution.");
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
+
+// Gate A slice 2: assignment ownership and fenced attempts. The producer fence
+// is lifted only inside a rolled-back savepoint; nothing can persist.
+async function verifyAssignmentFencing(client) {
+  await client.query("BEGIN");
+  try {
+    const suffix = require("node:crypto").randomUUID();
+    const user = (await client.query(
+      "INSERT INTO users(email,name) VALUES ($1,'Fencing QA') RETURNING id",
+      ["fencing-" + suffix + "@tesbo.invalid"]
+    )).rows[0].id;
+    const org = (await client.query(
+      "INSERT INTO organizations(name,slug) VALUES ('Fencing QA',$1) RETURNING id",
+      ["fencing-" + suffix]
+    )).rows[0].id;
+    const project = (await client.query(
+      "INSERT INTO projects(organization_id,key,name) VALUES ($1,'FNC','Fencing QA') RETURNING id",
+      [org]
+    )).rows[0].id;
+    const agent = (await client.query(
+      "INSERT INTO agents(slug,display_name) VALUES ($1,'Fencing workstation') RETURNING id",
+      ["fencing-" + suffix.slice(0, 8)]
+    )).rows[0].id;
+    const installation = (await client.query(
+      "INSERT INTO agent_installations(organization_id,agent_id,installation_key,display_name) VALUES ($1,$2,'fencing-workstation','Fencing workstation') RETURNING id",
+      [org, agent]
+    )).rows[0].id;
+    const grant = (await client.query(
+      "INSERT INTO agent_installation_project_grants(installation_id,project_id,capabilities) VALUES ($1,$2,ARRAY['task.claim.assigned','task.progress.assigned','report.submit.assigned']) RETURNING id",
+      [installation, project]
+    )).rows[0].id;
+
+    await client.query("SAVEPOINT fencing_open");
+    await client.query("ALTER TABLE ai_generation_requests DROP CONSTRAINT native_qa_external_producer_closed");
+    try {
+      const taskId = require("node:crypto").randomUUID();
+      const promptOne = "a".repeat(64);
+      const promptTwo = "b".repeat(64);
+      await client.query(
+        "INSERT INTO native_qa_task_prompt_revisions(task_id,project_id,revision,digest,investigation_objective,target_application,authored_by,reviewed_by,reviewed_at) VALUES ($1,$2,1,$3,'Fencing objective','https://example.invalid',$4,$4,now()),($1,$2,2,$5,'Fencing objective v2','https://example.invalid',$4,$4,now())",
+        [taskId, project, promptOne, user, promptTwo]
+      );
+      await client.query(externalInsertSql("external_qa_work", true, "'DRAFT',0,1", taskId), [project, user, promptOne]);
+      await client.query("UPDATE ai_generation_requests SET external_work_state='READY',external_work_revision=1 WHERE id=$1", [taskId]);
+      await client.query("UPDATE ai_generation_requests SET external_work_state='ASSIGNED',external_work_revision=2 WHERE id=$1", [taskId]);
+
+      const assignment = (await client.query(
+        "INSERT INTO native_qa_assignments(task_id,project_id,installation_id,grant_id,prompt_revision,prompt_digest,assigned_by) VALUES ($1,$2,$3,$4,1,$5,$6) RETURNING id,state",
+        [taskId, project, installation, grant, promptOne, user]
+      )).rows[0];
+      assert.equal(assignment.state, "assigned");
+
+      const reject = async (label, operation, sqlstate, constraints) => {
+        await client.query("SAVEPOINT fencing_probe");
+        let failure;
+        try { await operation(); } catch (error) { failure = error; }
+        await client.query("ROLLBACK TO SAVEPOINT fencing_probe");
+        await client.query("RELEASE SAVEPOINT fencing_probe");
+        assert.equal(failure?.code, sqlstate, label + " must be refused: " + (failure?.message || "succeeded"));
+        if (constraints) {
+          assert.ok(constraints.includes(failure?.constraint),
+            label + " failed for an unrelated constraint: " + failure?.constraint);
+        }
+      };
+
+      await reject("assignment pinning a different prompt than the task", () => client.query(
+        "INSERT INTO native_qa_assignments(task_id,project_id,installation_id,grant_id,prompt_revision,prompt_digest) VALUES ($1,$2,$3,$4,2,$5)",
+        [taskId, project, installation, grant, promptTwo]), "23514", ["native_qa_assignments_prompt_mismatch"]);
+
+      const attempt = (await client.query(
+        "INSERT INTO native_qa_attempts(task_id,assignment_id,installation_id,lease_hash,state,prompt_revision,prompt_digest,expected_task_revision,lease_expires_at) VALUES ($1,$2,$3,$4,'claimed',1,$5,2,now()+interval '5 minutes') RETURNING id,fence,state",
+        [taskId, assignment.id, installation, "d".repeat(64), promptOne]
+      )).rows[0];
+      assert.equal(Number(attempt.fence), 1);
+      assert.equal(attempt.state, "claimed");
+
+      await reject("second active attempt on the same task", () => client.query(
+        "INSERT INTO native_qa_attempts(task_id,assignment_id,installation_id,lease_hash,state,prompt_revision,prompt_digest,expected_task_revision,lease_expires_at) VALUES ($1,$2,$3,$4,'claimed',1,$5,2,now()+interval '5 minutes')",
+        [taskId, assignment.id, installation, "e".repeat(64), promptOne]), "23505");
+
+      await reject("claim against a stale task revision", () => client.query(
+        "INSERT INTO native_qa_attempts(task_id,assignment_id,installation_id,lease_hash,state,prompt_revision,prompt_digest,expected_task_revision,lease_expires_at) VALUES ($1,$2,$3,$4,'claimed',1,$5,1,now()+interval '5 minutes')",
+        [taskId, assignment.id, installation, "f".repeat(64), promptOne]), "23514", ["native_qa_attempts_task_stale"]);
+
+      await reject("attempt substituting a different prompt revision", () => client.query(
+        "INSERT INTO native_qa_attempts(task_id,assignment_id,installation_id,lease_hash,state,prompt_revision,prompt_digest,expected_task_revision,lease_expires_at) VALUES ($1,$2,$3,$4,'claimed',2,$5,2,now()+interval '5 minutes')",
+        [taskId, assignment.id, installation, "1".repeat(64), promptTwo]), "23514", ["native_qa_attempts_prompt_mismatch"]);
+
+      await reject("manual finalization while an executor attempt is active", () => client.query(
+        "UPDATE ai_generation_requests SET external_work_state='REPORTED',external_work_revision=3 WHERE id=$1", [taskId]),
+        "23514", ["native_qa_external_manual_blocked"]);
+
+      // An elapsed lease cannot renew authority.
+      await client.query("UPDATE native_qa_attempts SET lease_expires_at=now()-interval '1 minute' WHERE id=$1", [attempt.id]);
+      await reject("expired attempt renewing to in_progress", () => client.query(
+        "UPDATE native_qa_attempts SET state='in_progress' WHERE id=$1", [attempt.id]),
+        "23514", ["native_qa_attempts_lease_expired"]);
+
+      // Terminal attempts are immutable.
+      await client.query("UPDATE native_qa_attempts SET state='expired',ended_at=now(),end_reason='lease elapsed' WHERE id=$1", [attempt.id]);
+      await reject("expired attempt reporting again", () => client.query(
+        "UPDATE native_qa_attempts SET state='in_progress' WHERE id=$1", [attempt.id]),
+        "23514", ["native_qa_attempts_terminal"]);
+
+      // Idempotency receipts are unique per (project, command, request key).
+      await client.query(
+        "INSERT INTO native_qa_execution_receipts(project_id,command,request_key,request_digest,attempt_id,assignment_id,receipt) VALUES ($1,'claim','key-1',$2,$3,$4,'{}'::jsonb)",
+        [project, "2".repeat(64), attempt.id, assignment.id]
+      );
+      await reject("duplicate receipt request key", () => client.query(
+        "INSERT INTO native_qa_execution_receipts(project_id,command,request_key,request_digest,attempt_id,assignment_id,receipt) VALUES ($1,'claim','key-1',$2,$3,$4,'{}'::jsonb)",
+        [project, "3".repeat(64), attempt.id, assignment.id]), "23505");
+      await reject("receipt mutation", () => client.query(
+        "UPDATE native_qa_execution_receipts SET receipt='{\"x\":1}'::jsonb WHERE project_id=$1 AND command='claim' AND request_key='key-1'", [project]),
+        "23514", ["native_qa_execution_receipts_immutable"]);
+
+      console.log("Assignment/fencing: server fence 1, competing authority refused, stale revision refused, prompt substitution refused, active-attempt manual finalization blocked, expired/terminal attempts cannot regain authority, duplicate receipt refused.");
+    } finally {
+      await client.query("ROLLBACK TO SAVEPOINT fencing_open");
+      await client.query("RELEASE SAVEPOINT fencing_open");
+    }
   } finally {
     await client.query("ROLLBACK");
   }
@@ -693,8 +829,9 @@ async function main() {
     await verifyNativeQaTaskKinds(client);
     await verifyExternalWorkShape(client);
     await verifyInstallationFoundation(client);
+    await verifyAssignmentFencing(client);
     await verifyPopulatedTaskKindUpgrade(client, migrationFiles);
-    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows, native task kinds, external work conditional shape and installation identity foundation.`);
+    console.log(`Database integrity passed: ${tracked.rowCount} migrations, pgvector, unique run membership, immutable audit rows, native task kinds, external work conditional shape, installation identity foundation and fenced assignment authority.`);
   } finally {
     await client.end();
   }
