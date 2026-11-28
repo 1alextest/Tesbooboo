@@ -1963,6 +1963,21 @@ test.describe("zyra / agents (UI)", () => {
     await expect(dialog.getByText(/^Linear/)).toHaveCount(0);
   });
 
+  // Selecting a nonempty document renders Context as Markdown by default. Assert
+  // that the populated preview is present, then use the actual Edit action to
+  // verify its underlying textarea value without changing the product state.
+  async function openPopulatedContextEditor(dialog: Locator, expectedPreview: string): Promise<Locator> {
+    const edit = dialog.getByRole("button", { name: "Edit", exact: true });
+    const editor = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    await expect(edit).toBeVisible();
+    await expect(editor).toHaveCount(0);
+    await expect(dialog.locator(".zyra-prose").filter({ hasText: expectedPreview })).toBeVisible();
+    await edit.click();
+    await expect(editor).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Preview", exact: true })).toBeVisible();
+    return editor;
+  }
+
   test("ZYU-51 selecting a Knowledge Base document maps its Acceptance Criteria section to a dedicated field, not Context", async ({
     browser,
   }) => {
@@ -1979,7 +1994,7 @@ test.describe("zyra / agents (UI)", () => {
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
     const story = dialog.getByPlaceholder("As a user, I want...");
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Users should be able to log in");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(story).toHaveValue(new RegExp(title));
@@ -2022,9 +2037,8 @@ test.describe("zyra / agents (UI)", () => {
     const { dialog } = await openCreateModal(browser);
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
-    await expect(dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...")).toHaveValue(
-      /Just a plain note/,
-    );
+    const context = await openPopulatedContextEditor(dialog, "Just a plain note");
+    await expect(context).toHaveValue(/Just a plain note/);
     await expect(dialog.getByPlaceholder("Given ..., when ..., then ...")).toHaveValue("");
   });
 
@@ -2043,7 +2057,7 @@ test.describe("zyra / agents (UI)", () => {
     const { dialog } = await openCreateModal(browser);
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Do the thing well");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(acceptanceCriteria).toHaveValue(/Case one applies/);
@@ -2071,7 +2085,7 @@ test.describe("zyra / agents (UI)", () => {
     const { dialog } = await openCreateModal(browser);
     await dialog.getByRole("combobox").selectOption({ label: `${title} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Do the thing well");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(context).toHaveValue(/Do the thing well/);
@@ -2116,7 +2130,7 @@ test.describe("zyra / agents (UI)", () => {
 
     await select.selectOption({ label: `${title} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Some unique reselection content.");
     const value = await context.inputValue();
     const occurrences = value.split("Some unique reselection content.").length - 1;
     expect(occurrences, `content was duplicated in Context:\n${value}`).toBe(1);
@@ -2139,7 +2153,7 @@ test.describe("zyra / agents (UI)", () => {
     await select.selectOption({ label: `${titleA} - general` });
     await select.selectOption({ label: `${titleB} - general` });
 
-    const context = dialog.getByPlaceholder("Business rules, edge cases, acceptance notes...");
+    const context = await openPopulatedContextEditor(dialog, "Doc A body text");
     const acceptanceCriteria = dialog.getByPlaceholder("Given ..., when ..., then ...");
 
     await expect(context).toHaveValue(/Doc A body text/);
