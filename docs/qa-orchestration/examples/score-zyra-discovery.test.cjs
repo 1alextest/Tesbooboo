@@ -145,3 +145,76 @@ test('retains explicit subject abstention separately from review uncertainty and
   assert.deepEqual(arm.risk,{assigned:6,discovered:1,missed:3,unknown:1,unavailable:1});
   assert.deepEqual(arm.precision,{confirmed:2,adjudicatedDistinct:2});
 });
+
+
+// Literature-derived synthetic calibration: not a production reasoner or a held-out model trial.
+function semanticGroundingCalibration(equal) {
+  // Synthetic positive-proposition rules, not native graph relations or product approvals.
+  // Roots are stipulated by the fixture; no inference from model confidence or missing data.
+  const names=['p','q','independent','a','b','c','neighbor','cycle-x','cycle-y'];
+  const rules=[
+    {head:'a',body:['p','q']},
+    {head:'a',body:['independent']},
+    {head:'b',body:['a']},
+    {head:'c',body:['b','q']},
+    {head:'cycle-x',body:['cycle-y']},
+    {head:'cycle-y',body:['cycle-x']},
+    {head:'cycle-x',body:['p']},
+  ];
+  // Candidate bounded implementation: rebuild least grounded fixed point from roots.
+  function grounded(roots, activeRules, limit=names.length+1) {
+    const supported=new Set(roots);
+    for(let round=0;round<limit;round++) {
+      let changed=false;
+      for(const {head,body} of activeRules) {
+        if(!supported.has(head)&&body.every(x=>supported.has(x))) {supported.add(head);changed=true;}
+      }
+      if(!changed)return {status:'COMPLETE',supported:[...supported].sort()};
+    }
+    // Do not publish a partial result as complete or an authoritative clean result.
+    return {status:'UNKNOWN',supported:null};
+  }
+  // Independent algorithmic oracle: recursively enumerate acyclic grounded proof trees
+  // for each target on this small finite fixture; an ancestry cycle cannot prove itself.
+  function oracle(roots, activeRules) {
+    function proves(id, ancestors) {
+      if(roots.has(id))return true;
+      if(ancestors.has(id))return false;
+      const next=new Set(ancestors);next.add(id);
+      return activeRules.some(r=>r.head===id&&r.body.every(x=>proves(x,next)));
+    }
+    return names.filter(id=>proves(id,new Set())).sort();
+  }
+  // Complete enumeration of all premise availability masks and rule orderings in this fixture.
+  const premiseNames=['p','q','independent','neighbor'];
+  let comparisons=0;
+  for(let mask=0;mask<2**premiseNames.length;mask++) {
+    const roots=new Set(premiseNames.filter((_,i)=>(mask&(1<<i))!==0));
+    for(const activeRules of [rules,[...rules].reverse(),rules.filter(r=>r.head!=='a'||r.body.length!==1)]) {
+      const answer=grounded(roots,activeRules);
+      equal(answer.status,'COMPLETE');
+      equal(answer.supported,oracle(roots,activeRules));
+      comparisons++;
+    }
+  }
+  const initial=new Set(['p','q','neighbor']);
+  const corrected=new Set(['q','neighbor']);
+  const alternate=new Set(['q','independent','neighbor']);
+  equal(grounded(initial,rules).supported,['a','b','c','cycle-x','cycle-y','neighbor','p','q']);
+  equal(grounded(corrected,rules).supported,['neighbor','q']);
+  equal(grounded(alternate,rules).supported,['a','b','c','independent','neighbor','q']);
+  // No root supports this cycle after correction; a previous-result-seeded algorithm falsely retains it.
+  const staleRoots=new Set([...corrected,...grounded(initial,rules).supported.filter(x=>x!=='p')]);
+  const stale=grounded(staleRoots,rules).supported;
+  equal(stale.filter(x=>!oracle(corrected,rules).includes(x)),['a','b','c','cycle-x','cycle-y']);
+  // Same-source alternatives do not rescue invalidated source: two paths still share p.
+  const shared=[{head:'a',body:['p']},{head:'b',body:['p']},{head:'c',body:['a']},{head:'c',body:['b']}];
+  equal(grounded(new Set(['p']),shared).supported,['a','b','c','p']);
+  equal(grounded(new Set(),shared).supported,[]);
+  equal(grounded(initial,rules,1),{status:'UNKNOWN',supported:null});
+  equal(comparisons,48);
+}
+
+test('grounded semantic support: differential oracle, retraction, alternatives and cycle containment',()=>{
+  semanticGroundingCalibration((actual,expected)=>assert.deepEqual(actual,expected));
+});
