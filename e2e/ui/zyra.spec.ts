@@ -1366,7 +1366,7 @@ test.describe("zyra / agents (UI)", () => {
 
   interface ChatEntry {
     opType: "create" | "update" | "archive";
-    draft?: { title: string; description?: string; preconditions?: string; stepsJson?: string; testData?: string; priority?: string; suiteId?: string | null; severity?: string; component?: string };
+    draft?: { title: string; description?: string; preconditions?: string; stepsJson?: string; testData?: string; priority?: string; suiteId?: string | null; suiteName?: string; severity?: string; component?: string };
     testcaseId?: string;
     externalId?: string;
     fields?: Record<string, unknown>;
@@ -5499,12 +5499,12 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByText("Zyra generated test cases")).toHaveCount(0);
     await expect(page.getByText(/0 test cases across 0 suites/)).toBeVisible();
 
-    // Leaving suiteId null means the backend files this under its default "Zyra generated test
-    // cases" suite (LegacyService.ZYRA_DRAFT_SUITE_NAME) — a suite that does not exist yet, so its
-    // very appearance after saving is itself proof the repository picked up the new data.
+    // The chat generation route stages the default destination as suiteName when no suite ID
+    // exists yet. The native Save resolves that reviewed name atomically; null alone means
+    // unassigned. Seed the actual proposal shape without creating a suite before approval.
     const draftTitle = stamp("Fresh from Zyra");
     seedChatReviewBatch({
-      entries: [{ opType: "create", draft: { suiteId: null, title: draftTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P2" } }],
+      entries: [{ opType: "create", draft: { suiteId: null, suiteName: "Zyra generated test cases", title: draftTitle, description: "", preconditions: "", stepsJson: "[]", priority: "P2" } }],
     });
 
     // Client-side navigation only, via the same sidebar/modal links a real user clicks (ZYU-02) —
@@ -5517,6 +5517,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const suitesPath = `/api/projects/${tenant!.mainProjectId}/suites`;
     await expect(page.getByText(draftTitle)).toBeVisible();
+    expect(Number(scalar(`SELECT COUNT(*) FROM suites WHERE project_id = ${literal(tenant!.mainProjectId)} AND name = 'Zyra generated test cases' AND deleted_at IS NULL;`)), "the proposed suite must not exist before Save").toBe(0);
     // Set up the wait before clicking — the background refresh's request can land before the next
     // line would otherwise get a chance to start listening for it.
     const backgroundRefresh = page.waitForResponse(
