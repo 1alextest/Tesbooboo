@@ -6,6 +6,7 @@ import type { GraphCaptureForComparison } from "./graph-comparison-gate";
 import { projectImplementationObservations } from "./implementation-observation-graph";
 import { VerifiedPinnedSource } from "./implementation-source-verifier";
 import type { ProjectSourceBinding } from "./project-source-binding";
+import { classifyReceiptCaptureBasis, type QaReceiptCaptureBasis } from "./qa-consequence-preview";
 
 /** Internal history entry. This does not signal delivery or user acceptance. */
 export interface PersistedGraphObservation {
@@ -117,12 +118,24 @@ export class CurrentCacheGraphHistory {
   async readReceiptForUser(
     userId: string | null | undefined, projectId: string, historyId: unknown
   ): Promise<QaChangeReviewReceipt> {
+    return (await this.readReceiptWithCaptureBasisForUser(userId, projectId, historyId)).receipt;
+  }
+
+  /** Compare receipt and latest persisted capture metadata at one authorized read boundary. */
+  async readReceiptWithCaptureBasisForUser(
+    userId: string | null | undefined, projectId: string, historyId: unknown
+  ): Promise<{ receipt: QaChangeReviewReceipt; captureBasis: QaReceiptCaptureBasis }> {
     if (!userId) throw new ForbiddenException({ error: "Authenticated project membership required" });
     if (typeof historyId !== "string" || !/^[1-9][0-9]{0,18}$/.test(historyId) ||
         BigInt(historyId) > 9223372036854775807n) {
       throw new NotFoundException({ error: "QA change receipt not found" });
     }
-    const result = await this.db.query<{ authorized: boolean; receipt: QaChangeReviewReceipt | null }>(
+    const result = await this.db.query<{
+      authorized: boolean;
+      receipt: QaChangeReviewReceipt | null;
+      selected_metadata: unknown;
+      latest_metadata: unknown;
+    }>(
       `WITH allowed AS MATERIALIZED (
          SELECT DISTINCT p.id FROM projects p
           JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=$2::uuid
@@ -133,11 +146,24 @@ export class CurrentCacheGraphHistory {
            AND COALESCE((to_jsonb(p)->>'is_archived')::boolean,false)=false
            AND (to_jsonb(pm)->>'deleted_at') IS NULL
            AND (to_jsonb(om)->>'deleted_at') IS NULL
+       ), selected AS MATERIALIZED (
+         SELECT h.id, h.contract_id, h.source_scope_fingerprint, h.revision, h.review_receipt_json
+           FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
+          WHERE h.id=$3::bigint AND h.review_receipt_json IS NOT NULL
+       ), latest AS MATERIALIZED (
+         SELECT h.id, h.contract_id, h.source_scope_fingerprint, h.revision
+           FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
+          WHERE EXISTS (SELECT 1 FROM selected)
+          ORDER BY h.id DESC LIMIT 1
        )
        SELECT EXISTS(SELECT 1 FROM allowed) AS authorized,
-              (SELECT h.review_receipt_json
-                 FROM graph_capture_history h JOIN allowed a ON a.id=h.project_id
-                WHERE h.id=$3::bigint AND h.review_receipt_json IS NOT NULL) AS receipt`,
+              (SELECT review_receipt_json FROM selected) AS receipt,
+              (SELECT jsonb_build_object('id', id::text, 'contractId', contract_id,
+                 'scopeFingerprint', source_scope_fingerprint, 'revision', revision)
+                 FROM selected) AS selected_metadata,
+              (SELECT jsonb_build_object('id', id::text, 'contractId', contract_id,
+                 'scopeFingerprint', source_scope_fingerprint, 'revision', revision)
+                 FROM latest) AS latest_metadata`,
       [projectId, userId, historyId]
     );
     if (!result.rows[0]?.authorized) {
@@ -147,7 +173,9 @@ export class CurrentCacheGraphHistory {
     if (!receipt || receipt.projectId !== projectId) {
       throw new NotFoundException({ error: "QA change receipt not found" });
     }
-    return receipt;
+    return { receipt, captureBasis: classifyReceiptCaptureBasis(
+      receipt, historyId, result.rows[0].selected_metadata, result.rows[0].latest_metadata
+    ) };
   }
 
   /** Only invoked by the server-owned binding+Git verifier coordinator. */

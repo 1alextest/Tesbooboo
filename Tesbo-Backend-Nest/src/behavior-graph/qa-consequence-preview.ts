@@ -10,6 +10,44 @@ import { readSourceDeclarationReview, type SourceDeclarationReview } from './qa-
  * An explicit cached source reference can nominate a case for investigation, but cannot
  * establish a normative policy, semantic cause, model conformance or an actual test pass.
  */
+/** Relative to the latest persisted capture, not live source freshness or approval. */
+export type QaReceiptCaptureBasis =
+  | "latest_recorded"
+  | "historical_later_same_scope"
+  | "historical_later_other_scope"
+  | "unknown";
+
+type CaptureMetadata = { id: string; contractId: string; scopeFingerprint: string; revision: string };
+
+function isCaptureMetadata(value: unknown): value is CaptureMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.id === "string" && /^[1-9][0-9]{0,18}$/.test(row.id) &&
+    BigInt(row.id) <= 9223372036854775807n &&
+    [row.contractId, row.scopeFingerprint, row.revision].every(v => typeof v === "string" && v.trim().length > 0);
+}
+
+/**
+ * Selected receipt and both metadata rows must come from the same authorized
+ * ledger read. A later capture (even a repeated revision after a discontinuity)
+ * cannot silently refresh an older receipt. No source read or new approval.
+ */
+export function classifyReceiptCaptureBasis(
+  receipt: QaChangeReviewReceipt, historyId: string, selected: unknown, latest: unknown
+): QaReceiptCaptureBasis {
+  if (!isCaptureMetadata(selected) || !isCaptureMetadata(latest) ||
+      selected.id !== historyId || selected.contractId !== receipt.source?.contractId ||
+      selected.scopeFingerprint !== receipt.source?.scopeFingerprint ||
+      selected.revision !== receipt.source?.toRevision ||
+      BigInt(latest.id) < BigInt(selected.id)) return "unknown";
+  const sameScope = latest.contractId === selected.contractId &&
+    latest.scopeFingerprint === selected.scopeFingerprint;
+  if (latest.id === selected.id) {
+    return sameScope && latest.revision === selected.revision ? "latest_recorded" : "unknown";
+  }
+  return sameScope ? "historical_later_same_scope" : "historical_later_other_scope";
+}
+
 export interface QaConsequencePreview {
   receiptId: string;
   projectId: string;

@@ -59,8 +59,9 @@ export class GraphChangeReviewController {
     @Param("projectId") projectId: string,
     @Param("historyId") historyId: string
   ) {
-    const receipt = await this.history.readReceiptForUser(request.userId, projectId, historyId);
-    return explainQaConsequenceReceipt(receipt);
+    const { receipt, captureBasis } = await this.history.readReceiptWithCaptureBasisForUser(
+      request.userId, projectId, historyId);
+    return { ...explainQaConsequenceReceipt(receipt), captureBasis };
   }
 
   @Get(":historyId/runs")

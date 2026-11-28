@@ -72,6 +72,8 @@ const url = process.env.DATABASE_URL ?? "";
       expect(result.reviewReceipt?.evidence.executionAssertion).toBe("none");
       const saved = await admin.query("SELECT review_receipt_json FROM graph_capture_history WHERE id=$1", [result.id]);
       expect(saved.rows[0].review_receipt_json.id).toBe(result.reviewReceipt?.id);
+      expect(await store.readReceiptWithCaptureBasisForUser(user, project, result.id))
+        .toEqual({ receipt: result.reviewReceipt, captureBasis: "latest_recorded" });
       expect((await admin.query("SELECT COUNT(*)::int AS count FROM graph_capture_history WHERE project_id=$1", [project])).rows[0].count).toBe(2);
     });
 
@@ -142,6 +144,15 @@ const url = process.env.DATABASE_URL ?? "";
       expect(newest[0].changeState).toBe("source_scope_changed");
       const older = await store.listForUser(user, project, 1, newest[0].id);
       expect(older[0].changeState).toBe("changed");
+      expect(await store.readReceiptWithCaptureBasisForUser(user, project, older[0].id))
+        .toEqual({ receipt: older[0].reviewReceipt, captureBasis: "historical_later_other_scope" });
+      await admin.query("DELETE FROM project_members WHERE project_id=$1 AND user_id=$2", [project, user]);
+      try {
+        await expect(store.readReceiptWithCaptureBasisForUser(user, project, older[0].id))
+          .rejects.toMatchObject({ status: 403 });
+      } finally {
+        await admin.query("INSERT INTO project_members(project_id,user_id,role) VALUES ($1,$2,'qa_engineer')", [project,user]);
+      }
     });
 
     it("uses the approved project Git binding to persist real source bytes in the existing graph ledger", async () => {

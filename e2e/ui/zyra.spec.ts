@@ -1114,6 +1114,7 @@ test.describe("zyra / agents (UI)", () => {
     const suffix = stamp("requirement-nomination");
     const baseRevision = "base-" + suffix;
     const reviewRevision = "change-" + suffix;
+    const laterRevision = "later-" + suffix;
     const contract = "tesbo-current-cached-requirement-links-v2";
     const scope = "e2e-nomination-" + suffix;
     let caseId: string | undefined;
@@ -1205,14 +1206,31 @@ test.describe("zyra / agents (UI)", () => {
       const read = await response;
       expect(read.ok(), await read.text()).toBeTruthy();
       expect(await read.json()).toMatchObject({ projectId, receiptId: receipt.id, coverageAssertion: "none",
-        executionAssertion: "none", cachedRequirementReview: { changedRequirementCount: 2,
+        executionAssertion: "none", captureBasis: "latest_recorded", cachedRequirementReview: { changedRequirementCount: 2,
           withoutNomination: [{ requirementNodeId: missing, change: "modified" }] } });
+      const recordedBasis = explanation.getByRole("region", { name: "Recorded evidence basis" });
+      await expect(recordedBasis).toContainText("latest recorded capture at the time of this read");
       const inventory = explanation.getByRole("region", { name: "Changed requirement nomination review" });
       await expect(inventory).toContainText("1 of 2 changed cached requirements have no case nomination in this receipt.");
       await expect(inventory).toContainText("not current links, approved expectations or verified coverage");
       await inventory.getByText("Inspect recorded requirement references", { exact: true }).click();
       await expect(inventory.getByText(missing, { exact: true })).toBeVisible();
       await expect(inventory.getByText(linked, { exact: true })).toHaveCount(0);
+      await explanation.getByRole("button", { name: "Hide impact explanation" }).click();
+      // Record a later synthetic capture (no new receipt, execution or approval).
+      // Reopening the same historical receipt must reread the authorized ledger.
+      exec(`INSERT INTO graph_capture_history
+        (project_id, contract_id, source_scope_fingerprint, revision, capture_json)
+        VALUES (${literal(projectId)}, ${literal(contract)}, ${literal(scope)},
+          ${literal(laterRevision)}, ${literal(capture(laterRevision))}::jsonb);`);
+      const laterRead = page.waitForResponse(r => r.url().endsWith(`/agents/zyra/changes/${historyId}/analysis`) && r.request().method() === "GET");
+      await explanation.getByRole("button", { name: "Explain possible impact (read-only)" }).click();
+      const laterResult = await laterRead;
+      expect(laterResult.ok(), await laterResult.text()).toBeTruthy();
+      expect(await laterResult.json()).toMatchObject({ receiptId: receipt.id, source: receipt.source,
+        captureBasis: "historical_later_same_scope", sourceFreshness: "unverified", coverageAssertion: "none" });
+      await expect(recordedBasis).toContainText("A later capture exists in the same recorded source scope.");
+      await expect(inventory).toContainText("1 of 2 changed cached requirements");
       await explanation.getByRole("button", { name: "Hide impact explanation" }).click();
       // Reopening must revalidate the exact receipt instead of recycling an earlier authorized read.
       const wrong = async (route: import("@playwright/test").Route) => {
@@ -1230,7 +1248,7 @@ test.describe("zyra / agents (UI)", () => {
         WHERE project_id=${literal(projectId)} AND history_id=${literal(historyId)};`))).toBe(0);
     } finally {
       exec(`DELETE FROM graph_capture_history WHERE project_id=${literal(projectId)}
-        AND revision IN (${literal(baseRevision)},${literal(reviewRevision)});`);
+        AND revision IN (${literal(baseRevision)},${literal(reviewRevision)},${literal(laterRevision)});`);
       // Delete only the two disposable fixture bugs through the existing owner.
       if (linkedBugId || unrelatedBugId) {
         const human = await loginAs(tenant!.owner);
