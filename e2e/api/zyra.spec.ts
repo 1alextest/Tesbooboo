@@ -7817,10 +7817,15 @@ test.describe("zyra chat — request trace and turn lifecycle (fake provider)", 
       expect(userMessageId).toBeTruthy();
       await expect.poll(() => held.pending, { timeout: 30_000, message: "the reserved drafting reply never reached its hold" }).toBe(true);
       expect(held.request).toBe(ai.requests[1]);
-      const messages = await sessionMessages(sessionId);
-      const running = messages.find(m => m.id === userMessageId);
-      expect(running?.status).toBe("processing");
-      expect(running?.trace?.steps.some(s => s.stage === "generating" && s.status === "running")).toBe(true);
+      // The trace contract distinguishes outcome "running" from step status "active".
+      // Trace persistence is asynchronous; wait for the exact active phase as in ZYR-A-131.
+      await expect.poll(async () => {
+        const running = (await sessionMessages(sessionId)).find(m => m.id === userMessageId);
+        const last = running?.trace?.steps[running.trace.steps.length - 1];
+        return [running?.status, running?.trace?.outcome, last?.stage, last?.status].join("|");
+      }, { timeout: 10_000, message: "the held draft must expose an active generation step" }).toBe("processing|running|generating|active");
+      expect(held.pending, "the identified generation request must still be held").toBe(true);
+      expect(held.request?.messages.some(m => m.role === "user" && m.content.includes("Generate exactly 1 testcase drafts.") && m.content.includes("Story:")), "the held response must belong to the drafting prompt, not an unrelated provider request").toBe(true);
       // Age the exact session while the drafting call is still held, then observe its real heartbeat.
       exec(`UPDATE zyra_chat_sessions SET processing_since = now() - interval '10 minutes' WHERE id = ${literal(sessionId)};`);
       await expect
