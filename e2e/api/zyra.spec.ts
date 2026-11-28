@@ -8166,12 +8166,17 @@ test.describe("zyra — writes in the language the user writes in (fake provider
   test("ZYR-L-01 a Russian message gets Russian drafts and a Russian reply; the cached system prompt does not change", async () => {
     await allocateFakeAiKey();
     const sessionId = await newSession("E2E language basic");
+    // This language fixture has no project grounding; a grounded coverage claim would be false.
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
 
     const english = await createTurn(sessionId, "Create a test case for the login page.");
     expect(english.generation).not.toContain(DRAFTS_IN_RUSSIAN);
     expect(english.router).not.toContain(REPLY_IN_RUSSIAN);
     expect(sessionLanguage(sessionId)).toBe("en");
-    expect(String((await lastAssistant(sessionId)).content)).toMatch(/^I drafted 1 test case\(s\) after reading/);
+    const englishReply = String((await lastAssistant(sessionId)).content);
+    expect(englishReply).toContain("I don't have anything about this in the project's knowledge base");
+    expect(englishReply).toContain("I've still written 1 test case(s) from general practice");
+    expect(englishReply).not.toContain("I drafted 1 test case(s) after reading");
 
     ai.reset();
     queueCreateTurn("Вход с неверным паролем отклонён");
@@ -8191,7 +8196,9 @@ test.describe("zyra — writes in the language the user writes in (fake provider
 
     // The backend's own reply text is Russian; the draft suite keeps its real (English) name.
     const reply = await lastAssistant(sessionId);
-    expect(String(reply.content)).toMatch(/^Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/);
+    expect(String(reply.content)).toContain("В базе знаний проекта нет ничего об этом");
+    expect(String(reply.content)).toContain("Я всё равно написал(а) 1 тест-кейс(ов) на основе общей практики");
+    expect(String(reply.content)).not.toContain("Я подготовил(а) 1 тест-кейс(ов), изучив:");
     expect(String(reply.content)).toContain("**Zyra generated test cases**");
     expect(String(reply.content)).not.toContain("I drafted");
     expect(String(reply.reasoningSummary ?? reply.reasoning_summary ?? "")).toContain("Генерация через");

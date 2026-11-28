@@ -6589,6 +6589,7 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await allocateFakeAiKey();
     const page = await openChat(browser);
     const title = `Вход с неверным паролем отклонён ${Date.now() % 100000}`;
+    expect(scalar(`SELECT count(*)::text FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)};`)).toBe("0");
     ai.queueReply({ reply: "", reasoningSummary: "Создание.", action: "create", actionType: "create", operations: [], testcases: [], requestedCount: 1, exhaustive: false });
     ai.queueReply({
       drafts: [{
@@ -6609,7 +6610,9 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
     await composer(page).press("Enter");
     await expect(page.getByText(title).first()).toBeVisible({ timeout: 30_000 });
     // The backend's own reply text and the screen's labels around the drafts are Russian.
-    await expect(page.getByText(/Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/)).toBeVisible();
+    await expect(page.getByText(/В базе знаний проекта нет ничего об этом/)).toBeVisible();
+    await expect(page.getByText(/Я всё равно написал\(а\) 1 тест-кейс\(ов\) на основе общей практики/)).toBeVisible();
+    await expect(page.getByText(/Я подготовил\(а\) 1 тест-кейс\(ов\), изучив:/)).toHaveCount(0);
     await expect(page.getByText("Первый шаг").first()).toBeVisible();
     await expect(page.getByText("Выбрать все").first()).toBeVisible();
     // The severity a draft carries is stored as High and displayed in Russian.
