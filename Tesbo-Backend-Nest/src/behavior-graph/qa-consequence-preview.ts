@@ -1,5 +1,7 @@
 import type { QaChangeReviewReceipt } from './qa-change-review-receipt';
 import { CURRENT_CACHE_PROJECTION_CONTRACT } from './current-cache-graph-projection';
+import { IMPLEMENTATION_PROJECTION_CONTRACT } from './implementation-observation-graph';
+import { readSourceDeclarationReview, type SourceDeclarationReview } from './qa-source-declaration-review';
 
 /**
  * A truthful, *read-only* explanation of one already-committed and project-authorized
@@ -27,6 +29,7 @@ export interface QaConsequencePreview {
     changedRequirementCount: number;
     withoutNomination: Array<{ requirementNodeId: string; change: 'added' | 'modified' | 'removed' }>;
   } | null;
+  sourceDeclarationReview: SourceDeclarationReview | null;
   unlinkedCaseNodeIds: string[];
   changedNodeIds: string[];
   unlinkedOrUnprovenChange: boolean;
@@ -132,6 +135,10 @@ export function explainQaConsequenceReceipt(receipt: QaChangeReviewReceipt): QaC
     basis: receipt.evidence.basis,
     candidateEffects: effects,
     cachedRequirementReview: summarizeCachedRequirementReview(receipt),
+    sourceDeclarationReview: receipt.source.contractId === IMPLEMENTATION_PROJECTION_CONTRACT &&
+      (receipt.evidence.basis === 'source_declaration_unattested' ||
+        receipt.evidence.basis === 'verified_source_bytes_unverified_semantics')
+      ? readSourceDeclarationReview(receipt.sourceDeclarationReview, receipt.projectId, receipt.changed) : null,
     unlinkedCaseNodeIds: [...receipt.unlinkedCaseNodeIds].sort(),
     changedNodeIds,
     // A reference-derived candidate is not independent assurance of actual consequences.

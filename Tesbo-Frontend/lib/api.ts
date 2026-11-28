@@ -3554,7 +3554,8 @@ export interface BugItem {
 
 export async function listBugs(
   projectId: string,
-  params?: { status?: string; cycleId?: string; assigneeId?: string; testcaseId?: string }
+  params?: { status?: string; cycleId?: string; assigneeId?: string; testcaseId?: string },
+  signal?: AbortSignal
 ): Promise<BugItem[]> {
   const sp = new URLSearchParams();
   if (params?.status) sp.set("status", params.status);
@@ -3562,7 +3563,7 @@ export async function listBugs(
   if (params?.assigneeId) sp.set("assigneeId", params.assigneeId);
   if (params?.testcaseId) sp.set("testcaseId", params.testcaseId);
   const query = sp.toString();
-  return api(`/api/projects/${projectId}/bugs${query ? `?${query}` : ""}`);
+  return api(`/api/projects/${projectId}/bugs${query ? `?${query}` : ""}`, { signal });
 }
 
 export async function getBug(bugId: string): Promise<BugItem> {
@@ -5219,6 +5220,22 @@ export async function getAutomationRun(projectId: string, runId: string): Promis
   return api<AutomationRunDetail>(`/api/projects/${projectId}/automation/runs/${runId}`);
 }
 
+/**
+ * Close an automation-origin run through its own owner. The generic run status writer deliberately
+ * refuses automation runs, so a reporter that died before closing must use this route or the run
+ * would remain In Progress with no recoverable screen action.
+ */
+export async function closeAutomationRun(
+  projectId: string,
+  runId: string,
+  status: "completed" | "incomplete"
+): Promise<AutomationRunSummary & { alreadyClosed: boolean; mismatch: unknown }> {
+  return api<AutomationRunSummary & { alreadyClosed: boolean; mismatch: unknown }>(
+    `/api/projects/${projectId}/automation/runs/${runId}/close`,
+    { method: "PATCH", body: { status } }
+  );
+}
+
 // ── Execution evidence ────────────────────────────────────────────────────────
 //
 // The backend has served POST/GET /api/cycles/:cycleId/executions/:executionId/attachments since
@@ -5350,6 +5367,15 @@ export type GraphQaConsequencePreview = {
   cachedRequirementReview?: {
     changedRequirementCount: number;
     withoutNomination: Array<{ requirementNodeId: string; change: "added" | "modified" | "removed" }>;
+  } | null;
+  sourceDeclarationReview?: {
+    version: 1;
+    changedFileCount: number;
+    declarationLeadCount: number;
+    filesWithoutDeclarationCount: number;
+    leads: Array<{ nodeId: string; change: "added" | "modified" | "removed" | "related_source_change";
+      beforeFileId: string | null; afterFileId: string | null }>;
+    filesWithoutDeclaration: string[];
   } | null;
   unlinkedCaseNodeIds: string[];
   changedNodeIds: string[];

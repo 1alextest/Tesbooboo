@@ -190,12 +190,24 @@ The merged embedded `McpOAuthServer` is disabled by default and currently grants
 a healthy MCP catalog do not establish OAuth readiness. Keep the existing API-token clients
 and human-only publication/approval rules unchanged.
 
-Choose and verify one canonical public API origin before configuring the client. The documented
-split-host topology uses the backend's public HTTPS origin. The copied project MCP URL,
-`NEXT_PUBLIC_API_URL`, `TESBO_MCP_OAUTH_RESOURCE_ORIGIN` and the issuer must agree with that choice;
-the issuer is that same origin plus `/oauth`. `FRONTEND_URL` remains the web login origin.
-`NEXT_PUBLIC_API_URL` is a frontend build-time setting, so changing a service variable without
-rebuilding the frontend does not update the copied URL or login continuation.
+Choose and verify one canonical public **MCP** origin before configuring the client. Bind the
+OAuth resource URL and `TESBO_MCP_OAUTH_RESOURCE_ORIGIN` to that origin, with the issuer at the
+same origin plus `/oauth`. The browser's ordinary API origin is a separate deployment concern:
+do not change `NEXT_PUBLIC_API_URL` merely to repair OAuth discovery. `FRONTEND_URL` remains the
+web login origin. Changing the frontend build-time API setting affects ordinary login and API
+requests for every user of that build, as well as the current copied MCP URL and continuation.
+
+**The current Railway split-host deployment is not ready for a variable-only OAuth activation.**
+Tesbo's session cookie is host-only and `SameSite=Lax`. The current
+[Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat) includes `up.railway.app`,
+so two service hosts beneath it are different sites. Cross-site frontend fetches cannot use those
+Lax cookies, even with credentials and correct CORS; see the
+[HTTP cookie specification's SameSite rules](https://httpwg.org/http-extensions/draft-ietf-httpbis-rfc6265bis.html#section-4.1.2.7).
+Keeping login on the web host and changing only its continuation URL also does not establish a
+backend-host session. Preserve the working frontend API address and cookie policy until a reviewed
+first-party login/session solution or suitable same-site domain topology is implemented and proven
+in a real browser. Neither solution is supplied by this guide. Do not silently widen the cookie
+Domain, switch to `SameSite=None`, or treat origin selection as approval of an authentication change.
 
 The web app's existing `/api` rewrite alone does **not** expose root `/.well-known` or `/oauth`
 routes. If the web origin is selected instead, an operator must review and verify the complete
@@ -232,6 +244,13 @@ read-only issuer/PKCE contract, valid public signing keys and the exact unauthen
 challenge. Redirects, HTML, oversized metadata, foreign endpoints, private key fields and preview-only
 issuers fail. `clientAuthorization: "not_verified"` remains explicit even on success. An expected
 404 on an OAuth-off deployment is a failed readiness check, not permission to enable the provider.
+
+Before activation, also verify the required production OAuth schema and complete configuration;
+provider mounting happens before the shared API starts listening, so incomplete enabled settings
+can prevent backend startup. Keep client identification, project-owner preapproval and individual
+consent separate. When CIMD selects `private_key_jwt`, qualify the provider's remote client-JWKS
+fetch as well as its initial metadata fetch, including size, redirects and fail-closed network
+protection. Do not override the client's negotiated authentication method to avoid that qualification.
 
 After readiness succeeds, complete the authorized ChatGPT setup in the user's own browser,
 review the actual requested scopes, exercise a permitted project read and verify revocation.

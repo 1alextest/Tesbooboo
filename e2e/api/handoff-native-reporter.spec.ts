@@ -385,7 +385,8 @@ async function readRunInInterface(
   expect(response.ok(), "Opening the Run must read its exact persisted identity").toBe(true);
   expect((await response.json()).id).toBe(detail.runId);
   await expect(page.getByRole("heading", { name: detail.name, exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reopen", exact: true })).toBeVisible();
+  // Automation-origin runs are not reopened by the generic run writer.
+  await expect(page.getByRole("button", { name: "Reopen", exact: true })).toHaveCount(0);
   await expect(page.getByTitle("Results in this run were reported by an automation SDK, not entered by hand")).toBeVisible();
   await expect(page.getByTitle(detail.commitSha, { exact: true })).toBeVisible();
   await expect(page.getByText(detail.branch, { exact: true })).toBeVisible();
