@@ -3,6 +3,7 @@ import { Logger } from "@nestjs/common";
 import { createHash } from "crypto";
 import type { Job } from "bullmq";
 import { DatabaseService } from "../database/database.service";
+import { isGovernedDocumentType } from "../legacy/governed-document-metadata";
 import { notificationLinks, notificationMessages } from "../legacy/notification-events";
 import { writeNotifications } from "../legacy/notification-writer";
 import { tracedEmbeddingCall } from "../observability/embedding-trace";
@@ -35,37 +36,50 @@ export class RagEmbeddingProcessor extends WorkerHost {
   }
 
   private async processKnowledgeSource(job: Job<EmbeddingJobPayload>): Promise<void> {
-    const { projectId, sourceType, sourceId } = job.data;
+    const { organizationId, projectId, sourceType, sourceId } = job.data;
     const table = sourceType === "document" ? "knowledge_documents" : "knowledge_files";
     const contentColumn = sourceType === "document" ? "content_text" : "extracted_text";
     // Only documents carry governed types. Selected so a job queued before an item became (or
     // was created as) a governed manual/policy can never put its text on the embedding wire.
     const typeColumn = sourceType === "document" ? ", document_type" : "";
 
-    const sourceRes = await this.db.query<{ id: string; organization_id: string; content: string | null; embedding_content_hash: string | null; document_type?: string | null }>(
-      `SELECT id, organization_id, ${contentColumn} AS content, embedding_content_hash${typeColumn} FROM ${table} WHERE id = $1 AND project_id = $2 AND is_deleted = false`,
-      [sourceId, projectId]
-    );
+    type KnowledgeSource = { id: string; organization_id: string; content: string | null; embedding_content_hash: string | null; document_type?: string | null };
+    const sourceSql = `SELECT id, organization_id, ${contentColumn} AS content, embedding_content_hash${typeColumn}
+      FROM ${table} WHERE id = $1 AND project_id = $2 AND organization_id = $3 AND is_deleted = false`;
+    const sourceParams = [sourceId, projectId, organizationId];
+    const sourceRes = await this.db.query<KnowledgeSource>(sourceSql, sourceParams);
     const source = sourceRes.rows[0];
-    // Not found here means soft-deleted (is_deleted=true) or gone since the job was queued —
-    // either way there's nothing to embed. Explicitly clear the status rather than leaving it
-    // stuck at 'queued' forever (setStatus works fine against a soft-deleted row; it just
-    // stays excluded from retrieval via the is_deleted filter regardless of this status).
-    if (!source) {
-      await this.setStatus(table, sourceId, "unsupported").catch(() => undefined);
-      return;
-    }
+    // Missing/deleted/foreign source: the queued identity cannot authorize a status write.
+    if (!source || source.organization_id !== organizationId) return;
+
+    // Compare the exact text and document type, rather than treating an old ready flag or
+    // derivative hash as proof of current source identity. Whitespace-only changes can be
+    // conservatively retried; no historical observation is changed.
+    const sameBasis = (current: KnowledgeSource | undefined): boolean =>
+      !!current && current.id === source.id && current.organization_id === organizationId &&
+      current.content === source.content && current.document_type === source.document_type;
+    const currentBasis = async (): Promise<boolean> =>
+      sameBasis((await this.db.query<KnowledgeSource>(sourceSql, sourceParams)).rows[0]);
+    const setCurrentStatus = async (status: string): Promise<boolean> => {
+      const result = await this.db.query(
+        `UPDATE ${table} SET embedding_status = $2 WHERE id = $1 AND project_id = $3
+           AND organization_id = $4 AND is_deleted = false AND ${contentColumn} IS NOT DISTINCT FROM $5
+           ${sourceType === "document" ? "AND document_type IS NOT DISTINCT FROM $6" : ""} RETURNING id`,
+        [sourceId, status, projectId, organizationId, source.content, ...(sourceType === "document" ? [source.document_type] : [])]
+      );
+      return result.rows.length > 0;
+    };
 
     // Exposure hold: governed manuals/policies are human-only until an owner accepts a
     // distribution policy, so even an explicitly queued job must not call the embedding provider.
-    if (sourceType === "document" && (source.document_type === "user_manual" || source.document_type === "policy")) {
-      await this.setStatus(table, sourceId, "unsupported");
+    if (sourceType === "document" && isGovernedDocumentType(source.document_type)) {
+      await setCurrentStatus("unsupported");
       return;
     }
 
     const content = String(source.content || "").trim();
     if (!content) {
-      await this.setStatus(table, sourceId, "unsupported");
+      await setCurrentStatus("unsupported");
       return;
     }
 
@@ -79,18 +93,18 @@ export class RagEmbeddingProcessor extends WorkerHost {
       // OpenAI-only allocator started refusing every Anthropic project. Leaving it pending lets
       // the boot-time sweep pick it up for free as soon as a key exists.
       this.logger.warn(`Cannot embed ${sourceType}:${sourceId} — ${reason}`);
-      await this.setStatus(table, sourceId, "pending");
+      await setCurrentStatus("pending");
       return;
     }
 
     const contentHash = createHash("sha256").update(content).digest("hex");
     if (contentHash === source.embedding_content_hash) return;
 
-    await this.setStatus(table, sourceId, "processing");
+    if (!await setCurrentStatus("processing")) return;
 
     const chunks = this.chunking.chunk(content);
     if (!chunks.length) {
-      await this.setStatus(table, sourceId, "unsupported");
+      await setCurrentStatus("unsupported");
       return;
     }
 
@@ -103,6 +117,9 @@ export class RagEmbeddingProcessor extends WorkerHost {
     const embeddings: number[][] = [];
     for (let i = 0; i < chunks.length; i += RAG_EMBEDDING_BATCH_SIZE) {
       const batch = chunks.slice(i, i + RAG_EMBEDDING_BATCH_SIZE);
+      // Best-effort preflight before each batch. This is not an atomic provider-egress
+      // authorization fence; a source can still change after the read and before transport.
+      if (!await currentBasis()) return;
       const vectors = await tracedEmbeddingCall(
         {
           traceSeed,
@@ -119,7 +136,21 @@ export class RagEmbeddingProcessor extends WorkerHost {
       embeddings.push(...vectors);
     }
 
-    await this.db.transaction(async (client) => {
+    // A partial/mis-sized replacement is not a ready index. Preserve the last stored
+    // generation; a reader must separately verify its freshness against the parent.
+    if (embeddings.length !== chunks.length || embeddings.some((vector) =>
+      !vector || vector.length !== RAG_EMBEDDING_DIMENSION || vector.some((cell) => !Number.isFinite(cell)))) {
+      this.logger.warn("Knowledge embedding generation has an invalid vector shape.");
+      if (await setCurrentStatus("failed")) await this.notifyKnowledgeOutcome(projectId, sourceType, sourceId, "failed");
+      return;
+    }
+
+    const published = await this.db.transaction(async (client) => {
+      // Same transaction and parent lock for basis validation, replacement and ready status.
+      // No network request is made while holding this lock. An old job cannot overwrite a
+      // newer source's chunks or mark a changed/deleted/foreign parent ready.
+      const current = (await client.query<KnowledgeSource>(sourceSql + " FOR UPDATE", sourceParams)).rows[0];
+      if (!sameBasis(current)) return false;
       await client.query("DELETE FROM knowledge_document_chunks WHERE project_id = $1 AND source_type = $2 AND source_id = $3", [
         projectId,
         sourceType,
@@ -128,23 +159,12 @@ export class RagEmbeddingProcessor extends WorkerHost {
       for (let i = 0; i < chunks.length; i += 1) {
         const chunk = chunks[i];
         const vector = embeddings[i];
-        // Width is checked against the platform constant, which is what the column and its
-        // HNSW index are declared at — not against whatever the provider happened to return.
-        // A mismatch means the model or its `dimensions` handling is misconfigured; skipping
-        // is the only safe response, because slicing a non-Matryoshka vector to fit would
-        // store something that indexes cleanly and ranks nonsense.
-        if (!vector || vector.length !== RAG_EMBEDDING_DIMENSION) {
-          this.logger.warn(
-            `Discarding chunk ${chunk.chunkIndex} of ${sourceType}:${sourceId} — ${allocation.provider}/${allocation.model} returned ${vector?.length ?? 0} dimensions, expected ${RAG_EMBEDDING_DIMENSION}.`
-          );
-          continue;
-        }
         await client.query(
           `INSERT INTO knowledge_document_chunks
              (organization_id, project_id, source_type, source_id, chunk_index, heading_path, content, token_count, content_hash, embedding_model, embedding)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::vector)`,
           [
-            source.organization_id,
+            organizationId,
             projectId,
             sourceType,
             sourceId,
@@ -158,15 +178,13 @@ export class RagEmbeddingProcessor extends WorkerHost {
           ]
         );
       }
+      // Operational state is not an authored edit. Do not change updated_at.
+      await client.query(`UPDATE ${table} SET embedding_status = 'ready', embedding_content_hash = $2
+        WHERE id = $1 AND project_id = $3 AND organization_id = $4 AND is_deleted = false`,
+        [sourceId, contentHash, projectId, organizationId]);
+      return true;
     });
-
-    // No `updated_at = now()`: indexing status is operational state, not an authored edit.
-    // Touching updated_at here reordered "recently updated" documents and made a background
-    // embedding attempt look like a user write (the document-writes smoke compares full rows).
-    await this.db.query(`UPDATE ${table} SET embedding_status = 'ready', embedding_content_hash = $2 WHERE id = $1`, [
-      sourceId,
-      contentHash
-    ]);
+    if (!published) return;
     await this.notifyKnowledgeOutcome(projectId, sourceType, sourceId, "ready");
   }
 

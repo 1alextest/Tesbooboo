@@ -53,6 +53,8 @@ function vector(fill = 0.1): number[] {
 
 interface FakeDbOpts {
   source?: Record<string, unknown> | null;
+  /** Locked source may differ from the original provider input. */
+  lockedSource?: Record<string, unknown> | null;
   updates?: Array<{ sql: string; params: unknown[] }>;
   txQueries?: Array<{ sql: string; params: unknown[] }>;
 }
@@ -60,14 +62,18 @@ interface FakeDbOpts {
 function makeDb(opts: FakeDbOpts): DatabaseService {
   const updates = opts.updates ?? [];
   const txQueries = opts.txQueries ?? [];
-  const client = { query: jest.fn((sql: string, params: unknown[] = []) => (txQueries.push({ sql, params }), Promise.resolve({ rows: [] }))) };
+  const client = { query: jest.fn((sql: string, params: unknown[] = []) => {
+    txQueries.push({ sql, params });
+    const locked = opts.lockedSource === undefined ? opts.source : opts.lockedSource;
+    return Promise.resolve({ rows: sql.includes("FOR UPDATE") && locked ? [locked] : [] });
+  }) };
   return {
     query: jest.fn((sql: string, params: unknown[] = []) => {
       if (sql.trim().startsWith("SELECT") && (sql.includes("FROM knowledge_documents") || sql.includes("FROM knowledge_files") || sql.includes("FROM testcases"))) {
         return Promise.resolve({ rows: opts.source ? [opts.source] : [] });
       }
       updates.push({ sql, params });
-      return Promise.resolve({ rows: [] });
+      return Promise.resolve({ rows: sql.includes("RETURNING id") && opts.source ? [{ id: opts.source.id }] : [] });
     }),
     transaction: jest.fn(async (fn: (client: unknown) => Promise<unknown>) => fn(client))
   } as unknown as DatabaseService;
@@ -117,12 +123,13 @@ describe("RagEmbeddingProcessor.process — knowledge source (document/file)", (
 
   const payload: EmbeddingJobPayload = { organizationId: "org-1", projectId: "project-1", sourceType: "document", sourceId: "doc-1", reason: "created" };
 
-  it("marks the source unsupported (no crash) when it is gone/soft-deleted since the job was queued", async () => {
+  it("does not mutate a source absent from the queued project and organization", async () => {
     const db = makeDb({ source: null });
     const processor = new RagEmbeddingProcessor(db, chunking);
     await processor.process(makeJob("embed-source", payload));
     expect(embedTextsMock).not.toHaveBeenCalled();
     expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("UPDATE"))).toBe(false);
   });
 
   it.each(["user_manual", "policy"])("keeps a queued %s document under the exposure hold and never calls the embeddings API", async (documentType) => {
@@ -133,7 +140,7 @@ describe("RagEmbeddingProcessor.process — knowledge source (document/file)", (
     expect(embedTextsMock).not.toHaveBeenCalled();
     expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
     const statusUpdate = (db.query as jest.Mock).mock.calls.find((c) => String(c[0]).includes("embedding_status = $2"));
-    expect(statusUpdate?.[1]).toEqual(["doc-1", "unsupported"]);
+    expect(statusUpdate?.[1]).toEqual(["doc-1", "unsupported", "project-1", "org-1", "Confidential governed content, long enough to chunk.", documentType]);
   });
 
   it("marks the source unsupported and never calls the embeddings API when there is no extractable text", async () => {
@@ -151,7 +158,7 @@ describe("RagEmbeddingProcessor.process — knowledge source (document/file)", (
     await processor.process(makeJob("embed-source", payload));
     expect(tracedEmbeddingCallMock).not.toHaveBeenCalled();
     const statusUpdate = updateSpy.mock.calls.find((c) => String(c[0]).includes("embedding_status = $2"));
-    expect(statusUpdate?.[1]).toEqual(["doc-1", "pending"]);
+    expect(statusUpdate?.[1]).toEqual(["doc-1", "pending", "project-1", "org-1", "Some real content here.", undefined]);
     // Operational indexing state must not look like an authored edit: full-row document
     // assertions compare updated_at, and a background attempt used to bump it by milliseconds.
     expect(String(statusUpdate?.[0])).not.toContain("updated_at");
@@ -216,16 +223,62 @@ describe("RagEmbeddingProcessor.process — knowledge source (document/file)", (
     await expect(processor.process(makeJob("embed-source", payload))).rejects.toBe(original);
   });
 
-  it("discards a chunk whose returned vector has the wrong dimension and does not insert it", async () => {
+  it("preserves the prior index and marks a malformed replacement failed, never ready", async () => {
     resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
-    tracedEmbeddingCallMock.mockResolvedValue([vector().slice(0, 10)]); // wrong width
-    const db = makeDb({ source: { id: "doc-1", organization_id: "org-1", content: "Enough content to chunk normally here.", embedding_content_hash: null } });
-    const processor = new RagEmbeddingProcessor(db, chunking);
-    await processor.process(makeJob("embed-source", payload));
-    // Should not throw, and should still reach the final status update (ready) — the mismatch is
-    // logged and the chunk skipped, not treated as a hard failure of the whole job.
-    const calls = (db.query as jest.Mock).mock.calls.map((c) => String(c[0]));
-    expect(calls.some((sql) => sql.includes("embedding_status = 'ready'") || sql.includes("SET embedding_status = 'ready'"))).toBe(true);
+    tracedEmbeddingCallMock.mockResolvedValue([vector().slice(0, 10)]);
+    const db = makeDb({ source: { id: "doc-1", organization_id: "org-1", content: "Enough content to chunk normally here.", embedding_content_hash: "prior-hash" } });
+    await new RagEmbeddingProcessor(db, chunking).process(makeJob("embed-source", payload));
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect((db.query as jest.Mock).mock.calls.some(([sql, params]) =>
+      String(sql).includes("embedding_status = $2") && params[1] === "failed")).toBe(true);
+  });
+
+  const basis = { id: "doc-1", organization_id: "org-1", content: "Enough content to chunk normally here.", embedding_content_hash: null, document_type: "general" };
+
+  it.each([
+    { ...basis, content: "A changed source, not the submitted provider input." },
+    { ...basis, document_type: "policy" },
+    { ...basis, organization_id: "foreign-org" },
+    null
+  ])("refuses to publish when the locked native source no longer matches the provider input (%j)", async (lockedSource) => {
+    resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
+    tracedEmbeddingCallMock.mockResolvedValue([vector()]);
+    const txQueries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = makeDb({ source: basis, lockedSource, txQueries });
+    await new RagEmbeddingProcessor(db, chunking).process(makeJob("embed-source", payload));
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledTimes(1);
+    expect(txQueries).toHaveLength(1);
+    expect(txQueries[0].sql).toContain("FOR UPDATE");
+    expect(txQueries[0].params).toEqual(["doc-1", "project-1", "org-1"]);
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("embedding_status = 'ready'"))).toBe(false);
+  });
+
+  it("replaces chunks and marks the current source ready in the same locked transaction", async () => {
+    resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
+    tracedEmbeddingCallMock.mockResolvedValue([vector()]);
+    const txQueries: Array<{ sql: string; params: unknown[] }> = [];
+    const db = makeDb({ source: basis, txQueries });
+    await new RagEmbeddingProcessor(db, chunking).process(makeJob("embed-source", payload));
+    expect(txQueries.map(q => q.sql.trim().split(/\s+/)[0])).toEqual(["SELECT", "DELETE", "INSERT", "UPDATE"]);
+    expect(txQueries[0].sql).toContain("FOR UPDATE");
+    expect(txQueries[3].sql).toContain("embedding_status = 'ready'");
+    expect(txQueries[3].params).toEqual(["doc-1", expect.any(String), "project-1", "org-1"]);
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("embedding_status = 'ready'"))).toBe(false);
+  });
+
+  it("stops later batches after the native source changes while a prior request is in flight", async () => {
+    resolveEmbeddingAllocationMock.mockResolvedValue({ allocation: FAKE_ALLOCATION, reason: "ok" });
+    const opts: FakeDbOpts = { source: { ...basis } };
+    const db = makeDb(opts);
+    const chunks = Array.from({ length: RAG_EMBEDDING_BATCH_SIZE + 1 }, (_, i) => ({ chunkIndex: i, headingPath: null, content: "chunk " + i, tokenCount: 3 }));
+    jest.spyOn(chunking, "chunk").mockReturnValue(chunks);
+    tracedEmbeddingCallMock.mockImplementation(async () => {
+      opts.source = { ...basis, content: "Changed during the first batch." };
+      return Array.from({ length: RAG_EMBEDDING_BATCH_SIZE }, () => vector());
+    });
+    await new RagEmbeddingProcessor(db, chunking).process(makeJob("embed-source", payload));
+    expect(tracedEmbeddingCallMock).toHaveBeenCalledTimes(1);
+    expect(db.transaction).not.toHaveBeenCalled();
   });
 });
 
