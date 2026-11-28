@@ -20041,6 +20041,16 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
    * otherwise list one document twice. Keyed on the citation's real source id when present
    * (title alone is not guaranteed unique — two docs can share a name), falling back to title.
    */
+  private static zyraSelectTurnKnowledge(resolved: ZyraTurnSources["knowledge"], fallback: ZyraTurnSources["knowledge"]): {
+    knowledge: ZyraTurnSources["knowledge"]; usedRecencyFallback: boolean;
+  } {
+    // Recency is a last resort, not an addition to explicit, retrieved, catalogued or carried
+    // sources. The old length comparison admitted the fallback whenever ONLY explicit items
+    // resolved, duplicating the named documents and widening a named ticket to unrelated notes.
+    const usedRecencyFallback = resolved.length === 0 && fallback.length > 0;
+    return { knowledge: usedRecencyFallback ? LegacyService.dedupeZyraKnowledgeItems(fallback) : resolved, usedRecencyFallback };
+  }
+
   private static dedupeZyraKnowledgeItems<T extends { title: string; citation?: { sourceId?: string } }>(items: T[]): T[] {
     const seen = new Set<string>();
     const out: T[] = [];
@@ -20198,8 +20208,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const mentionedJira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
-    const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
+    const { knowledge, usedRecencyFallback } = LegacyService.zyraSelectTurnKnowledge(turnSources.knowledge, knowledgeFallback);
 
     // Opened once the gathered context exists, so the trace carries what Zyra actually read rather
     // than only what it later claims to have read.
@@ -20231,7 +20240,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       query: message,
       semanticSearchRan: ragDiagnostics.semanticSearchRan,
       reason: ragDiagnostics.reason,
-      retrieved: (ragKnowledge.length ? ragKnowledge : knowledgeFallback).map((item) => ({
+      retrieved: (ragKnowledge.length ? ragKnowledge : usedRecencyFallback ? knowledgeFallback : []).map((item) => ({
         title: String((item as Body).title || ""),
         sourceType: String(((item as Body).citation as Body)?.sourceType || ""),
         sourceId: String(((item as Body).citation as Body)?.sourceId || ""),
@@ -22056,8 +22065,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
     const jira = turnSources.jira;
     const bugs = turnSources.bugs;
     const knowledgeConfidence: RagRetrievalConfidence = turnSources.knowledgeConfidence;
-    const usedRecencyFallback = !ragKnowledge.length && turnSources.knowledge.length === explicitKnowledge.length;
-    const knowledge = [...turnSources.knowledge, ...(usedRecencyFallback ? knowledgeFallback : [])];
+    const { knowledge } = LegacyService.zyraSelectTurnKnowledge(turnSources.knowledge, knowledgeFallback);
     return {
       knowledge: capabilities.knowledgeBase ? knowledge : [],
       existingTestcases,

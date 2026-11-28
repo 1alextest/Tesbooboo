@@ -81,6 +81,7 @@ type Refs = {
 type SourceRef = { type: string; id: string; title: string };
 
 type Statics = {
+  zyraSelectTurnKnowledge: (resolved: KnowledgeItem[], fallback: KnowledgeItem[]) => { knowledge: KnowledgeItem[]; usedRecencyFallback: boolean };
   mergeZyraTurnSources: (own: Sources, carried: Sources) => Sources;
   normalizeZyraContextRefs: (raw: unknown) => Refs | null;
   zyraContextRefsFor: (sources: Sources) => Refs;
@@ -123,6 +124,31 @@ describe("Zyra turn context carry-over", () => {
       const merged = statics().mergeZyraTurnSources(none(), { ...none(), jira: [hotelTicket] });
       const index = internals(makeLegacy()).zyraSourceRefIndex({ knowledge: merged.knowledge, jira: merged.jira, existingTestcases: [] });
       expect(statics().sanitizeZyraSourceRefs(["HBP-99"], index)).toEqual([]);
+    });
+  });
+
+  describe("zyraSelectTurnKnowledge", () => {
+    it("does not duplicate a named document or add an unrelated recency document", () => {
+      const named = doc("named", "ABC-1: Leave policy");
+      const unrelated = doc("other", "ABC-2: Payroll export");
+      expect(statics().zyraSelectTurnKnowledge([named], [named, unrelated])).toEqual({
+        knowledge: [named], usedRecencyFallback: false
+      });
+    });
+
+    it("preserves multiple resolved documents and their order instead of widening a carried or broad scope", () => {
+      const resolved = [doc("two"), doc("one")];
+      expect(statics().zyraSelectTurnKnowledge(resolved, [doc("one"), doc("extra")])).toEqual({
+        knowledge: resolved, usedRecencyFallback: false
+      });
+    });
+
+    it("uses a deduplicated recency fallback only when nothing resolved", () => {
+      const recent = doc("recent");
+      expect(statics().zyraSelectTurnKnowledge([], [recent, recent])).toEqual({
+        knowledge: [recent], usedRecencyFallback: true
+      });
+      expect(statics().zyraSelectTurnKnowledge([], [])).toEqual({ knowledge: [], usedRecencyFallback: false });
     });
   });
 
