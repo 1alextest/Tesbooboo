@@ -479,7 +479,32 @@ export class ModelStudioRepository {
     client: PoolClient, userId: string | null | undefined, projectId: string,
     modelId: string, revisionId: string, body: Body
   ) {
-    await this.requireActiveModel(modelId, projectId, client);
+    // Optional current-only precondition for an explicitly reviewed suggestion.
+    // Serialize with model revision creation and ordinary link/unlink operations.
+    // This is not an additional grant or a new mapping owner.
+    if (body?.requireCurrentRevision !== undefined && body.requireCurrentRevision !== true) {
+      throw new BadRequestException({ error: "requireCurrentRevision must be true or omitted" });
+    }
+    const currentOnly = body?.requireCurrentRevision === true;
+    if (currentOnly) {
+      if (typeof body.testcaseRevision !== "string" || !HASH.test(body.testcaseRevision)) {
+        throw new BadRequestException({ error: "A reviewed testcaseRevision is required for current-only mapping" });
+      }
+      const locked = await client.query(
+        "SELECT id FROM mbt_models WHERE id=$1 AND project_id=$2 AND archived_at IS NULL FOR UPDATE",
+        [modelId, projectId]
+      );
+      if (!locked.rows[0]) throw new NotFoundException({ error: "Model not found" });
+      const head = await client.query(
+        "SELECT id FROM mbt_model_revisions WHERE model_id=$1 AND project_id=$2 ORDER BY revision_number DESC LIMIT 1",
+        [modelId, projectId]
+      );
+      if (head.rows[0]?.id !== revisionId) {
+        throw new ConflictException({ code: "STALE_BASE", error: "The model changed. Reopen the mapping review." });
+      }
+    } else {
+      await this.requireActiveModel(modelId, projectId, client);
+    }
     const revision = await client.query(
       "SELECT * FROM mbt_model_revisions WHERE id = $1 AND model_id = $2 AND project_id = $3",
       [revisionId, modelId, projectId]
@@ -512,6 +537,25 @@ export class ModelStudioRepository {
         code: "MAPPING_CHANGED",
         error: "This test case changed. Review its current content before linking it."
       });
+    }
+
+    if (currentOnly) {
+      if (unique.length !== 1 || !content.transitions.some(t => t.id === unique[0])) {
+        throw new BadRequestException({ error: "Review one suggested transition at a time" });
+      }
+      const overlapping = await client.query(
+        `SELECT * FROM mbt_model_case_links WHERE project_id=$1 AND model_revision_id=$2
+         AND testcase_id=$3 AND element_ids && $4::text[]`,
+        [projectId, revisionId, testcaseId, unique]
+      );
+      if (overlapping.rows.length) {
+        const existing = overlapping.rows[0];
+        if (overlapping.rows.length === 1 && existing.element_ids.length === 1 &&
+            existing.element_ids[0] === unique[0] && existing.testcase_revision === testcaseRevision) {
+          return this.linkView(existing);
+        }
+        throw new ConflictException({ code: "MAPPING_CHANGED", error: "An existing mapping overlaps this suggestion. Review the current mappings." });
+      }
     }
 
     const inserted = await client.query(

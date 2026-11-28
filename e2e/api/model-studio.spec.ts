@@ -1023,3 +1023,93 @@ test.describe("persisted Model Studio revisions and mappings", () => {
     }
   });
 });
+
+test("reviewed model transition mapping fences both revisions and overlapping relationships", async () => {
+  const tenant = await provisionRbacTenant("model-studio");
+  test.skip(!tenant, "requires direct SQL control for the disposable tenant");
+  const projectId = tenant!.mainProjectId;
+  const owner = await loginAs(tenant!.owner);
+  const base = "/api/projects/" + projectId + "/model-studio/models";
+  let modelId = "", caseId = "";
+  try {
+    const created = await owner.post(base, { data: { name: "E2E mapping suggestion " + Date.now(), model: MODEL } });
+    expect(created.status(), await created.text()).toBe(201);
+    const model = await created.json(); modelId = model.id;
+    const first = model.latestRevision.id;
+    const caseUrl = "/api/projects/" + projectId + "/testcases";
+    const createdCase = await owner.post(caseUrl, { data: {
+      title: "E2E suggested mapping " + Date.now(), steps: [{stepNumber: 1, action:"Submit", expectedResult:"The submission is accepted"}]
+    } });
+    expect(createdCase.status(), await createdCase.text()).toBe(201);
+    caseId = (await createdCase.json()).id;
+    const readCase = async () => {
+      const response = await owner.get(caseUrl + "/" + caseId);
+      expect(response.status(), await response.text()).toBe(200);
+      const row = await response.json();
+      expect(row).toMatchObject({id: caseId, projectId, editRevision: expect.stringMatching(/^[a-f0-9]{64}$/)});
+      return row;
+    };
+    const reviewed = await readCase();
+    const links = (revision: string) => base + "/" + modelId + "/revisions/" + revision + "/links";
+    const count = () => Number(scalar("SELECT count(*) FROM mbt_model_case_links WHERE model_id=" + literal(modelId) + ";"));
+    const body = {testcaseId: caseId, elementIds:["finish"], testcaseRevision:reviewed.editRevision, requireCurrentRevision:true};
+    expect(count()).toBe(0);
+    const missing = await owner.post(links(first), {data:{...body,testcaseRevision:undefined}});
+    expect(missing.status()).toBe(400);
+    const invalid = await owner.post(links(first), {data:{...body,requireCurrentRevision:false}});
+    expect(invalid.status()).toBe(400);
+    const state = await owner.post(links(first), {data:{...body,elementIds:["start"]}});
+    expect(state.status()).toBe(400);
+    expect(count()).toBe(0);
+    const edited = await owner.put(caseUrl + "/" + caseId, {data:{title: reviewed.title + " edited"}});
+    expect(edited.ok(), await edited.text()).toBeTruthy();
+    const currentCase = await readCase();
+    expect(currentCase.editRevision).not.toBe(reviewed.editRevision);
+    const staleCase = await owner.post(links(first), {data:body});
+    expect(staleCase.status()).toBe(409);
+    expect((await staleCase.json()).code).toBe("MAPPING_CHANGED");
+    expect(count()).toBe(0);
+    const nextResponse = await owner.post(base + "/" + modelId + "/revisions", {data:{baseRevisionId:first,model:MODEL}});
+    expect(nextResponse.status(), await nextResponse.text()).toBe(201);
+    const next = (await nextResponse.json()).id;
+    const refreshed = {...body,testcaseRevision:currentCase.editRevision};
+    const staleModel = await owner.post(links(first), {data:refreshed});
+    expect(staleModel.status()).toBe(409);
+    expect((await staleModel.json()).code).toBe("STALE_BASE");
+    expect(count()).toBe(0);
+
+    // A legitimate existing historical mapping is still allowed by the legacy
+    // explicit mapping contract; the new precondition does not rewrite it.
+    const ordinary = {testcaseId:caseId,testcaseRevision:currentCase.editRevision,elementIds:["finish"]};
+    const history = await owner.post(links(first), {data:{...ordinary,elementIds:["start"]}});
+    expect(history.status(), await history.text()).toBe(201);
+    expect(count()).toBe(1);
+    // Another mapping already includes this transition. A suggested mapping
+    // must not create a second overlapping logical relationship.
+    const prior = await owner.post(links(next), {data:{...ordinary,elementIds:["start","finish"]}});
+    expect(prior.status(), await prior.text()).toBe(201);
+    const priorLink = await prior.json();
+    const overlap = await owner.post(links(next), {data:refreshed});
+    expect(overlap.status()).toBe(409);
+    expect((await overlap.json()).code).toBe("MAPPING_CHANGED");
+    expect(count()).toBe(2);
+    const removed = await owner.delete(links(next) + "/" + priorLink.id);
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    // Concurrent equal requests must converge to the same exact mapping.
+    const results = await Promise.all([owner.post(links(next), {data:refreshed}),owner.post(links(next), {data:refreshed})]);
+    for (const response of results) expect(response.status(), await response.text()).toBe(201);
+    const [one,two] = await Promise.all(results.map(response=>response.json()));
+    expect(one.id).toBe(two.id);
+    expect(one).toMatchObject({testcaseRevision:currentCase.editRevision,coverageAssertion:"none",executionAssertion:"none"});
+    expect(count()).toBe(2);
+    expect(await readCase()).toMatchObject({editRevision:currentCase.editRevision});
+    const detail = await (await owner.get(base + "/" + modelId)).json();
+    expect(detail.revisions).toHaveLength(2);
+    expect(Number(scalar("SELECT count(*) FROM mbt_model_runs WHERE model_id=" + literal(modelId) + ";"))).toBe(0);
+  } finally {
+    if (modelId) exec("DELETE FROM mbt_models WHERE project_id=" + literal(projectId) + " AND id=" + literal(modelId) + ";");
+    if (caseId) await owner.delete("/api/projects/" + projectId + "/testcases/" + caseId, {failOnStatusCode:false});
+    await owner.dispose();
+  }
+});
+

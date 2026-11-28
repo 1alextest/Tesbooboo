@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   Field,
@@ -9,7 +9,8 @@ import {
   Input,
   Modal
 } from "@/components/ui";
-import { listTestCases, type TestCaseListItem } from "@/lib/api";
+import { getTestCase, listTestCases, type TestCaseListItem, type ModelStudioLink } from "@/lib/api";
+import { suggestModelCaseLinks, type LinkSuggestionReview } from "./model-case-link-candidates";
 
 /** The persisted draft shape (`tesbo-fsm-draft/1`). Kept local to authoring, not a second authority. */
 export type ModelDefinition = {
@@ -321,31 +322,80 @@ export function ModelDefinitionModal({
 type LinkCaseModalProps = {
   projectId: string;
   elements: Array<{ id: string; kind: "state" | "transition" }>;
+  transitions: ModelDefinition["transitions"];
+  mappingInventory: ModelStudioLink[] | null;
   busy: boolean;
   error: string | null;
   onClose: () => void;
-  onLink: (value: { testcaseId: string; elementIds: string[] }) => void;
+  onLink: (value: { testcaseId: string; elementIds: string[]; reviewedCaseRevision?: string }) => void;
 };
 
 /** Link a project test case to model elements on the latest revision. */
-export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLink }: LinkCaseModalProps) {
+export function LinkCaseModal({ projectId, elements, transitions, mappingInventory, busy, error, onClose, onLink }: LinkCaseModalProps) {
   const [search, setSearch] = useState("");
   const [cases, setCases] = useState<TestCaseListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [selectedElements, setSelectedElements] = useState<string[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [listError, setListError] = useState(false);
+  const [suggestion, setSuggestion] = useState<LinkSuggestionReview | null>(null);
+  const [suggestionStatus, setSuggestionStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [reviewedCaseRevision, setReviewedCaseRevision] = useState<string | undefined>();
+  const activeSuggestion = useRef<AbortController | null>(null);
+  const listGeneration = useRef(0);
+
+  function clearSuggestion() {
+    activeSuggestion.current?.abort();
+    activeSuggestion.current = null;
+    setSuggestion(null);
+    setSuggestionStatus("idle");
+    setReviewedCaseRevision(undefined);
+  }
+
+  useEffect(() => () => {
+    activeSuggestion.current?.abort();
+    activeSuggestion.current = null;
+    listGeneration.current++;
+  }, []);
+
+  async function findSuggestions() {
+    if (!selectedCaseId || !cases.some(row => row.id === selectedCaseId) || !mappingInventory || activeSuggestion.current) return;
+    setSelectedElements([]);
+    setReviewedCaseRevision(undefined);
+    setSuggestion(null);
+    setSuggestionStatus("loading");
+    const controller = new AbortController();
+    activeSuggestion.current = controller;
+    try {
+      const testcase = await getTestCase(projectId, selectedCaseId, controller.signal);
+      if (controller.signal.aborted || activeSuggestion.current !== controller) return;
+      const reviewed = suggestModelCaseLinks({ projectId, testcaseId: selectedCaseId, testcase, transitions,
+        mappedElementIds: mappingInventory.filter(link => link.testcaseId === selectedCaseId).flatMap(link => link.elementIds) });
+      setSuggestion(reviewed);
+      setSuggestionStatus(reviewed ? "ready" : "unavailable");
+    } catch {
+      if (!controller.signal.aborted && activeSuggestion.current === controller) setSuggestionStatus("unavailable");
+    } finally {
+      if (activeSuggestion.current === controller) activeSuggestion.current = null;
+    }
+  }
 
   const loadCases = useCallback(
     async (term: string) => {
+      const generation = ++listGeneration.current;
       setLoading(true);
+      setListError(false);
       try {
         const result = await listTestCases(projectId, { limit: 50, search: term.trim() || undefined });
-        setCases(result.list);
+        if (generation === listGeneration.current) setCases(result.list);
       } catch {
-        setCases([]);
+        if (generation === listGeneration.current) {
+          setCases([]);
+          setListError(true);
+        }
       } finally {
-        setLoading(false);
+        if (generation === listGeneration.current) setLoading(false);
       }
     },
     [projectId]
@@ -357,7 +407,7 @@ export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLin
 
   return (
     <Modal open onClose={onClose} title="Link a test case">
-      <div className="space-y-4">
+      <section aria-label="Link a test case" className="space-y-4">
         <p className="text-[12px] text-[var(--muted)]">
           A mapping records which case exercises these elements. It is a review relationship, not coverage or execution evidence.
         </p>
@@ -365,14 +415,19 @@ export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLin
           <FieldLabel>Test case</FieldLabel>
           <div className="flex gap-2">
             <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search cases" />
-            <Button type="button" variant="secondary" onClick={() => void loadCases(search)} disabled={loading}>
+            <Button type="button" variant="secondary" onClick={() => void loadCases(search)} disabled={loading || busy}>
               Search
             </Button>
           </div>
           <select
             aria-label="Test case"
             value={selectedCaseId}
-            onChange={(event) => setSelectedCaseId(event.target.value)}
+            disabled={busy}
+            onChange={(event) => {
+              clearSuggestion();
+              setSelectedElements([]);
+              setSelectedCaseId(event.target.value);
+            }}
             className="mt-2 w-full rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[13px]"
           >
             <option value="">{loading ? "Loading…" : "Select a case"}</option>
@@ -384,6 +439,34 @@ export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLin
           </select>
         </Field>
 
+        {listError && <p role="status">Case search is unavailable. Retry the search.</p>}
+        <section aria-label="Possible case-to-model links" className="space-y-2 border-b border-[var(--border)] pb-3">
+          <Button type="button" variant="secondary" disabled={busy || loading || !cases.some(row => row.id === selectedCaseId) || !mappingInventory || suggestionStatus === "loading"}
+            onClick={() => void findSuggestions()}>
+            {suggestionStatus === "loading" ? "Inspecting case…" : "Find possible links"}
+          </Button>
+          {!mappingInventory && <p className="text-xs">Current mapping inventory is unavailable. Refresh model coverage before finding suggestions.</p>}
+          {suggestionStatus === "unavailable" && <p role="status">Case details or supported step inventory unavailable. Recheck the selected case.</p>}
+          {suggestion && suggestionStatus === "ready" && <>
+            <p className="text-xs break-words">Reviewed case: {suggestion.title}</p>
+            <p className="text-xs">Literal action and expected-result matches only. Confirm the actor, conditions and effect before linking. No semantic equivalence or verified coverage is established.</p>
+            {suggestion.candidates.length === 0 && <p>No unambiguous unmapped literal match in this selected case. Other relationships may exist.</p>}
+            {suggestion.ambiguousElementIds.length > 0 && <p className="text-xs">Ambiguous matches need manual review: {suggestion.ambiguousElementIds.join(", ")}.</p>}
+            {suggestion.existingElementIds.length > 0 && <p className="text-xs">Matching elements already have mappings: {suggestion.existingElementIds.join(", ")}. Review existing mappings instead of duplicating them.</p>}
+            {suggestion.candidates.map(candidate => <div key={candidate.elementId} className="rounded border border-[var(--border)] p-2 space-y-1 text-xs">
+              <p className="font-medium">Transition {candidate.elementId} · Case step {candidate.stepIndex + 1}</p>
+              <p className="break-words">Action: {candidate.action}</p>
+              <p className="break-words">Expected observation: {candidate.expectedObservation}</p>
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => {
+                setSelectedElements([candidate.elementId]);
+                setReviewedCaseRevision(suggestion.testcaseRevision);
+                setLocalError(null);
+              }}>Use suggestion {candidate.elementId}</Button>
+            </div>)}
+            {reviewedCaseRevision && <p role="status">Suggestion selected for the exact reviewed case revision. Link selected case to confirm the mapping.</p>}
+          </>}
+        </section>
+
         <section aria-label="Model elements" className="space-y-1">
           <h3 className="text-[13px] font-semibold">Model elements</h3>
           {elements.map((element) => (
@@ -391,11 +474,14 @@ export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLin
               <input
                 type="checkbox"
                 checked={selectedElements.includes(element.id)}
-                onChange={(event) =>
+                disabled={busy || suggestionStatus === "loading"}
+                onChange={(event) => {
+                  // Manual selection remains separate from a reviewed suggestion.
+                  setReviewedCaseRevision(undefined);
                   setSelectedElements((current) =>
                     event.target.checked ? [...new Set([...current, element.id])] : current.filter((id) => id !== element.id)
-                  )
-                }
+                  );
+                }}
               />
               <span className="font-mono">{element.id}</span>
               <span className="text-[var(--muted)]">{element.kind}</span>
@@ -410,10 +496,10 @@ export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLin
           </Button>
           <Button
             type="button"
-            disabled={busy}
+            disabled={busy || loading || suggestionStatus === "loading"}
             onClick={() => {
-              if (!selectedCaseId) {
-                setLocalError("Choose a test case.");
+              if (!selectedCaseId || !cases.some(row => row.id === selectedCaseId)) {
+                setLocalError("Choose a test case from the current search.");
                 return;
               }
               if (!selectedElements.length) {
@@ -421,13 +507,13 @@ export function LinkCaseModal({ projectId, elements, busy, error, onClose, onLin
                 return;
               }
               setLocalError(null);
-              onLink({ testcaseId: selectedCaseId, elementIds: selectedElements });
+              onLink({ testcaseId: selectedCaseId, elementIds: selectedElements, reviewedCaseRevision });
             }}
           >
             {busy ? "Linking…" : "Link selected case"}
           </Button>
         </div>
-      </div>
+      </section>
     </Modal>
   );
 }

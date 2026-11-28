@@ -684,3 +684,83 @@ test("a model is created and revised in the studio, and a case is linked and unl
     await api.dispose();
   }
 });
+
+test("Model Studio nominates a literal case relationship without linking it until review", async ({ page }) => {
+  const api = await pwRequest.newContext({baseURL:env.apiBaseUrl,storageState:STATE_PATH});
+  const name = "E2E model relationship " + Date.now();
+  const base = "/api/projects/" + ctx.projectId + "/model-studio/models";
+  const caseUrl = "/api/projects/" + ctx.projectId + "/testcases";
+  let modelId = "", caseId = "", decoyId = "";
+  try {
+    const created = await api.post(base,{data:{name,model:MODEL}});
+    expect(created.status(),await created.text()).toBe(201);
+    const model = await created.json(); modelId=model.id;
+    const makeCase = async (title: string, expectedResult: string) => {
+      const response = await api.post(caseUrl,{data:{title,steps:[{stepNumber:1,action:"Submit",expectedResult}]}});
+      expect(response.status(),await response.text()).toBe(201);
+      return (await response.json()).id as string;
+    };
+    caseId=await makeCase(name+" matching","Submitted");
+    decoyId=await makeCase(name+" decoy","Refused");
+    const observed = await (await api.get(caseUrl+"/"+caseId)).json();
+    const count=()=>Number(scalar("SELECT count(*) FROM mbt_model_case_links WHERE model_id="+literal(modelId)+";"));
+    await page.goto("/projects/"+ctx.projectId+"/model-studio?model="+modelId);
+    await expect(page.getByRole("heading",{name,exact:true})).toBeVisible();
+    await page.getByRole("button",{name:"Link case",exact:true}).click();
+    const dialog=page.getByRole("region",{name:"Link a test case",exact:true});
+    const chooser=dialog.getByRole("combobox",{name:"Test case"});
+    const searchCases = async () => {
+      await dialog.getByPlaceholder("Search cases").fill(name);
+      await dialog.getByRole("button",{name:"Search",exact:true}).click();
+      await expect(chooser.locator(`option[value="${caseId}"]`)).toHaveCount(1);
+    };
+    await searchCases();
+    await chooser.selectOption({value:decoyId});
+    const region=dialog.getByRole("region",{name:"Possible case-to-model links"});
+    const find=region.getByRole("button",{name:"Find possible links"});
+    await find.click();
+    await expect(region).toContainText("No unambiguous unmapped literal match");
+    expect(count()).toBe(0);
+    await chooser.selectOption({value:caseId});
+    await find.click();
+    const choose=region.getByRole("button",{name:"Use suggestion finish"});
+    await expect(choose).toBeVisible();
+    await expect(region).toContainText("Case step 1");
+    await expect(region).toContainText("Expected observation: Submitted");
+    await expect(dialog.getByRole("checkbox",{name:/finish/})).not.toBeChecked();
+    expect(count()).toBe(0);
+    await choose.click();
+    await expect(dialog.getByRole("checkbox",{name:/finish/})).toBeChecked();
+    expect(count()).toBe(0);
+    // A real changed case after review must not be silently substituted.
+    const edited=await api.put(caseUrl+"/"+caseId,{data:{title:name+" matching edited"}});
+    expect(edited.ok(),await edited.text()).toBeTruthy();
+    await dialog.getByRole("button",{name:"Link selected case"}).click();
+    await expect(dialog).toContainText("The selected case changed");
+    expect(count()).toBe(0);
+    const fresh=await (await api.get(caseUrl+"/"+caseId)).json();
+    expect(fresh.editRevision).not.toBe(observed.editRevision);
+    await find.click();
+    await choose.click();
+    const submitted=page.waitForResponse(r=>r.request().method()==="POST"&&r.url().endsWith("/revisions/"+model.latestRevision.id+"/links"));
+    await dialog.getByRole("button",{name:"Link selected case"}).click();
+    const response=await submitted;
+    expect(response.status(),await response.text()).toBe(201);
+    expect(response.request().postDataJSON()).toMatchObject({testcaseId:caseId,elementIds:["finish"],testcaseRevision:fresh.editRevision,requireCurrentRevision:true});
+    await expect(page.getByRole("list",{name:"Linked cases"})).toContainText(name+" matching edited");
+    expect(count()).toBe(1);
+    await page.getByRole("button",{name:"Link case",exact:true}).click();
+    await searchCases();
+    await chooser.selectOption({value:caseId});
+    await find.click();
+    await expect(region).toContainText("Matching elements already have mappings: finish");
+    await expect(choose).toHaveCount(0);
+    expect(count()).toBe(1);
+    await dialog.getByRole("button",{name:"Cancel",exact:true}).click();
+  } finally {
+    if (modelId) exec("DELETE FROM mbt_models WHERE project_id="+literal(ctx.projectId)+" AND id="+literal(modelId)+";");
+    for (const id of [caseId,decoyId]) if (id) await api.delete(caseUrl+"/"+id,{failOnStatusCode:false});
+    await api.dispose();
+  }
+});
+
