@@ -2,8 +2,8 @@
   "package": "Tesbo canonical specifications",
   "package_revision": "1.4.49",
   "status": "PROPOSED / BACKLOG / NOT FROZEN",
-  "publication": "Integrated PR295 1.4.49 semantic inference containment continuation; previous archive and independent review receipts remain historical.",
-  "scope": "Retain all prior canonical bodies; add relationship maintenance, typed inference composition, uncertainty and provenance, invalidation, review and qualification; refresh only exact scanner document digest bindings.",
+  "publication": "Integrated PR295 1.4.49 semantic inference containment continuation; previous archive and independent review receipts remain historical. OAuth continuation refines existing review methods; no new archive or runtime publication.",
+  "scope": "Retain all prior canonical bodies; add relationship maintenance, typed inference composition, uncertainty and provenance, invalidation, review and qualification; refresh only exact scanner document digest bindings. OAuth handoff-closure refinement and contextual acceptance; linked finding-quota contradictions corrected.",
   "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
   "research_source_commit": "7539a739243167b2d6709df1d644bd5b955f6ffc",
   "source_archive": {
@@ -96,15 +96,15 @@
   "files": [
     {
       "path": "00_README.md",
-      "bytes": 191061,
-      "sha256": "c6ccf040fc36c7ecf24de35f21730e25a2979ed8f94dc684fba0ec1d1f74aa2d",
-      "git_blob": "959ae11ce9757020846feb11a17e66859f5efca6"
+      "bytes": 191723,
+      "sha256": "520464ab84faba56717827c3e93052930116fd895d8e40b1c3ade52088fa4693",
+      "git_blob": "6f17105d6baffa10dda57d90eb83c44fa3e8c1bd"
     },
     {
       "path": "01_PRODUCT_REQUIREMENTS.md",
-      "bytes": 256882,
-      "sha256": "862328c138a459ef67e8b76b49b75bac25ed0a6e319c0b0632d8d2244039db01",
-      "git_blob": "6c772cab5792a1b4baa81d13cb6096bcf925cf73"
+      "bytes": 258381,
+      "sha256": "3f5967d85488d2ebd02d63e5cfe6fe03cd1bfae0fc8569a0b4e5743936f10938",
+      "git_blob": "72fa38908cc470b3bfad359f1f247f560cb47088"
     },
     {
       "path": "02_WORKFLOW_AND_UX_SPEC.md",
@@ -132,9 +132,9 @@
     },
     {
       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
-      "bytes": 185695,
-      "sha256": "479353f8afd935da46bd74cf51cf72bcbd971e6e05e97d44ddacb33cd19f3132",
-      "git_blob": "1dbd821d9baa39b8d7a3263b852573c8fa3a3702"
+      "bytes": 191776,
+      "sha256": "4b130380704272dc963988937d2151c388c97c7830bb8b6c909ac114e1328175",
+      "git_blob": "aa0b6bb139354291816fcd3653630f6a1988dae8"
     },
     {
       "path": "07_UI_DESIGN_TASKS.md",
@@ -148,5 +148,8 @@
   "integration_scope": "C4 parent retained; documentation only. Independent acceptance, live exposure, native sync, source completeness and signing gates open.",
   "concurrent_publication_parent": "639faffc05e6c66f12a048dccaca4431285b674d",
   "whole_system_amendment": "reviews/whole-system-owner-amendment-20261128.md",
-  "semantic_inference_amendment": "reviews/whole-system-owner-amendment-20261128.md"
+  "semantic_inference_amendment": "reviews/whole-system-owner-amendment-20261128.md",
+  "oauth_review_continuation": "../reviews/oauth-spec-followup-20261128/README.md",
+  "oauth_integration_parent": "b915a26458efe1bcb50f0a88423c2e183a8d8698",
+  "oauth_original_review_candidate": "5a9936efa07e6373487186df10c7c7d1fe1cb3a4"
 }
