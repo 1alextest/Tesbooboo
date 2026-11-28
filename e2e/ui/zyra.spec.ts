@@ -4684,86 +4684,80 @@ test.describe("zyra / agents (UI)", () => {
 
   // ─── Transient network failures (fix for "Failed to fetch" on Zyra staging) ─
 
-  test("ZYU-33 a transport-level failure on save is retried once instead of surfacing to the user", async ({ browser }) => {
-    /*
-     * Regression test for intermittent "Failed to fetch — browser blocked or could not reach the
-     * API" reports on Zyra staging. RCA: browsers refuse to silently retry a POST/PATCH written
-     * into a keep-alive connection the server already closed while idle (nginx's default
-     * keepalive_timeout, 75s, is shorter than the gaps a real chat session leaves between
-     * requests) — fetch() throws a transport TypeError instead, which used to reach the user
-     * verbatim. A page refresh "fixed" it only because it opened a fresh connection. lib/api.ts's
-     * fetchWithNetworkErrorMessage now retries exactly once on that error class before surfacing
-     * anything, since the failed write never reached the server in the first place.
-     *
-     * Settings save (PATCH .../agents/zyra/settings) stands in for the chat POST here because it
-     * needs no AI key (see file header) and already has an observable persisted side effect
-     * (ZYU-06/07). route.abort("failed") reproduces the exact browser-level failure — Chromium
-     * surfaces it to fetch() as `TypeError: Failed to fetch`, the same string production code
-     * matches on.
-     */
+  // A transport error cannot tell the client whether a mutation reached the server.
+  // The shared API contract retries reads only. Exercise both sides of that ambiguity
+  // against the real settings endpoint; never reintroduce automatic write replay.
+  const unknownSettingsOutcome = "Request outcome unconfirmed. This action may already have been applied. Refresh to check before trying again.";
+
+  async function persistedKnowledgeAccess(): Promise<boolean> {
+    const res = await api.get(`/api/projects/${tenant!.mainProjectId}/agents/zyra`, { failOnStatusCode: false });
+    expect(res.status(), await res.text()).toBe(200);
+    return (await res.json()).settings.capabilities.knowledgeBaseAccess;
+  }
+
+  test("ZYU-33 a transport failure before settings delivery is not replayed and explicit retry after refresh persists", async ({ browser }) => {
     const page = await open(browser, "/agents/zyra/settings");
     const settingsPath = `/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`;
-
     let patchAttempts = 0;
-    // Matched by pathname predicate, not a glob: the frontend posts to the backend's own origin
-    // while the page is served from the frontend's, and a relative glob is resolved against
-    // baseURL — see NAV-B-07 in navigation.spec.ts for the same gotcha.
-    await page.route(
-      (url) => url.pathname === settingsPath,
-      async (route) => {
-        if (route.request().method() !== "PATCH") {
-          await route.continue();
-          return;
-        }
-        patchAttempts++;
-        if (patchAttempts === 1) {
-          await route.abort("failed");
-        } else {
-          await route.continue();
-        }
-      },
-    );
+    await page.route((url) => url.pathname === settingsPath, async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      patchAttempts++;
+      if (patchAttempts === 1) return route.abort("failed");
+      await route.continue();
+    });
 
     const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
+    await expect(knowledgeBase).toBeChecked();
+    expect(await persistedKnowledgeAccess()).toBe(true);
     await knowledgeBase.click();
+    await expect(knowledgeBase).not.toBeChecked();
     await page.getByRole("button", { name: "Save settings" }).click();
-
-    await expect(page.getByText("All changes saved.")).toBeVisible();
-    await expect(page.getByText(/Failed to fetch|browser blocked or could not reach the API/)).toHaveCount(0);
-    expect(patchAttempts, "the first attempt fails and the client retries exactly once").toBe(2);
+    await expect(page.getByText(unknownSettingsOutcome, { exact: true })).toBeVisible();
+    expect(patchAttempts, "an uncertain mutation is never automatically replayed").toBe(1);
+    expect(await persistedKnowledgeAccess(), "the deliberately undelivered write changed nothing").toBe(true);
 
     await page.reload();
-    await expect(
-      page.getByRole("switch", { name: "Knowledge base access", exact: true }),
-      "the retried request actually persisted the change, not just the UI's optimism",
-    ).not.toBeChecked();
-  });
-
-  test("ZYU-34 a failure that survives the retry still reaches the user", async ({ browser }) => {
-    // The other half of ZYU-33: a genuinely dead backend (both attempts fail) must not be silently
-    // swallowed — the user still needs to see it, just after one automatic retry rather than zero.
-    const page = await open(browser, "/agents/zyra/settings");
-    const settingsPath = `/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`;
-
-    let patchAttempts = 0;
-    await page.route(
-      (url) => url.pathname === settingsPath,
-      async (route) => {
-        if (route.request().method() !== "PATCH") {
-          await route.continue();
-          return;
-        }
-        patchAttempts++;
-        await route.abort("failed");
-      },
-    );
-
-    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
+    await expect(knowledgeBase).toBeChecked();
+    expect(patchAttempts).toBe(1);
+    // A new explicit action after reconciliation is safe; this is not a transport retry.
     await knowledgeBase.click();
     await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.getByText("All changes saved.", { exact: true })).toBeVisible();
+    expect(patchAttempts).toBe(2);
+    expect(await persistedKnowledgeAccess()).toBe(false);
+    await page.reload();
+    await expect(knowledgeBase).not.toBeChecked();
+    expect(patchAttempts).toBe(2);
+  });
 
-    await expect(page.getByText(/browser blocked or could not reach the API/)).toBeVisible();
-    expect(patchAttempts, "still only one retry, not an unbounded loop").toBe(2);
+  test("ZYU-34 a committed settings write with a lost response is not replayed and refresh reveals the committed state", async ({ browser }) => {
+    const page = await open(browser, "/agents/zyra/settings");
+    const settingsPath = `/api/projects/${tenant!.mainProjectId}/agents/zyra/settings`;
+    let patchAttempts = 0;
+    const upstreamStatuses: number[] = [];
+    await page.route((url) => url.pathname === settingsPath, async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      patchAttempts++;
+      // Complete the real request, then withhold its response from the browser.
+      const upstream = await route.fetch({ maxRetries: 0 });
+      upstreamStatuses.push(upstream.status());
+      await route.abort("failed");
+    });
+
+    const knowledgeBase = page.getByRole("switch", { name: "Knowledge base access", exact: true });
+    await expect(knowledgeBase).toBeChecked();
+    expect(await persistedKnowledgeAccess()).toBe(true);
+    await knowledgeBase.click();
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.getByText(unknownSettingsOutcome, { exact: true })).toBeVisible();
+    expect(patchAttempts, "no automatic replay after a committed write").toBe(1);
+    expect(upstreamStatuses).toEqual([200]);
+    expect(await persistedKnowledgeAccess(), "the write was committed despite response loss").toBe(false);
+
+    await page.reload();
+    await expect(knowledgeBase).not.toBeChecked();
+    expect(patchAttempts, "refresh reconciles by reading, not by replaying the write").toBe(1);
+    expect(await persistedKnowledgeAccess()).toBe(false);
   });
 
   // ─── Continue / resume (the misleading "Resuming…" hang fix) ───────────────
