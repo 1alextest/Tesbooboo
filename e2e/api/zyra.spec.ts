@@ -6595,21 +6595,34 @@ test.describe("zyra task-board — ticket auto-comment (fake provider)", () => {
     expect((await save(taskId)).status()).toBe(201);
     const commentId = markFailed(taskId);
 
-    const outsider = await provisionRbacTenant("zyra");
-    test.skip(!outsider, "the second tenant could not be provisioned");
+    const listUrl = url(`/tasks/${taskId}/ticket-comments`);
+    const before = scalar(`SELECT row_to_json(c)::text FROM integration_ticket_comments c WHERE id = ${literal(commentId)};`);
+    const ownerList = await asOwner.get(listUrl, { failOnStatusCode: false });
+    expect(ownerList.status(), await ownerList.text()).toBe(200);
+    expect((await ownerList.json()).list).toEqual(expect.arrayContaining([expect.objectContaining({ id: commentId, status: "failed" })]));
+
     const anon = await anonymousContext();
-    const asOutsider = await loginAs(outsider!.owner);
     try {
-      for (const [who, api] of [["anonymous", anon], ["another workspace", asOutsider]] as const) {
-        const list = await api.get(url(`/tasks/${taskId}/ticket-comments`), { failOnStatusCode: false });
-        expect([401, 403, 404], `${who} listing answered ${list.status()}`).toContain(list.status());
-        const retry = await api.post(retryUrl(taskId, commentId), { failOnStatusCode: false });
-        expect([401, 403, 404], `${who} retrying answered ${retry.status()}`).toContain(retry.status());
-      }
-      // Nothing was re-sent: the record is exactly as the owner left it.
-      expect(scalar(`SELECT status || '|' || reason FROM integration_ticket_comments WHERE id = ${literal(commentId)};`)).toBe("failed|seeded failure");
+      const list = await anon.get(listUrl, { failOnStatusCode: false });
+      const retry = await anon.post(retryUrl(taskId, commentId), { failOnStatusCode: false });
+      expect(list.status(), "anonymous listing must require authentication").toBe(401);
+      expect(retry.status(), "anonymous retry must require authentication").toBe(401);
+      expect(scalar(`SELECT row_to_json(c)::text FROM integration_ticket_comments c WHERE id = ${literal(commentId)};`)).toBe(before);
     } finally {
       await anon.dispose();
+    }
+
+    const outsider = await provisionRbacTenant("zyra");
+    expect(outsider, "the second tenant must be provisioned for cross-workspace refusal").toBeTruthy();
+    const asOutsider = await loginAs(outsider!.owner);
+    try {
+      const list = await asOutsider.get(listUrl, { failOnStatusCode: false });
+      const retry = await asOutsider.post(retryUrl(taskId, commentId), { failOnStatusCode: false });
+      expect([403, 404], `another workspace listing answered ${list.status()}`).toContain(list.status());
+      expect([403, 404], `another workspace retrying answered ${retry.status()}`).toContain(retry.status());
+      // Neither refused request may change the delivery ledger, including its timestamps and attribution.
+      expect(scalar(`SELECT row_to_json(c)::text FROM integration_ticket_comments c WHERE id = ${literal(commentId)};`)).toBe(before);
+    } finally {
       await asOutsider.dispose();
     }
   });
