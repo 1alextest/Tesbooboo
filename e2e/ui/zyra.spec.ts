@@ -1841,7 +1841,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(page.getByRole("heading", { name: "Zyra", level: 1 })).toBeVisible();
   });
 
-  test("ZYU-40 the Agents card shows nothing until used, then an absolute last-used date, and the chat sidebar's own timestamps are untouched", async ({
+  test("ZYU-40 the Agents card shows nothing until used, then an absolute last-used date, and the chat sidebar retains its date and time", async ({
     browser,
   }) => {
     /*
@@ -1849,13 +1849,12 @@ test.describe("zyra / agents (UI)", () => {
      * activity was through chat rather than the task board (see api/zyra.spec.ts ZYR-A-43/44 for the
      * backend half). The card now shows nothing at all in that footer slot until Zyra has actually
      * been used — no "Not used yet" placeholder either — and once used reads "Last used on
-     * DD/MM/YYYY"; this pins both states and that it never regresses back to a relative "…ago"
+     * DD Mon YYYY"; this pins both states and that it never regresses back to a relative "…ago"
      * string.
      *
-     * The Zyra chat screen's own "Conversations" sidebar renders each session's timestamp with its
-     * own long-standing `formatTime` (e.g. "Aug 24, 08:08 PM") and was explicitly asked NOT to change
-     * — pinned here too, on the same seeded session, so a future edit to the card's date logic can't
-     * silently leak into the sidebar.
+     * The sitewide date contract now uses "DD Mon YYYY" for the card and includes the time
+     * ("DD Mon YYYY, HH:MM AM/PM") in the Conversations sidebar. Pin the different precision
+     * of these surfaces on the same seeded session; neither may fall back to a relative date.
      */
     // Same selector convention as ZYU-02: the whole card is one <button>, and its accessible name is
     // the concatenation of everything visible inside it — heading, role text, description, chips,
@@ -1887,30 +1886,32 @@ test.describe("zyra / agents (UI)", () => {
     exec(`UPDATE zyra_chat_sessions SET updated_at = now() WHERE id = ${literal(sessionId)};`);
 
     await cleanPage.reload();
-    const usedLabel = agentCard(cleanPage).getByText(/^Last used on \d{2}\/\d{2}\/\d{4}$/);
+    const usedLabel = agentCard(cleanPage).getByText(/^Last used on \d{2} [A-Za-z]{3} \d{4}$/);
     await expect(usedLabel).toBeVisible();
     await expect(agentCard(cleanPage).getByText(/ago$/)).toHaveCount(0);
 
-    // The date is DD/MM/YYYY and within a day of "now" either side of a UTC/local boundary — not
+    // The date is DD Mon YYYY and within a day of "now" either side of a UTC/local boundary — not
     // asserted against an exact string, since the browser's and the DB's timezone need not match.
     const labelText = (await usedLabel.textContent())!;
-    const [, dd, mm, yyyy] = labelText.match(/(\d{2})\/(\d{2})\/(\d{4})/)!;
-    const shown = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    const [, dd, mon, yyyy] = labelText.match(/(\d{2}) ([A-Za-z]{3}) (\d{4})/)!;
+    const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(mon);
+    expect(month, "the English abbreviated month must be valid").toBeGreaterThanOrEqual(0);
+    const shown = new Date(Number(yyyy), month, Number(dd));
+    expect(shown.getDate()).toBe(Number(dd));
     const today = new Date();
     const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const dayDiff = Math.abs(shown.getTime() - todayMidnight.getTime()) / 86_400_000;
     expect(dayDiff, `"${labelText}" is not close to today's date`).toBeLessThanOrEqual(1);
 
-    // The chat screen's own "Conversations" sidebar timestamp is untouched by this fix — still its
-    // pre-existing locale format, not DD/MM/YYYY.
+    // The Conversations sidebar retains time precision under the sitewide date/time contract.
     const chatPage = await open(browser, "/agents/zyra");
     const sidebarRow = chatPage.locator("aside button").first();
     await expect(sidebarRow).toBeVisible();
     const sidebarTimestamp = (await sidebarRow.locator("span").nth(1).textContent()) ?? "";
-    expect(sidebarTimestamp, "the chat sidebar's own timestamp regressed to DD/MM/YYYY").not.toMatch(
-      /^\d{2}\/\d{2}\/\d{4}$/,
+    expect(sidebarTimestamp, "the sidebar must retain the date and absolute time").toMatch(
+      /^\d{2} [A-Za-z]{3} \d{4}, (0[1-9]|1[0-2]):[0-5]\d (AM|PM)$/,
     );
-    expect(sidebarTimestamp.trim().length, "the sidebar row lost its timestamp entirely").toBeGreaterThan(0);
+    expect(sidebarTimestamp.split(", ")[0], "both surfaces describe the seeded session's date").toBe(labelText.replace("Last used on ", ""));
   });
 
   // ─── The unconfigured-provider state, which is most workspaces ─────────────
