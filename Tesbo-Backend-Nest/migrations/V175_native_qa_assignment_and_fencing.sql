@@ -71,27 +71,27 @@ CREATE INDEX native_qa_attempts_lease_idx
 CREATE FUNCTION assert_native_assignment() RETURNS TRIGGER
 LANGUAGE plpgsql AS $$
 DECLARE
-  task_kind TEXT;
-  task_project UUID;
-  task_prompt BIGINT;
-  task_digest CHAR(64);
+  v_task_kind TEXT;
+  v_task_project UUID;
+  v_task_prompt BIGINT;
+  v_task_digest CHAR(64);
   installation_org UUID;
   project_org UUID;
   grant_row RECORD;
   prompt_row RECORD;
 BEGIN
-  SELECT task_kind, project_id, external_prompt_revision, external_prompt_digest
-    INTO task_kind, task_project, task_prompt, task_digest
-    FROM ai_generation_requests WHERE id = NEW.task_id FOR SHARE;
-  IF task_kind IS DISTINCT FROM 'external_qa_work' THEN
+  SELECT r.task_kind, r.project_id, r.external_prompt_revision, r.external_prompt_digest
+    INTO v_task_kind, v_task_project, v_task_prompt, v_task_digest
+    FROM ai_generation_requests r WHERE r.id = NEW.task_id FOR SHARE;
+  IF v_task_kind IS DISTINCT FROM 'external_qa_work' THEN
     RAISE EXCEPTION 'Assignments require an external QA task'
       USING ERRCODE='23514', CONSTRAINT='native_qa_assignments_task_kind';
   END IF;
-  IF task_project IS DISTINCT FROM NEW.project_id THEN
+  IF v_task_project IS DISTINCT FROM NEW.project_id THEN
     RAISE EXCEPTION 'Assignment project must match the task project'
       USING ERRCODE='23514', CONSTRAINT='native_qa_assignments_project_mismatch';
   END IF;
-  IF task_prompt IS DISTINCT FROM NEW.prompt_revision OR task_digest IS DISTINCT FROM NEW.prompt_digest THEN
+  IF v_task_prompt IS DISTINCT FROM NEW.prompt_revision OR v_task_digest IS DISTINCT FROM NEW.prompt_digest THEN
     RAISE EXCEPTION 'Assignment must pin the task current reviewed prompt'
       USING ERRCODE='23514', CONSTRAINT='native_qa_assignments_prompt_mismatch';
   END IF;
@@ -169,9 +169,9 @@ BEGIN
     SELECT max(fence) FROM native_qa_attempts WHERE task_id = NEW.task_id
   ), 0) + 1;
 
-  SELECT external_work_revision, external_work_state
+  SELECT r.external_work_revision, r.external_work_state
     INTO task_revision, task_state
-    FROM ai_generation_requests WHERE id = NEW.task_id FOR SHARE;
+    FROM ai_generation_requests r WHERE r.id = NEW.task_id FOR SHARE;
   IF task_state IS DISTINCT FROM 'ASSIGNED' THEN
     RAISE EXCEPTION 'Claim requires the task to be assigned'
       USING ERRCODE='23514', CONSTRAINT='native_qa_attempts_task_state';
