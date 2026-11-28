@@ -1480,6 +1480,19 @@ test.describe("zyra / agents (UI)", () => {
     return page;
   }
 
+  // Canonical browser URLs use the readable project key. Resolve it through
+  // the same authorized route contract rather than accepting any project slug.
+  async function expectCanonicalProjectPath(page: Page, path: string) {
+    const response = await api.get("/api/route-resolve", { params: { project: tenant!.mainProjectId } });
+    expect(response.ok(), "the exact project must resolve").toBeTruthy();
+    const resolved = await response.json();
+    expect(resolved.projectId).toBe(tenant!.mainProjectId);
+    expect(resolved.projectKey).toEqual(expect.any(String));
+    expect(resolved.projectKey.length).toBeGreaterThan(0);
+    await expect(page).toHaveURL(url =>
+      url.pathname === `/projects/${encodeURIComponent(resolved.projectKey)}${path}`);
+  }
+
   test("requirement change bundle is reviewed and rejected from the native task page without publishing", async ({ browser }) => {
     const title = `E2E UI requirement bundle ${Date.now()}`;
     const caseTitle = `E2E UI bundle case ${Date.now()}`;
@@ -1817,7 +1830,7 @@ test.describe("zyra / agents (UI)", () => {
     await expect(board).toHaveAttribute("href", new RegExp(`/projects/${tenant!.mainProjectId}/agents/tasks$`));
 
     await page.getByRole("link", { name: /Agent workspace/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra$`));
+    await expectCanonicalProjectPath(page, "/agents/zyra");
     await expect(page.getByRole("heading", { name: "Zyra", level: 1 })).toBeVisible();
   });
 
@@ -5468,7 +5481,7 @@ test.describe("zyra / agents (UI)", () => {
     await page.getByRole("link", { name: "Agents", exact: true }).click();
     await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
     await page.getByRole("link", { name: /Agent workspace/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra$`));
+    await expectCanonicalProjectPath(page, "/agents/zyra");
 
     const suitesPath = `/api/projects/${tenant!.mainProjectId}/suites`;
     await expect(page.getByText(draftTitle)).toBeVisible();
@@ -5553,7 +5566,7 @@ test.describe("zyra / agents (UI)", () => {
     await page.getByRole("link", { name: "Agents", exact: true }).click();
     await page.getByRole("button", { name: /Zyra the Test Generator/ }).click();
     await page.getByRole("link", { name: /Agent workspace/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/agents/zyra$`));
+    await expectCanonicalProjectPath(page, "/agents/zyra");
 
     const dashboardPath = `/api/projects/${tenant!.mainProjectId}/dashboard`;
     await expect(page.getByText(draftTitle)).toBeVisible();
@@ -5583,7 +5596,7 @@ test.describe("zyra / agents (UI)", () => {
     // (app/(app)/projects/[id]/page.tsx does router.replace to .../dashboard), still client-side
     // navigation throughout, so pageDataCache's module state survives the hop.
     await page.getByRole("link", { name: "Project home" }).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${tenant!.mainProjectId}/dashboard$`));
+    await expectCanonicalProjectPath(page, "/dashboard");
 
     // Correct immediately, sourced from the background-refreshed cache — not from the mount's own
     // fetch, which is still artificially stuck mid-flight.

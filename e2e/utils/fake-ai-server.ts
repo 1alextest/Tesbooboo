@@ -44,6 +44,8 @@ export interface FakeAiServer {
    * local stack, loopback when the backend is a host process (every CI workflow).
    */
   backendBaseUrl: string;
+  /** Direct HTTP endpoint for the test runner, even when the backend runs in Docker. */
+  runnerBaseUrl: string;
   /** Every chat-completion request this server received, in arrival order — for asserting on what the backend sent. */
   requests: FakeAiRequest[];
   /**
@@ -230,10 +232,13 @@ export async function startFakeAiServer(): Promise<FakeAiServer> {
 
   await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
   const port = (server.address() as { port: number }).port;
+  const runnerBaseUrl = `http://127.0.0.1:${port}/v1`;
+  const baseUrl = `http://host.docker.internal:${port}/v1`;
 
   return {
-    baseUrl: `http://host.docker.internal:${port}/v1`,
-    backendBaseUrl: env.ci ? `http://127.0.0.1:${port}/v1` : `http://host.docker.internal:${port}/v1`,
+    baseUrl,
+    backendBaseUrl: env.ci ? runnerBaseUrl : baseUrl,
+    runnerBaseUrl,
     requests,
     embeddingRequests,
     transcriptionRequests,

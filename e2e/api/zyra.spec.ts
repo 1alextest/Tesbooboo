@@ -41,8 +41,7 @@ import { messageTraceId, spanAttributes, startLangfuseCapture, type LangfuseCapt
 // this seam. Keep the product session-isolation assertions intact.
 test.describe("fake AI provider request ownership", () => {
   async function call(server: FakeAiServer, prompt: string) {
-    const endpoint = new URL(server.baseUrl + "/chat/completions");
-    endpoint.hostname = "127.0.0.1";
+    const endpoint = new URL(server.runnerBaseUrl + "/chat/completions");
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
