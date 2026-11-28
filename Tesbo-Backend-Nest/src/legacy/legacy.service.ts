@@ -19476,7 +19476,7 @@ export class LegacyService implements OnModuleInit, OnModuleDestroy {
       // already produced operations; it only re-asks, once, when the model plainly didn't.
       if (!turn.choice && decision.actionType === "answer" && !decision.operations.length && this.zyraIsConfirmation(message)) {
         const lastAssistantRes = await this.db.query(
-          `SELECT content, action_type, testcases FROM zyra_chat_messages
+          `SELECT role, content, action_type, testcases FROM zyra_chat_messages
            WHERE session_id = $1 AND project_id = $2 AND role = 'assistant'
            ORDER BY created_at DESC LIMIT 1`,
           [sessionId, projectId]
