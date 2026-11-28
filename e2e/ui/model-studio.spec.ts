@@ -712,7 +712,7 @@ test("Model Studio nominates a literal case relationship without linking it unti
     const searchCases = async () => {
       await dialog.getByPlaceholder("Search cases").fill(name);
       await dialog.getByRole("button",{name:"Search",exact:true}).click();
-      await expect(chooser.locator("option[value="+caseId+"]")).toHaveCount(1);
+      await expect(chooser.locator(`option[value="${caseId}"]`)).toHaveCount(1);
     };
     await searchCases();
     await chooser.selectOption({value:decoyId});
