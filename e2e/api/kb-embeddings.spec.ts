@@ -55,14 +55,15 @@ interface StubState {
   requests: Array<{ model: string; input: string[]; dimensions?: number }>;
   /** Set to a status code to make the next call fail, exercising the degradation path. */
   failWith: number | null;
+  beforeReply: ((inputs: string[]) => Promise<void>) | null;
 }
 
 async function startEmbeddingStub(): Promise<StubState> {
-  const state: Partial<StubState> = { requests: [], failWith: null };
+  const state: Partial<StubState> = { requests: [], failWith: null, beforeReply: null };
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
-    req.on("end", () => {
+    req.on("end", async () => {
       if (state.failWith) {
         res.writeHead(state.failWith, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: "stubbed embeddings failure" } }));
@@ -71,6 +72,7 @@ async function startEmbeddingStub(): Promise<StubState> {
       const body = JSON.parse(raw || "{}") as { model: string; input: string[]; dimensions?: number };
       state.requests!.push(body);
       const inputs = Array.isArray(body.input) ? body.input : [String(body.input)];
+      await state.beforeReply?.(inputs);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -113,6 +115,7 @@ test.describe("knowledge base — embeddings allocation and semantic retrieval",
     if (stub) {
       stub.requests.length = 0;
       stub.failWith = null;
+      stub.beforeReply = null;
     }
   });
 
@@ -136,8 +139,12 @@ test.describe("knowledge base — embeddings allocation and semantic retrieval",
   }
 
   async function createDocument(title: string, body: string): Promise<string> {
+    const tree = await asOwner.get(`/api/projects/${tenant!.mainProjectId}/knowledge-base/folders/tree`);
+    expect(tree.ok(), await tree.text()).toBeTruthy();
+    const folderId = (await tree.json()).id;
+    expect(folderId).toBeTruthy();
     const res = await asOwner.post(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents`, {
-      data: { title, contentText: body, contentHtml: `<p>${body}</p>`, documentType: "general" }
+      data: { folderId, title, contentText: body, contentHtml: `<p>${body}</p>`, documentType: "general" }
     });
     expect(res.ok(), `creating the document should succeed: ${await res.text()}`).toBeTruthy();
     return String((await res.json()).id);
@@ -266,6 +273,51 @@ test.describe("knowledge base — embeddings allocation and semantic retrieval",
     expect(listing.ok(), "the knowledge base must stay usable when embeddings are down").toBeTruthy();
 
     exec(`DELETE FROM knowledge_documents WHERE id = ${literal(docId)}`);
+  });
+
+  test("an in-flight older document embedding cannot publish after the source is edited", async () => {
+    const keyId = await addKey("Embeddings revision fence", "openai", stub.baseUrl);
+    await allocate(keyId);
+    const oldText = "The old version of the wishlist rule permits exactly eleven entries.";
+    const newText = "The current version of the wishlist rule permits exactly twenty-three entries.";
+    let releaseOld!: () => void;
+    let releaseNew!: () => void;
+    const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+    const newGate = new Promise<void>(resolve => { releaseNew = resolve; });
+    stub.beforeReply = async inputs => {
+      if (inputs.some(input => input.includes(oldText))) await oldGate;
+      if (inputs.some(input => input.includes(newText))) await newGate;
+    };
+    let docId = "";
+    try {
+      docId = await createDocument("E2E revision fence", oldText);
+      await expect.poll(() => stub.requests.some(r => r.input.some(input => input.includes(oldText))),
+        { timeout: 15000 }).toBe(true);
+      const response = await asOwner.patch(`/api/projects/${tenant!.mainProjectId}/knowledge-base/documents/${docId}`, {
+        data: { contentText: newText, contentHtml: `<p>${newText}</p>` }, failOnStatusCode: false
+      });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      releaseOld();
+      // The new generation is also held, so it cannot hide a stale old publication.
+      await expect.poll(() => stub.requests.some(r => r.input.some(input => input.includes(newText))),
+        { timeout: 15000 }).toBe(true);
+      expect(chunkCount(docId)).toBe(0);
+      expect(scalar(`SELECT embedding_status FROM knowledge_documents WHERE id = ${literal(docId)}`).trim()).not.toBe("ready");
+      releaseNew();
+      expect(await waitForStatus(docId, ["ready", "failed", "unsupported"])).toBe("ready");
+      const stored = column(`SELECT content FROM knowledge_document_chunks WHERE project_id = ${literal(tenant!.mainProjectId)} AND source_id = ${literal(docId)}`);
+      expect(stored.join(" ")).toContain(newText);
+      expect(stored.join(" ")).not.toContain(oldText);
+    } finally {
+      releaseOld();
+      releaseNew();
+      stub.beforeReply = null;
+      if (docId) {
+        await waitForStatus(docId, ["ready", "failed", "unsupported"], 10000);
+        exec(`DELETE FROM knowledge_document_chunks WHERE project_id = ${literal(tenant!.mainProjectId)} AND source_id = ${literal(docId)}`);
+        exec(`DELETE FROM knowledge_documents WHERE project_id = ${literal(tenant!.mainProjectId)} AND id = ${literal(docId)}`);
+      }
+    }
   });
 
   test("chunks never leak across projects", { tag: '@tesbo.testId("TES-TC-1177")' }, async () => {
