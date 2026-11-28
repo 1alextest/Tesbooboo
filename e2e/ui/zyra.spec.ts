@@ -2866,13 +2866,19 @@ test.describe("zyra / agents (UI)", () => {
   }
 
   test("ZYU-138 a short task description shows in full with no View more toggle", async ({ browser }) => {
-    const taskId = seedTask({ userStory: stamp("Short description story"), context: TICKET_MARKDOWN, linearIssueKeys: ["LIN-S1"] });
+    // The full TICKET_MARKDOWN fixture is used by the rich-rendering tests; it can exceed
+    // the 256px rendered-height cap. Use a genuinely short rendered description here.
+    const shortContext = "### LIN-05: Submit an Expense Claim\n\nReceipt is mandatory.";
+    const taskId = seedTask({ userStory: stamp("Short description story"), context: shortContext, linearIssueKeys: ["LIN-S1"] });
     const page = await open(browser, `/agents/tasks/${taskId}`);
 
     const description = page.getByTestId("task-description");
     await expect(description.locator("h3")).toHaveText("LIN-05: Submit an Expense Claim");
-    await expect(description.getByRole("button", { name: /View (more|less)/ })).toHaveCount(0);
+    await expect(description.getByText("Receipt is mandatory.", { exact: true })).toBeVisible();
+    // Establish the test precondition with actual layout, not Markdown character count.
     const heights = await descriptionHeights(page);
+    expect(heights.scroll, "short fixture must render below the collapse cap").toBeLessThan(COLLAPSED_MAX_PX);
+    await expect(description.getByRole("button", { name: /View (more|less)/ })).toHaveCount(0);
     expect(heights.client, "a description under the cap is not clipped").toBe(heights.scroll);
     // No fade either — the mask is applied only while there is hidden content.
     const mask = await page.locator("#task-description-content").evaluate((el) => getComputedStyle(el).maskImage || getComputedStyle(el).webkitMaskImage);
@@ -5373,7 +5379,8 @@ test.describe("zyra / agents (UI)", () => {
   test("ZYU-127 an unlinked message whose rows name two different batches gets no guessed review panel", async ({ browser }) => {
     const label = stamp("Ambiguous batch");
     const { sessionId, taskId } = seedChatReviewBatch({ entries: planBatch(label, 2) });
-    const otherTask = seedChatReviewBatch({ sessionId, entries: planBatch(stamp("Other batch"), 1) }).taskId;
+    const otherLabel = stamp("Other batch");
+    const otherTask = seedChatReviewBatch({ sessionId, entries: planBatch(otherLabel, 1) }).taskId;
     // Rewrite the first message as unlinked, with its second row pointing at the other batch.
     const rows = JSON.parse(
       scalar(`SELECT testcases::text FROM zyra_chat_messages WHERE review_request_id = ${literal(taskId)};`) || "[]",
@@ -5385,7 +5392,7 @@ test.describe("zyra / agents (UI)", () => {
     );
     const page = await open(browser, "/agents/zyra");
 
-    await expect(page.getByText(/Other batch case 1/)).toBeVisible();
+    await expect(page.getByText(`${otherLabel} case 1`, { exact: true })).toBeVisible();
     await expect(page.getByText(/1 of 1 selected — pending review/)).toBeVisible();
     // Only the other, properly linked batch gets a panel — no actions are offered against a guess.
     await expect(page.getByText(/of 2 selected — pending review/)).toHaveCount(0);
