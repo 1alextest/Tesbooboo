@@ -116,7 +116,7 @@ BEGIN
       USING ERRCODE='23514', CONSTRAINT='native_qa_assignments_grant_scope';
   END IF;
   IF grant_row.revoked_at IS NOT NULL
-     OR (grant_row.expires_at IS NOT NULL AND grant_row.expires_at <= now()) THEN
+     OR (grant_row.expires_at IS NOT NULL AND grant_row.expires_at <= clock_timestamp()) THEN
     RAISE EXCEPTION 'Assignment requires a live grant'
       USING ERRCODE='23514', CONSTRAINT='native_qa_assignments_grant_live';
   END IF;
@@ -199,7 +199,7 @@ BEGIN
 
   SELECT * INTO grant_row FROM agent_installation_project_grants WHERE id = assignment_row.grant_id;
   IF grant_row.revoked_at IS NOT NULL
-     OR (grant_row.expires_at IS NOT NULL AND grant_row.expires_at <= now()) THEN
+     OR (grant_row.expires_at IS NOT NULL AND grant_row.expires_at <= clock_timestamp()) THEN
     RAISE EXCEPTION 'Claim requires a live grant'
       USING ERRCODE='23514', CONSTRAINT='native_qa_attempts_grant_live';
   END IF;
@@ -245,7 +245,9 @@ BEGIN
       USING ERRCODE='23514', CONSTRAINT='native_qa_attempts_terminal';
   END IF;
   -- An attempt whose lease has already elapsed cannot renew or report.
-  IF OLD.lease_expires_at <= now() AND NEW.state IN ('claimed','in_progress') THEN
+  -- clock_timestamp(), not now(): now() is transaction start, so a long-running
+  -- transaction would never observe an elapsed lease.
+  IF OLD.lease_expires_at <= clock_timestamp() AND NEW.state IN ('claimed','in_progress') THEN
     RAISE EXCEPTION 'Expired attempt cannot renew authority'
       USING ERRCODE='23514', CONSTRAINT='native_qa_attempts_lease_expired';
   END IF;
