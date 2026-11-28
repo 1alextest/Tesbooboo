@@ -2,8 +2,8 @@
   "package": "Tesbo canonical specifications",
   "package_revision": "1.4.49",
   "status": "PROPOSED / BACKLOG / NOT FROZEN",
-  "publication": "Integrated repository candidate in existing PR295. Saved v1.4.48 and the separately published 639faffc v1.4.49 export retain historical identities; no archive matching this integrated candidate or runtime publication is claimed.",
-  "scope": "Preserve saved v1.4.48; reconcile general plugin proposal and evidence-informed engineering within existing owners. No implementation, active Skill, runtime acceptance or deployment.",
+  "publication": "Integrated PR295 1.4.49 whole-system owner-direction continuation. Historical C4 receipts and archives retain original identities. No matching new archive or runtime publication claimed.",
+  "scope": "Preserve all C4 bodies; add type-neutral participation, authority, semantic roles, qualified negative space and invalidation; Work Package B owner-direction clarification and exact scanner document bindings only.",
   "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
   "research_source_commit": "7539a739243167b2d6709df1d644bd5b955f6ffc",
   "source_archive": {
@@ -77,60 +77,68 @@
       "archive_bytes": 723552,
       "archive_sha256": "be4a09be89f3431646569afbb85353db5a9c05b7fc965f73ab0304e4883cd829",
       "scope": "Historical incoming publication; its exact manifest and original review receipts remain preserved. These archive bytes do not identify the integrated repository candidate."
+    },
+    {
+      "kind": "prior_integrated_repository_candidate",
+      "commit": "d7449ee3942fa45e03ccc9ce98bcca63cca68070",
+      "package_revision": "1.4.49",
+      "source_manifest_git_blob": "af0b8a3dde44b0a2a2f8b5aa4419d5e29cc8255b",
+      "scope": "C4 independent review evidence remains historical; owner-direction continuation is not independently reviewed."
     }
   ],
   "files": [
     {
       "path": "00_README.md",
-      "bytes": 189087,
-      "sha256": "8bd77b049d640e6bc4e579d9a686e67dee196fdd2526717316c505d25f28df1c",
-      "git_blob": "59238074785e28aa40f5b0e70cbec3c98d4566d0"
+      "bytes": 190215,
+      "sha256": "bda2e01f3c7b34cf2c4c6d3e9107c1e717b49d8d8bfa17ac940496bb8fb0531b",
+      "git_blob": "446be88666df85c8a93dde87b62b6d973b3c7e1a"
     },
     {
       "path": "01_PRODUCT_REQUIREMENTS.md",
-      "bytes": 253729,
-      "sha256": "ec315085b8caff2ad3362e87239c8fa31b934b404972eaf2b99470ab52c7288c",
-      "git_blob": "cc68f97e81ab64f2f7314ced2de83d0c6b1c18f2"
+      "bytes": 254864,
+      "sha256": "cedc27a2e85b350f74bb1f9e04fc6cc2b2f07a0c4ca44ba44421372f9f6d62b1",
+      "git_blob": "dc90111b1a2b2f9569cf90a4b7fc2ac507c26ce4"
     },
     {
       "path": "02_WORKFLOW_AND_UX_SPEC.md",
-      "bytes": 199145,
-      "sha256": "e39952e44e28fe62770fc89c76be84690465f6232f478d98a2f714a1072a9117",
-      "git_blob": "491e67f26a54e88fab76c704dc56e4e7560b2242"
+      "bytes": 199965,
+      "sha256": "fa7ea015afc3301a17d65e1e3ba9777d00503cbd7edae07b88a739985471447d",
+      "git_blob": "e99dc0629fbbd1c82b8f21fa7da6de9df2fecea3"
     },
     {
       "path": "03_TECHNICAL_DESIGN.md",
-      "bytes": 468828,
-      "sha256": "4e5f4a6cf5188ed77dcc7029597b36bf8e6cbf2f38b53357dd0a8580fb2ae037",
-      "git_blob": "69f7f7269665788e92fd12d131aa15afb6b39a67"
+      "bytes": 470784,
+      "sha256": "76422bbade48dd19ab983a9e721f5f9b71927d4c72fba275b8dc5ab8706bd556",
+      "git_blob": "87a914df751762d97fc2e77b4bf9ee4bbc25916c"
     },
     {
       "path": "04_MCP_API_CONTRACTS.md",
-      "bytes": 214460,
-      "sha256": "b6f6c0816ef9b4d46c1396b1d96e223a6f32d0d811b2ee80870a029532e9c9d2",
-      "git_blob": "9d7fc6c380203bbe2308de6d4baaecbd9aca3d99"
+      "bytes": 215506,
+      "sha256": "83957d20ad7e2fb33522665ac3627fb26c862deeec32fc385ac9c4d7307a6836",
+      "git_blob": "a931766e1beecc48c57f04bbd60dab337dbb0949"
     },
     {
       "path": "05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
-      "bytes": 447453,
-      "sha256": "772389d456086492db0ba642a13836943749406a2114ce1c56f7c70d9a5ad05e",
-      "git_blob": "cf94a0c3219cb45941e815b38c91728eae289dfd"
+      "bytes": 448862,
+      "sha256": "67fc625dbc721188ce4315e9af4c32a54bf6ecd7d9680cff92384316987a89e6",
+      "git_blob": "f2ef0b21d75792627f74d7b110691ccbee2f1a92"
     },
     {
       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
-      "bytes": 182753,
-      "sha256": "5c7503220dcf1bed842cfca5cb9f71781f6dd0241b1b27c5c4727c8dd1835041",
-      "git_blob": "94887aff8dc9af1b5387634e5cda972578f3ac29"
+      "bytes": 184054,
+      "sha256": "c52f61eb882f112081375dd72b74305c2b3008d8a543442390db03e5e461ed03",
+      "git_blob": "e5270d633c92b5417d16ebd0b67db9d7f57ab0cb"
     },
     {
       "path": "07_UI_DESIGN_TASKS.md",
-      "bytes": 169494,
-      "sha256": "06529b05fa83c72baac0a0daeeaae57d2b82cb5925257de623232f5a4bd7bc09",
-      "git_blob": "e010a1558324ba7776085576c4d3692cf44258df"
+      "bytes": 170481,
+      "sha256": "3c35474fc2368e6f7a2da534a6930e306dc8a5caab7ec3589e23bc0dba28d04d",
+      "git_blob": "e0e265de22ca5e4ae2fc550dd905bad645e34d07"
     }
   ],
   "review_record": "reviews/spec-review-20261127/README.md",
   "integration_parent": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
-  "integration_scope": "Preserve incoming development and merged PR315; source-review findings retain their original pins. This proposal changes documentation and exact document verification bindings only relative to incoming development.",
-  "concurrent_publication_parent": "639faffc05e6c66f12a048dccaca4431285b674d"
+  "integration_scope": "C4 parent retained; documentation only. Independent acceptance, live exposure, native sync, source completeness and signing gates open.",
+  "concurrent_publication_parent": "639faffc05e6c66f12a048dccaca4431285b674d",
+  "whole_system_amendment": "reviews/whole-system-owner-amendment-20261128.md"
 }
