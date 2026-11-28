@@ -2,8 +2,8 @@
   "package": "Tesbo canonical specifications",
   "package_revision": "1.4.49",
   "status": "PROPOSED / BACKLOG / NOT FROZEN",
-  "publication": "Integrated PR295 1.4.49 whole-system owner-direction continuation. Historical C4 receipts and archives retain original identities. No matching new archive or runtime publication claimed.",
-  "scope": "Preserve all C4 bodies; add type-neutral participation, authority, semantic roles, qualified negative space and invalidation; Work Package B owner-direction clarification and exact scanner document bindings only.",
+  "publication": "Integrated PR295 1.4.49 whole-system owner-direction continuation. Historical C4 receipts and archives retain original identities. No matching new archive or runtime publication claimed. OAuth continuation refines existing review methods; no new archive or runtime publication.",
+  "scope": "Preserve all C4 bodies; add type-neutral participation, authority, semantic roles, qualified negative space and invalidation; Work Package B owner-direction clarification and exact scanner document bindings only. OAuth handoff-closure refinement and contextual acceptance; existing method finding-quota contradiction corrected.",
   "source_commit": "f92c3341eadc03f274becbead3b0f45d0a86539e",
   "research_source_commit": "7539a739243167b2d6709df1d644bd5b955f6ffc",
   "source_archive": {
@@ -89,9 +89,9 @@
   "files": [
     {
       "path": "00_README.md",
-      "bytes": 190215,
-      "sha256": "bda2e01f3c7b34cf2c4c6d3e9107c1e717b49d8d8bfa17ac940496bb8fb0531b",
-      "git_blob": "446be88666df85c8a93dde87b62b6d973b3c7e1a"
+      "bytes": 190877,
+      "sha256": "f123e13acdbaff848ef02642133935c38a1ebba6f275342a07e488b794af97fa",
+      "git_blob": "8810ed53ef80323ae7a133b439bbb757a2c5d6b8"
     },
     {
       "path": "01_PRODUCT_REQUIREMENTS.md",
@@ -125,9 +125,9 @@
     },
     {
       "path": "06_IMPLEMENTATION_AGENT_BRIEF.md",
-      "bytes": 184054,
-      "sha256": "c52f61eb882f112081375dd72b74305c2b3008d8a543442390db03e5e461ed03",
-      "git_blob": "e5270d633c92b5417d16ebd0b67db9d7f57ab0cb"
+      "bytes": 190135,
+      "sha256": "6542bd5c9296eb33c56ba33bc7c655a77fec802b60472a07fae8ae36900a2f17",
+      "git_blob": "756d51289fae1aaac1b7ecd0bb5e4bd70c295a43"
     },
     {
       "path": "07_UI_DESIGN_TASKS.md",
@@ -140,5 +140,6 @@
   "integration_parent": "d440c48ede32ca38783b178ea6d957ded8bca9e4",
   "integration_scope": "C4 parent retained; documentation only. Independent acceptance, live exposure, native sync, source completeness and signing gates open.",
   "concurrent_publication_parent": "639faffc05e6c66f12a048dccaca4431285b674d",
-  "whole_system_amendment": "reviews/whole-system-owner-amendment-20261128.md"
+  "whole_system_amendment": "reviews/whole-system-owner-amendment-20261128.md",
+  "oauth_review_continuation": "../reviews/oauth-spec-followup-20261128/README.md"
 }

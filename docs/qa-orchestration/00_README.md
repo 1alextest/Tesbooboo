@@ -2,6 +2,8 @@
 
 **Current package amendment:** 1.4.49 — 27 November 2026; PROPOSED / BACKLOG / NOT FROZEN. Read the final revision 1.4.49 section for this update. Earlier revision headers and receipts below retain their historical scope.
 
+**28 November OAuth review continuation:** canonical 06 refines the existing [handoff-closure and missed-review method](06_IMPLEMENTATION_AGENT_BRIEF.md#closing-actual-handoffs-and-learning-from-a-miss); the [OAuth integration spec](../specs/mcp-oauth-chatgpt-connection.md#28-november-2026--read-only-connection-continuation) owns its contextual acceptance detail. Historical reviews, current proposed method, implemented read-only issuer, actual activation and client/native acceptance remain separate. Same eight canonical owners and 1.4.49 proposed lineage; no matching archive, new active Skill or runtime publication is asserted by this source amendment.
+
 **UX and team review addendum · 26 November 2026.** For interactions with consequential choices, use the [team checks](06_IMPLEMENTATION_AGENT_BRIEF.md#reviewing-a-consequential-user-choice) and [design examples](07_UI_DESIGN_TASKS.md#designing-and-verifying-a-consequential-choice). These additions clarify how to review the existing proposed workflows.
 
 **Revision:** 1.4.45 — 22 November 2026. Derive redesign obligations from each target project. NOT FROZEN.
