@@ -1,0 +1,124 @@
+{
+  "candidate": "1.4.49 C5 owner-direction whole-system reasoning",
+  "previous_candidate_manifest_sha256": "5060d011e67a57092f3a4ad2ff1e1b050dcc775e43cc26e62e0cad6333a95bbf",
+  "source_repository_commit": "362092d90bef78ba912df88e95b8e4de83cdaa19",
+  "canonical_source_manifest_sha256": "ba1cb46b29ad6cfce55c95b9f090a695c6b56b2cfddd162636a3c4cd0ce5803e",
+  "verification_scope": "Frozen inputs for the existing document verifier; no independent execution, runtime validation, acceptance or freeze claimed.",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "bytes": 22212,
+      "sha256": "e65560734faf7aa84e5e127c3e3f9a2274c47818f7628dedc37a2377ce31a38e"
+    },
+    {
+      "path": "CLAUDE.md",
+      "bytes": 22374,
+      "sha256": "85f8edf61844289b041ea5322d9210956f1ee9e904f41964c3632d5e6ccf55f8"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/skills-governance.md",
+      "bytes": 101195,
+      "sha256": "cc850737c2995a86dc285fc02791e41fd598658c3afe1d13af727637cd2b9310"
+    },
+    {
+      "path": "docs/qa-orchestration/source-manifest.json",
+      "bytes": 6233,
+      "sha256": "ba1cb46b29ad6cfce55c95b9f090a695c6b56b2cfddd162636a3c4cd0ce5803e"
+    },
+    {
+      "path": "docs/qa-orchestration/00_README.md",
+      "bytes": 190215,
+      "sha256": "bda2e01f3c7b34cf2c4c6d3e9107c1e717b49d8d8bfa17ac940496bb8fb0531b"
+    },
+    {
+      "path": "docs/qa-orchestration/01_PRODUCT_REQUIREMENTS.md",
+      "bytes": 254864,
+      "sha256": "cedc27a2e85b350f74bb1f9e04fc6cc2b2f07a0c4ca44ba44421372f9f6d62b1"
+    },
+    {
+      "path": "docs/qa-orchestration/02_WORKFLOW_AND_UX_SPEC.md",
+      "bytes": 199965,
+      "sha256": "fa7ea015afc3301a17d65e1e3ba9777d00503cbd7edae07b88a739985471447d"
+    },
+    {
+      "path": "docs/qa-orchestration/03_TECHNICAL_DESIGN.md",
+      "bytes": 470784,
+      "sha256": "76422bbade48dd19ab983a9e721f5f9b71927d4c72fba275b8dc5ab8706bd556"
+    },
+    {
+      "path": "docs/qa-orchestration/04_MCP_API_CONTRACTS.md",
+      "bytes": 215506,
+      "sha256": "83957d20ad7e2fb33522665ac3627fb26c862deeec32fc385ac9c4d7307a6836"
+    },
+    {
+      "path": "docs/qa-orchestration/05_IMPLEMENTATION_BACKLOG_AND_TEST_PLAN.md",
+      "bytes": 448862,
+      "sha256": "67fc625dbc721188ce4315e9af4c32a54bf6ecd7d9680cff92384316987a89e6"
+    },
+    {
+      "path": "docs/qa-orchestration/06_IMPLEMENTATION_AGENT_BRIEF.md",
+      "bytes": 184054,
+      "sha256": "c52f61eb882f112081375dd72b74305c2b3008d8a543442390db03e5e461ed03"
+    },
+    {
+      "path": "docs/qa-orchestration/07_UI_DESIGN_TASKS.md",
+      "bytes": 170481,
+      "sha256": "3c35474fc2368e6f7a2da534a6930e306dc8a5caab7ec3589e23bc0dba28d04d"
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/plugin-ecosystem-obsidian-review.md",
+      "bytes": 59890,
+      "sha256": "2657724fce2bd1baf9a748455a31850e17f45bc778472de1fa685408dc8108bc"
+    },
+    {
+      "path": "scripts/check-gitleaks-evidence-exceptions.py",
+      "bytes": 16800,
+      "sha256": "5d91406e1e51e3186b825acff7b5f1d526b8369df0807ac0b053836f5217ff2a"
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/spec-review-20261127/verify-documents.py",
+      "bytes": 4725,
+      "sha256": "97410fd680261207ca04df7c284510af65e8471fbbb162323aa19ae216562b5b"
+    },
+    {
+      "path": "docs/agent-scope-discipline.md",
+      "bytes": 18710,
+      "sha256": "147250c41f0ec7c21f9ee0da7e1912f271b1d3f573b7c54a640fc7cba196a2b6"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/AGENT_RULE_TEMPLATE.md",
+      "bytes": 49072,
+      "sha256": "0f412e4e92892a43f6bec74eb15cee050804805a359960a649dca7301238ff03"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/README.md",
+      "bytes": 57353,
+      "sha256": "dd2bbdf27b2cc46c991ab6373203d5200bf0b939cc9ec57431167d72f5805076"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/design.md",
+      "bytes": 169556,
+      "sha256": "d25c9a64f059b5d9726d50852cae007e89ebc77991e3cefe044a9646f1b2df64"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/implementation-plan.md",
+      "bytes": 151530,
+      "sha256": "6b312d7d2e5847aa2fab9e8baee226d996858fce6fce1ec322c6c1a6d058a67e"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/requirements.md",
+      "bytes": 102838,
+      "sha256": "44bb9772ff529c3a3100300e9c8b31f5b94e8d879656c43b69d639056546159f"
+    },
+    {
+      "path": "docs/qa-orchestration/reviews/whole-system-owner-amendment-20261128.md",
+      "bytes": 2520,
+      "sha256": "1c32b9ca10a8c033753b8ff9b0eecccf87ae3cc09c0773fb249f36d57e180101"
+    },
+    {
+      "path": "docs/specs/agent-synchronized-engineering/work-package-b-governed-manuals-policies-design.md",
+      "bytes": 76323,
+      "sha256": "79a69e49a56b704738a291f4a68b33e682f4525ab58a3713da41991a1306e320"
+    }
+  ]
+}
