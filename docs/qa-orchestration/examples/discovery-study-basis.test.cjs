@@ -220,3 +220,48 @@ test('configuration, unit contracts, operational observations and partial scope 
   assert.throws(()=>prepareCrossArtifactContext(basis),/explicit disposition/);
 });
 
+test('Skills review practice reuses the whole-system vocabulary and frozen study without inventing artifact families',()=>{
+  const {WHOLE_SYSTEM_DOMAINS,skillsReviewPracticeStudy}=require('./cross-artifact-calibration.cjs');
+  const study=skillsReviewPracticeStudy();
+  const {manifest,subjectPackets}=freezePairedDiscovery(study);
+  assert.equal(manifest.trials.length,12);
+  assert.equal(subjectPackets.length,12);
+  for(const packet of subjectPackets){
+    const input=verifySubjectPacket(packet,manifest,manifest.ref);
+    const context=input.context.split('\n',1)[0],basis=JSON.parse(context);
+    assert.deepEqual(Object.keys(basis.domains),WHOLE_SYSTEM_DOMAINS);
+    assert.equal(prepareCrossArtifactContext(basis),context);
+    assert.doesNotMatch(input.context,/private:|practice-oracle:|expectedDisposition|rubricRef/);
+  }
+  const {scoreDiscovery}=require('./score-zyra-discovery.cjs');
+  for(const arm of scoreDiscovery(manifest,[],manifest.ref).arms){
+    assert.equal(arm.assigned,6);
+    assert.equal(arm.available,0);
+    assert.equal(arm.risk.unavailable,4);
+    assert.equal(arm.requirementGap.unavailable,3);
+    assert.equal(arm.controls.UNAVAILABLE,2);
+  }
+  assert.deepEqual(Object.fromEntries(study.pairs.map(p=>[p.id,p.expectedDisposition])),
+    {assignment:'FINDINGS',accessibility:'FINDINGS',specification:'FINDINGS',stale:'FINDINGS',clean:'NO_FINDINGS',unknown:'UNKNOWN'});
+});
+
+test('Skills review evidence distinguishes approval, effective assignment, design concerns and stale observations',()=>{
+  const {skillsReviewPracticeStudy}=require('./cross-artifact-calibration.cjs');
+  const {manifest,subjectPackets}=freezePairedDiscovery(skillsReviewPracticeStudy());
+  const context=id=>verifySubjectPacket(subjectPackets.find(p=>p.trialId===id+'-2'),manifest,manifest.ref).context;
+  const cite=(pair,domain,id,revision,excerpt)=>bindCrossArtifactCitation(context(pair),{domain,id,revision,excerpt});
+  assert.equal(cite('assignment','decision','skill-review-decision','receipt-2','contains no assignment change').role,'observed');
+  assert.equal(cite('assignment','skill','case-authoring','v2','preserve stable subject identity').role,'approved');
+  assert.equal(cite('assignment','effective_configuration','project-A-case-assignment','assignment-rev7','bound to Skill case-authoring v1').role,'observed');
+  assert.throws(()=>cite('assignment','effective_configuration','project-A-case-assignment','assignment-rev7','bound to Skill case-authoring v2'),/exact supplied artifact revision/);
+  assert.equal(cite('accessibility','requirement','keyboard-review-req','v1','focus returns to the initiating control').role,'approved');
+  assert.equal(cite('accessibility','design','skill-version-comparison','design-v5','focus on the page body').role,'candidate');
+  assert.equal(cite('accessibility','execution','comparison-run','run1','keyboard traversal and focus restoration were not exercised').semanticVerdict,'not_adjudicated');
+  assert.throws(()=>cite('accessibility','execution','comparison-run','run1','focus returns to the initiating control'),/exact supplied artifact revision/);
+  assert.equal(cite('specification','design','skill-approval-spec','design-v6','machine client approve').transferAuthority,'not_established');
+  assert.equal(cite('stale','execution','skill-version-labels','run2','design-v4 has not been tested').role,'historical');
+  assert.throws(()=>cite('stale','execution','skill-version-labels','design-v4','Passed'),/exact supplied artifact revision/);
+  assert.equal(cite('clean','execution','skill-approval-run','run3','next authoring operation records v1').role,'observed');
+  assert.equal(cite('unknown','execution','skill-approval-run','run4','Approved v2').inventoryAvailability,'partial');
+  assert.throws(()=>cite('unknown','effective_configuration','project-A-case-assignment','assignment-rev7','bound to Skill case-authoring v1'),/exact supplied artifact revision/);
+});
