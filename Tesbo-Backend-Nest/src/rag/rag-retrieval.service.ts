@@ -76,12 +76,10 @@ type RetrievalOpts = { maxSources?: number; charBudget?: number } & RetrievalTra
 // full-text search. Does NOT replace knowledgeSnapshot() (that stays for the explicit-picker
 // task-generation flow — a named-document lookup, not semantic search).
 //
-// Never throws: any failure (no embedding allocation, nothing embedded yet, embeddings API
-// error) resolves to [] so the caller's existing knowledgeSnapshot() fallback stays clean. Note
-// that only the ANN half depends on an embeddings key — the FTS half runs regardless, so a
-// workspace with no embeddings key degrades to keyword-only matching rather than to nothing.
-// That degradation is invisible through retrieveKnowledgeContext() by design; use
-// retrieveWithDiagnostics() when a human needs to know which half ran.
+// Never throws: the two search mechanisms degrade independently. A provider, allocation or
+// database failure in one path must not discard successful results from the other. The returned
+// candidates are relevance- and budget-bounded, not an exhaustive inventory or coverage claim.
+// Use retrieveWithDiagnostics() to distinguish failure or skipped paths from completed search.
 @Injectable()
 export class RagRetrievalService {
   private readonly logger = new Logger(RagRetrievalService.name);
@@ -96,13 +94,10 @@ export class RagRetrievalService {
   }
 
   /**
-   * Same retrieval, but says whether the semantic half actually ran.
-   *
-   * retrieveKnowledgeContext() returns [] for every failure mode, which is right for callers
-   * that just want context and wrong for anyone trying to understand the system: "no embeddings
-   * key in the workspace" and "the knowledge base has nothing on this topic" produced an
-   * identical empty array. That is how semantic search stayed off across every project in
-   * production without a single alert. Callers that surface state to a human should use this.
+   * Return usable candidates and an honest diagnostic for each failed or skipped search path.
+   * A completed bounded search, unavailable search and no relevant matches are distinct.
+   * Relevance confidence ranks returned candidates; it is not inventory completeness,
+   * normative authority or evidence of an absent requirement.
    */
   async retrieveWithDiagnostics(
     projectId: string,
@@ -114,15 +109,37 @@ export class RagRetrievalService {
       const text = String(query || "").trim();
       if (!text) return { items: [], semanticSearchRan: false, reason: "Empty query.", topScore: null, confidence: "none" };
 
-      const [resolved, keyword] = await Promise.all([resolveEmbeddingAllocation(this.db, projectId), this.keywordQuery(text)]);
-      reason = resolved.reason;
-      const allocation = resolved.allocation;
+      const [allocationResult, keywordResult] = await Promise.allSettled([
+        resolveEmbeddingAllocation(this.db, projectId), this.keywordQuery(text, true)
+      ]);
+      const allocation = allocationResult.status === "fulfilled" ? allocationResult.value.allocation : null;
+      const keyword = keywordResult.status === "fulfilled" ? keywordResult.value : null;
+      const diagnostics: string[] = [
+        allocationResult.status === "fulfilled" ? allocationResult.value.reason : "Embedding allocation unavailable."
+      ];
+      // Report fixed, client-safe path names, never database/provider payloads or query text.
+      const unavailable = (path: string) => {
+        const message = `${path} unavailable.`;
+        diagnostics.push(message);
+        this.logger.warn(message);
+      };
+      if (allocationResult.status === "rejected") this.logger.warn("Embedding allocation unavailable.");
+      if (keywordResult.status === "rejected") unavailable("Keyword query preparation");
+      else if (!keyword) diagnostics.push("Keyword search skipped: no content terms.");
 
-      const [annRowsRaw, ftsDocRows, ftsFileRows] = await Promise.all([
-        allocation ? this.annSearch(projectId, allocation, text, { traceId: opts.traceId, traceSeed: opts.traceSeed }) : Promise.resolve([] as AnnRow[]),
+      const [ann, docs, files] = await Promise.allSettled([
+        allocation ? this.annSearch(projectId, allocation, text, { traceId: opts.traceId, traceSeed: opts.traceSeed }) : Promise.resolve(null),
         keyword ? this.ftsSearch(projectId, "knowledge_documents", "content_text", keyword) : Promise.resolve([] as FtsRow[]),
         keyword ? this.ftsSearch(projectId, "knowledge_files", "extracted_text", keyword) : Promise.resolve([] as FtsRow[])
       ]);
+      const semanticSearchRan = ann.status === "fulfilled" && ann.value !== null;
+      if (ann.status === "rejected" || (allocation && !semanticSearchRan)) unavailable("Semantic search");
+      if (docs.status === "rejected") unavailable("Document keyword search");
+      if (files.status === "rejected") unavailable("File keyword search");
+      reason = diagnostics.filter(Boolean).join(" ");
+      const annRowsRaw = ann.status === "fulfilled" ? ann.value ?? [] : [];
+      const ftsDocRows = docs.status === "fulfilled" ? docs.value : [];
+      const ftsFileRows = files.status === "fulfilled" ? files.value : [];
       // Reported honestly even when every candidate gets filtered below — "we searched and the best
       // match scored 0.31" is a real, useful signal, distinct from "no candidates existed at all".
       const topScore = annRowsRaw.length ? Math.max(...annRowsRaw.map((row) => row.cosine_similarity)) : null;
@@ -138,7 +155,7 @@ export class RagRetrievalService {
       // fusion, or it fills the context budget indistinguishably from a strong one.
       const annRows = annRowsRaw.filter((row) => row.cosine_similarity >= RAG_MIN_SIMILARITY);
       if (!annRows.length && !ftsDocRows.length && !ftsFileRows.length) {
-        return { items: [], semanticSearchRan: Boolean(allocation), reason, topScore, confidence };
+        return { items: [], semanticSearchRan, reason, topScore, confidence };
       }
 
       const maxSources = opts.maxSources ?? RAG_MAX_SOURCES;
@@ -146,15 +163,15 @@ export class RagRetrievalService {
       await this.focusSources(fused, keyword);
       return {
         items: this.budgetToItems(fused, maxSources, opts.charBudget ?? RAG_CONTEXT_CHAR_BUDGET),
-        semanticSearchRan: Boolean(allocation),
+        semanticSearchRan,
         reason,
         topScore,
         confidence
       };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`retrieveKnowledgeContext failed for project ${projectId}: ${message}`);
-      return { items: [], semanticSearchRan: false, reason: reason || `Retrieval failed: ${message}`, topScore: null, confidence: "none" };
+    } catch {
+      // Unexpected assembly failures remain fail-closed; the diagnostic must not expose raw input.
+      this.logger.warn("Knowledge retrieval assembly unavailable.");
+      return { items: [], semanticSearchRan: false, reason: [reason, "Knowledge retrieval assembly unavailable."].filter(Boolean).join(" "), topScore: null, confidence: "none" };
     }
   }
 
@@ -249,7 +266,7 @@ export class RagRetrievalService {
     return res.rows;
   }
 
-  private async annSearch(projectId: string, allocation: EmbeddingKeyAllocation, query: string, traceOpts: RetrievalTraceOpts = {}): Promise<AnnRow[]> {
+  private async annSearch(projectId: string, allocation: EmbeddingKeyAllocation, query: string, traceOpts: RetrievalTraceOpts = {}): Promise<AnnRow[] | null> {
     const [queryVector] = await tracedEmbeddingCall(
       {
         traceId: traceOpts.traceId,
@@ -263,7 +280,8 @@ export class RagRetrievalService {
       },
       () => embedTexts(allocation, [query])
     );
-    if (!queryVector) return [];
+    // No vector means the ANN query never ran, not that it completed with zero candidates.
+    if (!queryVector?.length) return null;
     const vectorLiteral = `[${queryVector.join(",")}]`;
     // The literal `c.project_id = $1` equality is what lets Postgres prune straight to one
     // of the 64 hash partitions before touching that partition's HNSW index.
@@ -291,15 +309,19 @@ export class RagRetrievalService {
    * This replaced plainto_tsquery, which ANDs every word of the message: "Generate test cases for
    * session timeout" required a document to contain "generate", "test", "case" AND "timeout", so a
    * doc stating "sessions expire after 20 minutes" was never found and retrieval fell back to the
-   * 12 most recently edited documents. Never throws — a failure here just skips keyword search.
+   * 12 most recently edited documents. Explicit passage selection can fall back to the opening;
+   * diagnostic retrieval requests propagation to distinguish failed preparation from no terms.
    */
-  private async keywordQuery(text: string): Promise<KeywordQuery | null> {
+  private async keywordQuery(text: string, reportFailure = false): Promise<KeywordQuery | null> {
     const res = await this.db
       .query<{ terms: string[] | null; boilerplate: string[] | null }>(
         "SELECT tsvector_to_array(to_tsvector('english', $1)) AS terms, tsvector_to_array(to_tsvector('english', $2)) AS boilerplate",
         [text, RAG_QUERY_BOILERPLATE.join(" ")]
       )
-      .catch(() => ({ rows: [] as Array<{ terms: string[] | null; boilerplate: string[] | null }> }));
+      .catch((error) => {
+        if (reportFailure) throw error;
+        return { rows: [] as Array<{ terms: string[] | null; boilerplate: string[] | null }> };
+      });
     const boilerplate = new Set(res.rows[0]?.boilerplate ?? []);
     const terms = (res.rows[0]?.terms ?? []).filter((term) => term && !boilerplate.has(term));
     if (!terms.length) return null;
@@ -332,8 +354,7 @@ export class RagRetrievalService {
            AND (SELECT count(*) FROM unnest($3::text[]) AS t(term) WHERE search_vector @@ t.term::tsquery) >= $4
          ORDER BY rank DESC LIMIT ${RAG_FTS_CANDIDATES}`,
         [projectId, keyword.tsquery, keyword.terms.map(RagRetrievalService.quoteLexeme), keyword.minMatchedTerms]
-      )
-      .catch(() => ({ rows: [] as Array<{ id: string; title: string; content: string; rank: number }> }));
+      );
     return res.rows.map((row) => ({ source_type: sourceType, source_id: row.id, title: row.title, content: row.content, rank: row.rank }));
   }
 

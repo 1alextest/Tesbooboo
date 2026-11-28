@@ -95,9 +95,9 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "synthetic login request", { traceSeed: "turn-1" });
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ items: [], semanticSearchRan: false, topScore: null, confidence: "none" });
-    expect(result.reason).toBe("Using the project's openai key for embeddings.");
+    expect(result.reason).toBe("Using the project's openai key for embeddings. Semantic search unavailable.");
     expect(JSON.stringify({ result, warnings: warning.mock.calls })).not.toContain(privateDetail);
-    expect(JSON.stringify(warning.mock.calls)).toContain("temporarily unavailable (HTTP 500)");
+    expect(warning).toHaveBeenCalledWith("Semantic search unavailable.");
     expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("knowledge_document_chunks"))).toBe(false);
     expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "kb-query-embedding", traceSeed: "turn-1" }), expect.any(Function));
   });
@@ -115,12 +115,13 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     expect(global.fetch).toHaveBeenCalledTimes(2);
     expect(knowledge).toMatchObject({ items: [], semanticSearchRan: false, topScore: null, confidence: "none" });
     expect(testcases).toMatchObject({ matches: [], semanticSearchRan: false });
-    expect(knowledge.reason).toBe("Using the project's openai key for embeddings.");
-    expect(testcases.reason).toBe(knowledge.reason);
+    expect(knowledge.reason).toBe("Using the project's openai key for embeddings. Semantic search unavailable.");
+    expect(testcases.reason).toBe("Using the project's openai key for embeddings.");
     expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("$2::vector"))).toBe(false);
     expect(JSON.stringify({ knowledge, testcases, queries: (db.query as jest.Mock).mock.calls, warnings: warning.mock.calls })).not.toContain(privateDetail);
     expect(warning).toHaveBeenCalledTimes(2);
-    for (const [message] of warning.mock.calls) expect(message).toContain("AI provider returned invalid embedding data.");
+    expect(warning.mock.calls[0][0]).toBe("Semantic search unavailable.");
+    expect(warning.mock.calls[1][0]).toContain("AI provider returned invalid embedding data.");
     expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "kb-query-embedding", traceSeed: "turn-1" }), expect.any(Function));
     expect(tracedEmbeddingCallMock).toHaveBeenCalledWith(expect.objectContaining({ name: "testcase-query-embedding", traceSeed: "turn-2" }), expect.any(Function));
   });
@@ -192,17 +193,89 @@ describe("RagRetrievalService.retrieveWithDiagnostics", () => {
     expect(result.items.every((item) => !item.content.endsWith("..."))).toBe(true);
   });
 
-  it("degrades to keyword-only results (confidence 'none', no crash) when the embeddings call itself fails mid-query", async () => {
-    embedTextsMock.mockRejectedValue(new Error("embeddings provider unreachable"));
+  it("keeps valid keyword results and reports an unavailable semantic search when the embedding provider fails", async () => {
+    const privateDetail = "private-provider-context";
+    embedTextsMock.mockRejectedValue(new Error(privateDetail));
+    const warning = jest.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
     const db = makeDb([], [{ id: "kw-doc", title: "Keyword match", content: "matched by text", rank: 0.5 }]);
-    const svc = new RagRetrievalService(db);
-    const result = await svc.retrieveWithDiagnostics("project-1", "some query");
-    // annSearch itself catches nothing — the embeddings failure propagates out of embedTexts, is
-    // caught by retrieveWithDiagnostics' own try/catch, and the whole call degrades to [] rather
-    // than losing the FTS half too or throwing into the caller.
-    expect(result.items).toEqual([]);
-    expect(result.confidence).toBe("none");
-    expect(result.topScore).toBeNull();
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "some query");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["kw-doc"]);
+    expect(result).toMatchObject({ confidence: "weak", semanticSearchRan: false, topScore: null });
+    expect(result.reason).toContain("Semantic search unavailable.");
+    expect(JSON.stringify({ result, warnings: warning.mock.calls })).not.toContain(privateDetail);
+  });
+
+  function rejectQueries(db: DatabaseService, ...patterns: string[]): void {
+    const query = db.query as jest.Mock;
+    const original = query.getMockImplementation()!;
+    query.mockImplementation((sql: string, params: unknown[] = []) => {
+      if (patterns.some((pattern) => sql.includes(pattern))) return Promise.reject(new Error("private-database-context"));
+      return original(sql, params);
+    });
+  }
+
+  it("keeps ANN and file matches if the document keyword path fails", async () => {
+    const db = makeDb([annRow("ann-doc", 0.93)], [], [{ id: "kw-file", title: "File", content: "matching file", rank: 0.7 }]);
+    rejectQueries(db, "FROM knowledge_documents");
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "some query");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(expect.arrayContaining(["ann-doc", "kw-file"]));
+    expect(result).toMatchObject({ confidence: "strong", semanticSearchRan: true, topScore: 0.93 });
+    expect(result.reason).toContain("Document keyword search unavailable.");
+    expect(result.reason).not.toContain("File keyword search unavailable.");
+    expect(result.reason).not.toContain("private-database-context");
+  });
+
+  it("keeps valid documents when the file keyword path fails", async () => {
+    const db = makeDb([], [{ id: "kw-doc", title: "Keyword match", content: "matched by text", rank: 0.5 }]);
+    rejectQueries(db, "FROM knowledge_files");
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "some query");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["kw-doc"]);
+    expect(result).toMatchObject({ semanticSearchRan: true, confidence: "weak" });
+    expect(result.reason).toContain("File keyword search unavailable.");
+  });
+
+  it("keeps keyword results when the allocation lookup itself fails", async () => {
+    resolveEmbeddingAllocationMock.mockRejectedValue(new Error("private-allocation-context"));
+    const db = makeDb([], [{ id: "kw-doc", title: "Keyword match", content: "matched by text", rank: 0.5 }]);
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "some query");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["kw-doc"]);
+    expect(result).toMatchObject({ semanticSearchRan: false, confidence: "weak", topScore: null, reason: "Embedding allocation unavailable." });
+    expect(embedTextsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ANN results when keyword preparation fails rather than claiming no terms", async () => {
+    const db = makeDb([annRow("ann-doc", 0.93)]);
+    rejectQueries(db, "tsvector_to_array");
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "some query");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["ann-doc"]);
+    expect(result.semanticSearchRan).toBe(true);
+    expect(result.reason).toContain("Keyword query preparation unavailable.");
+    expect(result.reason).not.toContain("no content terms");
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("FROM knowledge_documents"))).toBe(false);
+  });
+
+  it("distinguishes both failed paths from a completed empty bounded search", async () => {
+    const failed = makeDb([]);
+    rejectQueries(failed, "knowledge_document_chunks", "FROM knowledge_documents", "FROM knowledge_files");
+    const failure = await new RagRetrievalService(failed).retrieveWithDiagnostics("project-1", "some query");
+    const empty = await new RagRetrievalService(makeDb([])).retrieveWithDiagnostics("project-1", "some query");
+    expect(failure.items).toEqual([]);
+    expect(failure).toMatchObject({ semanticSearchRan: false, confidence: "none", topScore: null });
+    expect(failure.reason).toContain("Semantic search unavailable.");
+    expect(failure.reason).toContain("Document keyword search unavailable.");
+    expect(failure.reason).toContain("File keyword search unavailable.");
+    expect(empty).toMatchObject({ items: [], semanticSearchRan: true, confidence: "none", topScore: null });
+    expect(empty.reason).not.toContain("unavailable");
+  });
+
+  it("does not claim ANN ran if the embedding call returns no vector", async () => {
+    embedTextsMock.mockResolvedValue([]);
+    const db = makeDb([], [{ id: "kw-doc", title: "Keyword match", content: "matched by text", rank: 0.5 }]);
+    const result = await new RagRetrievalService(db).retrieveWithDiagnostics("project-1", "some query");
+    expect(result.items.map((item) => item.citation.sourceId)).toEqual(["kw-doc"]);
+    expect(result.semanticSearchRan).toBe(false);
+    expect(result.reason).toContain("Semantic search unavailable.");
+    expect((db.query as jest.Mock).mock.calls.some(([sql]) => String(sql).includes("knowledge_document_chunks"))).toBe(false);
   });
 
   // Previously asserted "none" here. Changed deliberately with the exact-value grounding fix: a
