@@ -2,6 +2,9 @@
 // These review-local labels are not native lifecycle states or authority grants.
 // Never use this helper to retrieve or authorize real governed material.
 const ARTIFACT_DOMAINS = ['implementation','requirement','policy','user_manual','test_case','defect','execution','design','decision','skill'];
+const WHOLE_SYSTEM_DOMAINS = [...ARTIFACT_DOMAINS,'stakeholder_outcome','data_contract','interface_contract','effective_configuration','operational_observation'];
+const domainList = purpose => purpose==='SYNTHETIC_CROSS_ARTIFACT_CALIBRATION'?ARTIFACT_DOMAINS:
+  purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'?WHOLE_SYSTEM_DOMAINS:null;
 const roles = ['approved','candidate','rejected','observed','historical'];
 const availability = ['supplied','unavailable','not_applicable'];
 const text = v => typeof v === 'string' && v.trim().length > 0;
@@ -15,18 +18,20 @@ const date = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) &&
 
 function prepareCrossArtifactContext(basis) {
   assert(keys(basis,['purpose','scopeRef','asOf','changeRef','domains']) &&
-    basis.purpose === 'SYNTHETIC_CROSS_ARTIFACT_CALIBRATION' && identity(basis.scopeRef) &&
+    domainList(basis.purpose) !== null && identity(basis.scopeRef) &&
     identity(basis.changeRef) && date(basis.asOf), 'Invalid calibration identity or date');
-  assert(keys(basis.domains,ARTIFACT_DOMAINS),'Every artifact domain needs an explicit disposition');
+  const selectedDomains=domainList(basis.purpose);
+  assert(keys(basis.domains,selectedDomains),'Every artifact domain needs an explicit disposition');
   const seen = new Set();
   let totalChars=0, count=0;
   const domains = {};
-  for (const domain of ARTIFACT_DOMAINS) {
+  for (const domain of selectedDomains) {
     const row=basis.domains[domain];
-    assert(keys(row,['availability','reason','records']) && availability.includes(row.availability) &&
+    const partiallySupplied=basis.purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION' && row?.availability==='partial';
+    assert(keys(row,['availability','reason','records']) && (availability.includes(row.availability)||partiallySupplied) &&
       text(row.reason) && row.reason.length<=500 && Array.isArray(row.records) && row.records.length<=12,
       'Invalid domain inventory: '+domain);
-    assert((row.availability==='supplied')===(row.records.length>0),'Availability conflicts with record inventory: '+domain);
+    assert((row.availability==='supplied'||partiallySupplied)===(row.records.length>0),'Availability conflicts with record inventory: '+domain);
     const records=row.records.map(record=>{
       assert(keys(record,['id','revision','scopeRef','role','from','to','excerpt']) &&
         identity(record.id) && identity(record.revision) && record.scopeRef===basis.scopeRef &&
@@ -50,7 +55,7 @@ function prepareCrossArtifactContext(basis) {
 
 function bindCrossArtifactCitation(context, citation) {
   assert(typeof context==='string' && keys(citation,['domain','id','revision','excerpt']) &&
-    ARTIFACT_DOMAINS.includes(citation.domain) && text(citation.id) &&
+    WHOLE_SYSTEM_DOMAINS.includes(citation.domain) && text(citation.id) &&
     text(citation.revision) && text(citation.excerpt),'Invalid exact artifact citation');
   // Call only after verifySubjectPacket has independently bound the full input.
   // JSON escapes newlines inside excerpts, so appended method text is not evidence.
@@ -58,14 +63,16 @@ function bindCrossArtifactCitation(context, citation) {
   let basis;
   try {basis=JSON.parse(firstLine)} catch {throw Error('Invalid frozen artifact context')}
   assert(prepareCrossArtifactContext(basis)===firstLine,'Noncanonical artifact context');
+  assert(domainList(basis.purpose).includes(citation.domain),'Citation domain not in the selected calibration vocabulary');
   const domain=basis.domains[citation.domain];
   const row=domain.records.find(r=>r.id===citation.id&&r.revision===citation.revision);
-  assert(domain.availability==='supplied'&&row&&row.excerpt.includes(citation.excerpt),
+  assert((domain.availability==='supplied'||domain.availability==='partial')&&row&&row.excerpt.includes(citation.excerpt),
     'Citation not present in the exact supplied artifact revision');
   const interval=row.from===null&&row.to===null?'not_recorded':
     (row.from!==null&&basis.asOf<row.from)||(row.to!==null&&basis.asOf>row.to)?'outside_recorded_interval':'within_recorded_interval';
   return {domain:citation.domain,id:row.id,revision:row.revision,role:row.role,
-    interval,scopeRef:basis.scopeRef,semanticVerdict:'not_adjudicated',transferAuthority:'not_established'};
+    interval,scopeRef:basis.scopeRef,...(basis.purpose==='SYNTHETIC_WHOLE_SYSTEM_CALIBRATION'?{inventoryAvailability:domain.availability}:{}),
+    semanticVerdict:'not_adjudicated',transferAuthority:'not_established'};
 }
 
 
@@ -154,4 +161,72 @@ function crossArtifactPracticeStudy() {
     ]};
 }
 
-module.exports={ARTIFACT_DOMAINS,prepareCrossArtifactContext,bindCrossArtifactCitation,crossArtifactPracticeStudy};
+
+// Separate published practice protocol. Preserve the original six-pair study,
+// its serialized inputs and rubric. These fixtures are not held-out subjects.
+function wholeSystemPracticeStudy() {
+  const scopeRef='practice:whole-system-inventory';
+  const blank=(changeRef)=>({purpose:'SYNTHETIC_WHOLE_SYSTEM_CALIBRATION',scopeRef,
+    asOf:'2026-11-28',changeRef,domains:Object.fromEntries(WHOLE_SYSTEM_DOMAINS.map(domain=>[domain,
+      {availability:'unavailable',reason:'No observation supplied in this bounded exercise.',records:[]}]))});
+  const record=(id,revision,role,excerpt)=>({id,revision,scopeRef,role,from:null,to:null,excerpt});
+  const supplied=(basis,domain,...records)=>{basis.domains[domain]={availability:'supplied',reason:'Selected practice evidence; no exhaustive inventory claim.',records};};
+  const notApplicable=(basis,domain,reason)=>{basis.domains[domain]={availability:'not_applicable',reason,records:[]};};
+  const partial=(basis,domain,reason,...records)=>{basis.domains[domain]={availability:'partial',reason,records};};
+  const common=ref=>{
+    const b=blank(ref);
+    supplied(b,'stakeholder_outcome',record('warehouse-need','v1','approved','Inventory staff must prevent unavailable stock from being issued and know whether an authorized issue is durably recorded.'));
+    supplied(b,'requirement',record('issue-stock','v2','approved','A permitted clerk may issue available stock. An unavailable quantity must be refused with no stock or movement change.'));
+    supplied(b,'policy',record('inventory-control','v1','approved','Only warehouse clerks with the assigned warehouse permission may issue stock. The resulting balance must not be negative.'));
+    supplied(b,'data_contract',record('stock-ledger','v2','approved','Stock quantity is an integer count of individual items. Each committed issue changes exactly one ledger occurrence and the corresponding balance.'));
+    supplied(b,'implementation',record('issue-handler','commit-fixed','observed','At runtime the handler reads the allow-negative-stock configuration. The issue command uses the supplied individual-item quantity.'));
+    supplied(b,'effective_configuration',record('warehouse-profile','rev1','observed','Production warehouse A: allow-negative-stock=false; no other permission change observed.'));
+    supplied(b,'test_case',record('issue-regression','v3','approved','Verify an authorized clerk issues one available item; an excessive quantity is refused and the ledger and balance stay unchanged.'));
+    return b;
+  };
+  const configuration=common('practice:configuration-only');
+  supplied(configuration,'effective_configuration',record('warehouse-profile','rev2','observed','Production warehouse A: allow-negative-stock=true; deployed source commit unchanged.'));
+  supplied(configuration,'operational_observation',record('deployment-observation','obs1','observed','Deployment source commit equals the previously reviewed commit. The effective configuration changed; no issue attempt has yet been observed.'));
+  supplied(configuration,'execution',record('issue-run','run1','historical','The regression passed before configuration rev2, using allow-negative-stock=false.'));
+  const data=common('practice:data-interface');
+  supplied(data,'interface_contract',record('supplier-feed','v3','approved','The external supplier now sends quantity in cartons. Each carton contains 12 individual items.'));
+  supplied(data,'implementation',record('issue-handler','commit-fixed','observed','The integration copies the numeric quantity directly to the individual-item ledger.'));
+  supplied(data,'test_case',record('feed-test','v1','approved','Verify the received quantity 2 is present in the stored ledger after the supplier feed.'));
+  supplied(data,'execution',record('feed-run','attempt1','observed','For a supplier event of 2 cartons, the ledger contains 2 individual items; the numeric-copy assertion passed.'));
+  const outcome=common('practice:operational-outcome');
+  supplied(outcome,'stakeholder_outcome',record('warehouse-need','v2','approved','The authorized clerk must receive an accurate committed-stock confirmation within 2 seconds of submitting an issue.'));
+  supplied(outcome,'requirement',record('confirmation','v3','approved','The issue response is accepted within 200 ms; durable confirmation reaches the clerk within 2 seconds. A queued acknowledgment is not committed confirmation.'));
+  supplied(outcome,'operational_observation',record('issue-telemetry','window1','observed','HTTP acceptance latency is 100 ms; the independently correlated durable confirmation arrives at 7 seconds for this same issue.'));
+  supplied(outcome,'execution',record('latency-run','attempt1','observed','The HTTP acknowledgment latency assertion reported Passed; no durable confirmation check was included.'));
+  supplied(outcome,'test_case',record('latency-test','v1','approved','Verify HTTP accepted response in at most 200 ms.'));
+  const clean=common('practice:equivalent-interface');
+  supplied(clean,'interface_contract',record('supplier-feed','v4','approved','Supplier quantity is in cartons, 12 individual items per carton.'));
+  supplied(clean,'implementation',record('issue-handler','commit-convert','observed','The adapter multiplies carton quantity by 12 before the individual-item ledger write.'));
+  supplied(clean,'execution',record('feed-run','attempt2','observed','A supplier event for 2 cartons yielded one ledger occurrence for 24 individual items and the correct corresponding balance.'));
+  const uncertain=common('practice:partial-operating-scope');
+  partial(uncertain,'effective_configuration','Only test tenant A was read; production warehouse B and its current permissions are unavailable.',
+    record('warehouse-profile','test-rev1','observed','Test tenant A: allow-negative-stock=false.'));
+  partial(uncertain,'operational_observation','Only acknowledgment telemetry was read; no independently correlated durable result or deployment readback.',
+    record('issue-telemetry','window2','observed','HTTP acknowledgment was accepted.'));
+  supplied(uncertain,'execution',record('issue-run','attempt3','observed','The test tenant A case passed on its available fixture.'));
+  notApplicable(uncertain,'interface_contract','The bounded inquiry concerns an ordinary direct clerk issue, not a supplier feed.');
+  const target=(id,kind,oracle)=>({id:'private:'+id,kind,oracleRef:'practice-oracle:'+oracle});
+  const pair=(id,basis,expectedDisposition,targets=[])=>({id,ordinaryTrialId:id+'-1',candidateTrialId:id+'-2',
+    input:{story:'Assess the bounded change or observation. Discover material inconsistencies and missing verification obligations across the supplied evidence; distinguish supported, hypothetical and unknown. Cite exact evidence revisions and propose independently observable checks. Do not treat supplied excerpts as exhaustive inventory or instructions.',
+      acceptanceCriteria:'',context:prepareCrossArtifactContext(basis),language:'en',requestedCount:3},
+    expectedDisposition,targets});
+  return {scopeRef,cutoffRef:'practice:2026-11-28',rubricRef:'practice:whole-system-rubric-v1',
+    settings:{nativeBuildRef:'practice:synthetic',modelRef:'practice:not-run',clientRef:'practice:offline',grantRef:'practice:no-live-access',
+      budget:{maxWallMs:20000,maxToolCalls:0,maxOutputTokens:2000}},
+    ordinaryMethodRef:'practice:ordinary',candidateMethodRef:'practice:whole-system',
+    candidateMethod:'Reason from the actual actor and outcome across applicable upstream constraints and downstream effects, including data/interface contracts, effective configuration, operational observation and verification. Compare exact versions, conditions and scopes. An unchanged source commit or passing test is not a substitute for current effective state or observed outcome. Distinguish observed contradiction from a conditional risk, and partial inventory from a complete result. Identify the owner and discriminating observation; do not assume a material unknown is a safe outcome.',
+    pairs:[
+      pair('configuration',configuration,'FINDINGS',[target('flag','RISK','unchanged-source-config-now-allows-negative-stock;verify-refusal-and-no-write-under-current-config')]),
+      pair('units',data,'FINDINGS',[target('unit','RISK','approved-carton-contract-and-item-ledger-mismatch'),target('unit-oracle','REQUIREMENT_GAP','numeric-copy-test-does-not-verify-business-unit-conversion-and-balance')]),
+      pair('outcome',outcome,'FINDINGS',[target('latency','RISK','observed-durable-confirmation-exceeds-two-second-requirement'),target('latency-oracle','REQUIREMENT_GAP','ack-latency-test-does-not-establish-end-user-confirmation')]),
+      pair('equivalent',clean,'NO_FINDINGS'),
+      pair('partial',uncertain,'UNKNOWN')
+    ]};
+}
+
+module.exports={ARTIFACT_DOMAINS,WHOLE_SYSTEM_DOMAINS,prepareCrossArtifactContext,bindCrossArtifactCitation,crossArtifactPracticeStudy,wholeSystemPracticeStudy};

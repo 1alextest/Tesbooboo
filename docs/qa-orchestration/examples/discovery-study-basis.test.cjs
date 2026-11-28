@@ -173,3 +173,50 @@ test('cross-artifact context fails closed for missing, contradictory or foreign 
   assert.equal(prepareCrossArtifactContext(temporal),canonical);
 });
 
+test('whole-system practice adds operating context without altering the original artifact protocol',()=>{
+  const {WHOLE_SYSTEM_DOMAINS,wholeSystemPracticeStudy}=require('./cross-artifact-calibration.cjs');
+  const study=wholeSystemPracticeStudy();
+  const {manifest,subjectPackets}=freezePairedDiscovery(study);
+  assert.equal(manifest.trials.length,10);
+  for(const packet of subjectPackets){
+    const input=verifySubjectPacket(packet,manifest,manifest.ref);
+    const context=input.context.split('\n',1)[0],basis=JSON.parse(context);
+    assert.deepEqual(Object.keys(basis.domains),WHOLE_SYSTEM_DOMAINS);
+    assert.equal(prepareCrossArtifactContext(basis),context);
+    assert.doesNotMatch(input.context,/private:|practice-oracle:|expectedDisposition/);
+  }
+  const {scoreDiscovery}=require('./score-zyra-discovery.cjs');
+  for(const arm of scoreDiscovery(manifest,[],manifest.ref).arms){
+    assert.equal(arm.assigned,5);
+    assert.equal(arm.available,0);
+    assert.equal(arm.risk.unavailable,3);
+    assert.equal(arm.requirementGap.unavailable,2);
+    assert.equal(arm.controls.UNAVAILABLE,2);
+  }
+  const original=crossArtifactPracticeStudy();
+  assert.equal(original.pairs.length,6);
+  assert.equal(Object.keys(JSON.parse(original.pairs[0].input.context).domains).length,10);
+});
+
+test('configuration, unit contracts, operational observations and partial scope retain exact provenance',()=>{
+  const {wholeSystemPracticeStudy}=require('./cross-artifact-calibration.cjs');
+  const {manifest,subjectPackets}=freezePairedDiscovery(wholeSystemPracticeStudy());
+  const context=id=>verifySubjectPacket(subjectPackets.find(p=>p.trialId===id+'-2'),manifest,manifest.ref).context;
+  const cite=(id,domain,ref,revision,excerpt)=>bindCrossArtifactCitation(context(id),{domain,id:ref,revision,excerpt});
+  assert.equal(cite('configuration','effective_configuration','warehouse-profile','rev2','deployed source commit unchanged').role,'observed');
+  assert.equal(cite('configuration','execution','issue-run','run1','before configuration rev2').role,'historical');
+  assert.equal(cite('units','interface_contract','supplier-feed','v3','12 individual items').role,'approved');
+  assert.equal(cite('units','execution','feed-run','attempt1','ledger contains 2 individual items').semanticVerdict,'not_adjudicated');
+  assert.equal(cite('outcome','operational_observation','issue-telemetry','window1','7 seconds').transferAuthority,'not_established');
+  const observed=cite('partial','effective_configuration','warehouse-profile','test-rev1','Test tenant A');
+  assert.equal(observed.inventoryAvailability,'partial');
+  assert.throws(()=>cite('partial','effective_configuration','warehouse-profile','test-rev1','Production warehouse B'),/exact supplied artifact revision/);
+  const basis=JSON.parse(context('partial').split('\n',1)[0]);
+  assert.match(basis.domains.effective_configuration.reason,/production warehouse B/);
+  assert.equal(basis.domains.interface_contract.availability,'not_applicable');
+  const changed=copy(basis);changed.domains.effective_configuration.records=[];
+  assert.throws(()=>prepareCrossArtifactContext(changed),/Availability conflicts/);
+  delete basis.domains.operational_observation;
+  assert.throws(()=>prepareCrossArtifactContext(basis),/explicit disposition/);
+});
+

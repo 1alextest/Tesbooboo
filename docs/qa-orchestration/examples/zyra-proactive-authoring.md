@@ -175,3 +175,17 @@ These six published practice pairs are known, not fresh held-outs. The existing 
 
 For native qualification, obtain authorized exact-version source reads and a separately approved egress decision; compare existing Zyra versus candidate on newly sequestered examples across these artifact relationships, including source-free document changes. Record verified citation bindings, actual semantic adjudication and human decisions as separate evidence. Only the existing requirement, governed document, case, Bug, evidence and Skill owners may publish changes. Existing PRR/spec owner #295 retains the canonical design and open governance decisions.
 
+### Whole-system semantic practice — 28 November 2026
+
+This is a **separate known-fixture protocol**, using the same frozen paired-study and scorecard owners. The earlier six-pair artifact protocol, its exact serialized inputs, rubric and missing execution outcomes are preserved. The seven native work domains are not the universe of evidence. Five additional source lenses in this synthetic fixture are stakeholder outcome, data contract, interface contract, effective configuration and operational observation. These are review-local inputs, not new native entity types or a universal required list. Supplied excerpts remain bounded; explicitly partial inventory can retain known records and a reason for the unseen scope without asserting completeness. Literal citation binding continues to confer neither normative applicability nor semantic judgment or transfer authority.
+
+| Practice pair | Why code/tests alone are insufficient |
+| --- | --- |
+| Configuration-only risk | Same source revision, different effective allow-negative-stock setting. Earlier green tests used the old setting. Investigate the current refusal and independently observe unchanged stock/ledger for prohibited issues; no actual new issue attempt has been observed. |
+| External data contract and units | An approved supplier change sends cartons, while the ledger uses individual items. A passing numeric-copy test misses the difference between 2 cartons and 2 items. Reconcile units, exact ledger occurrence and balance. |
+| Operational user outcome | Fast HTTP acceptance is observed while the independently correlated durable confirmation arrives after the approved user-facing bound. The acknowledgment assertion passes but does not measure the required outcome. |
+| Legitimate converted interface | Correct 2-carton-to-24-item conversion and independently observed single ledger effect; no forced defect. |
+| Partial operating context | Only the test tenant configuration and acknowledgment were read. Production warehouse B and durable effects are unobserved; do not infer a production failure or clean outcome. |
+
+These five additional practice pairs are known synthetic scenarios, not fresh held-out trials. No external source or production data, model dispatch, native execution, governance grant, independent adjudication or active Skill is involved. The existing suite checks frozen input identity, literal citation and scope, missingness and negative controls; both arms remain unavailable until real qualified execution. This extends the principle-2 whole-system reconciliation proposal in #295, which retains authority and the existing procedure. Actual semantic discovery, permission-qualified retrieval (especially governed manuals/policies), cross-domain runtime correlation and independent effectiveness remain separate.
+
