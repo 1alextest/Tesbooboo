@@ -4402,7 +4402,8 @@ test.describe("zyra / agents (UI)", () => {
     await expect(title).toBeVisible();
     await expect(panel.getByText("User context", { exact: true }), "the old label must not still be rendered").toHaveCount(0);
 
-    const sourceCard = panel.locator("div.rounded-lg", { has: title });
+    const sourceCard = panel.locator("div.rounded-lg", { has: page.getByRole("heading", { name: "User Story Context", level: 3, exact: true }) });
+    await expect(sourceCard).toHaveCount(1);
     await expect(
       sourceCard.locator(".zyra-prose p"),
       "each line of the context must stay on its own row, not collapse into one paragraph",
@@ -4535,7 +4536,7 @@ test.describe("zyra / agents (UI)", () => {
     await panel.getByRole("button", { name: /^Sources/ }).click();
     await expect(panel.getByText(longToken, { exact: false })).toBeVisible();
 
-    const scrollArea = panel.locator(".overflow-y-auto").filter({ has: panel.getByText(longToken, { exact: false }) });
+    const scrollArea = panel.locator(".overflow-y-auto").filter({ has: page.getByText(longToken, { exact: false }) });
     await expect(scrollArea).toHaveCount(1);
     const { scrollWidth, clientWidth } = await scrollArea.evaluate((el) => ({
       scrollWidth: el.scrollWidth,
@@ -4607,9 +4608,11 @@ test.describe("zyra / agents (UI)", () => {
     .join("\n")
     .slice(0, 320);
 
-  async function expectLinearContextRendered(scope: Page | Locator) {
-    const title = scope.getByRole("heading", { name: "User Story Context", level: 3 });
+  async function expectLinearContextRendered(page: Page, scope: Page | Locator = page) {
+    // Playwright evaluates has relative to each candidate; do not embed the enclosing panel.
+    const title = page.getByRole("heading", { name: "User Story Context", level: 3, exact: true });
     const sourceCard = scope.locator("div.rounded-lg", { has: title });
+    await expect(sourceCard).toHaveCount(1);
     await expect(sourceCard.getByRole("heading", { name: "QAB-241: LIN-01: Create a System User", level: 1 })).toBeVisible();
     await expect(sourceCard.locator("li")).toHaveCount(8);
     await expect(sourceCard.locator("li").first()).toHaveText("Status: Backlog");
@@ -4636,7 +4639,7 @@ test.describe("zyra / agents (UI)", () => {
 
     const panel = page.locator(".slide-in-right");
     await panel.getByRole("button", { name: /^Sources/ }).click();
-    await expectLinearContextRendered(panel);
+    await expectLinearContextRendered(page, panel);
   });
 
   test("ZYU-127 jira and linear sources render Markdown too, a link cut mid-syntax stays plain text, and HTML stays escaped", async ({
@@ -6475,6 +6478,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
   });
 
   test("ZYU-119 a request that failed before any reply shows its trace under the request, with the step that failed", async ({ browser }) => {
+    // Keep provider availability independent from the persisted turn state under test.
+    await allocateFakeAiKey();
     seedRequest("failed", traceJson("failed", [
       { stage: "received", status: "ok" },
       { stage: "routing", status: "failed", meta: { status: "failed", reason: "This turn did not complete." } },
@@ -6490,6 +6495,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
   });
 
   test("ZYU-120 a request left processing by a turn that died reads as interrupted, and the conversation is not locked", async ({ browser }) => {
+    // Keep provider availability independent from the persisted turn state under test.
+    await allocateFakeAiKey();
     seedRequest("processing", traceJson("running", [
       { stage: "received", status: "ok" },
       { stage: "routing", status: "active", meta: { totalContextItems: 2 } },
@@ -6503,6 +6510,8 @@ test.describe("zyra / chat send (UI, fake provider)", () => {
   });
 
   test("ZYU-121 a request still running elsewhere (another tab, or before a reload) shows its steps so far from the persisted trace", async ({ browser }) => {
+    // Keep provider availability independent from the persisted turn state under test.
+    await allocateFakeAiKey();
     seedRequest("processing", traceJson("running", [
       { stage: "received", status: "ok" },
       { stage: "context:jira", status: "empty", meta: { items: [], count: 0 } },
